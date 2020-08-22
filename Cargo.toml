@@ -1,0 +1,7 @@
+[package]
+name = "shari"
+version = "0.1.0"
+authors = ["Yuichi Nishiwaki <nyuichi@is.s.u-tokyo.ac.jp>"]
+edition = "2018"
+
+[dependencies]
