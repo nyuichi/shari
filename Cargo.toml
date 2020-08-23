@@ -5,3 +5,4 @@ authors = ["Yuichi Nishiwaki <nyuichi@is.s.u-tokyo.ac.jp>"]
 edition = "2018"
 
 [dependencies]
+once_cell = "1.4.1"
