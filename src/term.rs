@@ -52,8 +52,8 @@ impl Type {
 // locally nameless representation
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Term {
-    Var(Type, usize),    // bound variable
-    Local(Type, String), // free variable
+    Fvar(Type, String),
+    Bvar(Type, usize),
     Abs(Type, Box<Term>),
     App(Type, Box<Term>, Box<Term>),
 }
@@ -61,91 +61,92 @@ pub enum Term {
 impl Term {
     pub fn r#type(&self) -> &Type {
         match self {
-            Self::Var(t, _) => t,
-            Self::Local(t, _) => t,
+            Self::Fvar(t, _) => t,
+            Self::Bvar(t, _) => t,
             Self::Abs(t, _) => t,
             Self::App(t, _, _) => t,
         }
     }
 
-    /// self.open(m) == [m/0]self
-    pub fn open(&mut self, m: &Term) {
-        self.open_at(m, 0)
+    /// self.open_subst(m) == [m/x][x/0]self (x#self) == [m/0]self
+    pub fn open_subst(&mut self, m: &Term) {
+        self.open_subst_at(m, 0)
     }
 
-    fn open_at(&mut self, m: &Term, level: usize) {
+    fn open_subst_at(&mut self, m: &Term, level: usize) {
         match self {
-            Self::Var(_, i) => {
+            Self::Fvar(_, _) => {}
+            Self::Bvar(_, i) => {
                 if *i == level {
                     *self = m.clone();
                 }
             }
-            Self::Local(_, _) => {}
             Self::Abs(_, n) => {
-                n.open_at(m, level + 1);
+                n.open_subst_at(m, level + 1);
             }
             Self::App(_, m1, m2) => {
-                m1.open_at(m, level);
-                m2.open_at(m, level);
+                m1.open_subst_at(m, level);
+                m2.open_subst_at(m, level);
             }
         }
     }
 
-    pub fn open_local(&mut self, local: &str) {
-        self.open_local_at(local, 0)
+    /// self.open(x) == [x/0]self
+    pub fn open(&mut self, name: &str) {
+        self.open_at(name, 0)
     }
 
-    fn open_local_at(&mut self, local: &str, level: usize) {
+    fn open_at(&mut self, name: &str, level: usize) {
         match self {
-            Self::Var(t, i) => {
+            Self::Fvar(_, _) => {}
+            Self::Bvar(t, i) => {
                 if *i == level {
-                    *self = Self::Local(std::mem::replace(t, Type::Var(0)), local.to_owned());
+                    *self = Self::Fvar(std::mem::replace(t, Type::Var(0)), name.to_owned());
                 }
             }
-            Self::Local(_, _) => {}
             Self::Abs(_, n) => {
-                n.open_local_at(local, level + 1);
+                n.open_at(name, level + 1);
             }
             Self::App(_, m1, m2) => {
-                m1.open_local_at(local, level);
-                m2.open_local_at(local, level);
+                m1.open_at(name, level);
+                m2.open_at(name, level);
             }
         }
     }
 
-    /// self.close_local(local) == [0/local]self
-    pub fn close_local(&mut self, local: &str) {
-        self.close_local_at(local, 0)
+    /// self.close(x) == [0/x]self
+    pub fn close(&mut self, name: &str) {
+        self.close_at(name, 0)
     }
 
-    fn close_local_at(&mut self, local: &str, level: usize) {
+    fn close_at(&mut self, name: &str, level: usize) {
         match self {
-            Self::Var(_, _) => {}
-            Self::Local(t, ref name) => {
-                if name == local {
-                    *self = Self::Var(std::mem::replace(t, Type::Var(0)), level);
+            Self::Fvar(t, ref x) => {
+                if name == x {
+                    *self = Self::Bvar(std::mem::replace(t, Type::Var(0)), level);
                 }
             }
+            Self::Bvar(_, _) => {}
             Self::Abs(_, m) => {
-                m.close_local_at(local, level + 1);
+                m.close_at(name, level + 1);
             }
             Self::App(_, m1, m2) => {
-                m1.close_local_at(local, level);
-                m2.close_local_at(local, level);
+                m1.close_at(name, level);
+                m2.close_at(name, level);
             }
         }
     }
 
-    pub fn into_abs(mut self, local: &str, t: Type) -> Self {
+    pub fn into_abs(mut self, name: &str, t: Type) -> Self {
         let t = Type::Arrow(Box::new(t), Box::new(self.r#type().clone()));
-        self.close_local(local);
+        self.close(name);
         Self::Abs(t, Box::new(self))
     }
 
-    pub fn is_fresh(&self, local: &str) -> bool {
+    pub fn is_fresh(&self, name: &str) -> bool {
         match self {
-            Self::Var(_, _) => true,
-            Self::Local(_, name) => name != local,
+            Self::Fvar(_, x) => name != x,
+            Self::Bvar(_, _) => true,
             Self::Abs(_, m) => m.is_closed(),
             Self::App(_, m1, m2) => m1.is_closed() && m2.is_closed(),
         }
@@ -153,8 +154,8 @@ impl Term {
 
     pub fn is_closed(&self) -> bool {
         match self {
-            Self::Var(_, _) => true,
-            Self::Local(_, _) => false,
+            Self::Fvar(_, _) => false,
+            Self::Bvar(_, _) => true,
             Self::Abs(_, m) => m.is_closed(),
             Self::App(_, m1, m2) => m1.is_closed() && m2.is_closed(),
         }
@@ -166,8 +167,8 @@ impl Term {
 
     fn is_locally_closed_at(&self, level: usize) -> bool {
         match self {
-            Self::Var(_, i) => *i < level,
-            Self::Local(_, _) => true,
+            Self::Fvar(_, _) => true,
+            Self::Bvar(_, i) => *i < level,
             Self::Abs(_, m) => m.is_locally_closed_at(level + 1),
             Self::App(_, m1, m2) => {
                 m1.is_locally_closed_at(level) && m2.is_locally_closed_at(level)
@@ -179,30 +180,30 @@ impl Term {
         self.is_locally_closed_at(1)
     }
 
-    pub fn subst(&mut self, local: &str, m: &Term) {
+    pub fn subst(&mut self, name: &str, m: &Term) {
         match self {
-            Self::Var(_, _) => {}
-            Self::Local(_, ref name) => {
-                if name == local {
+            Self::Fvar(_, ref x) => {
+                if name == x {
                     *self = m.clone();
                 }
             }
+            Self::Bvar(_, _) => {}
             Self::App(_, m1, m2) => {
-                m1.subst(local, m);
-                m2.subst(local, m);
+                m1.subst(name, m);
+                m2.subst(name, m);
             }
             Self::Abs(_, n) => {
-                n.subst(local, m);
+                n.subst(name, m);
             }
         }
     }
 
     pub fn subst_type(&mut self, i: usize, t: &Type) {
         match self {
-            Self::Var(u, _) => {
+            Self::Fvar(u, _) => u.subst(i, t),
+            Self::Bvar(u, _) => {
                 u.subst(i, t);
             }
-            Self::Local(u, _) => u.subst(i, t),
             Self::Abs(u, m) => {
                 u.subst(i, t);
                 m.subst_type(i, t);
@@ -219,6 +220,14 @@ impl Term {
         for (i, t) in &subst.0 {
             self.subst_type(*i, t);
         }
+    }
+
+    pub fn head(&self) -> &Self {
+        let mut m = self;
+        while let Self::App(_, m1, _) = m {
+            m = m1;
+        }
+        m
     }
 }
 
@@ -258,8 +267,7 @@ impl TypeSubst {
 
     fn infer(&mut self, m: &mut Term, env: &mut HashMap<String, (HashSet<usize>, Type)>) {
         match m {
-            Term::Var(_, _) => unimplemented!(),
-            Term::Local(t, name) => {
+            Term::Fvar(t, name) => {
                 let u = match env.get(name) {
                     None => unimplemented!("{}", name),
                     Some((vars, t)) => {
@@ -273,6 +281,7 @@ impl TypeSubst {
                 };
                 self.unify(t, &u);
             }
+            Term::Bvar(_, _) => unimplemented!(),
             Term::Abs(t, m) => {
                 let fresh_tv = fresh_tvar();
                 self.unify(
@@ -281,9 +290,9 @@ impl TypeSubst {
                 );
                 let name = fresh();
                 env.insert(name.clone(), (Default::default(), Type::Var(fresh_tv)));
-                m.open_local(&name);
+                m.open(&name);
                 self.infer(m, env);
-                m.close_local(&name);
+                m.close(&name);
                 env.remove(&name);
             }
             Term::App(t, m1, m2) => {
@@ -326,8 +335,8 @@ mod tests {
         .collect();
         let mut m = Term::App(
             Type::Var(fresh_tvar()),
-            Term::Local(Type::Var(fresh_tvar()), "f".to_owned()).into(),
-            Term::Var(Type::Var(fresh_tvar()).into(), 0).into(),
+            Term::Fvar(Type::Var(fresh_tvar()), "f".to_owned()).into(),
+            Term::Bvar(Type::Var(fresh_tvar()).into(), 0).into(),
         )
         .into_abs("x", Type::Var(fresh_tvar()));
         m.infer(&env);
