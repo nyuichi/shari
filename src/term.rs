@@ -254,8 +254,12 @@ impl Term {
         self.subst(&x, m);
     }
 
+    /// `t` in `λv*. t m*`
     pub fn head(&self) -> &Self {
         let mut m = self;
+        while let Self::Abs(_, n) = m {
+            m = n;
+        }
         while let Self::App(_, m1, _) = m {
             m = m1;
         }
