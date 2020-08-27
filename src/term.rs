@@ -28,11 +28,13 @@ pub enum Type {
     Mvar(usize),
 }
 
-impl Type {
-    fn dummy() -> Self {
+impl Default for Type {
+    fn default() -> Self {
         Self::Bvar(0xdeadbeef)
     }
+}
 
+impl Type {
     fn instantiate(&mut self, mids: &[usize]) {
         match self {
             Self::Fvar(_) => {}
@@ -45,6 +47,16 @@ impl Type {
             }
             Self::Mvar(_) => todo!("mvar in Type::instantiate"),
         }
+    }
+
+    pub fn uncurry(&self) -> (Vec<&Type>, &Type) {
+        let mut ts = vec![];
+        let mut t = self;
+        while let Self::Arrow(t1, t2) = t {
+            ts.push(&**t1);
+            t = t2;
+        }
+        (ts, t)
     }
 
     pub fn subst_meta(&mut self, i: usize, t: &Type) {
@@ -90,6 +102,12 @@ pub enum Term {
     App(Type, Box<Term>, Box<Term>),
 }
 
+impl Default for Term {
+    fn default() -> Self {
+        Self::Bvar(Type::default(), 0xdeadbeef)
+    }
+}
+
 impl Term {
     pub fn r#type(&self) -> &Type {
         match self {
@@ -110,7 +128,7 @@ impl Term {
             Self::Fvar(_, _) => {}
             Self::Bvar(t, i) => {
                 if *i == level {
-                    *self = Self::Fvar(std::mem::replace(t, Type::dummy()), name.to_owned());
+                    *self = Self::Fvar(std::mem::take(t), name.to_owned());
                 }
             }
             Self::Abs(_, n) => {
@@ -132,7 +150,7 @@ impl Term {
         match self {
             Self::Fvar(t, ref x) => {
                 if name == x {
-                    *self = Self::Bvar(std::mem::replace(t, Type::dummy()), level);
+                    *self = Self::Bvar(std::mem::take(t), level);
                 }
             }
             Self::Bvar(_, _) => {}
@@ -146,10 +164,14 @@ impl Term {
         }
     }
 
-    pub fn into_abs(mut self, name: &str, t: Type) -> Self {
+    pub fn mk_abs(&mut self, name: &str, t: Type) {
         let t = Type::Arrow(Box::new(t), Box::new(self.r#type().clone()));
         self.close(name);
-        Self::Abs(t, Box::new(self))
+        *self = Self::Abs(t, Box::new(std::mem::take(self)));
+    }
+
+    pub fn mk_app(&mut self, arg: Term, t: Type) {
+        *self = Self::App(t, Box::new(std::mem::take(self)), Box::new(arg));
     }
 
     pub fn is_fresh(&self, name: &str) -> bool {
@@ -226,7 +248,7 @@ impl Term {
     }
 
     /// self.open_subst(m) == [m/x][x/0]self (for fresh x) == [m/0]self
-    pub fn open_subst(&mut self, m: &Term) {
+    fn open_subst(&mut self, m: &Term) {
         let x = fresh();
         self.open(&x);
         self.subst(&x, m);
@@ -238,6 +260,152 @@ impl Term {
             m = m1;
         }
         m
+    }
+
+    fn is_neutral(&self) -> bool {
+        match self {
+            Self::Abs(_, _) => false,
+            Self::App(_, m1, m2) => m1.is_neutral() && m2.is_normal(),
+            Self::Bvar(_, _) | Self::Fvar(_, _) => true,
+        }
+    }
+
+    /// `true` if the term is in a β-normal form.
+    pub fn is_normal(&self) -> bool {
+        if let Self::Abs(_, m) = self {
+            m.is_normal()
+        } else {
+            self.is_neutral()
+        }
+    }
+
+    /// does not check if a term inside an abstraction is in a whnf
+    pub fn is_whnf(&self) -> bool {
+        match self {
+            Self::Abs(_, _) => true,
+            Self::Bvar(_, _) | Self::Fvar(_, _) | Self::App(_, _, _) => match self.head() {
+                Self::Bvar(_, _) | Self::Fvar(_, _) => true,
+                Self::App(_, _, _) | Self::Abs(_, _) => false,
+            },
+        }
+    }
+
+    /// Check if the term is in a η-long β-normal form.
+    /// `self` must be fully typed.
+    /// See Lectures on the Curry-Howard isomorphism, Chapter 4.
+    pub fn is_canonical(&self) -> bool {
+        match self.r#type() {
+            Type::Arrow(_, _) => {
+                if let Self::Abs(_, m) = self {
+                    m.is_canonical()
+                } else {
+                    false
+                }
+            }
+            Type::Fvar(_) | Type::Bvar(_) | Type::Mvar(_) => {
+                let mut m = self;
+                while let Self::App(_, m1, m2) = m {
+                    if !m2.is_canonical() {
+                        return false;
+                    }
+                    m = m1;
+                }
+                match m {
+                    Self::Fvar(_, _) | Self::Bvar(_, _) => true,
+                    Self::Abs(_, _) => false,
+                    Self::App(_, _, _) => unreachable!(),
+                }
+            }
+        }
+    }
+
+    /// applicative-order (leftmost-innermost) reduction
+    fn beta_reduce(&mut self) {
+        match self {
+            Self::Fvar(_, _) => {}
+            Self::Bvar(_, _) => {}
+            Self::App(_, m1, m2) => {
+                m1.beta_reduce();
+                m2.beta_reduce();
+                if let Self::Abs(_, m) = &mut **m1 {
+                    m.open_subst(m2);
+                    *self = std::mem::take(m);
+                    self.beta_reduce();
+                }
+            }
+            Self::Abs(_, m) => m.beta_reduce(),
+        }
+    }
+
+    /// Type directed naive η expansion
+    /// [M] := λv*. M v*
+    fn naive_expand(&mut self) {
+        let args: Vec<_> = self
+            .r#type()
+            .uncurry()
+            .0
+            .into_iter()
+            .map(|t| (fresh(), t.clone()))
+            .collect();
+
+        for (name, t) in &args {
+            let arg = Term::Fvar(t.clone(), name.to_owned());
+            let t = match self.r#type() {
+                Type::Arrow(_, t2) => (**t2).clone(),
+                _ => unreachable!(),
+            };
+            self.mk_app(arg, t);
+        }
+        for (name, t) in args {
+            self.mk_abs(&name, t);
+        }
+    }
+
+    /// 1. [x M₁ ... Mₙ] := x [M₁] ... [Mₙ]
+    /// 2. [(λx.M) M₁ ... Mₙ] := (λx.[M]) [M₁] ... [Mₙ]
+    fn eta_expand_head(&mut self) {
+        match self {
+            Self::Fvar(_, _) | Self::Bvar(_, _) => {}
+            Self::Abs(_, _) => {
+                self.eta_expand();
+            }
+            Self::App(_, m1, m2) => {
+                m1.eta_expand_head();
+                m2.eta_expand();
+            }
+        }
+    }
+
+    /// Gives the long η form, which is formally defined as follows:
+    /// 1. [λx.M] := λx.[M]
+    /// 2. [x M₁ ... Mₙ] := λv*. x [M₁] ... [Mₙ] v*
+    /// 3. [(λx.M) M₁ ... Mₙ] := λv*. (λx.[M]) [M₁] ... [Mₙ] v*
+    fn eta_expand(&mut self) {
+        match self {
+            Self::Abs(_, m) => {
+                let x = fresh();
+                m.open(&x);
+                m.eta_expand();
+                m.close(&x);
+            }
+            Self::Bvar(_, _) | Self::Fvar(_, _) | Self::App(_, _, _) => {
+                self.eta_expand_head();
+                self.naive_expand();
+            }
+        }
+    }
+
+    pub fn canonicalize(&mut self) {
+        self.beta_reduce();
+        self.eta_expand();
+    }
+
+    pub fn def_eq(&self, other: &Self) -> bool {
+        let mut m1 = self.clone();
+        let mut m2 = other.clone();
+        m1.canonicalize();
+        m2.canonicalize();
+        m1 == m2
     }
 }
 
@@ -283,6 +451,7 @@ impl TypeSubst {
         }
     }
 
+    // TODO: split env into consts and freevars
     fn infer(&mut self, m: &mut Term, env: &mut HashMap<String, TypeScheme>) {
         match m {
             Term::Fvar(t, name) => {
@@ -344,12 +513,12 @@ mod tests {
         )]
         .into_iter()
         .collect();
-        let mut m = Term::App(
+        let mut m = Term::Fvar(Type::Mvar(fresh_mvar()), "f".to_owned());
+        m.mk_app(
+            Term::Fvar(Type::Mvar(fresh_mvar()).into(), "x".to_owned()),
             Type::Mvar(fresh_mvar()),
-            Term::Fvar(Type::Mvar(fresh_mvar()), "f".to_owned()).into(),
-            Term::Bvar(Type::Mvar(fresh_mvar()).into(), 0).into(),
-        )
-        .into_abs("x", Type::Mvar(fresh_mvar()));
+        );
+        m.mk_abs("x", Type::Mvar(fresh_mvar()));
         m.infer(&env);
         assert_eq!(
             m.r#type(),
