@@ -3,22 +3,21 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::mem;
 
 fn fresh() -> String {
-    use std::sync::{Arc, Mutex};
-    static COUNTER: Lazy<Arc<Mutex<usize>>> = Lazy::new(Default::default);
-    let mut c = COUNTER.lock().unwrap();
-    let r = *c;
-    *c += 1;
-    format!("#{}", r)
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static COUNTER: Lazy<AtomicUsize> = Lazy::new(Default::default);
+    format!("#{}", COUNTER.fetch_add(1, Ordering::Relaxed))
 }
 
-// TODO: reclaim unused mvars
-pub fn fresh_mvar() -> usize {
-    use std::sync::{Arc, Mutex};
-    static COUNTER: Lazy<Arc<Mutex<usize>>> = Lazy::new(Default::default);
-    let mut c = COUNTER.lock().unwrap();
-    let r = *c;
-    *c += 1;
-    r
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct MvarId(usize);
+
+impl MvarId {
+    // TODO: reclaim unused mvars
+    pub fn fresh() -> Self {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: Lazy<AtomicUsize> = Lazy::new(Default::default);
+        Self(COUNTER.fetch_add(1, Ordering::Relaxed))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,7 +25,7 @@ pub enum Type {
     Const(String),
     Bvar(usize),
     Arrow(Box<Type>, Box<Type>),
-    Mvar(usize),
+    Mvar(MvarId),
 }
 
 impl Default for Type {
@@ -102,7 +101,7 @@ impl Type {
         }
     }
 
-    fn instantiate(&mut self, mids: &[usize]) {
+    fn instantiate(&mut self, mids: &[MvarId]) {
         match self {
             Self::Const(_) => {}
             Self::Bvar(i) => {
@@ -116,18 +115,18 @@ impl Type {
         }
     }
 
-    pub fn subst_meta(&mut self, i: usize, t: &Type) {
+    pub fn subst_meta(&mut self, mid: MvarId, t: &Type) {
         match self {
             Self::Const(_) => {}
             Self::Bvar(_) => {}
-            Self::Mvar(j) => {
-                if i == *j {
+            Self::Mvar(i) => {
+                if *i == mid {
                     *self = t.clone();
                 }
             }
             Self::Arrow(t1, t2) => {
-                t1.subst_meta(i, t);
-                t2.subst_meta(i, t);
+                t1.subst_meta(mid, t);
+                t2.subst_meta(mid, t);
             }
         }
     }
@@ -141,7 +140,7 @@ impl TypeScheme {
         let mut t = self.1.clone();
         if self.0 > 0 {
             t.instantiate(
-                &std::iter::repeat_with(fresh_mvar)
+                &std::iter::repeat_with(MvarId::fresh)
                     .take(self.0)
                     .collect::<Vec<_>>(),
             );
@@ -160,7 +159,7 @@ pub enum Term {
     App(Type, Box<Term>, Box<Term>),
     Const(Type, String),
     /// Mvar should not depend on any bound variables inside which the mvar lives.
-    Mvar(Type, usize),
+    Mvar(Type, MvarId),
 }
 
 impl Default for Term {
@@ -316,7 +315,7 @@ impl Term {
         }
     }
 
-    pub fn subst_meta(&mut self, mid: usize, m: &Term) {
+    pub fn subst_meta(&mut self, mid: MvarId, m: &Term) {
         match self {
             Self::Fvar(_, _) => {}
             Self::Bvar(_, _) => {}
@@ -336,21 +335,21 @@ impl Term {
         }
     }
 
-    fn subst_type_meta(&mut self, i: usize, t: &Type) {
+    fn subst_type_meta(&mut self, mid: MvarId, t: &Type) {
         match self {
-            Self::Fvar(u, _) => u.subst_meta(i, t),
-            Self::Bvar(u, _) => u.subst_meta(i, t),
-            Self::Const(u, _) => u.subst_meta(i, t),
+            Self::Fvar(u, _) => u.subst_meta(mid, t),
+            Self::Bvar(u, _) => u.subst_meta(mid, t),
+            Self::Const(u, _) => u.subst_meta(mid, t),
             Self::Abs(u, m) => {
-                u.subst_meta(i, t);
-                m.subst_type_meta(i, t);
+                u.subst_meta(mid, t);
+                m.subst_type_meta(mid, t);
             }
             Self::App(u, m1, m2) => {
-                u.subst_meta(i, t);
-                m1.subst_type_meta(i, t);
-                m2.subst_type_meta(i, t);
+                u.subst_meta(mid, t);
+                m1.subst_type_meta(mid, t);
+                m2.subst_type_meta(mid, t);
             }
-            Self::Mvar(u, _) => u.subst_meta(i, t),
+            Self::Mvar(u, _) => u.subst_meta(mid, t),
         }
     }
 
@@ -580,7 +579,7 @@ impl Term {
 }
 
 #[derive(Clone, Debug, Default)]
-struct TypeSubst(Vec<(usize, Type)>);
+struct TypeSubst(Vec<(MvarId, Type)>);
 
 impl TypeSubst {
     // should we put this method in `impl Type` instead?
@@ -634,7 +633,7 @@ impl TypeSubst {
             Term::Mvar(_, _) => {}
             Term::Bvar(_, _) => unimplemented!(),
             Term::Abs(t, m) => {
-                let mid = fresh_mvar();
+                let mid = MvarId::fresh();
                 self.unify(
                     t,
                     &Type::Arrow(Box::new(Type::Mvar(mid)), Box::new(m.r#type().clone())),
@@ -717,7 +716,7 @@ impl Hnf {
     /// Suppose `f ≡ λx*. X t*` and `r ≡ λy*. x u*`.
     /// Imitation: X ↦ λz*. x (Y z*)* (when x = c)
     /// Projection: X ↦ λz*. zᵢ (Y z*)* (when τ(zᵢ) is compatible with τ(x))
-    fn r#match(&self, other: &Hnf) -> Vec<(usize, Term)> {
+    fn r#match(&self, other: &Hnf) -> Vec<(MvarId, Term)> {
         let (t, mid) = if let Term::Mvar(t, mid) = &self.head {
             (t, *mid)
         } else {
@@ -747,7 +746,7 @@ impl Hnf {
                     .map(|t| {
                         let mut t = t.clone();
                         t.curry(zs.iter().map(|(_, t)| (*t).clone()).collect());
-                        let mut m = Term::Mvar(t, fresh_mvar());
+                        let mut m = Term::Mvar(t, MvarId::fresh());
                         m.curry(
                             zs.iter()
                                 .map(|(x, t)| Term::Fvar((*t).clone(), x.to_owned()))
@@ -822,7 +821,7 @@ impl DisagreementSet {
         }
     }
 
-    fn solve(self) -> Vec<(usize, Term)> {
+    fn solve(self) -> Vec<(MvarId, Term)> {
         let mut queue = VecDeque::new();
         queue.push_back((self, vec![]));
         while let Some((mut set, subst)) = queue.pop_front() {
@@ -886,12 +885,12 @@ mod tests {
         )]
         .into_iter()
         .collect();
-        let mut m = Term::Fvar(Type::Mvar(fresh_mvar()), "f".to_owned());
+        let mut m = Term::Fvar(Type::Mvar(MvarId::fresh()), "f".to_owned());
         m.mk_app(
-            Term::Fvar(Type::Mvar(fresh_mvar()).into(), "x".to_owned()),
-            Type::Mvar(fresh_mvar()),
+            Term::Fvar(Type::Mvar(MvarId::fresh()).into(), "x".to_owned()),
+            Type::Mvar(MvarId::fresh()),
         );
-        m.mk_abs("x", Type::Mvar(fresh_mvar()));
+        m.mk_abs("x", Type::Mvar(MvarId::fresh()));
         m.infer(&env);
         assert_eq!(
             m.r#type(),
