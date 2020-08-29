@@ -22,15 +22,14 @@ impl MvarId {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Type {
-    Const(String),
-    Bvar(usize),
+    Base(String),
     Arrow(Box<Type>, Box<Type>),
     Mvar(MvarId),
 }
 
 impl Default for Type {
     fn default() -> Self {
-        Self::Bvar(12345678)
+        Self::Mvar(MvarId(12345678))
     }
 }
 
@@ -88,8 +87,7 @@ impl Type {
     pub fn is_ground(&self) -> bool {
         match self {
             Self::Arrow(t1, t2) => t1.is_ground() && t2.is_ground(),
-            Type::Const(_) => true,
-            Type::Bvar(_) => true,
+            Type::Base(_) => true,
             Type::Mvar(_) => false,
         }
     }
@@ -110,24 +108,9 @@ impl Type {
         }
     }
 
-    fn instantiate(&mut self, mids: &[MvarId]) {
-        match self {
-            Self::Const(_) => {}
-            Self::Bvar(i) => {
-                *self = Self::Mvar(mids[*i]);
-            }
-            Self::Arrow(t1, t2) => {
-                t1.instantiate(mids);
-                t2.instantiate(mids);
-            }
-            Self::Mvar(_) => todo!("mvar in Type::instantiate"),
-        }
-    }
-
     pub fn subst_meta(&mut self, mid: MvarId, t: &Type) {
         match self {
-            Self::Const(_) => {}
-            Self::Bvar(_) => {}
+            Self::Base(_) => {}
             Self::Mvar(i) => {
                 if *i == mid {
                     *self = t.clone();
@@ -138,23 +121,6 @@ impl Type {
                 t2.subst_meta(mid, t);
             }
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct TypeScheme(usize, Type);
-
-impl TypeScheme {
-    pub fn instantiate(&self) -> Type {
-        let mut t = self.1.clone();
-        if self.0 > 0 {
-            t.instantiate(
-                &std::iter::repeat_with(MvarId::fresh)
-                    .take(self.0)
-                    .collect::<Vec<_>>(),
-            );
-        }
-        t
     }
 }
 
@@ -469,7 +435,7 @@ impl Term {
                     false
                 }
             }
-            Type::Const(_) | Type::Bvar(_) | Type::Mvar(_) => {
+            Type::Base(_) | Type::Mvar(_) => {
                 let mut m = self;
                 while let Self::App(_, m1, m2) = m {
                     if !m2.is_canonical() {
@@ -624,23 +590,22 @@ impl TypeSubst {
                 }
             }
             (t1, t2) => {
-                unimplemented!("unify {:?} {:?}", t1, t2);
+                todo!("unify failed {:?} {:?}", t1, t2);
             }
         }
     }
 
     // TODO: split env into consts and freevars
-    fn infer(&mut self, m: &mut Term, env: &mut HashMap<String, TypeScheme>) {
+    fn infer(&mut self, m: &mut Term, env: &mut HashMap<String, Type>) {
         match m {
             Term::Fvar(t, name) | Term::Const(t, name) => {
-                let u = match env.get(name) {
-                    None => unimplemented!("{}", name),
-                    Some(s) => s.instantiate(),
-                };
-                self.unify(t, &u);
+                let u = env
+                    .get(name)
+                    .unwrap_or_else(|| todo!("constant or fvar not found {}", name));
+                self.unify(t, u);
             }
             Term::Mvar(_, _) => {}
-            Term::Bvar(_, _) => unimplemented!(),
+            Term::Bvar(_, _) => todo!(),
             Term::Abs(t, m) => {
                 let mid = MvarId::fresh();
                 self.unify(
@@ -648,7 +613,7 @@ impl TypeSubst {
                     &Type::Arrow(Box::new(Type::Mvar(mid)), Box::new(m.r#type().clone())),
                 );
                 let name = fresh();
-                env.insert(name.clone(), TypeScheme(0, Type::Mvar(mid)));
+                env.insert(name.clone(), Type::Mvar(mid));
                 m.open(&name);
                 self.infer(m, env);
                 m.close(&name);
@@ -667,7 +632,7 @@ impl TypeSubst {
 }
 
 impl Term {
-    pub fn infer(&mut self, env: &HashMap<String, TypeScheme>) {
+    pub fn infer(&mut self, env: &HashMap<String, Type>) {
         let mut subst = TypeSubst::default();
         subst.infer(self, &mut env.clone());
         subst.apply_term(self);
@@ -885,12 +850,9 @@ mod tests {
     fn test_infer() {
         let env = vec![(
             "f".to_owned(),
-            TypeScheme(
-                0,
-                Type::Arrow(
-                    Type::Const("A".to_owned()).into(),
-                    Type::Const("B".to_owned()).into(),
-                ),
+            Type::Arrow(
+                Type::Base("A".to_owned()).into(),
+                Type::Base("B".to_owned()).into(),
             ),
         )]
         .into_iter()
@@ -905,8 +867,8 @@ mod tests {
         assert_eq!(
             m.r#type(),
             &Type::Arrow(
-                Type::Const("A".to_owned()).into(),
-                Type::Const("B".to_owned()).into()
+                Type::Base("A".to_owned()).into(),
+                Type::Base("B".to_owned()).into()
             )
         );
     }
