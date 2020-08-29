@@ -30,7 +30,7 @@ pub enum Type {
 
 impl Default for Type {
     fn default() -> Self {
-        Self::Bvar(0xdeadbeef)
+        Self::Bvar(12345678)
     }
 }
 
@@ -83,6 +83,15 @@ impl Type {
             t = &**t2;
         }
         ts
+    }
+
+    pub fn is_ground(&self) -> bool {
+        match self {
+            Self::Arrow(t1, t2) => t1.is_ground() && t2.is_ground(),
+            Type::Const(_) => true,
+            Type::Bvar(_) => true,
+            Type::Mvar(_) => false,
+        }
     }
 
     /// (t₁ → … → tₙ → t) ↦ [t₁, …, tₙ] (self becomes t)
@@ -164,7 +173,7 @@ pub enum Term {
 
 impl Default for Term {
     fn default() -> Self {
-        Self::Bvar(Type::default(), 0xdeadbeef)
+        Self::Bvar(Type::default(), 12345678)
     }
 }
 
@@ -672,6 +681,7 @@ struct Hnf {
     /// Outermost-first
     binder: Vec<(String, Type)>,
     /// Fvar, Const, or Mvar.
+    // TODO: use locally nameless forms directly.
     head: Term,
     /// Huch calls these parts "arguments" [Huch, 2020](https://www21.in.tum.de/teaching/sar/SS20/5.pdf).
     /// See also Notation 2.29 in The Clausal Theory of Types [Wolfram, 2009].
