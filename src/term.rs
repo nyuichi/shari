@@ -508,51 +508,51 @@ impl Term {
         }
     }
 
-    /// Type directed naive η expansion
-    /// [M] := λv*. M v*
-    fn naive_expand(&mut self) {
+    /// [x M₁ ... Mₙ] := λv*. x [M₁] ... [Mₙ] v*
+    fn eta_expand_neutral(&mut self) {
+        assert!(self.is_neutral());
+        // [x M₁ ... Mₙ] := x [M₁] ... [Mₙ]
+        let mut m = &mut *self;
+        loop {
+            match m {
+                Self::Fvar(_, _) | Self::Bvar(_, _) | Self::Const(_, _) | Self::Mvar(_, _) => {
+                    break;
+                }
+                Self::App(_, m1, m2) => {
+                    m2.eta_expand_normal();
+                    m = m1;
+                }
+                Self::Abs(_, _) => unreachable!(),
+            }
+        }
+        // [M] := λv*. M v*
         let binder: Vec<_> = self
             .r#type()
             .components()
             .into_iter()
             .map(|t| (fresh(), t.clone()))
             .collect();
-
-        for (name, t) in &binder {
-            let arg = Term::Fvar(t.clone(), name.to_owned());
-            let t = match self.r#type() {
-                Type::Arrow(_, t2) => (**t2).clone(),
-                _ => unreachable!(),
-            };
-            self.mk_app(arg, t);
-        }
+        self.curry(
+            binder
+                .iter()
+                .map(|(x, t)| Term::Fvar(t.clone(), x.to_owned()))
+                .collect(),
+        );
         for (name, t) in binder.into_iter().rev() {
             self.mk_abs(&name, t);
-        }
-    }
-
-    /// 1. [x M₁ ... Mₙ] := x [M₁] ... [Mₙ]
-    /// 2. [(λx.M) M₁ ... Mₙ] := (λx.[M]) [M₁] ... [Mₙ]
-    fn eta_expand_neutral(&mut self) {
-        match self {
-            Self::Fvar(_, _) | Self::Bvar(_, _) | Self::Const(_, _) | Self::Mvar(_, _) => {}
-            Self::App(_, m1, m2) => {
-                m1.eta_expand_neutral();
-                m2.eta_expand();
-            }
-            Self::Abs(_, _) => unreachable!(),
         }
     }
 
     /// self must be in β-normal form.
     /// 1. [λx.M] := λx.[M]
     /// 2. [x M₁ ... Mₙ] := λv*. x [M₁] ... [Mₙ] v*
-    fn eta_expand(&mut self) {
+    fn eta_expand_normal(&mut self) {
+        assert!(self.is_normal());
         match self {
             Self::Abs(_, m) => {
                 let x = fresh();
                 m.open(&x);
-                m.eta_expand();
+                m.eta_expand_normal();
                 m.close(&x);
             }
             Self::Bvar(_, _)
@@ -561,14 +561,13 @@ impl Term {
             | Self::Mvar(_, _)
             | Self::App(_, _, _) => {
                 self.eta_expand_neutral();
-                self.naive_expand();
             }
         }
     }
 
     pub fn canonicalize(&mut self) {
         self.beta_reduce();
-        self.eta_expand();
+        self.eta_expand_normal();
     }
 
     pub fn def_eq(&self, other: &Self) -> bool {
@@ -683,6 +682,7 @@ struct Hnf {
 impl From<Term> for Hnf {
     /// `m` has to be fully typed and canonicalized.
     fn from(m: Term) -> Self {
+        assert!(m.is_canonical());
         let mut binder = vec![];
         let mut head = m;
         while let Term::Abs(t, mut m) = head {
@@ -721,7 +721,7 @@ impl Hnf {
         let (t, mid) = if let Term::Mvar(t, mid) = &self.head {
             (t, *mid)
         } else {
-            unreachable!()
+            panic!("self is not flex")
         };
         let zs: Vec<_> = self.args.iter().map(|m| (fresh(), m.r#type())).collect();
         let mut heads = vec![];
@@ -847,7 +847,7 @@ impl DisagreementSet {
                 queue.push_back((new_set, new_subst));
             }
         }
-        panic!("no solution found");
+        todo!("no solution found");
     }
 }
 
@@ -856,8 +856,8 @@ impl Term {
     fn unify(&mut self, other: &mut Term) {
         let mut set = DisagreementSet::default();
         self.canonicalize();
-        other.canonicalize();
         let h1 = Hnf::from(self.clone());
+        other.canonicalize();
         let h2 = Hnf::from(mem::take(other));
         set.add(h1, h2);
         let subst = set.solve();
