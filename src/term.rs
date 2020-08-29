@@ -750,7 +750,7 @@ struct DisagreementSet {
     // flex-rigid
     fr: Vec<(Hnf, Hnf)>,
     // flex-flex
-    // ff: Vec<(Hnf, Hnf)>,
+    ff: Vec<(Hnf, Hnf)>,
 }
 
 impl DisagreementSet {
@@ -760,9 +760,7 @@ impl DisagreementSet {
             (true, true) => self.rr.push((m1, m2)),
             (true, false) => self.fr.push((m2, m1)),
             (false, true) => self.fr.push((m1, m2)),
-            (false, false) => {
-                // self.ff.push((m1, m2))
-            }
+            (false, false) => self.ff.push((m1, m2)),
         }
     }
 
@@ -807,11 +805,11 @@ impl DisagreementSet {
             let (h1, h2) = &set.fr[0];
             for (mid, m) in h1.r#match(h2) {
                 let mut new_set = DisagreementSet::default();
-                for (f, r) in &set.fr {
-                    let mut m1 = Term::from(f.clone());
+                for (m1, m2) in set.fr.iter().chain(set.ff.iter()) {
+                    let mut m1 = Term::from(m1.clone());
                     m1.subst_meta(mid, &m);
                     m1.canonicalize();
-                    let mut m2 = Term::from(r.clone());
+                    let mut m2 = Term::from(m2.clone());
                     m2.subst_meta(mid, &m);
                     m2.canonicalize();
                     new_set.add(Hnf::from(m1), Hnf::from(m2));
