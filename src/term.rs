@@ -133,7 +133,7 @@ pub enum Term {
     Abs(Type, Box<Term>),
     App(Type, Box<Term>, Box<Term>),
     Const(Type, String),
-    /// Mvar should not depend on any bound variables inside which the mvar lives.
+    /// Mvar is always closed.
     Mvar(Type, MvarId),
 }
 
@@ -155,8 +155,10 @@ impl Term {
         }
     }
 
+    /// `self` must satisfy `Term::is_body`.
     /// self.open(x) == [x/0]self
     pub fn open(&mut self, name: &str) {
+        assert!(self.is_body());
         self.open_at(name, 0)
     }
 
@@ -180,8 +182,10 @@ impl Term {
         }
     }
 
+    /// `self` must be locally closed.
     /// self.close(x) == [0/x]self
     pub fn close(&mut self, name: &str) {
+        assert!(self.is_locally_closed());
         self.close_at(name, 0)
     }
 
@@ -329,6 +333,7 @@ impl Term {
     }
 
     /// m is in head position of n if n ≡ λv*. m l*
+    /// May return a locally open term
     pub fn head(&self) -> &Self {
         let mut m = self;
         while let Self::Abs(_, n) = m {
@@ -410,6 +415,8 @@ impl Term {
 
     /// `self` and `ms` have to be fully typed.
     pub fn curry(&mut self, ms: Vec<Term>) {
+        // assert!(self.is_well_typed());
+        // assert!(ms.iter().all(Term::is_well_typed));
         for m in ms {
             let t = match self.r#type() {
                 Type::Arrow(t1, t2) => {
@@ -427,6 +434,7 @@ impl Term {
     /// See Lectures on the Curry-Howard isomorphism, Chapter 4.
     /// https://math.stackexchange.com/q/3334730
     pub fn is_canonical(&self) -> bool {
+        // assert!(self.is_well_typed());
         match self.r#type() {
             Type::Arrow(_, _) => {
                 if let Self::Abs(_, m) = self {
@@ -539,12 +547,17 @@ impl Term {
         }
     }
 
+    /// self must be fully typed
     pub fn canonicalize(&mut self) {
+        // assert!(self.is_well_typed());
         self.beta_reduce();
         self.eta_expand_normal();
     }
 
+    /// self and other must be fully typed
     pub fn def_eq(&self, other: &Self) -> bool {
+        // assert!(self.is_well_typed());
+        // assert!(other.is_well_typed());
         let mut m1 = self.clone();
         m1.canonicalize();
         let mut m2 = other.clone();
@@ -557,19 +570,6 @@ impl Term {
 struct TypeSubst(Vec<(MvarId, Type)>);
 
 impl TypeSubst {
-    // should we put this method in `impl Type` instead?
-    fn apply_type(&self, t: &mut Type) {
-        for (i, u) in &self.0 {
-            t.subst_meta(*i, u);
-        }
-    }
-
-    fn apply_term(&self, m: &mut Term) {
-        for (i, t) in &self.0 {
-            m.subst_type_meta(*i, t);
-        }
-    }
-
     fn unify(&mut self, t1: &Type, t2: &Type) {
         if t1 == t2 {
             return;
@@ -585,7 +585,7 @@ impl TypeSubst {
                     self.0.push((*i, t.clone()));
                 } else {
                     let mut u = Type::Mvar(*i);
-                    self.apply_type(&mut u);
+                    u.apply_subst(&self);
                     self.unify(&u, t);
                 }
             }
@@ -594,48 +594,62 @@ impl TypeSubst {
             }
         }
     }
+}
+
+impl Type {
+    fn apply_subst(&mut self, subst: &TypeSubst) {
+        for (i, u) in &subst.0 {
+            self.subst_meta(*i, u);
+        }
+    }
+}
+
+impl Term {
+    fn apply_type_subst(&mut self, subst: &TypeSubst) {
+        for (i, t) in &subst.0 {
+            self.subst_type_meta(*i, t);
+        }
+    }
 
     // TODO: split env into consts and freevars
-    fn infer(&mut self, m: &mut Term, env: &mut HashMap<String, Type>) {
-        match m {
+    fn infer_help(&mut self, subst: &mut TypeSubst, env: &mut HashMap<String, Type>) {
+        match self {
             Term::Fvar(t, name) | Term::Const(t, name) => {
                 let u = env
                     .get(name)
                     .unwrap_or_else(|| todo!("constant or fvar not found {}", name));
-                self.unify(t, u);
+                subst.unify(t, u);
             }
             Term::Mvar(_, _) => {}
             Term::Bvar(_, _) => todo!(),
             Term::Abs(t, m) => {
                 let mid = MvarId::fresh();
-                self.unify(
+                subst.unify(
                     t,
                     &Type::Arrow(Box::new(Type::Mvar(mid)), Box::new(m.r#type().clone())),
                 );
                 let name = fresh();
                 env.insert(name.clone(), Type::Mvar(mid));
                 m.open(&name);
-                self.infer(m, env);
+                m.infer_help(subst, env);
                 m.close(&name);
                 env.remove(&name);
             }
             Term::App(t, m1, m2) => {
-                self.unify(
+                subst.unify(
                     m1.r#type(),
                     &Type::Arrow(Box::new(m2.r#type().clone()), Box::new(t.clone())),
                 );
-                self.infer(m1, env);
-                self.infer(m2, env);
+                m1.infer_help(subst, env);
+                m2.infer_help(subst, env);
             }
         }
     }
-}
 
-impl Term {
     pub fn infer(&mut self, env: &HashMap<String, Type>) {
         let mut subst = TypeSubst::default();
-        subst.infer(self, &mut env.clone());
-        subst.apply_term(self);
+        self.infer_help(&mut subst, &mut env.clone());
+        self.apply_type_subst(&subst);
     }
 }
 
