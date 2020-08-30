@@ -130,7 +130,7 @@ impl Type {
 pub enum Term {
     Fvar(Type, String),
     Bvar(Type, usize),
-    Abs(Type, Box<Term>),
+    Abs(Type, Type, Box<Term>),
     App(Type, Box<Term>, Box<Term>),
     Const(Type, String),
     /// Mvar is always closed.
@@ -148,7 +148,7 @@ impl Term {
         match self {
             Self::Fvar(t, _) => t,
             Self::Bvar(t, _) => t,
-            Self::Abs(t, _) => t,
+            Self::Abs(t, _, _) => t,
             Self::App(t, _, _) => t,
             Self::Const(t, _) => t,
             Self::Mvar(t, _) => t,
@@ -170,7 +170,7 @@ impl Term {
                     *self = Self::Fvar(mem::take(t), name.to_owned());
                 }
             }
-            Self::Abs(_, n) => {
+            Self::Abs(_, _, n) => {
                 n.open_at(name, level + 1);
             }
             Self::App(_, m1, m2) => {
@@ -197,7 +197,7 @@ impl Term {
                 }
             }
             Self::Bvar(_, _) => {}
-            Self::Abs(_, m) => {
+            Self::Abs(_, _, m) => {
                 m.close_at(name, level + 1);
             }
             Self::App(_, m1, m2) => {
@@ -210,9 +210,9 @@ impl Term {
     }
 
     fn mk_abs(&mut self, name: &str, t: Type) {
-        let t = Type::Arrow(Box::new(t), Box::new(self.r#type().clone()));
+        let u = Type::Arrow(Box::new(t.clone()), Box::new(self.r#type().clone()));
         self.close(name);
-        *self = Self::Abs(t, Box::new(mem::take(self)));
+        *self = Self::Abs(u, t, Box::new(mem::take(self)));
     }
 
     fn mk_app(&mut self, arg: Term, t: Type) {
@@ -224,7 +224,7 @@ impl Term {
         match self {
             Self::Fvar(_, x) => name != x,
             Self::Bvar(_, _) => true,
-            Self::Abs(_, m) => m.is_closed(),
+            Self::Abs(_, _, m) => m.is_closed(),
             Self::App(_, m1, m2) => m1.is_closed() && m2.is_closed(),
             Self::Const(_, _) => true,
             Self::Mvar(_, _) => true,
@@ -235,7 +235,7 @@ impl Term {
         match self {
             Self::Fvar(_, _) => false,
             Self::Bvar(_, _) => true,
-            Self::Abs(_, m) => m.is_closed(),
+            Self::Abs(_, _, m) => m.is_closed(),
             Self::App(_, m1, m2) => m1.is_closed() && m2.is_closed(),
             Self::Const(_, _) => true,
             Self::Mvar(_, _) => true,
@@ -250,7 +250,7 @@ impl Term {
         match self {
             Self::Fvar(_, _) => true,
             Self::Bvar(_, i) => *i < level,
-            Self::Abs(_, m) => m.is_locally_closed_at(level + 1),
+            Self::Abs(_, _, m) => m.is_locally_closed_at(level + 1),
             Self::App(_, m1, m2) => {
                 m1.is_locally_closed_at(level) && m2.is_locally_closed_at(level)
             }
@@ -267,7 +267,7 @@ impl Term {
         match self {
             Self::Fvar(_, _) => true,
             Self::Bvar(_, _) => true,
-            Self::Abs(_, m) => m.is_ground(),
+            Self::Abs(_, _, m) => m.is_ground(),
             Self::App(_, m1, m2) => m1.is_ground() && m2.is_ground(),
             Self::Const(_, _) => true,
             Self::Mvar(_, _) => false,
@@ -286,7 +286,7 @@ impl Term {
                 m1.subst(name, m);
                 m2.subst(name, m);
             }
-            Self::Abs(_, n) => {
+            Self::Abs(_, _, n) => {
                 n.subst(name, m);
             }
             Self::Const(_, _) => {}
@@ -302,7 +302,7 @@ impl Term {
                 m1.subst_meta(mid, m);
                 m2.subst_meta(mid, m);
             }
-            Self::Abs(_, n) => {
+            Self::Abs(_, _, n) => {
                 n.subst_meta(mid, m);
             }
             Self::Const(_, _) => {}
@@ -319,8 +319,9 @@ impl Term {
             Self::Fvar(u, _) => u.subst_meta(mid, t),
             Self::Bvar(u, _) => u.subst_meta(mid, t),
             Self::Const(u, _) => u.subst_meta(mid, t),
-            Self::Abs(u, m) => {
+            Self::Abs(u, v, m) => {
                 u.subst_meta(mid, t);
+                v.subst_meta(mid, t);
                 m.subst_type_meta(mid, t);
             }
             Self::App(u, m1, m2) => {
@@ -336,7 +337,7 @@ impl Term {
     /// May return a locally open term
     pub fn head(&self) -> &Self {
         let mut m = self;
-        while let Self::Abs(_, n) = m {
+        while let Self::Abs(_, _, n) = m {
             m = n;
         }
         while let Self::App(_, m1, _) = m {
@@ -352,7 +353,7 @@ impl Term {
             Self::Bvar(_, _)
             | Self::Fvar(_, _)
             | Self::Const(_, _)
-            | Self::Abs(_, _)
+            | Self::Abs(_, _, _)
             | Self::App(_, _, _) => false,
         }
     }
@@ -364,7 +365,7 @@ impl Term {
 
     fn is_neutral(&self) -> bool {
         match self {
-            Self::Abs(_, _) => false,
+            Self::Abs(_, _, _) => false,
             Self::App(_, m1, m2) => m1.is_neutral() && m2.is_normal(),
             Self::Bvar(_, _) | Self::Fvar(_, _) | Self::Const(_, _) | Self::Mvar(_, _) => true,
         }
@@ -372,7 +373,7 @@ impl Term {
 
     /// `true` if the term is in β-normal form.
     pub fn is_normal(&self) -> bool {
-        if let Self::Abs(_, m) = self {
+        if let Self::Abs(_, _, m) = self {
             m.is_normal()
         } else {
             self.is_neutral()
@@ -383,7 +384,7 @@ impl Term {
     pub fn is_hnf(&self) -> bool {
         match self.head() {
             Self::Fvar(_, _) | Self::Bvar(_, _) | Self::Const(_, _) | Self::Mvar(_, _) => true,
-            Self::Abs(_, _) => false,
+            Self::Abs(_, _, _) => false,
             Self::App(_, _, _) => unreachable!(),
         }
     }
@@ -391,7 +392,7 @@ impl Term {
     /// does not check if a term inside an abstraction is in whnf
     pub fn is_whnf(&self) -> bool {
         match self {
-            Self::Abs(_, _) => true,
+            Self::Abs(_, _, _) => true,
             Self::Bvar(_, _)
             | Self::Fvar(_, _)
             | Self::Const(_, _)
@@ -437,7 +438,7 @@ impl Term {
         // assert!(self.is_well_typed());
         match self.r#type() {
             Type::Arrow(_, _) => {
-                if let Self::Abs(_, m) = self {
+                if let Self::Abs(_, _, m) = self {
                     m.is_canonical()
                 } else {
                     false
@@ -455,7 +456,7 @@ impl Term {
                     Self::Fvar(_, _) | Self::Bvar(_, _) | Self::Const(_, _) | Self::Mvar(_, _) => {
                         true
                     }
-                    Self::Abs(_, _) => false,
+                    Self::Abs(_, _, _) => false,
                     Self::App(_, _, _) => unreachable!(),
                 }
             }
@@ -480,13 +481,13 @@ impl Term {
             Self::App(_, m1, m2) => {
                 m1.beta_reduce();
                 m2.beta_reduce();
-                if let Self::Abs(_, m) = &mut **m1 {
+                if let Self::Abs(_, _, m) = &mut **m1 {
                     m.open_subst(m2);
                     m.beta_reduce();
                     *self = mem::take(m);
                 }
             }
-            Self::Abs(_, m) => m.beta_reduce(),
+            Self::Abs(_, _, m) => m.beta_reduce(),
         }
     }
 
@@ -504,7 +505,7 @@ impl Term {
                     m2.eta_expand_normal();
                     m = m1;
                 }
-                Self::Abs(_, _) => unreachable!(),
+                Self::Abs(_, _, _) => unreachable!(),
             }
         }
         // [M] := λv*. M v*
@@ -531,7 +532,7 @@ impl Term {
     fn eta_expand_normal(&mut self) {
         assert!(self.is_normal());
         match self {
-            Self::Abs(_, m) => {
+            Self::Abs(_, _, m) => {
                 let x = fresh();
                 m.open(&x);
                 m.eta_expand_normal();
@@ -622,14 +623,13 @@ impl Term {
             }
             Term::Mvar(_, _) => {}
             Term::Bvar(_, _) => todo!(),
-            Term::Abs(t, m) => {
-                let mid = MvarId::fresh();
+            Term::Abs(t, u, m) => {
                 subst.unify(
                     t,
-                    &Type::Arrow(Box::new(Type::Mvar(mid)), Box::new(m.r#type().clone())),
+                    &Type::Arrow(Box::new(u.clone()), Box::new(m.r#type().clone())),
                 );
                 let name = fresh();
-                env.insert(name.clone(), Type::Mvar(mid));
+                env.insert(name.clone(), u.clone());
                 m.open(&name);
                 m.infer_help(subst, env);
                 m.close(&name);
@@ -673,7 +673,7 @@ impl From<Term> for Hnf {
         assert!(m.is_canonical());
         let mut binder = vec![];
         let mut head = m;
-        while let Term::Abs(t, mut m) = head {
+        while let Term::Abs(_, t, mut m) = head {
             let x = fresh();
             m.open(&x);
             binder.push((x, t));
