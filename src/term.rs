@@ -448,39 +448,6 @@ impl Term {
         }
     }
 
-    /// Check if the term is in η-long β-normal form.
-    /// `self` must be fully typed.
-    /// See Lectures on the Curry-Howard isomorphism, Chapter 4.
-    /// https://math.stackexchange.com/q/3334730
-    pub fn is_canonical(&self) -> bool {
-        // assert!(self.is_well_typed());
-        match self.r#type() {
-            Type::Arrow(_, _) => {
-                if let Self::Abs(_, _, m) = self {
-                    m.is_canonical()
-                } else {
-                    false
-                }
-            }
-            Type::Base(_) | Type::Mvar(_) => {
-                let mut m = self;
-                while let Self::App(_, m1, m2) = m {
-                    if !m2.is_canonical() {
-                        return false;
-                    }
-                    m = m1;
-                }
-                match m {
-                    Self::Fvar(_, _) | Self::Bvar(_, _) | Self::Const(_, _) | Self::Mvar(_, _) => {
-                        true
-                    }
-                    Self::Abs(_, _, _) => false,
-                    Self::App(_, _, _) => unreachable!(),
-                }
-            }
-        }
-    }
-
     /// self.open_subst(m) == [m/x][x/0]self (for fresh x) == [m/0]self
     fn open_subst(&mut self, m: &Term) {
         // TODO: traverse the whole term only once
@@ -507,6 +474,47 @@ impl Term {
             }
             Self::Abs(_, _, m) => m.beta_reduce(),
         }
+    }
+
+    fn is_canonical_help(&mut self) -> bool {
+        // assert!(self.is_well_typed());
+        match self.r#type() {
+            Type::Arrow(_, _) => {
+                if let Self::Abs(_, _, m) = self {
+                    let name = Name::fresh();
+                    m.open(&name);
+                    let r = m.is_canonical_help();
+                    m.close(&name);
+                    r
+                } else {
+                    false
+                }
+            }
+            Type::Base(_) | Type::Mvar(_) => {
+                let mut m = self;
+                while let Self::App(_, m1, m2) = m {
+                    if !m2.is_canonical_help() {
+                        return false;
+                    }
+                    m = m1;
+                }
+                match m {
+                    Self::Fvar(_, _) | Self::Bvar(_, _) | Self::Const(_, _) | Self::Mvar(_, _) => {
+                        true
+                    }
+                    Self::Abs(_, _, _) => false,
+                    Self::App(_, _, _) => unreachable!(),
+                }
+            }
+        }
+    }
+
+    /// Check if the term is in η-long β-normal form.
+    /// `self` must be fully typed.
+    /// See Lectures on the Curry-Howard isomorphism, Chapter 4.
+    /// https://math.stackexchange.com/q/3334730
+    pub fn is_canonical(&self) -> bool {
+        self.clone().is_canonical_help()
     }
 
     /// [x M₁ ... Mₙ] := λv*. x [M₁] ... [Mₙ] v*
@@ -729,10 +737,10 @@ impl Hnf {
         } else {
             panic!("self is not flex")
         };
-        let zs: Vec<_> = self
-            .args
-            .iter()
-            .map(|m| (Name::fresh(), m.r#type()))
+        let zs: Vec<_> = t
+            .components()
+            .into_iter()
+            .map(|t| (Name::fresh(), t.clone()))
             .collect();
         let mut heads = vec![];
         // projection
