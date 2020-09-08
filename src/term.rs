@@ -3,26 +3,26 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::mem;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct Name(String);
-
-impl std::ops::Deref for Name {
-    type Target = str;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+pub enum Name {
+    Named(String),
+    Anon(usize),
 }
 
 impl std::fmt::Display for Name {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        match self {
+            Name::Named(name) => write!(f, "{}", name),
+            Name::Anon(k) => write!(f, "#{}", k),
+        }
     }
 }
 
 impl Name {
+    // TODO: reclaim unused mvars
     fn fresh() -> Self {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static COUNTER: Lazy<AtomicUsize> = Lazy::new(Default::default);
-        Self(format!("#{}", COUNTER.fetch_add(1, Ordering::Relaxed)))
+        Self::Anon(COUNTER.fetch_add(1, Ordering::Relaxed))
     }
 }
 
@@ -175,17 +175,17 @@ impl Term {
 
     /// `self` must satisfy `Term::is_body`.
     /// self.open(x) == [x/0]self
-    pub fn open(&mut self, name: &str) {
+    pub fn open(&mut self, name: &Name) {
         assert!(self.is_body());
         self.open_at(name, 0)
     }
 
-    fn open_at(&mut self, name: &str, level: usize) {
+    fn open_at(&mut self, name: &Name, level: usize) {
         match self {
             Self::Fvar(_, _) => {}
             Self::Bvar(t, i) => {
                 if *i == level {
-                    *self = Self::Fvar(mem::take(t), Name(name.to_owned()));
+                    *self = Self::Fvar(mem::take(t), name.clone());
                 }
             }
             Self::Abs(_, _, n) => {
@@ -202,15 +202,15 @@ impl Term {
 
     /// `self` must be locally closed.
     /// self.close(x) == [0/x]self
-    pub fn close(&mut self, name: &str) {
+    pub fn close(&mut self, name: &Name) {
         assert!(self.is_locally_closed());
         self.close_at(name, 0)
     }
 
-    fn close_at(&mut self, name: &str, level: usize) {
+    fn close_at(&mut self, name: &Name, level: usize) {
         match self {
             Self::Fvar(t, x) => {
-                if name == &**x {
+                if name == x {
                     *self = Self::Bvar(mem::take(t), level);
                 }
             }
@@ -227,7 +227,7 @@ impl Term {
         }
     }
 
-    fn mk_abs(&mut self, name: &str, t: Type) {
+    fn mk_abs(&mut self, name: &Name, t: Type) {
         let u = Type::Arrow(Box::new(t.clone()), Box::new(self.r#type().clone()));
         self.close(name);
         *self = Self::Abs(u, t, Box::new(mem::take(self)));
@@ -238,9 +238,9 @@ impl Term {
     }
 
     /// x # self <==> x ∉ FV(self)
-    pub fn is_fresh(&self, name: &str) -> bool {
+    pub fn is_fresh(&self, name: &Name) -> bool {
         match self {
-            Self::Fvar(_, x) => name != &**x,
+            Self::Fvar(_, x) => name != x,
             Self::Bvar(_, _) => true,
             Self::Abs(_, _, m) => m.is_closed(),
             Self::App(_, m1, m2) => m1.is_closed() && m2.is_closed(),
@@ -292,10 +292,10 @@ impl Term {
         }
     }
 
-    pub fn subst(&mut self, name: &str, m: &Term) {
+    pub fn subst(&mut self, name: &Name, m: &Term) {
         match self {
             Self::Fvar(_, x) => {
-                if name == &**x {
+                if name == x {
                     *self = m.clone();
                 }
             }
@@ -883,26 +883,29 @@ mod tests {
     #[test]
     fn test_infer() {
         let env = vec![(
-            Name("f".to_owned()),
+            Name::Named("f".to_owned()),
             Type::Arrow(
-                Type::Base(Name("A".to_owned())).into(),
-                Type::Base(Name("B".to_owned())).into(),
+                Type::Base(Name::Named("A".to_owned())).into(),
+                Type::Base(Name::Named("B".to_owned())).into(),
             ),
         )]
         .into_iter()
         .collect();
-        let mut m = Term::Fvar(Type::Mvar(MvarId::fresh()), Name("f".to_owned()));
+        let mut m = Term::Fvar(Type::Mvar(MvarId::fresh()), Name::Named("f".to_owned()));
         m.mk_app(
-            Term::Fvar(Type::Mvar(MvarId::fresh()).into(), Name("x".to_owned())),
+            Term::Fvar(
+                Type::Mvar(MvarId::fresh()).into(),
+                Name::Named("x".to_owned()),
+            ),
             Type::Mvar(MvarId::fresh()),
         );
-        m.mk_abs("x", Type::Mvar(MvarId::fresh()));
+        m.mk_abs(&Name::Named("x".to_owned()), Type::Mvar(MvarId::fresh()));
         m.infer(&env);
         assert_eq!(
             m.r#type(),
             &Type::Arrow(
-                Type::Base(Name("A".to_owned())).into(),
-                Type::Base(Name("B".to_owned())).into()
+                Type::Base(Name::Named("A".to_owned())).into(),
+                Type::Base(Name::Named("B".to_owned())).into()
             )
         );
     }
