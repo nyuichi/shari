@@ -45,6 +45,10 @@ pub struct TypeScheme {
 }
 
 impl TypeScheme {
+    pub fn arity(&self) -> usize {
+        self.vars.len()
+    }
+
     pub fn instantiate(&self, args: &[Type]) -> Type {
         assert_eq!(self.vars.len(), args.len());
         let mut t = self.scheme.clone();
@@ -248,12 +252,14 @@ impl Term {
         }
     }
 
-    fn mk_abs(&mut self, name: &Name, t: Type) {
+    #[doc(hidden)]
+    pub fn mk_abs(&mut self, name: &Name, t: Type) {
         self.close(name);
         *self = Self::Abs(t, Box::new(mem::take(self)));
     }
 
-    fn mk_app(&mut self, arg: Term) {
+    #[doc(hidden)]
+    pub fn mk_app(&mut self, arg: Term) {
         *self = Self::App(Box::new(mem::take(self)), Box::new(arg));
     }
 
@@ -661,7 +667,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn get_const(&self, name: &Name) -> Option<&TypeScheme> {
+    pub fn get_const(&self, name: &Name) -> Option<&TypeScheme> {
         match self {
             Self::Global { consts } => consts.get(name),
             Self::Local { outer, .. } => outer.get_const(name),
