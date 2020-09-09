@@ -26,7 +26,7 @@ impl Name {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct MvarId(usize);
 
 impl MvarId {
@@ -35,6 +35,25 @@ impl MvarId {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static COUNTER: Lazy<AtomicUsize> = Lazy::new(Default::default);
         Self(COUNTER.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TypeScheme {
+    vars: Vec<MvarId>,
+    scheme: Type,
+}
+
+impl TypeScheme {
+    pub fn instantiate(&self, args: &[Type]) -> Type {
+        assert_eq!(self.vars.len(), args.len());
+        let mut t = self.scheme.clone();
+        let mut subst = TypeSubst::default();
+        for (mid, t) in self.vars.iter().zip(args.iter()) {
+            subst.0.push((*mid, t.clone()));
+        }
+        t.apply_subst(&subst);
+        t
     }
 }
 
@@ -126,7 +145,7 @@ impl Type {
         }
     }
 
-    pub fn subst_meta(&mut self, mid: MvarId, t: &Type) {
+    fn subst_meta(&mut self, mid: MvarId, t: &Type) {
         match self {
             Self::Base(_) => {}
             Self::Mvar(i) => {
@@ -140,6 +159,19 @@ impl Type {
             }
         }
     }
+
+    fn mvars(&self, set: &mut HashSet<MvarId>) {
+        match self {
+            Type::Base(_) => {}
+            Type::Arrow(t1, t2) => {
+                t1.mvars(set);
+                t2.mvars(set);
+            }
+            Type::Mvar(mid) => {
+                set.insert(*mid);
+            }
+        }
+    }
 }
 
 /// locally nameless representation
@@ -150,7 +182,7 @@ pub enum Term {
     Bvar(usize),
     Abs(Type, Box<Term>),
     App(Box<Term>, Box<Term>),
-    Const(Name),
+    Const(Name, Vec<Type>),
     /// Mvar is always closed.
     Mvar(Type, MvarId),
 }
@@ -184,7 +216,7 @@ impl Term {
                 m1.open_at(name, level);
                 m2.open_at(name, level);
             }
-            Self::Const(_) => {}
+            Self::Const(_, _) => {}
             Self::Mvar(_, _) => {}
         }
     }
@@ -211,7 +243,7 @@ impl Term {
                 m1.close_at(name, level);
                 m2.close_at(name, level);
             }
-            Self::Const(_) => {}
+            Self::Const(_, _) => {}
             Self::Mvar(_, _) => {}
         }
     }
@@ -232,7 +264,7 @@ impl Term {
             Self::Bvar(_) => true,
             Self::Abs(_, m) => m.is_closed(),
             Self::App(m1, m2) => m1.is_closed() && m2.is_closed(),
-            Self::Const(_) => true,
+            Self::Const(_, _) => true,
             Self::Mvar(_, _) => true,
         }
     }
@@ -243,7 +275,7 @@ impl Term {
             Self::Bvar(_) => true,
             Self::Abs(_, m) => m.is_closed(),
             Self::App(m1, m2) => m1.is_closed() && m2.is_closed(),
-            Self::Const(_) => true,
+            Self::Const(_, _) => true,
             Self::Mvar(_, _) => true,
         }
     }
@@ -258,7 +290,7 @@ impl Term {
             Self::Bvar(i) => *i < level,
             Self::Abs(_, m) => m.is_locally_closed_at(level + 1),
             Self::App(m1, m2) => m1.is_locally_closed_at(level) && m2.is_locally_closed_at(level),
-            Self::Const(_) => true,
+            Self::Const(_, _) => true,
             Self::Mvar(_, _) => true,
         }
     }
@@ -273,7 +305,7 @@ impl Term {
             Self::Bvar(_) => true,
             Self::Abs(_, m) => m.is_ground(),
             Self::App(m1, m2) => m1.is_ground() && m2.is_ground(),
-            Self::Const(_) => true,
+            Self::Const(_, _) => true,
             Self::Mvar(_, _) => false,
         }
     }
@@ -293,12 +325,12 @@ impl Term {
             Self::Abs(_, n) => {
                 n.subst(name, m);
             }
-            Self::Const(_) => {}
+            Self::Const(_, _) => {}
             Self::Mvar(_, _) => {}
         }
     }
 
-    pub fn subst_meta(&mut self, mid: MvarId, m: &Term) {
+    fn subst_meta(&mut self, mid: MvarId, m: &Term) {
         match self {
             Self::Fvar(_) => {}
             Self::Bvar(_) => {}
@@ -309,7 +341,7 @@ impl Term {
             Self::Abs(_, n) => {
                 n.subst_meta(mid, m);
             }
-            Self::Const(_) => {}
+            Self::Const(_, _) => {}
             Self::Mvar(_, i) => {
                 if *i == mid {
                     *self = m.clone();
@@ -320,7 +352,7 @@ impl Term {
 
     fn subst_type_meta(&mut self, mid: MvarId, t: &Type) {
         match self {
-            Self::Fvar(_) | Self::Bvar(_) | Self::Const(_) => {}
+            Self::Fvar(_) | Self::Bvar(_) => {}
             Self::Abs(u, m) => {
                 u.subst_meta(mid, t);
                 m.subst_type_meta(mid, t);
@@ -328,6 +360,11 @@ impl Term {
             Self::App(m1, m2) => {
                 m1.subst_type_meta(mid, t);
                 m2.subst_type_meta(mid, t);
+            }
+            Self::Const(_, ts) => {
+                for u in ts {
+                    u.subst_meta(mid, t);
+                }
             }
             Self::Mvar(u, _) => u.subst_meta(mid, t),
         }
@@ -350,9 +387,11 @@ impl Term {
     pub fn is_flex(&self) -> bool {
         match self.head() {
             Self::Mvar(_, _) => true,
-            Self::Bvar(_) | Self::Fvar(_) | Self::Const(_) | Self::Abs(_, _) | Self::App(_, _) => {
-                false
-            }
+            Self::Bvar(_)
+            | Self::Fvar(_)
+            | Self::Const(_, _)
+            | Self::Abs(_, _)
+            | Self::App(_, _) => false,
         }
     }
 
@@ -365,7 +404,7 @@ impl Term {
         match self {
             Self::Abs(_, _) => false,
             Self::App(m1, m2) => m1.is_neutral() && m2.is_normal(),
-            Self::Bvar(_) | Self::Fvar(_) | Self::Const(_) | Self::Mvar(_, _) => true,
+            Self::Bvar(_) | Self::Fvar(_) | Self::Const(_, _) | Self::Mvar(_, _) => true,
         }
     }
 
@@ -381,7 +420,7 @@ impl Term {
     /// m is in head normal form if m has no β-redex at its head position.
     pub fn is_hnf(&self) -> bool {
         match self.head() {
-            Self::Fvar(_) | Self::Bvar(_) | Self::Const(_) | Self::Mvar(_, _) => true,
+            Self::Fvar(_) | Self::Bvar(_) | Self::Const(_, _) | Self::Mvar(_, _) => true,
             Self::Abs(_, _) => false,
             Self::App(_, _) => unreachable!(),
         }
@@ -391,9 +430,11 @@ impl Term {
     pub fn is_whnf(&self) -> bool {
         match self {
             Self::Abs(_, _) => true,
-            Self::Bvar(_) | Self::Fvar(_) | Self::Const(_) | Self::Mvar(_, _) | Self::App(_, _) => {
-                self.is_hnf()
-            }
+            Self::Bvar(_)
+            | Self::Fvar(_)
+            | Self::Const(_, _)
+            | Self::Mvar(_, _)
+            | Self::App(_, _) => self.is_hnf(),
         }
     }
 
@@ -429,7 +470,7 @@ impl Term {
         match self {
             Self::Fvar(_) => {}
             Self::Bvar(_) => {}
-            Self::Const(_) => {}
+            Self::Const(_, _) => {}
             Self::Mvar(_, _) => {}
             Self::App(m1, m2) => {
                 m1.beta_reduce();
@@ -468,7 +509,7 @@ impl Term {
                     m = m1;
                 }
                 match m {
-                    Self::Fvar(_) | Self::Bvar(_) | Self::Const(_) | Self::Mvar(_, _) => true,
+                    Self::Fvar(_) | Self::Bvar(_) | Self::Const(_, _) | Self::Mvar(_, _) => true,
                     Self::Abs(_, _) => false,
                     Self::App(_, _) => unreachable!(),
                 }
@@ -493,7 +534,7 @@ impl Term {
         let mut m = &mut *self;
         loop {
             match m {
-                Self::Fvar(_) | Self::Bvar(_) | Self::Const(_) | Self::Mvar(_, _) => {
+                Self::Fvar(_) | Self::Bvar(_) | Self::Const(_, _) | Self::Mvar(_, _) => {
                     break;
                 }
                 Self::App(m1, m2) => {
@@ -535,7 +576,11 @@ impl Term {
                 m.close(&x);
                 env.remove_local(&x);
             }
-            Self::Bvar(_) | Self::Fvar(_) | Self::Const(_) | Self::Mvar(_, _) | Self::App(_, _) => {
+            Self::Bvar(_)
+            | Self::Fvar(_)
+            | Self::Const(_, _)
+            | Self::Mvar(_, _)
+            | Self::App(_, _) => {
                 self.eta_expand_neutral(env);
             }
         }
@@ -562,10 +607,10 @@ impl Term {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub enum Env<'a> {
     Global {
-        consts: HashMap<Name, Type>,
+        consts: HashMap<Name, TypeScheme>,
     },
     Local {
         outer: &'a Env<'a>,
@@ -607,7 +652,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn add_const(&mut self, name: Name, t: Type) {
+    fn add_const(&mut self, name: Name, t: TypeScheme) {
         match self {
             Self::Global { consts } => {
                 consts.insert(name, t).map(|_| todo!());
@@ -616,7 +661,7 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn get_const(&self, name: &Name) -> Option<&Type> {
+    fn get_const(&self, name: &Name) -> Option<&TypeScheme> {
         match self {
             Self::Global { consts } => consts.get(name),
             Self::Local { outer, .. } => outer.get_const(name),
@@ -685,10 +730,15 @@ impl Term {
                 .get_local(name)
                 .unwrap_or_else(|| todo!("fvar not found {}", name))
                 .clone(),
-            Term::Const(name) => env
-                .get_const(name)
-                .unwrap_or_else(|| todo!("constant not found {}", name))
-                .clone(),
+            Term::Const(name, ts) => {
+                let scheme = env
+                    .get_const(name)
+                    .unwrap_or_else(|| todo!("constant not found {}", name));
+                if scheme.vars.len() != ts.len() {
+                    todo!();
+                }
+                scheme.clone().instantiate(&ts)
+            }
             Term::Mvar(t, _) => t.clone(),
             Term::Bvar(_) => panic!("self is open"),
             Term::Abs(t, m) => {
@@ -719,21 +769,7 @@ impl Term {
         t
     }
 
-    fn has_type_meta(&self) -> bool {
-        match self {
-            Term::Fvar(_) => false,
-            Term::Bvar(_) => false,
-            Term::Abs(t, m) => (!t.is_ground()) || m.has_type_meta(),
-            Term::App(m1, m2) => m1.has_type_meta() || m2.has_type_meta(),
-            Term::Const(_) => false,
-            Term::Mvar(t, _) => !t.is_ground(),
-        }
-    }
-
     pub fn check(&self, env: &Env) -> bool {
-        if self.has_type_meta() {
-            return false;
-        }
         self.clone().infer(env);
         true
     }
@@ -811,7 +847,7 @@ impl Hnf {
         }
         // imitation
         match other.head {
-            Term::Fvar(_) | Term::Const(_) => {
+            Term::Fvar(_) | Term::Const(_, _) => {
                 let mut m = other.head.clone();
                 let t = m.infer(env);
                 heads.push((m, t));
@@ -950,12 +986,15 @@ mod tests {
         let mut env = Env::default();
         env.add_const(
             Name::Named("f".to_owned()),
-            Type::Arrow(
-                Type::Base(Name::Named("A".to_owned())).into(),
-                Type::Base(Name::Named("B".to_owned())).into(),
-            ),
+            TypeScheme {
+                vars: vec![],
+                scheme: Type::Arrow(
+                    Type::Base(Name::Named("A".to_owned())).into(),
+                    Type::Base(Name::Named("B".to_owned())).into(),
+                ),
+            },
         );
-        let mut m = Term::Const(Name::Named("f".to_owned()));
+        let mut m = Term::Const(Name::Named("f".to_owned()), vec![]);
         m.mk_app(Term::Fvar(Name::Named("x".to_owned())));
         m.mk_abs(&Name::Named("x".to_owned()), Type::Mvar(MvarId::fresh()));
         let t = m.infer(&env);
