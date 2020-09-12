@@ -1,4 +1,4 @@
-use crate::term::{Env, MvarId, Name, Term, Type};
+use crate::syntax::{Name, Term, Type};
 use core::ops::Range;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -325,15 +325,13 @@ pub enum ParseError<'a> {
 struct Parse<'a> {
     lex: Lex<'a>,
     token_table: TokenTable,
-    env: Env<'a>,
 }
 
 impl<'a> Parse<'a> {
-    fn new(input: &'a str, filename: &'a str, token_table: TokenTable, env: Env<'a>) -> Self {
+    fn new(input: &'a str, filename: &'a str, token_table: TokenTable) -> Self {
         Self {
             lex: Lex::new(input, filename),
             token_table,
-            env,
         }
     }
 
@@ -435,13 +433,13 @@ impl<'a> Parse<'a> {
         let token = self.any_token()?;
         if token.is_ident() {
             let id = token.as_str();
-            Ok(Type::Base(Name::Named(id.to_owned())))
+            Ok(Type::Var(Name::Named(id.to_owned())))
         } else if token.is_symbol() && token.as_str() == "(" {
             let t = self.r#type()?;
             self.expect_symbol(")")?;
             Ok(t)
         } else {
-            unimplemented!()
+            todo!()
         }
     }
 
@@ -488,26 +486,28 @@ impl<'a> Parse<'a> {
         self.expect_symbol(",")?;
         let mut m = self.subterm(0)?;
         if params.is_empty() {
-            unimplemented!("empty binding");
+            todo!("empty binding");
         }
         for (name, t) in params.into_iter().rev() {
-            m.mk_abs(&name, t);
+            m = Term::Abs(name, Some(t), Box::new(m));
         }
         Ok(m)
     }
 
     fn term_forall(&mut self, _token: Token) -> Result<Term, ParseError<'a>> {
-        todo!()
-        // let vars = self.parameters()?;
-        // self.expect_symbol(",")?;
-        // let body = self.subterm(0)?;
-        // if vars.is_empty() {
-        //     unimplemented!("empty binding");
-        // }
-        // Ok(vars
-        //     .into_iter()
-        //     .rev()
-        //     .fold(body, |m, (var, t)| m.into_forall(&var, t)))
+        let params = self.parameters()?;
+        self.expect_symbol(",")?;
+        let mut m = self.subterm(0)?;
+        if params.is_empty() {
+            todo!("empty binding");
+        }
+        for (name, t) in params.into_iter().rev() {
+            m = Term::App(
+                Box::new(Term::Var(Name::Named("forall".to_owned()))),
+                Box::new(Term::Abs(name, Some(t), Box::new(m))),
+            );
+        }
+        Ok(m)
     }
 
     fn term_var(&mut self, token: Token, entity: Option<String>) -> Term {
@@ -515,23 +515,14 @@ impl<'a> Parse<'a> {
             None => Name::Named(token.as_str().to_owned()),
             Some(s) => Name::Named(s),
         };
-        if let Some(scheme) = self.env.get_const(&name) {
-            Term::Const(
-                name,
-                (0..scheme.arity())
-                    .map(|_| Type::Mvar(MvarId::fresh()))
-                    .collect(),
-            )
-        } else {
-            Term::Fvar(name)
-        }
+        Term::Var(name)
     }
 
     fn subterm(&mut self, rbp: usize) -> Result<Term, ParseError<'a>> {
         let token = self.any_token()?;
         // nud
         let nud = match self.token_table.get_nud(&token) {
-            None => unimplemented!("nud unknown: {}", token),
+            None => todo!("nud unknown: {}", token),
             Some(nud) => nud,
         };
         let mut left = match nud {
@@ -546,10 +537,9 @@ impl<'a> Parse<'a> {
             Nud::User(op) => match op.fixity {
                 Fixity::Nofix => self.term_var(token, Some(op.entity)),
                 Fixity::Prefix => {
-                    let mut m = self.term_var(token, Some(op.entity));
+                    let fun = self.term_var(token, Some(op.entity));
                     let arg = self.subterm(op.prec)?;
-                    m.mk_app(arg);
-                    m
+                    Term::App(Box::new(fun), Box::new(arg))
                 }
                 _ => unreachable!(),
             },
@@ -566,28 +556,39 @@ impl<'a> Parse<'a> {
             match led {
                 Led::App => {
                     let right = self.subterm(led.prec())?;
-                    left.mk_app(right);
+                    left = Term::App(Box::new(left), Box::new(right));
                 }
                 Led::Imp => {
-                    todo!()
-                    // self.advance();
-                    // let right = self.subterm(led.prec() - 1)?;
-                    // left = Term::Imp(left.into(), right.into());
+                    self.advance();
+                    let right = self.subterm(led.prec() - 1)?;
+                    left = Term::App(
+                        Box::new(Term::App(
+                            Box::new(Term::Var(Name::Named("imp".to_owned()))),
+                            Box::new(left),
+                        )),
+                        Box::new(right),
+                    );
                 }
                 Led::Eq => {
-                    todo!()
-                    // self.advance();
-                    // let right = self.subterm(led.prec())?;
-                    // left = Term::Eq(left.into(), right.into());
+                    self.advance();
+                    let right = self.subterm(led.prec())?;
+                    left = Term::App(
+                        Box::new(Term::App(
+                            Box::new(Term::Var(Name::Named("eq".to_owned()))),
+                            Box::new(left),
+                        )),
+                        Box::new(right),
+                    );
                 }
                 Led::User(op) => match op.fixity {
                     Fixity::Infixl => {
                         self.advance();
-                        let mut f = self.term_var(token, Some(op.entity));
+                        let fun = self.term_var(token, Some(op.entity));
                         let right = self.subterm(prec)?;
-                        f.mk_app(left);
-                        f.mk_app(right);
-                        left = f;
+                        left = Term::App(
+                            Box::new(Term::App(Box::new(fun), Box::new(left))),
+                            Box::new(right),
+                        );
                     }
                     _ => unreachable!(),
                 },
@@ -602,12 +603,13 @@ mod tests {
     use super::*;
 
     fn parse_term(input: &str) -> Term {
-        let mut parser = Parse::new(input, "", TokenTable::default(), Env::default());
+        let mut parser = Parse::new(input, "", TokenTable::default());
         parser.term().unwrap()
     }
 
     #[test]
     fn parse() {
-        println!("{:?}", parse_term("λ (x : ℕ → ℕ), x y"))
+        println!("{:?}", parse_term("λ (x : ℕ → ℕ), x y"));
+        println!("{:?}", parse_term("p → (p → q) → q"));
     }
 }

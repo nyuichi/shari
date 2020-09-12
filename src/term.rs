@@ -1,5 +1,5 @@
 use once_cell::sync::Lazy;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::mem;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -52,18 +52,16 @@ impl TypeScheme {
     pub fn instantiate(&self, args: &[Type]) -> Type {
         assert_eq!(self.vars.len(), args.len());
         let mut t = self.scheme.clone();
-        let mut subst = TypeSubst::default();
-        for (mid, t) in self.vars.iter().zip(args.iter()) {
-            subst.0.push((*mid, t.clone()));
+        for (mid, u) in self.vars.iter().zip(args.iter()) {
+            t.instantiate(*mid, u);
         }
-        t.apply_subst(&subst);
         t
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Type {
-    Base(Name),
+    Fvar(Name),
     Arrow(Box<Type>, Box<Type>),
     Mvar(MvarId),
 }
@@ -74,7 +72,7 @@ impl Default for Type {
     }
 }
 
-/// Following the notations from [Barendregt+, 06](https://ftp.science.ru.nl/CSI/CompMath.Found/I.pdf).
+/// Following notations from [Barendregt+, 06](https://ftp.science.ru.nl/CSI/CompMath.Found/I.pdf).
 impl Type {
     pub fn depth(&self) -> usize {
         match self {
@@ -128,7 +126,7 @@ impl Type {
     pub fn is_ground(&self) -> bool {
         match self {
             Self::Arrow(t1, t2) => t1.is_ground() && t2.is_ground(),
-            Type::Base(_) => true,
+            Type::Fvar(_) => true,
             Type::Mvar(_) => false,
         }
     }
@@ -149,30 +147,17 @@ impl Type {
         }
     }
 
-    fn subst_meta(&mut self, mid: MvarId, t: &Type) {
+    fn instantiate(&mut self, mid: MvarId, t: &Type) {
         match self {
-            Self::Base(_) => {}
+            Self::Fvar(_) => {}
             Self::Mvar(i) => {
                 if *i == mid {
                     *self = t.clone();
                 }
             }
             Self::Arrow(t1, t2) => {
-                t1.subst_meta(mid, t);
-                t2.subst_meta(mid, t);
-            }
-        }
-    }
-
-    fn mvars(&self, set: &mut HashSet<MvarId>) {
-        match self {
-            Type::Base(_) => {}
-            Type::Arrow(t1, t2) => {
-                t1.mvars(set);
-                t2.mvars(set);
-            }
-            Type::Mvar(mid) => {
-                set.insert(*mid);
+                t1.instantiate(mid, t);
+                t2.instantiate(mid, t);
             }
         }
     }
@@ -180,20 +165,21 @@ impl Type {
 
 /// locally nameless representation
 /// See [Charguéraud, 2012].
+/// Every term `m` has an associated Env `m.env`, under which `m` is type-correct.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Term {
-    Fvar(Name),
-    Bvar(usize),
-    Abs(Type, Box<Term>),
-    App(Box<Term>, Box<Term>),
-    Const(Name, Vec<Type>),
+    Fvar(Type, Name),
+    Bvar(Type, usize),
+    Abs(Type, Type, Box<Term>),
+    App(Type, Box<Term>, Box<Term>),
+    Const(Type, Name, Vec<Type>),
     /// Mvar is always closed.
     Mvar(Type, MvarId),
 }
 
 impl Default for Term {
     fn default() -> Self {
-        Self::Bvar(12345678)
+        Self::Bvar(Type::default(), 12345678)
     }
 }
 
@@ -207,20 +193,20 @@ impl Term {
 
     fn open_at(&mut self, name: &Name, level: usize) {
         match self {
-            Self::Fvar(_) => {}
-            Self::Bvar(i) => {
+            Self::Fvar(_, _) => {}
+            Self::Bvar(t, i) => {
                 if *i == level {
-                    *self = Self::Fvar(name.clone());
+                    *self = Self::Fvar(mem::take(t), name.clone());
                 }
             }
-            Self::Abs(_, n) => {
+            Self::Abs(_, _, n) => {
                 n.open_at(name, level + 1);
             }
-            Self::App(m1, m2) => {
+            Self::App(_, m1, m2) => {
                 m1.open_at(name, level);
                 m2.open_at(name, level);
             }
-            Self::Const(_, _) => {}
+            Self::Const(_, _, _) => {}
             Self::Mvar(_, _) => {}
         }
     }
@@ -234,54 +220,61 @@ impl Term {
 
     fn close_at(&mut self, name: &Name, level: usize) {
         match self {
-            Self::Fvar(x) => {
+            Self::Fvar(t, x) => {
                 if name == x {
-                    *self = Self::Bvar(level);
+                    *self = Self::Bvar(mem::take(t), level);
                 }
             }
-            Self::Bvar(_) => {}
-            Self::Abs(_, m) => {
+            Self::Bvar(_, _) => {}
+            Self::Abs(_, _, m) => {
                 m.close_at(name, level + 1);
             }
-            Self::App(m1, m2) => {
+            Self::App(_, m1, m2) => {
                 m1.close_at(name, level);
                 m2.close_at(name, level);
             }
-            Self::Const(_, _) => {}
+            Self::Const(_, _, _) => {}
             Self::Mvar(_, _) => {}
         }
     }
 
-    #[doc(hidden)]
-    pub fn mk_abs(&mut self, name: &Name, t: Type) {
+    fn mk_abs(&mut self, name: &Name, t: Type) {
+        let u = self.r#type().clone();
         self.close(name);
-        *self = Self::Abs(t, Box::new(mem::take(self)));
+        *self = Self::Abs(
+            Type::Arrow(Box::new(t.clone()), Box::new(u)),
+            t,
+            Box::new(mem::take(self)),
+        );
     }
 
-    #[doc(hidden)]
-    pub fn mk_app(&mut self, arg: Term) {
-        *self = Self::App(Box::new(mem::take(self)), Box::new(arg));
+    fn mk_app(&mut self, arg: Term) {
+        if let Type::Arrow(t1, t2) = self.r#type() {
+            assert_eq!(&**t1, arg.r#type());
+            *self = Self::App((**t2).clone(), Box::new(mem::take(self)), Box::new(arg));
+        }
+        panic!("invalid application")
     }
 
     /// x # self <==> x ∉ FV(self)
     pub fn is_fresh(&self, name: &Name) -> bool {
         match self {
-            Self::Fvar(x) => name != x,
-            Self::Bvar(_) => true,
-            Self::Abs(_, m) => m.is_closed(),
-            Self::App(m1, m2) => m1.is_closed() && m2.is_closed(),
-            Self::Const(_, _) => true,
+            Self::Fvar(_, x) => name != x,
+            Self::Bvar(_, _) => true,
+            Self::Abs(_, _, m) => m.is_closed(),
+            Self::App(_, m1, m2) => m1.is_closed() && m2.is_closed(),
+            Self::Const(_, _, _) => true,
             Self::Mvar(_, _) => true,
         }
     }
 
     pub fn is_closed(&self) -> bool {
         match self {
-            Self::Fvar(_) => false,
-            Self::Bvar(_) => true,
-            Self::Abs(_, m) => m.is_closed(),
-            Self::App(m1, m2) => m1.is_closed() && m2.is_closed(),
-            Self::Const(_, _) => true,
+            Self::Fvar(_, _) => false,
+            Self::Bvar(_, _) => true,
+            Self::Abs(_, _, m) => m.is_closed(),
+            Self::App(_, m1, m2) => m1.is_closed() && m2.is_closed(),
+            Self::Const(_, _, _) => true,
             Self::Mvar(_, _) => true,
         }
     }
@@ -292,11 +285,13 @@ impl Term {
 
     fn is_locally_closed_at(&self, level: usize) -> bool {
         match self {
-            Self::Fvar(_) => true,
-            Self::Bvar(i) => *i < level,
-            Self::Abs(_, m) => m.is_locally_closed_at(level + 1),
-            Self::App(m1, m2) => m1.is_locally_closed_at(level) && m2.is_locally_closed_at(level),
-            Self::Const(_, _) => true,
+            Self::Fvar(_, _) => true,
+            Self::Bvar(_, i) => *i < level,
+            Self::Abs(_, _, m) => m.is_locally_closed_at(level + 1),
+            Self::App(_, m1, m2) => {
+                m1.is_locally_closed_at(level) && m2.is_locally_closed_at(level)
+            }
+            Self::Const(_, _, _) => true,
             Self::Mvar(_, _) => true,
         }
     }
@@ -307,47 +302,47 @@ impl Term {
 
     pub fn is_ground(&self) -> bool {
         match self {
-            Self::Fvar(_) => true,
-            Self::Bvar(_) => true,
-            Self::Abs(_, m) => m.is_ground(),
-            Self::App(m1, m2) => m1.is_ground() && m2.is_ground(),
-            Self::Const(_, _) => true,
+            Self::Fvar(_, _) => true,
+            Self::Bvar(_, _) => true,
+            Self::Abs(_, _, m) => m.is_ground(),
+            Self::App(_, m1, m2) => m1.is_ground() && m2.is_ground(),
+            Self::Const(_, _, _) => true,
             Self::Mvar(_, _) => false,
         }
     }
 
     pub fn subst(&mut self, name: &Name, m: &Term) {
         match self {
-            Self::Fvar(x) => {
+            Self::Fvar(_, x) => {
                 if name == x {
                     *self = m.clone();
                 }
             }
-            Self::Bvar(_) => {}
-            Self::App(m1, m2) => {
+            Self::Bvar(_, _) => {}
+            Self::App(_, m1, m2) => {
                 m1.subst(name, m);
                 m2.subst(name, m);
             }
-            Self::Abs(_, n) => {
+            Self::Abs(_, _, n) => {
                 n.subst(name, m);
             }
-            Self::Const(_, _) => {}
+            Self::Const(_, _, _) => {}
             Self::Mvar(_, _) => {}
         }
     }
 
-    fn subst_meta(&mut self, mid: MvarId, m: &Term) {
+    fn instantiate(&mut self, mid: MvarId, m: &Term) {
         match self {
-            Self::Fvar(_) => {}
-            Self::Bvar(_) => {}
-            Self::App(m1, m2) => {
-                m1.subst_meta(mid, m);
-                m2.subst_meta(mid, m);
+            Self::Fvar(_, _) => {}
+            Self::Bvar(_, _) => {}
+            Self::App(_, m1, m2) => {
+                m1.instantiate(mid, m);
+                m2.instantiate(mid, m);
             }
-            Self::Abs(_, n) => {
-                n.subst_meta(mid, m);
+            Self::Abs(_, _, n) => {
+                n.instantiate(mid, m);
             }
-            Self::Const(_, _) => {}
+            Self::Const(_, _, _) => {}
             Self::Mvar(_, i) => {
                 if *i == mid {
                     *self = m.clone();
@@ -356,23 +351,25 @@ impl Term {
         }
     }
 
-    fn subst_type_meta(&mut self, mid: MvarId, t: &Type) {
+    fn instantiate_type(&mut self, mid: MvarId, t: &Type) {
         match self {
-            Self::Fvar(_) | Self::Bvar(_) => {}
-            Self::Abs(u, m) => {
-                u.subst_meta(mid, t);
-                m.subst_type_meta(mid, t);
+            Self::Abs(u1, u2, m) => {
+                u1.instantiate(mid, t);
+                u2.instantiate(mid, t);
+                m.instantiate_type(mid, t);
             }
-            Self::App(m1, m2) => {
-                m1.subst_type_meta(mid, t);
-                m2.subst_type_meta(mid, t);
+            Self::App(u, m1, m2) => {
+                u.instantiate(mid, t);
+                m1.instantiate_type(mid, t);
+                m2.instantiate_type(mid, t);
             }
-            Self::Const(_, ts) => {
+            Self::Const(u, _, ts) => {
+                u.instantiate(mid, t);
                 for u in ts {
-                    u.subst_meta(mid, t);
+                    u.instantiate(mid, t);
                 }
             }
-            Self::Mvar(u, _) => u.subst_meta(mid, t),
+            Self::Fvar(u, _) | Self::Bvar(u, _) | Self::Mvar(u, _) => u.instantiate(mid, t),
         }
     }
 
@@ -380,43 +377,26 @@ impl Term {
     /// May return a locally open term
     pub fn head(&self) -> &Self {
         let mut m = self;
-        while let Self::Abs(_, n) = m {
+        while let Self::Abs(_, _, n) = m {
             m = n;
         }
-        while let Self::App(m1, _) = m {
+        while let Self::App(_, m1, _) = m {
             m = m1;
         }
         m
     }
 
-    /// See [Vukmirović+, 2020].
-    pub fn is_flex(&self) -> bool {
-        match self.head() {
-            Self::Mvar(_, _) => true,
-            Self::Bvar(_)
-            | Self::Fvar(_)
-            | Self::Const(_, _)
-            | Self::Abs(_, _)
-            | Self::App(_, _) => false,
-        }
-    }
-
-    /// See [Vukmirović+, 2020].
-    pub fn is_rigid(&self) -> bool {
-        !self.is_flex()
-    }
-
     fn is_neutral(&self) -> bool {
         match self {
-            Self::Abs(_, _) => false,
-            Self::App(m1, m2) => m1.is_neutral() && m2.is_normal(),
-            Self::Bvar(_) | Self::Fvar(_) | Self::Const(_, _) | Self::Mvar(_, _) => true,
+            Self::Abs(_, _, _) => false,
+            Self::App(_, m1, m2) => m1.is_neutral() && m2.is_normal(),
+            Self::Bvar(_, _) | Self::Fvar(_, _) | Self::Const(_, _, _) | Self::Mvar(_, _) => true,
         }
     }
 
     /// `true` if the term is in β-normal form.
     pub fn is_normal(&self) -> bool {
-        if let Self::Abs(_, m) = self {
+        if let Self::Abs(_, _, m) = self {
             m.is_normal()
         } else {
             self.is_neutral()
@@ -426,21 +406,21 @@ impl Term {
     /// m is in head normal form if m has no β-redex at its head position.
     pub fn is_hnf(&self) -> bool {
         match self.head() {
-            Self::Fvar(_) | Self::Bvar(_) | Self::Const(_, _) | Self::Mvar(_, _) => true,
-            Self::Abs(_, _) => false,
-            Self::App(_, _) => unreachable!(),
+            Self::Fvar(_, _) | Self::Bvar(_, _) | Self::Const(_, _, _) | Self::Mvar(_, _) => true,
+            Self::Abs(_, _, _) => false,
+            Self::App(_, _, _) => unreachable!(),
         }
     }
 
     /// does not check if a term inside an abstraction is in whnf
     pub fn is_whnf(&self) -> bool {
         match self {
-            Self::Abs(_, _) => true,
-            Self::Bvar(_)
-            | Self::Fvar(_)
-            | Self::Const(_, _)
+            Self::Abs(_, _, _) => true,
+            Self::Bvar(_, _)
+            | Self::Fvar(_, _)
+            | Self::Const(_, _, _)
             | Self::Mvar(_, _)
-            | Self::App(_, _) => self.is_hnf(),
+            | Self::App(_, _, _) => self.is_hnf(),
         }
     }
 
@@ -449,7 +429,7 @@ impl Term {
     /// assert(m = n)
     pub fn uncurry(&mut self) -> Vec<Term> {
         let mut args = vec![];
-        while let Self::App(m1, m2) = mem::take(self) {
+        while let Self::App(_, m1, m2) = mem::take(self) {
             args.push(*m2);
             *self = *m1;
         }
@@ -474,85 +454,83 @@ impl Term {
     /// applicative-order (leftmost-innermost) reduction
     fn beta_reduce(&mut self) {
         match self {
-            Self::Fvar(_) => {}
-            Self::Bvar(_) => {}
-            Self::Const(_, _) => {}
+            Self::Fvar(_, _) => {}
+            Self::Bvar(_, _) => {}
+            Self::Const(_, _, _) => {}
             Self::Mvar(_, _) => {}
-            Self::App(m1, m2) => {
+            Self::App(_, m1, m2) => {
                 m1.beta_reduce();
                 m2.beta_reduce();
-                if let Self::Abs(_, m) = &mut **m1 {
+                if let Self::Abs(_, _, m) = &mut **m1 {
                     m.open_subst(m2);
                     m.beta_reduce();
                     *self = mem::take(m);
                 }
             }
-            Self::Abs(_, m) => m.beta_reduce(),
+            Self::Abs(_, _, m) => m.beta_reduce(),
         }
     }
 
-    fn is_canonical_help(&mut self, env: &mut Env) -> bool {
-        match self.infer(env) {
+    fn r#type(&self) -> &Type {
+        todo!()
+    }
+
+    /// Check if the term is in η-long β-normal form.
+    /// See Lectures on the Curry-Howard isomorphism, Chapter 4.
+    /// https://math.stackexchange.com/q/3334730
+    fn is_canonical(&mut self) -> bool {
+        match self.r#type() {
             Type::Arrow(_, _) => {
-                if let Self::Abs(t, m) = self {
+                if let Self::Abs(_, _, m) = self {
                     let name = Name::fresh();
-                    env.add_local(name.clone(), t.clone());
                     m.open(&name);
-                    let r = m.is_canonical_help(env);
+                    let r = m.is_canonical();
                     m.close(&name);
-                    env.remove_local(&name);
                     r
                 } else {
                     false
                 }
             }
-            Type::Base(_) | Type::Mvar(_) => {
+            Type::Fvar(_) | Type::Mvar(_) => {
                 let mut m = self;
-                while let Self::App(m1, m2) = m {
-                    if !m2.is_canonical_help(env) {
+                while let Self::App(_, m1, m2) = m {
+                    if !m2.is_canonical() {
                         return false;
                     }
                     m = m1;
                 }
                 match m {
-                    Self::Fvar(_) | Self::Bvar(_) | Self::Const(_, _) | Self::Mvar(_, _) => true,
-                    Self::Abs(_, _) => false,
-                    Self::App(_, _) => unreachable!(),
+                    Self::Fvar(_, _)
+                    | Self::Bvar(_, _)
+                    | Self::Const(_, _, _)
+                    | Self::Mvar(_, _) => true,
+                    Self::Abs(_, _, _) => false,
+                    Self::App(_, _, _) => unreachable!(),
                 }
             }
         }
     }
 
-    /// Check if the term is in η-long β-normal form.
-    /// `self` must be fully typed.
-    /// See Lectures on the Curry-Howard isomorphism, Chapter 4.
-    /// https://math.stackexchange.com/q/3334730
-    pub fn is_canonical(&self, env: &Env) -> bool {
-        assert!(self.check(env));
-        let mut env = env.extend();
-        self.clone().is_canonical_help(&mut env)
-    }
-
     /// [x M₁ ... Mₙ] := λv*. x [M₁] ... [Mₙ] v*
-    fn eta_expand_neutral(&mut self, env: &mut Env) {
+    fn eta_expand_neutral(&mut self) {
         assert!(self.is_neutral());
         // [x M₁ ... Mₙ] := x [M₁] ... [Mₙ]
         let mut m = &mut *self;
         loop {
             match m {
-                Self::Fvar(_) | Self::Bvar(_) | Self::Const(_, _) | Self::Mvar(_, _) => {
+                Self::Fvar(_, _) | Self::Bvar(_, _) | Self::Const(_, _, _) | Self::Mvar(_, _) => {
                     break;
                 }
-                Self::App(m1, m2) => {
-                    m2.eta_expand_normal(env);
+                Self::App(_, m1, m2) => {
+                    m2.eta_expand_normal();
                     m = m1;
                 }
-                Self::Abs(_, _) => unreachable!(),
+                Self::Abs(_, _, _) => unreachable!(),
             }
         }
         // [M] := λv*. M v*
         let binder: Vec<_> = self
-            .infer(env)
+            .r#type()
             .components()
             .into_iter()
             .map(|t| (Name::fresh(), t.clone()))
@@ -560,7 +538,7 @@ impl Term {
         self.curry(
             binder
                 .iter()
-                .map(|(x, _)| Term::Fvar(x.to_owned()))
+                .map(|(x, t)| Term::Fvar(t.clone(), x.to_owned()))
                 .collect(),
         );
         for (name, t) in binder.into_iter().rev() {
@@ -571,213 +549,38 @@ impl Term {
     /// self must be in β-normal form.
     /// 1. [λx.M] := λx.[M]
     /// 2. [x M₁ ... Mₙ] := λv*. x [M₁] ... [Mₙ] v*
-    fn eta_expand_normal(&mut self, env: &mut Env) {
+    fn eta_expand_normal(&mut self) {
         assert!(self.is_normal());
         match self {
-            Self::Abs(t, m) => {
+            Self::Abs(_, t, m) => {
                 let x = Name::fresh();
-                env.add_local(x.clone(), t.clone());
                 m.open(&x);
-                m.eta_expand_normal(env);
+                m.eta_expand_normal();
                 m.close(&x);
-                env.remove_local(&x);
             }
-            Self::Bvar(_)
-            | Self::Fvar(_)
-            | Self::Const(_, _)
+            Self::Bvar(_, _)
+            | Self::Fvar(_, _)
+            | Self::Const(_, _, _)
             | Self::Mvar(_, _)
-            | Self::App(_, _) => {
-                self.eta_expand_neutral(env);
+            | Self::App(_, _, _) => {
+                self.eta_expand_neutral();
             }
         }
     }
 
-    /// self must be fully typed
-    pub fn canonicalize(&mut self, env: &Env) {
-        assert!(self.check(env));
+    pub fn canonicalize(&mut self) {
         self.beta_reduce();
-        let mut env = env.extend();
-        self.eta_expand_normal(&mut env);
+        self.eta_expand_normal();
     }
 
-    /// self and other must be fully typed and type equal.
-    pub fn def_eq(&self, other: &Self, env: &Env) -> bool {
-        assert!(self.check(env));
-        assert!(other.check(env));
-        assert!(self.clone().infer(env) == other.clone().infer(env));
+    /// self and other must be type-correct and type-equal under the same environment.
+    pub fn def_eq(&mut self, other: &mut Self) -> bool {
+        assert_eq!(self.r#type(), self.r#type());
         let mut m1 = self.clone();
-        m1.canonicalize(env);
+        m1.canonicalize();
         let mut m2 = other.clone();
-        m2.canonicalize(env);
+        m2.canonicalize();
         m1 == m2
-    }
-}
-
-#[derive(Debug)]
-pub enum Env<'a> {
-    Global {
-        consts: HashMap<Name, TypeScheme>,
-    },
-    Local {
-        outer: &'a Env<'a>,
-        locals: HashMap<Name, Type>,
-    },
-}
-
-impl<'a> Default for Env<'a> {
-    fn default() -> Self {
-        Env::Global {
-            consts: Default::default(),
-        }
-    }
-}
-
-impl<'a> Env<'a> {
-    fn extend(&'a self) -> Self {
-        Self::Local {
-            outer: self,
-            locals: Default::default(),
-        }
-    }
-
-    fn add_local(&mut self, name: Name, t: Type) {
-        match self {
-            Self::Global { .. } => todo!(),
-            Self::Local { locals, .. } => {
-                locals.insert(name, t).map(|_| todo!());
-            }
-        }
-    }
-
-    fn remove_local(&mut self, name: &Name) {
-        match self {
-            Self::Global { .. } => todo!(),
-            Self::Local { locals, .. } => {
-                locals.remove(name).unwrap_or_else(|| todo!());
-            }
-        }
-    }
-
-    fn add_const(&mut self, name: Name, t: TypeScheme) {
-        match self {
-            Self::Global { consts } => {
-                consts.insert(name, t).map(|_| todo!());
-            }
-            Self::Local { .. } => todo!(),
-        }
-    }
-
-    pub fn get_const(&self, name: &Name) -> Option<&TypeScheme> {
-        match self {
-            Self::Global { consts } => consts.get(name),
-            Self::Local { outer, .. } => outer.get_const(name),
-        }
-    }
-
-    fn get_local(&self, name: &Name) -> Option<&Type> {
-        match self {
-            Self::Global { .. } => todo!(),
-            Self::Local { outer, locals } => match locals.get(name) {
-                Some(t) => Some(t),
-                None => outer.get_local(name),
-            },
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-struct TypeSubst(Vec<(MvarId, Type)>);
-
-impl TypeSubst {
-    fn unify(&mut self, t1: &Type, t2: &Type) {
-        if t1 == t2 {
-            return;
-        }
-        match (t1, t2) {
-            (Type::Arrow(t11, t12), Type::Arrow(t21, t22)) => {
-                self.unify(t11, t21);
-                self.unify(t12, t22);
-            }
-            (Type::Mvar(i), t) | (t, Type::Mvar(i)) => {
-                if self.0.iter().find(|(j, _)| j == i).is_none() {
-                    // TODO: occur check
-                    self.0.push((*i, t.clone()));
-                } else {
-                    let mut u = Type::Mvar(*i);
-                    u.apply_subst(&self);
-                    self.unify(&u, t);
-                }
-            }
-            (t1, t2) => {
-                todo!("unify failed {:?} {:?}", t1, t2);
-            }
-        }
-    }
-}
-
-impl Type {
-    fn apply_subst(&mut self, subst: &TypeSubst) {
-        for (i, u) in &subst.0 {
-            self.subst_meta(*i, u);
-        }
-    }
-}
-
-impl Term {
-    fn apply_type_subst(&mut self, subst: &TypeSubst) {
-        for (i, t) in &subst.0 {
-            self.subst_type_meta(*i, t);
-        }
-    }
-
-    fn infer_help(&mut self, subst: &mut TypeSubst, env: &mut Env) -> Type {
-        match self {
-            Term::Fvar(name) => env
-                .get_local(name)
-                .unwrap_or_else(|| todo!("fvar not found {}", name))
-                .clone(),
-            Term::Const(name, ts) => {
-                let scheme = env
-                    .get_const(name)
-                    .unwrap_or_else(|| todo!("constant not found {}", name));
-                if scheme.vars.len() != ts.len() {
-                    todo!();
-                }
-                scheme.clone().instantiate(&ts)
-            }
-            Term::Mvar(t, _) => t.clone(),
-            Term::Bvar(_) => panic!("self is open"),
-            Term::Abs(t, m) => {
-                let name = Name::fresh();
-                env.add_local(name.clone(), t.clone());
-                m.open(&name);
-                let u = m.infer_help(subst, env);
-                m.close(&name);
-                env.remove_local(&name);
-                Type::Arrow(Box::new(t.clone()), Box::new(u))
-            }
-            Term::App(m1, m2) => {
-                let t1 = m1.infer_help(subst, env);
-                let t2 = m2.infer_help(subst, env);
-                let tv = Type::Mvar(MvarId::fresh());
-                subst.unify(&t1, &Type::Arrow(Box::new(t2), Box::new(tv.clone())));
-                tv
-            }
-        }
-    }
-
-    pub fn infer(&mut self, env: &Env) -> Type {
-        let mut subst = TypeSubst::default();
-        let mut env = env.extend();
-        let mut t = self.infer_help(&mut subst, &mut env);
-        self.apply_type_subst(&subst);
-        t.apply_subst(&subst);
-        t
-    }
-
-    pub fn check(&self, env: &Env) -> bool {
-        self.clone().infer(env);
-        true
     }
 }
 
@@ -796,12 +599,12 @@ struct Hnf {
 }
 
 impl From<Term> for Hnf {
-    /// `m` has to be fully typed and canonicalized.
-    fn from(m: Term) -> Self {
-        // assert!(m.is_canonical());
+    /// `m` must be canonical.
+    fn from(mut m: Term) -> Self {
+        assert!(m.is_canonical());
         let mut binder = vec![];
         let mut head = m;
-        while let Term::Abs(t, mut m) = head {
+        while let Term::Abs(_, t, mut m) = head {
             let x = Name::fresh();
             m.open(&x);
             binder.push((x, t));
@@ -825,6 +628,23 @@ impl From<Hnf> for Term {
 }
 
 impl Hnf {
+    /// See [Vukmirović+, 2020].
+    pub fn is_flex(&self) -> bool {
+        match self.head {
+            Term::Mvar(_, _) => true,
+            Term::Bvar(_, _)
+            | Term::Fvar(_, _)
+            | Term::Const(_, _, _)
+            | Term::Abs(_, _, _)
+            | Term::App(_, _, _) => false,
+        }
+    }
+
+    /// See [Vukmirović+, 2020].
+    pub fn is_rigid(&self) -> bool {
+        !self.is_flex()
+    }
+
     fn matrix(&self) -> (&Term, &Vec<Term>) {
         (&self.head, &self.args)
     }
@@ -833,7 +653,9 @@ impl Hnf {
     /// Suppose `f ≡ λx*. X t*` and `r ≡ λy*. x u*`.
     /// Imitation: X ↦ λz*. x (Y z*)* (when x = c)
     /// Projection: X ↦ λz*. zᵢ (Y z*)* (when τ(zᵢ) is compatible with τ(x))
-    fn r#match(&self, other: &Hnf, env: &Env) -> Vec<(MvarId, Term)> {
+    fn r#match(&self, other: &Hnf) -> Vec<(MvarId, Term)> {
+        assert!(self.is_flex());
+        assert!(self.is_rigid());
         let (t, mid) = if let Term::Mvar(t, mid) = &self.head {
             (t, *mid)
         } else {
@@ -848,28 +670,31 @@ impl Hnf {
         // projection
         for (x, u) in &zs {
             if t.target() == u.target() {
-                heads.push((Term::Fvar(x.to_owned()), (*u).clone()));
+                heads.push(Term::Fvar((*u).clone(), x.to_owned()));
             }
         }
         // imitation
         match other.head {
-            Term::Fvar(_) | Term::Const(_, _) => {
-                let mut m = other.head.clone();
-                let t = m.infer(env);
-                heads.push((m, t));
+            Term::Fvar(_, _) | Term::Const(_, _, _) => {
+                heads.push(other.head.clone());
             }
             _ => {}
         };
         let mut subst = vec![];
-        for (mut head, t) in heads {
+        for mut head in heads {
             head.curry(
-                t.components()
+                head.r#type()
+                    .components()
                     .into_iter()
                     .map(|t| {
                         let mut t = t.clone();
                         t.curry(zs.iter().map(|(_, t)| (*t).clone()).collect());
                         let mut m = Term::Mvar(t, MvarId::fresh());
-                        m.curry(zs.iter().map(|(x, _)| Term::Fvar(x.to_owned())).collect());
+                        m.curry(
+                            zs.iter()
+                                .map(|(x, t)| Term::Fvar(t.clone(), x.to_owned()))
+                                .collect(),
+                        );
                         m
                     })
                     .collect(),
@@ -898,7 +723,7 @@ struct DisagreementSet {
 
 impl DisagreementSet {
     fn add(&mut self, m1: Hnf, m2: Hnf) {
-        match (m1.head.is_rigid(), m2.head.is_rigid()) {
+        match (m1.is_rigid(), m2.is_rigid()) {
             (true, true) => self.rr.push((m1, m2)),
             (true, false) => self.fr.push((m2, m1)),
             (false, true) => self.fr.push((m1, m2)),
@@ -914,7 +739,7 @@ impl DisagreementSet {
                 let mut head2 = h2.head.clone();
                 for ((x, t1), (y, t2)) in h1.binder.iter().zip(h2.binder.iter()) {
                     assert_eq!(t1, t2);
-                    let m = Term::Fvar(x.to_owned());
+                    let m = Term::Fvar(t1.clone(), x.to_owned());
                     head2.subst(y, &m);
                 }
                 h1.head == head2
@@ -936,7 +761,7 @@ impl DisagreementSet {
         }
     }
 
-    fn solve(self, env: &Env) -> Vec<(MvarId, Term)> {
+    fn solve(self) -> Vec<(MvarId, Term)> {
         let mut queue = VecDeque::new();
         queue.push_back((self, vec![]));
         while let Some((mut set, subst)) = queue.pop_front() {
@@ -945,15 +770,15 @@ impl DisagreementSet {
                 return subst;
             }
             let (h1, h2) = &set.fr[0];
-            for (mid, m) in h1.r#match(h2, env) {
+            for (mid, m) in h1.r#match(h2) {
                 let mut new_set = DisagreementSet::default();
                 for (m1, m2) in set.fr.iter().chain(set.ff.iter()) {
                     let mut m1 = Term::from(m1.clone());
-                    m1.subst_meta(mid, &m);
-                    m1.canonicalize(env);
+                    m1.instantiate(mid, &m);
+                    m1.canonicalize();
                     let mut m2 = Term::from(m2.clone());
-                    m2.subst_meta(mid, &m);
-                    m2.canonicalize(env);
+                    m2.instantiate(mid, &m);
+                    m2.canonicalize();
                     new_set.add(Hnf::from(m1), Hnf::from(m2));
                 }
                 let mut new_subst = subst.clone();
@@ -966,50 +791,19 @@ impl DisagreementSet {
 }
 
 impl Term {
-    /// `self` and `other` must be fully-typed and type-equal.
-    fn unify(&mut self, other: &mut Term, env: &Env) {
-        assert!(self.clone().infer(env) == other.clone().infer(env));
+    /// `self` and `other` must be type-correct and type-equal under the same environment.
+    fn unify(&mut self, other: &mut Term) {
+        assert_eq!(self.r#type(), other.r#type());
         let mut set = DisagreementSet::default();
-        self.canonicalize(env);
+        self.canonicalize();
         let h1 = Hnf::from(self.clone());
-        other.canonicalize(env);
+        other.canonicalize();
         let h2 = Hnf::from(mem::take(other));
         set.add(h1, h2);
-        let subst = set.solve(env);
+        let subst = set.solve();
         for (mid, m) in subst {
-            self.subst_meta(mid, &m);
+            self.instantiate(mid, &m);
         }
         *other = self.clone();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_infer() {
-        let mut env = Env::default();
-        env.add_const(
-            Name::Named("f".to_owned()),
-            TypeScheme {
-                vars: vec![],
-                scheme: Type::Arrow(
-                    Type::Base(Name::Named("A".to_owned())).into(),
-                    Type::Base(Name::Named("B".to_owned())).into(),
-                ),
-            },
-        );
-        let mut m = Term::Const(Name::Named("f".to_owned()), vec![]);
-        m.mk_app(Term::Fvar(Name::Named("x".to_owned())));
-        m.mk_abs(&Name::Named("x".to_owned()), Type::Mvar(MvarId::fresh()));
-        let t = m.infer(&env);
-        assert_eq!(
-            t,
-            Type::Arrow(
-                Type::Base(Name::Named("A".to_owned())).into(),
-                Type::Base(Name::Named("B".to_owned())).into()
-            )
-        );
     }
 }
