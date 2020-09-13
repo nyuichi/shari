@@ -1,9 +1,24 @@
-use crate::syntax::{Name, Term, Type};
 use core::ops::Range;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
 use thiserror::Error;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Name(pub String);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Type {
+    Var(Name),
+    Arrow(Box<Type>, Box<Type>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Term {
+    Var(Name),
+    Abs(Name, Option<Type>, Box<Term>),
+    App(Box<Term>, Box<Term>),
+}
 
 #[derive(Debug, Clone)]
 pub struct SourceInfo<'a> {
@@ -425,15 +440,14 @@ impl<'a> Parse<'a> {
     }
 
     fn name(&mut self) -> Result<Name, ParseError<'a>> {
-        self.ident()
-            .map(|token| Name::Named(token.as_str().to_owned()))
+        self.ident().map(|token| Name(token.as_str().to_owned()))
     }
 
     fn type_primary(&mut self) -> Result<Type, ParseError<'a>> {
         let token = self.any_token()?;
         if token.is_ident() {
             let id = token.as_str();
-            Ok(Type::Var(Name::Named(id.to_owned())))
+            Ok(Type::Var(Name(id.to_owned())))
         } else if token.is_symbol() && token.as_str() == "(" {
             let t = self.r#type()?;
             self.expect_symbol(")")?;
@@ -454,10 +468,11 @@ impl<'a> Parse<'a> {
         Ok(t)
     }
 
+    /// typed parameters e.g. `"(x y : T)"`
     fn parameter(&mut self, _token: Token) -> Result<(Vec<Name>, Type), ParseError<'a>> {
-        let mut idents = vec![Name::Named(self.ident()?.as_str().to_owned())];
+        let mut idents = vec![Name(self.ident()?.as_str().to_owned())];
         while let Some(ident) = self.ident_opt() {
-            idents.push(Name::Named(ident.as_str().to_owned()));
+            idents.push(Name(ident.as_str().to_owned()));
         }
         // TODO: allow declarations with no explict types
         self.expect_symbol(":")?;
@@ -466,12 +481,18 @@ impl<'a> Parse<'a> {
         Ok((idents, t))
     }
 
-    fn parameters(&mut self) -> Result<Vec<(Name, Type)>, ParseError<'a>> {
+    fn parameters(&mut self) -> Result<Vec<(Name, Option<Type>)>, ParseError<'a>> {
         let mut params = vec![];
-        while let Some(token) = self.expect_symbol_opt("(") {
-            let (names, t) = self.parameter(token)?;
-            for name in names {
-                params.push((name, t.clone()));
+        loop {
+            if let Some(token) = self.expect_symbol_opt("(") {
+                let (names, t) = self.parameter(token)?;
+                for name in names {
+                    params.push((name, Some(t.clone())));
+                }
+            } else if let Some(token) = self.ident_opt() {
+                params.push((Name(token.as_str().to_owned()), None));
+            } else {
+                break;
             }
         }
         Ok(params)
@@ -489,7 +510,7 @@ impl<'a> Parse<'a> {
             todo!("empty binding");
         }
         for (name, t) in params.into_iter().rev() {
-            m = Term::Abs(name, Some(t), Box::new(m));
+            m = Term::Abs(name, t, Box::new(m));
         }
         Ok(m)
     }
@@ -503,8 +524,8 @@ impl<'a> Parse<'a> {
         }
         for (name, t) in params.into_iter().rev() {
             m = Term::App(
-                Box::new(Term::Var(Name::Named("forall".to_owned()))),
-                Box::new(Term::Abs(name, Some(t), Box::new(m))),
+                Box::new(Term::Var(Name("forall".to_owned()))),
+                Box::new(Term::Abs(name, t, Box::new(m))),
             );
         }
         Ok(m)
@@ -512,8 +533,8 @@ impl<'a> Parse<'a> {
 
     fn term_var(&mut self, token: Token, entity: Option<String>) -> Term {
         let name = match entity {
-            None => Name::Named(token.as_str().to_owned()),
-            Some(s) => Name::Named(s),
+            None => Name(token.as_str().to_owned()),
+            Some(s) => Name(s),
         };
         Term::Var(name)
     }
@@ -563,7 +584,7 @@ impl<'a> Parse<'a> {
                     let right = self.subterm(led.prec() - 1)?;
                     left = Term::App(
                         Box::new(Term::App(
-                            Box::new(Term::Var(Name::Named("imp".to_owned()))),
+                            Box::new(Term::Var(Name("imp".to_owned()))),
                             Box::new(left),
                         )),
                         Box::new(right),
@@ -574,7 +595,7 @@ impl<'a> Parse<'a> {
                     let right = self.subterm(led.prec())?;
                     left = Term::App(
                         Box::new(Term::App(
-                            Box::new(Term::Var(Name::Named("eq".to_owned()))),
+                            Box::new(Term::Var(Name("eq".to_owned()))),
                             Box::new(left),
                         )),
                         Box::new(right),
@@ -599,10 +620,10 @@ impl<'a> Parse<'a> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
-    fn parse_term(input: &str) -> Term {
+    pub fn parse_term(input: &str) -> Term {
         let mut parser = Parse::new(input, "", TokenTable::default());
         parser.term().unwrap()
     }
