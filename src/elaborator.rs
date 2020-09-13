@@ -1,20 +1,57 @@
+use crate::env;
 use crate::parser;
 use crate::term::{self, MvarId, Name};
-use once_cell::sync::Lazy;
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::mem;
 
-#[derive(Debug, Default)]
-pub struct Env {
-    pub consts: HashMap<Name, TypeScheme>,
-    pub types: HashSet<Name>,
-    pub locals: HashMap<Name, Type>,
+#[derive(Debug)]
+struct LocalEnv<'a> {
+    env: &'a env::Env,
+    locals: Vec<(Name, Type)>,
+}
+
+impl<'a> LocalEnv<'a> {
+    fn get_local(&self, name: &Name) -> Option<Type> {
+        for (x, t) in self.locals.iter().rev() {
+            if x == name {
+                return Some(t.clone());
+            }
+        }
+        if let Some(t) = self.env.get_local(name) {
+            return Some(t.clone().into());
+        }
+        None
+    }
+
+    fn get_const(&self, name: &Name) -> Option<TypeScheme> {
+        if let Some(s) = self.env.get_const(name) {
+            return Some(s.clone().into());
+        }
+        None
+    }
+
+    fn push_local(&mut self, name: Name, t: Type) {
+        self.locals.push((name, t));
+    }
+
+    fn pop_local(&mut self) {
+        if self.locals.pop().is_none() {
+            panic!("logic flaw")
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct TypeScheme {
-    vars: Vec<MvarId>,
+    vars: Vec<Name>,
     scheme: Type,
+}
+
+impl From<env::TypeScheme> for TypeScheme {
+    fn from(s: env::TypeScheme) -> Self {
+        Self {
+            vars: s.vars,
+            scheme: Type::from(s.scheme),
+        }
+    }
 }
 
 impl TypeScheme {
@@ -25,8 +62,8 @@ impl TypeScheme {
     pub fn instantiate(&self, args: &[Type]) -> Type {
         assert_eq!(self.vars.len(), args.len());
         let mut t = self.scheme.clone();
-        for (mid, u) in self.vars.iter().zip(args.iter()) {
-            t.instantiate(&mid, u);
+        for (name, u) in self.vars.iter().zip(args.iter()) {
+            t.subst(name, u);
         }
         t
     }
@@ -50,7 +87,33 @@ impl From<parser::Type> for Type {
     }
 }
 
+impl From<term::Type> for Type {
+    fn from(t: term::Type) -> Self {
+        match t {
+            term::Type::Fvar(name) => Type::Var(name),
+            term::Type::Arrow(t1, t2) => {
+                Type::Arrow(Box::new((*t1).into()), Box::new((*t2).into()))
+            }
+        }
+    }
+}
+
 impl Type {
+    fn subst(&mut self, name: &Name, t: &Type) {
+        match self {
+            Self::Var(x) => {
+                if x == name {
+                    *self = t.clone();
+                }
+            }
+            Self::Arrow(t1, t2) => {
+                t1.subst(name, t);
+                t2.subst(name, t);
+            }
+            Self::Mvar(_) => {}
+        }
+    }
+
     fn instantiate(&mut self, mid: &MvarId, t: &Type) {
         match self {
             Self::Var(_) => {}
@@ -74,6 +137,11 @@ impl Type {
             }
             Type::Mvar(_) => unreachable!("logic flaw: uninstantiated type meta variable found"),
         }
+    }
+
+    pub fn elaborate(self, _env: &env::Env) -> term::Type {
+        // TODO: find undefined base types
+        self.certify()
     }
 }
 
@@ -143,8 +211,12 @@ impl Term {
         }
     }
 
-    pub fn elaborate(mut self, env: &mut Env) -> term::Term {
-        self.infer(env);
+    pub fn elaborate(mut self, env: &env::Env) -> term::Term {
+        let mut local_env = LocalEnv {
+            env,
+            locals: Default::default(),
+        };
+        self.infer(&mut local_env);
         // TODO: make sure no meta var remains
         self.certify()
     }
@@ -154,7 +226,9 @@ impl Term {
 struct TypeSubst(Vec<(MvarId, Type)>);
 
 impl TypeSubst {
-    fn unify(&mut self, t1: &Type, t2: &Type) {
+    fn unify(&mut self, t1: &mut Type, t2: &mut Type) {
+        t1.apply_subst(self);
+        t2.apply_subst(self);
         if t1 == t2 {
             return;
         }
@@ -163,14 +237,14 @@ impl TypeSubst {
                 self.unify(t11, t21);
                 self.unify(t12, t22);
             }
-            (Type::Mvar(i), t) | (t, Type::Mvar(i)) => {
-                if self.0.iter().find(|(j, _)| j == i).is_none() {
+            (&mut Type::Mvar(i), t) | (t, &mut Type::Mvar(i)) => {
+                if self.0.iter().find(|(j, _)| *j == i).is_none() {
                     // TODO: occur check
-                    self.0.push((*i, t.clone()));
+                    self.0.push((i, t.clone()));
                 } else {
-                    let mut u = Type::Mvar(*i);
+                    let mut u = Type::Mvar(i);
                     u.apply_subst(&self);
-                    self.unify(&u, t);
+                    self.unify(&mut u, t);
                 }
             }
             (t1, t2) => {
@@ -195,19 +269,19 @@ impl Term {
         }
     }
 
-    fn infer_help(&mut self, subst: &mut TypeSubst, env: &mut Env) -> Type {
+    fn infer_help(&mut self, subst: &mut TypeSubst, env: &mut LocalEnv) -> Type {
         match self {
             Term::Var(t, name) => {
-                if let Some(u) = env.locals.get(name) {
-                    subst.unify(t, u);
-                    return t.clone();
+                if let Some(mut u) = env.get_local(name) {
+                    subst.unify(t, &mut u);
+                    return u;
                 }
-                if let Some(scheme) = env.consts.get(name) {
+                if let Some(scheme) = env.get_const(name) {
                     let ts: Vec<_> = (0..scheme.arity())
                         .map(|_| Type::Mvar(MvarId::fresh()))
                         .collect();
-                    let u = scheme.clone().instantiate(&ts);
-                    subst.unify(t, &u);
+                    let mut u = scheme.instantiate(&ts);
+                    subst.unify(t, &mut u);
                     *self = Term::Const(u.clone(), name.clone(), ts);
                     return u;
                 }
@@ -217,22 +291,25 @@ impl Term {
                 unreachable!("logic flaw: const found before type inferenece done")
             }
             Term::Abs(name, t, m) => {
-                env.locals.insert(name.clone(), t.clone());
+                env.push_local(name.clone(), t.clone());
                 let u = m.infer_help(subst, env);
-                env.locals.remove(&name);
+                env.pop_local();
                 Type::Arrow(Box::new(t.clone()), Box::new(u))
             }
             Term::App(m1, m2) => {
-                let t1 = m1.infer_help(subst, env);
+                let mut t1 = m1.infer_help(subst, env);
                 let t2 = m2.infer_help(subst, env);
                 let tv = Type::Mvar(MvarId::fresh());
-                subst.unify(&t1, &Type::Arrow(Box::new(t2), Box::new(tv.clone())));
+                subst.unify(
+                    &mut t1,
+                    &mut Type::Arrow(Box::new(t2), Box::new(tv.clone())),
+                );
                 tv
             }
         }
     }
 
-    pub fn infer(&mut self, env: &mut Env) {
+    fn infer(&mut self, env: &mut LocalEnv) {
         let mut subst = TypeSubst::default();
         self.infer_help(&mut subst, env);
         self.apply_type_subst(&subst);
@@ -245,14 +322,14 @@ mod tests {
 
     #[test]
     fn test_infer() {
-        let mut env = Env::default();
-        env.consts.insert(
+        let mut env = env::Env::default();
+        env.add_const(
             Name::Named("f".to_owned()),
-            TypeScheme {
+            env::TypeScheme {
                 vars: vec![],
-                scheme: Type::Arrow(
-                    Type::Var(Name::Named("A".to_owned())).into(),
-                    Type::Var(Name::Named("B".to_owned())).into(),
+                scheme: term::Type::Arrow(
+                    term::Type::Fvar(Name::Named("A".to_owned())).into(),
+                    term::Type::Fvar(Name::Named("B".to_owned())).into(),
                 ),
             },
         );

@@ -116,20 +116,6 @@ impl Type {
             *self = Self::Arrow(Box::new(t), Box::new(mem::take(self)));
         }
     }
-
-    fn instantiate(&mut self, name: &Name, t: &Type) {
-        match self {
-            Self::Fvar(x) => {
-                if x == name {
-                    *self = t.clone();
-                }
-            }
-            Self::Arrow(t1, t2) => {
-                t1.instantiate(name, t);
-                t2.instantiate(name, t);
-            }
-        }
-    }
 }
 
 /// locally nameless representation
@@ -323,28 +309,6 @@ impl Term {
         }
     }
 
-    fn instantiate_type(&mut self, name: &Name, t: &Type) {
-        match self {
-            Self::Abs(u1, u2, m) => {
-                u1.instantiate(name, t);
-                u2.instantiate(name, t);
-                m.instantiate_type(name, t);
-            }
-            Self::App(u, m1, m2) => {
-                u.instantiate(name, t);
-                m1.instantiate_type(name, t);
-                m2.instantiate_type(name, t);
-            }
-            Self::Const(u, _, ts) => {
-                u.instantiate(name, t);
-                for u in ts {
-                    u.instantiate(name, t);
-                }
-            }
-            Self::Fvar(u, _) | Self::Bvar(u, _) | Self::Mvar(u, _) => u.instantiate(name, t),
-        }
-    }
-
     /// m is in head position of n if n ≡ λv*. m l*
     /// May return a locally open term
     pub fn head(&self) -> &Self {
@@ -443,7 +407,7 @@ impl Term {
         }
     }
 
-    fn r#type(&self) -> &Type {
+    pub fn r#type(&self) -> &Type {
         match self {
             Self::Fvar(t, _)
             | Self::Bvar(t, _)
@@ -531,7 +495,7 @@ impl Term {
     fn eta_expand_normal(&mut self) {
         assert!(self.is_normal());
         match self {
-            Self::Abs(_, t, m) => {
+            Self::Abs(_, _, m) => {
                 let x = Name::fresh();
                 m.open(&x);
                 m.eta_expand_normal();
@@ -774,7 +738,7 @@ impl DisagreementSet {
 
 impl Term {
     /// `self` and `other` must be type-correct and type-equal under the same environment.
-    fn unify(&mut self, other: &mut Term) {
+    pub fn unify(&mut self, other: &mut Term) {
         assert_eq!(self.r#type(), other.r#type());
         let mut set = DisagreementSet::default();
         self.canonicalize();

@@ -240,15 +240,16 @@ impl<'a> Iterator for Lex<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Fixity {
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Fixity {
     Infixl,
+    Infixr,
     Nofix,
     Prefix,
 }
 
 #[derive(Debug, Clone)]
-pub struct Operator {
+struct Operator {
     fixity: Fixity,
     prec: usize,
     entity: String,
@@ -260,10 +261,30 @@ pub struct TokenTable {
     nud: HashMap<String, Operator>,
 }
 
+impl TokenTable {
+    pub fn add(&mut self, symbol: &str, fixity: Fixity, prec: usize, entity: &str) {
+        let op = Operator {
+            fixity,
+            prec,
+            entity: entity.to_owned(),
+        };
+        match fixity {
+            Fixity::Infixl | Fixity::Infixr => {
+                if let Some(_) = self.led.insert(symbol.to_owned(), op) {
+                    todo!()
+                }
+            }
+            Fixity::Nofix | Fixity::Prefix => {
+                if let Some(_) = self.nud.insert(symbol.to_owned(), op) {
+                    todo!()
+                }
+            }
+        };
+    }
+}
+
 enum Led {
     App,
-    Imp,
-    Eq,
     User(Operator),
 }
 
@@ -271,8 +292,6 @@ impl Led {
     fn prec(&self) -> usize {
         match self {
             Self::App => 1024,
-            Self::Imp => 25,
-            Self::Eq => 50,
             Self::User(op) => op.prec,
         }
     }
@@ -295,8 +314,6 @@ impl TokenTable {
                 match self.led.get(lit) {
                     Some(op) => Some(Led::User(op.clone())),
                     None => match lit {
-                        "→" => Some(Led::Imp),
-                        "=" => Some(Led::Eq),
                         _ => {
                             if self.get_nud(token).is_some() {
                                 Some(Led::App)
@@ -333,17 +350,17 @@ pub enum ParseError<'a> {
         message: String,
         source_info: SourceInfo<'a>,
     },
-    #[error("unexpected end of input")]
-    Eof,
+    #[error("unexpected end of input at {source_info}")]
+    Eof { source_info: SourceInfo<'a> },
 }
 
-struct Parse<'a> {
+pub struct Parser<'a> {
     lex: Lex<'a>,
-    token_table: TokenTable,
+    token_table: &'a TokenTable,
 }
 
-impl<'a> Parse<'a> {
-    fn new(input: &'a str, filename: &'a str, token_table: TokenTable) -> Self {
+impl<'a> Parser<'a> {
+    pub fn new(input: &'a str, filename: &'a str, token_table: &'a TokenTable) -> Self {
         Self {
             lex: Lex::new(input, filename),
             token_table,
@@ -357,7 +374,9 @@ impl<'a> Parse<'a> {
         })
     }
     fn eof_error(&self) -> ParseError<'a> {
-        ParseError::Eof
+        ParseError::Eof {
+            source_info: SourceInfo::eof(self.lex.input, self.lex.filename),
+        }
     }
 
     fn optional<F, R>(&mut self, f: F) -> Option<R>
@@ -439,10 +458,6 @@ impl<'a> Parse<'a> {
         None
     }
 
-    fn name(&mut self) -> Result<Name, ParseError<'a>> {
-        self.ident().map(|token| Name(token.as_str().to_owned()))
-    }
-
     fn type_primary(&mut self) -> Result<Type, ParseError<'a>> {
         let token = self.any_token()?;
         if token.is_ident() {
@@ -457,7 +472,7 @@ impl<'a> Parse<'a> {
         }
     }
 
-    fn r#type(&mut self) -> Result<Type, ParseError<'a>> {
+    pub fn r#type(&mut self) -> Result<Type, ParseError<'a>> {
         let t = self.type_primary()?;
         if let Some(token) = self.peek_opt() {
             if token.is_symbol() && token.as_str() == "→" {
@@ -498,7 +513,7 @@ impl<'a> Parse<'a> {
         Ok(params)
     }
 
-    fn term(&mut self) -> Result<Term, ParseError<'a>> {
+    pub fn term(&mut self) -> Result<Term, ParseError<'a>> {
         self.subterm(0)
     }
 
@@ -579,40 +594,20 @@ impl<'a> Parse<'a> {
                     let right = self.subterm(led.prec())?;
                     left = Term::App(Box::new(left), Box::new(right));
                 }
-                Led::Imp => {
+                Led::User(op) => {
+                    let prec = match op.fixity {
+                        Fixity::Infixl => prec,
+                        Fixity::Infixr => prec - 1,
+                        _ => unreachable!(),
+                    };
                     self.advance();
-                    let right = self.subterm(led.prec() - 1)?;
+                    let fun = self.term_var(token, Some(op.entity));
+                    let right = self.subterm(prec)?;
                     left = Term::App(
-                        Box::new(Term::App(
-                            Box::new(Term::Var(Name("imp".to_owned()))),
-                            Box::new(left),
-                        )),
+                        Box::new(Term::App(Box::new(fun), Box::new(left))),
                         Box::new(right),
                     );
                 }
-                Led::Eq => {
-                    self.advance();
-                    let right = self.subterm(led.prec())?;
-                    left = Term::App(
-                        Box::new(Term::App(
-                            Box::new(Term::Var(Name("eq".to_owned()))),
-                            Box::new(left),
-                        )),
-                        Box::new(right),
-                    );
-                }
-                Led::User(op) => match op.fixity {
-                    Fixity::Infixl => {
-                        self.advance();
-                        let fun = self.term_var(token, Some(op.entity));
-                        let right = self.subterm(prec)?;
-                        left = Term::App(
-                            Box::new(Term::App(Box::new(fun), Box::new(left))),
-                            Box::new(right),
-                        );
-                    }
-                    _ => unreachable!(),
-                },
             }
         }
         Ok(left)
@@ -624,7 +619,8 @@ pub mod tests {
     use super::*;
 
     pub fn parse_term(input: &str) -> Term {
-        let mut parser = Parse::new(input, "", TokenTable::default());
+        let token_table = TokenTable::default();
+        let mut parser = Parser::new(input, "", &token_table);
         parser.term().unwrap()
     }
 
@@ -632,5 +628,6 @@ pub mod tests {
     fn parse() {
         println!("{:?}", parse_term("λ (x : ℕ → ℕ), x y"));
         println!("{:?}", parse_term("p → (p → q) → q"));
+        println!("{:?}", parse_term("λ x y, ∀ P, P x → P y"));
     }
 }
