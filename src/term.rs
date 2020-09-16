@@ -8,18 +8,9 @@ pub enum Name {
     Anon(usize),
 }
 
-impl std::fmt::Display for Name {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Name::Named(name) => write!(f, "{}", name),
-            Name::Anon(k) => write!(f, "#{}", k),
-        }
-    }
-}
-
 impl Name {
     // TODO: reclaim unused mvars
-    fn fresh() -> Self {
+    pub fn fresh() -> Self {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static COUNTER: Lazy<AtomicUsize> = Lazy::new(Default::default);
         Self::Anon(COUNTER.fetch_add(1, Ordering::Relaxed))
@@ -28,6 +19,12 @@ impl Name {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct MvarId(usize);
+
+impl std::fmt::Display for MvarId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 impl MvarId {
     // TODO: reclaim unused mvars
@@ -38,7 +35,7 @@ impl MvarId {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
     Fvar(Name),
     Arrow(Box<Type>, Box<Type>),
@@ -121,7 +118,7 @@ impl Type {
 /// locally nameless representation
 /// See [Charguéraud, 2012].
 /// Every term `m` has an associated Env `m.env`, under which `m` is type-correct.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Term {
     Fvar(Type, Name),
     Bvar(Type, usize),
@@ -365,9 +362,17 @@ impl Term {
     /// assert(m = n)
     pub fn uncurry(&mut self) -> Vec<Term> {
         let mut args = vec![];
-        while let Self::App(_, m1, m2) = mem::take(self) {
-            args.push(*m2);
-            *self = *m1;
+        loop {
+            match mem::take(self) {
+                Self::App(_, m1, m2) => {
+                    args.push(*m2);
+                    *self = *m1;
+                }
+                m => {
+                    *self = m;
+                    break;
+                }
+            }
         }
         args.reverse();
         args

@@ -301,6 +301,7 @@ enum Nud {
     Var,
     Abs,
     Forall,
+    Exists,
     Paren,
     User(Operator),
 }
@@ -336,6 +337,7 @@ impl TokenTable {
                     "(" => Some(Nud::Paren),
                     "λ" => Some(Nud::Abs),
                     "∀" => Some(Nud::Forall),
+                    "∃" => Some(Nud::Exists),
                     _ => self.nud.get(token.as_str()).map(|op| Nud::User(op.clone())),
                 }
             }
@@ -373,6 +375,7 @@ impl<'a> Parser<'a> {
             source_info: token.source_info,
         })
     }
+
     fn eof_error(&self) -> ParseError<'a> {
         ParseError::Eof {
             source_info: SourceInfo::eof(self.lex.input, self.lex.filename),
@@ -396,6 +399,7 @@ impl<'a> Parser<'a> {
     fn peek_opt(&mut self) -> Option<Token<'a>> {
         self.optional(|this| this.peek())
     }
+
     fn peek(&mut self) -> Result<Token<'a>, ParseError<'a>> {
         self.lex
             .clone()
@@ -404,12 +408,14 @@ impl<'a> Parser<'a> {
             .expect("lex error")
             .ok_or_else(|| self.eof_error())
     }
+
     fn advance(&mut self) {
         self.lex
             .next()
             .expect("unchecked advance")
             .expect("lex error");
     }
+
     fn any_token(&mut self) -> Result<Token<'a>, ParseError<'a>> {
         self.lex
             .next()
@@ -425,6 +431,7 @@ impl<'a> Parser<'a> {
         }
         Ok(token)
     }
+
     fn ident_opt(&mut self) -> Option<Token<'a>> {
         if let Some(token) = self.peek_opt() {
             if token.is_ident() {
@@ -434,13 +441,7 @@ impl<'a> Parser<'a> {
         }
         None
     }
-    fn symbol(&mut self) -> Result<Token<'a>, ParseError<'a>> {
-        let token = self.any_token()?;
-        if !token.is_symbol() {
-            return Self::fail(token, "expected symbol");
-        }
-        Ok(token)
-    }
+
     fn expect_symbol(&mut self, sym: &str) -> Result<(), ParseError<'a>> {
         let token = self.any_token()?;
         if token.kind == TokenKind::Symbol && token.as_str() == sym {
@@ -448,6 +449,7 @@ impl<'a> Parser<'a> {
         }
         Self::fail(token, format!("expected symbol '{}'", sym))
     }
+
     fn expect_symbol_opt(&mut self, sym: &str) -> Option<Token<'a>> {
         if let Some(token) = self.peek_opt() {
             if token.kind == TokenKind::Symbol && token.as_str() == sym {
@@ -546,6 +548,22 @@ impl<'a> Parser<'a> {
         Ok(m)
     }
 
+    fn term_exists(&mut self, _token: Token) -> Result<Term, ParseError<'a>> {
+        let params = self.parameters()?;
+        self.expect_symbol(",")?;
+        let mut m = self.subterm(0)?;
+        if params.is_empty() {
+            todo!("empty binding");
+        }
+        for (name, t) in params.into_iter().rev() {
+            m = Term::App(
+                Box::new(Term::Var(Name("exists".to_owned()))),
+                Box::new(Term::Abs(name, t, Box::new(m))),
+            );
+        }
+        Ok(m)
+    }
+
     fn term_var(&mut self, token: Token, entity: Option<String>) -> Term {
         let name = match entity {
             None => Name(token.as_str().to_owned()),
@@ -570,6 +588,7 @@ impl<'a> Parser<'a> {
                 m
             }
             Nud::Forall => self.term_forall(token)?,
+            Nud::Exists => self.term_exists(token)?,
             Nud::User(op) => match op.fixity {
                 Fixity::Nofix => self.term_var(token, Some(op.entity)),
                 Fixity::Prefix => {

@@ -1,6 +1,7 @@
 use crate::env;
 use crate::parser;
 use crate::term::{self, MvarId, Name};
+use std::collections::HashMap;
 
 #[derive(Debug)]
 struct LocalEnv<'a> {
@@ -14,9 +15,6 @@ impl<'a> LocalEnv<'a> {
             if x == name {
                 return Some(t.clone());
             }
-        }
-        if let Some(t) = self.env.get_local(name) {
-            return Some(t.clone().into());
         }
         None
     }
@@ -211,10 +209,13 @@ impl Term {
         }
     }
 
-    pub fn elaborate(mut self, env: &env::Env) -> term::Term {
+    pub fn elaborate(mut self, env: &env::Env, locals: HashMap<Name, term::Type>) -> term::Term {
         let mut local_env = LocalEnv {
             env,
-            locals: Default::default(),
+            locals: locals
+                .into_iter()
+                .map(|(k, v)| (k, Type::from(v)))
+                .collect(),
         };
         self.infer(&mut local_env);
         // TODO: make sure no meta var remains
@@ -336,7 +337,7 @@ mod tests {
         let m = parser::tests::parse_term("λ x, f x");
         println!("{:?}", m);
         let m = Term::from(m);
-        let m = m.elaborate(&mut env);
+        let m = m.elaborate(&mut env, Default::default());
         println!("{:?}", m);
         // let mut m = Term::Const(Name::Named("f".to_owned()), vec![]);
         // m.mk_app(Term::Fvar(Name::Named("x".to_owned())));
