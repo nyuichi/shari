@@ -1,26 +1,29 @@
-use crate::env;
 use crate::parser;
-use crate::term::{self, MvarId, Name};
+use crate::term::{self, MvarId, Name, Scheme, Sign};
 use std::collections::HashMap;
 
 #[derive(Debug)]
-struct LocalEnv<'a> {
-    env: &'a env::Env,
+struct Env<'a> {
+    sign: &'a Sign,
+    local_consts: &'a HashMap<Name, term::Type>,
     locals: Vec<(Name, Type)>,
 }
 
-impl<'a> LocalEnv<'a> {
+impl<'a> Env<'a> {
     fn get_local(&self, name: &Name) -> Option<Type> {
         for (x, t) in self.locals.iter().rev() {
             if x == name {
                 return Some(t.clone());
             }
         }
+        if let Some(t) = self.local_consts.get(name) {
+            return Some(Type::from(t.clone()));
+        }
         None
     }
 
-    fn get_const(&self, name: &Name) -> Option<TypeScheme> {
-        if let Some(s) = self.env.get_const(name) {
+    fn get_const(&self, name: &Name) -> Option<Scheme<Type>> {
+        if let Some(s) = self.sign.get_const(name) {
             return Some(s.clone().into());
         }
         None
@@ -37,30 +40,20 @@ impl<'a> LocalEnv<'a> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct TypeScheme {
-    vars: Vec<Name>,
-    scheme: Type,
-}
-
-impl From<env::TypeScheme> for TypeScheme {
-    fn from(s: env::TypeScheme) -> Self {
+impl From<Scheme<term::Type>> for Scheme<Type> {
+    fn from(s: Scheme<term::Type>) -> Self {
         Self {
-            vars: s.vars,
-            scheme: Type::from(s.scheme),
+            type_vars: s.type_vars,
+            main: Type::from(s.main),
         }
     }
 }
 
-impl TypeScheme {
-    pub fn arity(&self) -> usize {
-        self.vars.len()
-    }
-
+impl Scheme<Type> {
     pub fn instantiate(&self, args: &[Type]) -> Type {
-        assert_eq!(self.vars.len(), args.len());
-        let mut t = self.scheme.clone();
-        for (name, u) in self.vars.iter().zip(args.iter()) {
+        assert_eq!(self.arity(), args.len());
+        let mut t = self.main.clone();
+        for (name, u) in self.type_vars.iter().zip(args.iter()) {
             t.subst(name, u);
         }
         t
@@ -137,7 +130,7 @@ impl Type {
         }
     }
 
-    pub fn elaborate(self, _env: &env::Env) -> term::Type {
+    pub fn elaborate(self, _sign: &Sign) -> term::Type {
         // TODO: find undefined base types
         self.certify()
     }
@@ -209,16 +202,18 @@ impl Term {
         }
     }
 
-    pub fn elaborate(mut self, env: &env::Env, locals: HashMap<Name, term::Type>) -> term::Term {
-        let mut local_env = LocalEnv {
-            env,
-            locals: locals
-                .into_iter()
-                .map(|(k, v)| (k, Type::from(v)))
-                .collect(),
+    pub fn elaborate(
+        mut self,
+        sign: &Sign,
+        local_consts: &HashMap<Name, term::Type>,
+    ) -> term::Term {
+        let mut local_env = Env {
+            sign,
+            local_consts,
+            locals: vec![],
         };
         self.infer(&mut local_env);
-        // TODO: make sure no meta var remains
+        // TODO: make sure no meta type var remains
         self.certify()
     }
 }
@@ -270,7 +265,7 @@ impl Term {
         }
     }
 
-    fn infer_help(&mut self, subst: &mut TypeSubst, env: &mut LocalEnv) -> Type {
+    fn infer_help(&mut self, subst: &mut TypeSubst, env: &mut Env) -> Type {
         match self {
             Term::Var(t, name) => {
                 if let Some(mut u) = env.get_local(name) {
@@ -310,7 +305,7 @@ impl Term {
         }
     }
 
-    fn infer(&mut self, env: &mut LocalEnv) {
+    fn infer(&mut self, env: &mut Env) {
         let mut subst = TypeSubst::default();
         self.infer_help(&mut subst, env);
         self.apply_type_subst(&subst);
@@ -323,12 +318,12 @@ mod tests {
 
     #[test]
     fn test_infer() {
-        let mut env = env::Env::default();
-        env.add_const(
+        let mut sign = Sign::default();
+        sign.add_const(
             Name::Named("f".to_owned()),
-            env::TypeScheme {
-                vars: vec![],
-                scheme: term::Type::Arrow(
+            Scheme::<term::Type> {
+                type_vars: vec![],
+                main: term::Type::Arrow(
                     term::Type::Fvar(Name::Named("A".to_owned())).into(),
                     term::Type::Fvar(Name::Named("B".to_owned())).into(),
                 ),
@@ -337,7 +332,7 @@ mod tests {
         let m = parser::tests::parse_term("λ x, f x");
         println!("{:?}", m);
         let m = Term::from(m);
-        let m = m.elaborate(&mut env, Default::default());
+        let m = m.elaborate(&sign, &Default::default());
         println!("{:?}", m);
         // let mut m = Term::Const(Name::Named("f".to_owned()), vec![]);
         // m.mk_app(Term::Fvar(Name::Named("x".to_owned())));

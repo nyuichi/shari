@@ -1,5 +1,5 @@
 use once_cell::sync::Lazy;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::mem;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -17,21 +17,31 @@ impl Name {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub struct MvarId(usize);
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct Scheme<T> {
+    pub type_vars: Vec<Name>,
+    pub main: T,
+}
 
-impl std::fmt::Display for MvarId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+impl<T> Scheme<T> {
+    pub fn arity(&self) -> usize {
+        self.type_vars.len()
     }
 }
 
-impl MvarId {
-    // TODO: reclaim unused mvars
-    pub fn fresh() -> Self {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static COUNTER: Lazy<AtomicUsize> = Lazy::new(Default::default);
-        Self(COUNTER.fetch_add(1, Ordering::Relaxed))
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
+pub struct Sign {
+    consts: HashMap<Name, Scheme<Type>>,
+    // TODO: types: HashSet<Name>,
+}
+
+impl Sign {
+    pub fn add_const(&mut self, name: Name, t: Scheme<Type>) {
+        self.consts.insert(name, t).map(|_| todo!());
+    }
+
+    pub fn get_const(&self, name: &Name) -> Option<&Scheme<Type>> {
+        self.consts.get(name)
     }
 }
 
@@ -101,9 +111,17 @@ impl Type {
     /// (t₁ → … → tₙ → t) ↦ [t₁, …, tₙ] (self becomes t)
     pub fn uncurry(&mut self) -> Vec<Type> {
         let mut ts = vec![];
-        while let Self::Arrow(t1, t2) = mem::take(self) {
-            ts.push(*t1);
-            *self = *t2;
+        loop {
+            match mem::take(self) {
+                Self::Arrow(t1, t2) => {
+                    ts.push(*t1);
+                    *self = *t2;
+                }
+                t => {
+                    *self = t;
+                    break;
+                }
+            }
         }
         ts
     }
@@ -115,9 +133,26 @@ impl Type {
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct MvarId(usize);
+
+impl std::fmt::Display for MvarId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl MvarId {
+    // TODO: reclaim unused mvars
+    pub fn fresh() -> Self {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: Lazy<AtomicUsize> = Lazy::new(Default::default);
+        Self(COUNTER.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
 /// locally nameless representation
 /// See [Charguéraud, 2012].
-/// Every term `m` has an associated Env `m.env`, under which `m` is type-correct.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Term {
     Fvar(Type, Name),
@@ -136,7 +171,6 @@ impl Default for Term {
 }
 
 impl Term {
-    /// `self` must satisfy `Term::is_body`.
     /// self.open(x) == [x/0]self
     pub fn open(&mut self, name: &Name) {
         assert!(self.is_body());
@@ -163,10 +197,9 @@ impl Term {
         }
     }
 
-    /// `self` must be locally closed.
     /// self.close(x) == [0/x]self
     pub fn close(&mut self, name: &Name) {
-        assert!(self.is_locally_closed());
+        assert!(self.is_lclosed());
         self.close_at(name, 0)
     }
 
@@ -234,25 +267,23 @@ impl Term {
         }
     }
 
-    pub fn is_locally_closed(&self) -> bool {
-        self.is_locally_closed_at(0)
+    pub fn is_lclosed(&self) -> bool {
+        self.is_lclosed_at(0)
     }
 
-    fn is_locally_closed_at(&self, level: usize) -> bool {
+    fn is_lclosed_at(&self, level: usize) -> bool {
         match self {
             Self::Fvar(_, _) => true,
             Self::Bvar(_, i) => *i < level,
-            Self::Abs(_, _, m) => m.is_locally_closed_at(level + 1),
-            Self::App(_, m1, m2) => {
-                m1.is_locally_closed_at(level) && m2.is_locally_closed_at(level)
-            }
+            Self::Abs(_, _, m) => m.is_lclosed_at(level + 1),
+            Self::App(_, m1, m2) => m1.is_lclosed_at(level) && m2.is_lclosed_at(level),
             Self::Const(_, _, _) => true,
             Self::Mvar(_, _) => true,
         }
     }
 
     pub fn is_body(&self) -> bool {
-        self.is_locally_closed_at(1)
+        self.is_lclosed_at(1)
     }
 
     pub fn is_ground(&self) -> bool {
@@ -494,7 +525,6 @@ impl Term {
         }
     }
 
-    /// self must be in β-normal form.
     /// 1. [λx.M] := λx.[M]
     /// 2. [x M₁ ... Mₙ] := λv*. x [M₁] ... [Mₙ] v*
     fn eta_expand_normal(&mut self) {
@@ -547,7 +577,6 @@ struct Hnf {
 }
 
 impl From<Term> for Hnf {
-    /// `m` must be canonical.
     fn from(mut m: Term) -> Self {
         assert!(m.is_canonical());
         let mut binder = vec![];
@@ -597,7 +626,6 @@ impl Hnf {
         (&self.head, &self.args)
     }
 
-    /// `self` must be flex and `other` must be rigid.
     /// Suppose `f ≡ λx*. X t*` and `r ≡ λy*. x u*`.
     /// Imitation: X ↦ λz*. x (Y z*)* (when x = c)
     /// Projection: X ↦ λz*. zᵢ (Y z*)* (when τ(zᵢ) is compatible with τ(x))

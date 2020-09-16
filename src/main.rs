@@ -1,26 +1,21 @@
 use shari::elaborator;
-use shari::env;
 use shari::logic;
 use shari::parser;
 use shari::term;
-use std::collections::HashMap;
 
 #[derive(Default)]
 struct Prover {
-    env: env::Env,
+    spec: logic::Spec,
     token_table: parser::TokenTable,
-    defs: HashMap<term::Name, (Vec<term::Name>, term::Term)>,
-    axioms: HashMap<term::Name, (Vec<term::Name>, term::Term)>,
-    theorems: HashMap<term::Name, (Vec<term::Name>, term::Term)>,
 }
 
 impl Prover {
     fn new_const(&mut self, name: &str, type_vars: &[&str], t: &str) {
-        self.env.add_const(
+        self.spec.sign.add_const(
             self.name(name),
-            env::TypeScheme {
-                vars: self.type_vars(type_vars),
-                scheme: self.r#type(t),
+            term::Scheme::<term::Type> {
+                type_vars: self.type_vars(type_vars),
+                main: self.r#type(t),
             },
         )
     }
@@ -52,22 +47,37 @@ impl Prover {
 
     fn new_def(&mut self, name: &str, type_vars: &[&str], t: &str, m: &str) {
         self.new_const(name, type_vars, t);
-        let m = self.term(m);
+        let m = self.term(&[], m);
         assert_eq!(*m.r#type(), self.r#type(t));
-        self.defs
-            .insert(self.name(name), (self.type_vars(type_vars), m));
+        self.spec.defs.insert(
+            self.name(name),
+            term::Scheme {
+                type_vars: self.type_vars(type_vars),
+                main: m,
+            },
+        );
     }
 
     fn new_axiom(&mut self, name: &str, type_vars: &[&str], m: &str) {
-        let m = self.term(m);
+        let m = self.term(&[], m);
         assert_eq!(*m.r#type(), term::Type::Fvar(self.name("Prop")));
-        self.axioms
-            .insert(self.name(name), (self.type_vars(type_vars), m));
+        self.spec.axioms.insert(
+            self.name(name),
+            term::Scheme {
+                type_vars: self.type_vars(type_vars),
+                main: m,
+            },
+        );
     }
 
     fn new_theorem(&mut self, name: &str, type_vars: &[&str], h: logic::Theorem) {
-        self.theorems
-            .insert(self.name(name), (self.type_vars(type_vars), h.certify()));
+        self.spec.theorems.insert(
+            self.name(name),
+            term::Scheme {
+                type_vars: self.type_vars(type_vars),
+                main: h,
+            },
+        );
     }
 
     fn name(&self, input: &str) -> term::Name {
@@ -79,23 +89,32 @@ impl Prover {
             .r#type()
             .unwrap_or_else(|_| todo!());
         let t = elaborator::Type::from(t);
-        t.elaborate(&self.env)
+        t.elaborate(&self.spec.sign)
     }
 
     fn type_vars(&self, input: &[&str]) -> Vec<term::Name> {
         input.into_iter().map(|x| self.name(*x)).collect()
     }
 
-    fn term(&self, input: &str) -> term::Term {
-        self.local_term(input, Default::default())
-    }
-
-    fn local_term(&self, input: &str, locals: HashMap<term::Name, term::Type>) -> term::Term {
+    fn term(&self, locals: &[(&str, &str)], input: &str) -> term::Term {
         let m = parser::Parser::new(input, "", &self.token_table)
             .term()
             .unwrap_or_else(|_| todo!());
         let m = elaborator::Term::from(m);
-        m.elaborate(&self.env, locals)
+        let local_consts = locals
+            .iter()
+            .map(|(x, t)| (self.name(x), self.r#type(t)))
+            .collect();
+        m.elaborate(&self.spec.sign, &local_consts)
+    }
+
+    fn assume(&self, locals: &[(&str, &str)], input: &str) -> logic::Theorem {
+        let local_consts = locals
+            .iter()
+            .map(|(x, t)| (self.name(x), self.r#type(t)))
+            .collect();
+        let m = self.term(locals, input);
+        logic::Theorem::assume(self.spec.clone(), local_consts, m)
     }
 }
 
@@ -116,12 +135,7 @@ fn main() {
         "λ p q, ∀ r, (p → q → r) → r",
     );
     p.new_infixr("∧", 35, "and");
-    p.new_def(
-        "iff",
-        &[],
-        "Prop → Prop → Prop",
-        "λ (p q : Prop), (p → q) ∧ (q → p)",
-    );
+    p.new_def("iff", &[], "Prop → Prop → Prop", "λ p q, (p → q) ∧ (q → p)");
     p.new_infix("↔", 20, "iff");
     p.new_def("bot", &[], "Prop", "∀ r, r");
     p.new_nofix("⊥", "bot");
@@ -143,26 +157,18 @@ fn main() {
     p.new_axiom(
         "fun_ext",
         &["α", "β"],
-        "∀ (m₁ m₂ : α → β), (m₁ = m₂) ↔ (∀ x, m₁ x = m₂ x)",
+        "∀ (f₁ f₂ : α → β), (f₁ = f₂) ↔ (∀ x, f₁ x = f₂ x)",
     );
     p.new_axiom("prop_ext", &[], "∀ p q, (p = q) ↔ (p ↔ q)");
 
     p.new_theorem("mp", &[], {
-        use logic::Theorem as T;
-
-        let locals: HashMap<_, _> = vec![
-            (term::Name::Named("p".to_owned()), p.r#type("Prop")),
-            (term::Name::Named("q".to_owned()), p.r#type("Prop")),
-        ]
-        .into_iter()
-        .collect();
-        let mut h = T::assume(locals.clone(), p.local_term("p → q", locals.clone()));
-        h.imp_elim(T::assume(locals.clone(), p.local_term("p", locals.clone())));
-        h.imp_intro(&p.local_term("p → q", locals.clone()));
-        h.imp_intro(&p.local_term("p", locals.clone()));
+        let locals = [("p", "Prop"), ("q", "Prop")];
+        let mut h = p.assume(&locals, "p → q");
+        h.imp_elim(p.assume(&locals, "p"));
+        h.imp_intro(&p.term(&locals, "p → q"));
+        h.imp_intro(&p.term(&locals, "p"));
         h.forall_intro(&p.name("q"));
         h.forall_intro(&p.name("p"));
-        println!("proved: {}.", h.clone().certify());
         h
     });
 }

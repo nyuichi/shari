@@ -1,9 +1,18 @@
-use crate::term::{Name, Term, Type};
+use crate::term::{Name, Scheme, Sign, Term, Type};
 use std::collections::{HashMap, HashSet};
 use std::mem;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Default)]
+pub struct Spec {
+    pub sign: Sign,
+    pub defs: HashMap<Name, Scheme<Term>>,
+    pub axioms: HashMap<Name, Scheme<Term>>,
+    pub theorems: HashMap<Name, Scheme<Theorem>>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Theorem {
+    spec: Spec,
     locals: HashMap<Name, Type>,
     assump: HashSet<Term>,
     target: Term,
@@ -14,13 +23,8 @@ impl Theorem {
         &self.target
     }
 
-    pub fn certify(self) -> Term {
-        assert!(self.locals.is_empty());
-        assert!(self.assump.is_empty());
-        self.target
-    }
-
-    pub fn merge(&mut self, locals: HashMap<Name, Type>, assump: HashSet<Term>) {
+    fn merge(&mut self, spec: Spec, locals: HashMap<Name, Type>, assump: HashSet<Term>) {
+        assert_eq!(self.spec, spec);
         for (name, t) in locals {
             match self.locals.get(&name) {
                 Some(u) => assert_eq!(*u, t),
@@ -34,9 +38,10 @@ impl Theorem {
         }
     }
 
-    pub fn assume(locals: HashMap<Name, Type>, target: Term) -> Self {
+    pub fn assume(spec: Spec, locals: HashMap<Name, Type>, target: Term) -> Self {
         assert!(target.is_prop());
         Self {
+            spec,
             locals,
             assump: vec![target.clone()].into_iter().collect(),
             target,
@@ -44,6 +49,7 @@ impl Theorem {
     }
 
     pub fn eq_intro(
+        spec: Spec,
         locals: HashMap<Name, Type>,
         assump: HashSet<Term>,
         m1: Term,
@@ -55,6 +61,7 @@ impl Theorem {
         assert_eq!(m1.r#type(), m2.r#type());
         assert!(Term::def_eq(&mut m1.clone(), &mut m2.clone()));
         Self {
+            spec,
             locals,
             assump,
             target: Term::mk_eq(m1, m2),
@@ -73,7 +80,7 @@ impl Theorem {
         m2.fill(&n2);
         assert!(m2.is_prop());
         assert_eq!(m2, h.target);
-        self.merge(h.locals, h.assump);
+        self.merge(h.spec, h.locals, h.assump);
         self.target = m1;
     }
 
@@ -91,7 +98,7 @@ impl Theorem {
             None => todo!(),
         };
         assert_eq!(p, h.target);
-        self.merge(h.locals, h.assump);
+        self.merge(h.spec, h.locals, h.assump);
         self.target = q;
     }
 
@@ -123,11 +130,12 @@ impl Theorem {
             todo!();
         }
         let Theorem {
+            spec,
             locals,
             assump,
             target,
         } = h;
-        self.merge(locals, assump);
+        self.merge(spec, locals, assump);
         self.target = Term::mk_eq(target, mem::take(&mut self.target));
     }
 }
