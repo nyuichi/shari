@@ -18,6 +18,20 @@ pub struct Theorem {
     target: Term,
 }
 
+impl std::fmt::Display for Theorem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "▶ ")?;
+        for (x, t) in &self.locals {
+            write!(f, "({} : {}) ", x, t)?;
+        }
+        write!(f, "| ")?;
+        for p in &self.assump {
+            write!(f, "({}) ", p)?;
+        }
+        write!(f, "⊢ {}", self.target)
+    }
+}
+
 impl Theorem {
     pub fn target(&self) -> &Term {
         &self.target
@@ -121,23 +135,6 @@ impl Theorem {
         f.fill(m);
         self.target = f;
     }
-
-    pub fn prop_ext(&mut self, mut h: Theorem) {
-        if !self.assump.remove(&h.target) {
-            todo!();
-        }
-        if !h.assump.remove(&self.target) {
-            todo!();
-        }
-        let Theorem {
-            spec,
-            locals,
-            assump,
-            target,
-        } = h;
-        self.merge(spec, locals, assump);
-        self.target = Term::mk_eq(target, mem::take(&mut self.target));
-    }
 }
 
 impl Term {
@@ -149,7 +146,8 @@ impl Term {
     }
 
     /// self must be context-like
-    fn fill(&mut self, m: &Term) {
+    #[doc(hidden)]
+    pub fn fill(&mut self, m: &Term) {
         if let Term::Abs(_, t, n) = self {
             assert_eq!(m.r#type(), t);
             let x = Name::fresh();
@@ -181,7 +179,7 @@ impl Term {
         m
     }
 
-    fn as_eq(mut self) -> Option<(Term, Term)> {
+    pub fn as_eq(mut self) -> Option<(Term, Term)> {
         let mut args = self.uncurry();
         if args.len() == 2 {
             if let Term::Const(_, Name::Named(name), _) = &self {
@@ -213,7 +211,7 @@ impl Term {
         *self = forall;
     }
 
-    fn as_forall(mut self) -> Option<Term> {
+    pub fn as_forall(mut self) -> Option<Term> {
         let mut args = self.uncurry();
         if args.len() == 1 {
             if let Term::Const(_, Name::Named(name), _) = &self {
@@ -226,7 +224,8 @@ impl Term {
         None
     }
 
-    fn mk_imp(&mut self, p: Term) {
+    #[doc(hidden)]
+    pub fn mk_imp(&mut self, p: Term) {
         assert!(self.is_prop());
         assert!(p.is_prop());
         let mut imp = Term::Const(
@@ -245,7 +244,7 @@ impl Term {
         *self = imp;
     }
 
-    fn as_imp(mut self) -> Option<(Term, Term)> {
+    pub fn as_imp(mut self) -> Option<(Term, Term)> {
         let mut args = self.uncurry();
         if args.len() == 2 {
             if let Term::Const(_, Name::Named(name), _) = &self {
@@ -259,13 +258,3 @@ impl Term {
         None
     }
 }
-
-// #[test]
-// fn run() {
-//     let mut tactic_state = Tactic::prove(vec!["p", "q"], vec![], "p → (p → q) → q");
-//     tactic_state.imp_intro();
-//     tactic_state.imp_intro();
-//     tactic_state.imp_elim("p");
-//     tactic_state.assumption();
-//     tactic_state.assumption();
-// }

@@ -1,6 +1,7 @@
 use shari::elaborator;
 use shari::logic;
 use shari::parser;
+use shari::tactic;
 use shari::term;
 
 #[derive(Default)]
@@ -169,6 +170,21 @@ fn main() {
         h.imp_intro(&p.term(&locals, "p"));
         h.forall_intro(&p.name("q"));
         h.forall_intro(&p.name("p"));
+        println!("{}", h);
+        h
+    });
+
+    p.new_theorem("mp_by_tactic", &[], {
+        let mut t = tactic::TacticState::new(p.spec.clone(), p.term(&[], "∀ p q, p → (p → q) → q"));
+        t.forall_intro(p.name("p"));
+        t.forall_intro(p.name("q"));
+        t.imp_intro();
+        t.imp_intro();
+        t.imp_elim(p.term(&[("p", "Prop")], "p"));
+        t.assume();
+        t.assume();
+        let h = t.qed();
+        println!("{}", h);
         h
     });
 }
