@@ -121,34 +121,23 @@ pub struct Lex<'a> {
     filename: &'a str,
 }
 
-#[derive(Debug, Clone)]
-pub struct LexError {
+#[derive(Debug, Clone, Error)]
+#[error("unrecognizable character at line {line}, column {column}, in file \"{filename}\"")]
+pub struct LexError<'a> {
     line: usize,
     column: usize,
-    filename: String,
+    filename: &'a str,
 }
 
-impl From<Lex<'_>> for LexError {
-    fn from(lex: Lex<'_>) -> Self {
+impl<'a> From<Lex<'a>> for LexError<'a> {
+    fn from(lex: Lex<'a>) -> Self {
         Self {
             line: lex.line,
             column: lex.column,
-            filename: lex.filename.to_owned(),
+            filename: lex.filename,
         }
     }
 }
-
-impl std::fmt::Display for LexError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "unrecognizable character at line {}, column {}, in file {}",
-            self.line, self.column, self.filename
-        )
-    }
-}
-
-impl std::error::Error for LexError {}
 
 impl<'a> Lex<'a> {
     fn new(input: &'a str, filename: &'a str) -> Self {
@@ -184,7 +173,7 @@ impl<'a> Lex<'a> {
 }
 
 impl<'a> Iterator for Lex<'a> {
-    type Item = std::result::Result<Token<'a>, LexError>;
+    type Item = std::result::Result<Token<'a>, LexError<'a>>;
     fn next(&mut self) -> Option<Self::Item> {
         #[derive(PartialEq, Eq, Debug)]
         enum Kind {
@@ -217,7 +206,7 @@ impl<'a> Iterator for Lex<'a> {
                 return None;
             }
             let cap = match RE.captures(&self.input[self.position..]) {
-                None => return Some(Err(self.clone().into())),
+                None => return Some(Err(LexError::from(self.clone()))),
                 Some(cap) => cap,
             };
             // change the position of the cursor
@@ -347,6 +336,8 @@ impl TokenTable {
 
 #[derive(Debug, Error)]
 pub enum ParseError<'a> {
+    #[error("{lex_error}")]
+    Lex { lex_error: LexError<'a> },
     #[error("parse error: {message} at {source_info}")]
     Parse {
         message: String,
@@ -354,6 +345,15 @@ pub enum ParseError<'a> {
     },
     #[error("unexpected end of input at {source_info}")]
     Eof { source_info: SourceInfo<'a> },
+}
+
+// Since LexError is not 'static we only want #[from] and don't need #[source],
+// but this is impossible because #[from] attibute always implies #[source].
+// So I am implementing it manually.
+impl<'a> From<LexError<'a>> for ParseError<'a> {
+    fn from(err: LexError<'a>) -> Self {
+        Self::Lex { lex_error: err }
+    }
 }
 
 pub struct Parser<'a> {
@@ -404,8 +404,7 @@ impl<'a> Parser<'a> {
         self.lex
             .clone()
             .next()
-            .transpose()
-            .expect("lex error")
+            .transpose()?
             .ok_or_else(|| self.eof_error())
     }
 
@@ -413,7 +412,14 @@ impl<'a> Parser<'a> {
         self.lex
             .next()
             .expect("unchecked advance")
-            .expect("lex error");
+            .expect("impossible lex error! probably due to unchecked advance");
+    }
+
+    pub fn eof(&mut self) -> Result<(), ParseError<'a>> {
+        if let Some(token) = self.peek_opt() {
+            Self::fail(token, "expected EOF but tokens remain")?;
+        }
+        Ok(())
     }
 
     fn any_token(&mut self) -> Result<Token<'a>, ParseError<'a>> {
@@ -460,12 +466,21 @@ impl<'a> Parser<'a> {
         None
     }
 
+    pub fn name(&mut self) -> Result<Name, ParseError<'a>> {
+        Ok(Name(self.ident()?.as_str().to_owned()))
+    }
+
+    fn name_opt(&mut self) -> Option<Name> {
+        self.ident_opt()
+            .map(|token| Name(token.as_str().to_owned()))
+    }
+
     fn type_primary(&mut self) -> Result<Type, ParseError<'a>> {
+        if let Some(name) = self.name_opt() {
+            return Ok(Type::Var(name));
+        }
         let token = self.any_token()?;
-        if token.is_ident() {
-            let id = token.as_str();
-            Ok(Type::Var(Name(id.to_owned())))
-        } else if token.is_symbol() && token.as_str() == "(" {
+        if token.is_symbol() && token.as_str() == "(" {
             let t = self.r#type()?;
             self.expect_symbol(")")?;
             Ok(t)
@@ -487,9 +502,11 @@ impl<'a> Parser<'a> {
 
     /// typed parameters e.g. `"(x y : T)"`
     fn parameter(&mut self, _token: Token) -> Result<(Vec<Name>, Type), ParseError<'a>> {
-        let mut idents = vec![Name(self.ident()?.as_str().to_owned())];
-        while let Some(ident) = self.ident_opt() {
-            idents.push(Name(ident.as_str().to_owned()));
+        let mut idents = vec![];
+        // needs at least one parameter
+        idents.push(self.name()?);
+        while let Some(name) = self.name_opt() {
+            idents.push(name);
         }
         // TODO: allow declarations with no explict types
         self.expect_symbol(":")?;
@@ -506,8 +523,8 @@ impl<'a> Parser<'a> {
                 for name in names {
                     params.push((name, Some(t.clone())));
                 }
-            } else if let Some(token) = self.ident_opt() {
-                params.push((Name(token.as_str().to_owned()), None));
+            } else if let Some(name) = self.name_opt() {
+                params.push((name, None));
             } else {
                 break;
             }

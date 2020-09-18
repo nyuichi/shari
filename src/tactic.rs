@@ -126,9 +126,10 @@ impl TacticState {
             assert!(p.is_fresh(&name));
         }
         let c = mem::take(&mut seq.target).as_forall().unwrap();
-        if let Term::Abs(_, t, mut m) = c {
+        if let Term::Abs(_, p) = c {
+            let (t, mut m) = *p;
             m.open(&name);
-            seq.target = *m;
+            seq.target = m;
             if let Some(_) = seq.locals.insert(name.clone(), t) {
                 todo!();
             }

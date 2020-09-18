@@ -137,10 +137,17 @@ impl Theorem {
     }
 }
 
+impl Type {
+    #[doc(hidden)]
+    pub fn mk_prop() -> Type {
+        Type::Fvar(Name::Named(Box::new("Prop".to_owned())))
+    }
+}
+
 impl Term {
     fn is_prop(&self) -> bool {
         match self.r#type() {
-            Type::Fvar(Name::Named(name)) => name == "Prop",
+            Type::Fvar(Name::Named(name)) => name.as_str() == "Prop",
             _ => false,
         }
     }
@@ -148,7 +155,8 @@ impl Term {
     /// self must be context-like
     #[doc(hidden)]
     pub fn fill(&mut self, m: &Term) {
-        if let Term::Abs(_, t, n) = self {
+        if let Term::Abs(_, p) = self {
+            let (t, n) = &mut **p;
             assert_eq!(m.r#type(), t);
             let x = Name::fresh();
             n.open(&x);
@@ -161,17 +169,12 @@ impl Term {
 
     fn mk_eq(m1: Term, m2: Term) -> Self {
         assert_eq!(m1.r#type(), m2.r#type());
-        let t = m1.r#type();
+        let a = m1.r#type().clone();
+        let mut t = Type::mk_prop();
+        t.curry(vec![a.clone(), a.clone()]);
         let eq = Term::Const(
-            Type::Arrow(
-                Box::new(t.clone()),
-                Box::new(Type::Arrow(
-                    Box::new(t.clone()),
-                    Box::new(Type::Fvar(Name::Named("Prop".to_owned()))),
-                )),
-            ),
-            Name::Named("eq".to_owned()),
-            vec![t.clone()],
+            t,
+            Box::new((Name::Named(Box::new("eq".to_owned())), vec![a])),
         );
         let mut m = eq;
         m.mk_app(m1);
@@ -182,11 +185,13 @@ impl Term {
     pub fn as_eq(mut self) -> Option<(Term, Term)> {
         let mut args = self.uncurry();
         if args.len() == 2 {
-            if let Term::Const(_, Name::Named(name), _) = &self {
-                if name == "eq" {
-                    let n2 = args.pop().unwrap();
-                    let n1 = args.pop().unwrap();
-                    return Some((n1, n2));
+            if let Term::Const(_, p) = &self {
+                if let (Name::Named(name), _) = &**p {
+                    if name.as_str() == "eq" {
+                        let n2 = args.pop().unwrap();
+                        let n1 = args.pop().unwrap();
+                        return Some((n1, n2));
+                    }
                 }
             }
         }
@@ -196,16 +201,13 @@ impl Term {
     fn mk_forall(&mut self, name: &Name, t: Type) {
         assert!(self.is_prop());
         self.mk_abs(name, t.clone());
+        let mut pred_ty = Type::mk_prop();
+        pred_ty.curry(vec![t.clone()]);
+        let mut forall_ty = Type::mk_prop();
+        forall_ty.curry(vec![pred_ty]);
         let mut forall = Term::Const(
-            Type::Arrow(
-                Box::new(Type::Arrow(
-                    Box::new(t.clone()),
-                    Box::new(Type::Fvar(Name::Named("Prop".to_owned()))),
-                )),
-                Box::new(Type::Fvar(Name::Named("Prop".to_owned()))),
-            ),
-            Name::Named("forall".to_owned()),
-            vec![t],
+            forall_ty,
+            Box::new((Name::Named(Box::new("forall".to_owned())), vec![t])),
         );
         forall.mk_app(mem::take(self));
         *self = forall;
@@ -214,10 +216,12 @@ impl Term {
     pub fn as_forall(mut self) -> Option<Term> {
         let mut args = self.uncurry();
         if args.len() == 1 {
-            if let Term::Const(_, Name::Named(name), _) = &self {
-                if name == "forall" {
-                    let f = args.pop().unwrap();
-                    return Some(f);
+            if let Term::Const(_, p) = &self {
+                if let (Name::Named(name), _) = &**p {
+                    if name.as_str() == "forall" {
+                        let f = args.pop().unwrap();
+                        return Some(f);
+                    }
                 }
             }
         }
@@ -228,16 +232,11 @@ impl Term {
     pub fn mk_imp(&mut self, p: Term) {
         assert!(self.is_prop());
         assert!(p.is_prop());
+        let mut t = Type::mk_prop();
+        t.curry(vec![Type::mk_prop(), Type::mk_prop()]);
         let mut imp = Term::Const(
-            Type::Arrow(
-                Box::new(Type::Fvar(Name::Named("Prop".to_owned()))),
-                Box::new(Type::Arrow(
-                    Box::new(Type::Fvar(Name::Named("Prop".to_owned()))),
-                    Box::new(Type::Fvar(Name::Named("Prop".to_owned()))),
-                )),
-            ),
-            Name::Named("imp".to_owned()),
-            vec![],
+            t,
+            Box::new((Name::Named(Box::new("imp".to_owned())), vec![])),
         );
         imp.mk_app(p);
         imp.mk_app(mem::take(self));
@@ -247,11 +246,13 @@ impl Term {
     pub fn as_imp(mut self) -> Option<(Term, Term)> {
         let mut args = self.uncurry();
         if args.len() == 2 {
-            if let Term::Const(_, Name::Named(name), _) = &self {
-                if name == "imp" {
-                    let q = args.pop().unwrap();
-                    let p = args.pop().unwrap();
-                    return Some((p, q));
+            if let Term::Const(_, p) = &self {
+                if let (Name::Named(name), _) = &**p {
+                    if name.as_str() == "imp" {
+                        let q = args.pop().unwrap();
+                        let p = args.pop().unwrap();
+                        return Some((p, q));
+                    }
                 }
             }
         }

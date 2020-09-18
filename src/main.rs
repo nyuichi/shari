@@ -82,13 +82,16 @@ impl Prover {
     }
 
     fn name(&self, input: &str) -> term::Name {
-        term::Name::Named(input.to_owned())
+        let mut parser = parser::Parser::new(input, "", &self.token_table);
+        let x = parser.name().unwrap_or_else(|_| todo!());
+        parser.eof().unwrap_or_else(|_| todo!());
+        term::Name::from(x)
     }
 
     fn r#type(&self, input: &str) -> term::Type {
-        let t = parser::Parser::new(input, "", &self.token_table)
-            .r#type()
-            .unwrap_or_else(|_| todo!());
+        let mut parser = parser::Parser::new(input, "", &self.token_table);
+        let t = parser.r#type().unwrap_or_else(|_| todo!());
+        parser.eof().unwrap_or_else(|_| todo!());
         let t = elaborator::Type::from(t);
         t.elaborate(&self.spec.sign)
     }
@@ -98,9 +101,9 @@ impl Prover {
     }
 
     fn term(&self, locals: &[(&str, &str)], input: &str) -> term::Term {
-        let m = parser::Parser::new(input, "", &self.token_table)
-            .term()
-            .unwrap_or_else(|_| todo!());
+        let mut parser = parser::Parser::new(input, "", &self.token_table);
+        let m = parser.term().unwrap_or_else(|_| todo!());
+        parser.eof().unwrap_or_else(|_| todo!());
         let m = elaborator::Term::from(m);
         let local_consts = locals
             .iter()

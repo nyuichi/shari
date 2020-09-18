@@ -40,6 +40,12 @@ impl<'a> Env<'a> {
     }
 }
 
+impl From<parser::Name> for Name {
+    fn from(name: parser::Name) -> Self {
+        Name::Named(Box::new(name.0))
+    }
+}
+
 impl From<Scheme<term::Type>> for Scheme<Type> {
     fn from(s: Scheme<term::Type>) -> Self {
         Self {
@@ -70,7 +76,7 @@ pub enum Type {
 impl From<parser::Type> for Type {
     fn from(t: parser::Type) -> Self {
         match t {
-            parser::Type::Var(name) => Type::Var(Name::Named(name.0)),
+            parser::Type::Var(name) => Type::Var(name.into()),
             parser::Type::Arrow(t1, t2) => {
                 Type::Arrow(Box::new((*t1).into()), Box::new((*t2).into()))
             }
@@ -82,8 +88,9 @@ impl From<term::Type> for Type {
     fn from(t: term::Type) -> Self {
         match t {
             term::Type::Fvar(name) => Type::Var(name),
-            term::Type::Arrow(t1, t2) => {
-                Type::Arrow(Box::new((*t1).into()), Box::new((*t2).into()))
+            term::Type::Arrow(p) => {
+                let (t1, t2) = *p;
+                Type::Arrow(Box::new(t1.into()), Box::new(t2.into()))
             }
         }
     }
@@ -124,7 +131,9 @@ impl Type {
         match self {
             Type::Var(name) => term::Type::Fvar(name),
             Type::Arrow(t1, t2) => {
-                term::Type::Arrow(Box::new(t1.certify()), Box::new(t2.certify()))
+                let mut t = t2.certify();
+                t.curry(vec![t1.certify()]);
+                t
             }
             Type::Mvar(_) => unreachable!("logic flaw: uninstantiated type meta variable found"),
         }
@@ -147,13 +156,13 @@ pub enum Term {
 impl From<parser::Term> for Term {
     fn from(m: parser::Term) -> Self {
         match m {
-            parser::Term::Var(name) => Term::Var(Type::Mvar(MvarId::fresh()), Name::Named(name.0)),
+            parser::Term::Var(name) => Term::Var(Type::Mvar(MvarId::fresh()), name.into()),
             parser::Term::Abs(name, t, m) => {
                 let t = match t {
                     Some(t) => Type::from(t),
                     None => Type::Mvar(MvarId::fresh()),
                 };
-                Term::Abs(Name::Named(name.0), t, Box::new((*m).into()))
+                Term::Abs(name.into(), t, Box::new((*m).into()))
             }
             parser::Term::App(m1, m2) => Term::App(Box::new((*m1).into()), Box::new((*m2).into())),
         }
@@ -196,8 +205,7 @@ impl Term {
             }
             Term::Const(t, name, ts) => term::Term::Const(
                 t.certify(),
-                name,
-                ts.into_iter().map(Type::certify).collect(),
+                Box::new((name, ts.into_iter().map(Type::certify).collect())),
             ),
         }
     }
@@ -319,14 +327,15 @@ mod tests {
     #[test]
     fn test_infer() {
         let mut sign = Sign::default();
+        let mut t = term::Type::Fvar(Name::Named(Box::new("B".to_owned())));
+        t.curry(vec![term::Type::Fvar(Name::Named(Box::new(
+            "A".to_owned(),
+        )))]);
         sign.add_const(
-            Name::Named("f".to_owned()),
+            Name::Named(Box::new("f".to_owned())),
             Scheme::<term::Type> {
                 type_vars: vec![],
-                main: term::Type::Arrow(
-                    term::Type::Fvar(Name::Named("A".to_owned())).into(),
-                    term::Type::Fvar(Name::Named("B".to_owned())).into(),
-                ),
+                main: t,
             },
         );
         let m = parser::tests::parse_term("λ x, f x");

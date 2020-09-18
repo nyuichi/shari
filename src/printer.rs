@@ -10,12 +10,19 @@ impl std::fmt::Display for term::Name {
     }
 }
 
+impl std::fmt::Display for term::MvarId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.id())
+    }
+}
+
 impl std::fmt::Display for term::Type {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         fn go(t: &term::Type, prec: usize, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             match t {
                 term::Type::Fvar(name) => write!(f, "{}", name),
-                term::Type::Arrow(t1, t2) => {
+                term::Type::Arrow(p) => {
+                    let (t1, t2) = &**p;
                     if prec > 0 {
                         write!(f, "(")?;
                     }
@@ -61,7 +68,8 @@ impl term::Term {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         let mut args = self.uncurry();
-        if let term::Term::Const(_, name, _) = self {
+        if let term::Term::Const(_, p) = self {
+            let (name, _) = &mut **p;
             if let Some(op) = find_user_notation(name) {
                 match op.fixity {
                     parser::Fixity::Infixl => {
@@ -126,7 +134,8 @@ impl term::Term {
                     "forall" => {
                         if args.len() == 1 {
                             let mut arg = args.pop().unwrap();
-                            if let term::Term::Abs(_, t, m) = &mut arg {
+                            if let term::Term::Abs(_, p) = &mut arg {
+                                let (t, m) = &mut **p;
                                 if !allow_lambda {
                                     write!(f, "(")?;
                                 }
@@ -150,9 +159,13 @@ impl term::Term {
         match self {
             term::Term::Bvar(_, i) => write!(f, "{}", i),
             term::Term::Fvar(_, name) => write!(f, "{}", name),
-            term::Term::Const(_, name, _) => write!(f, "{}", name),
+            term::Term::Const(_, p) => {
+                let (name, _) = &mut **p;
+                write!(f, "{}", name)
+            }
             term::Term::Mvar(_, name) => write!(f, "?{}", name),
-            term::Term::Abs(_, t, m) => {
+            term::Term::Abs(_, p) => {
+                let (t, m) = &mut **p;
                 if !allow_lambda {
                     write!(f, "(")?;
                 }
@@ -165,7 +178,8 @@ impl term::Term {
                 }
                 Ok(())
             }
-            term::Term::App(_, m1, m2) => {
+            term::Term::App(_, p) => {
+                let (m1, m2) = &mut **p;
                 if prec >= 1024 {
                     write!(f, "(")?;
                     allow_lambda = true;
