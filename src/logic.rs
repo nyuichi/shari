@@ -1,4 +1,4 @@
-use crate::term::{Name, Scheme, Sign, Term, Type};
+use crate::term::{Context, Name, Scheme, Sign, Term, Type};
 use std::collections::{HashMap, HashSet};
 use std::mem;
 
@@ -82,20 +82,20 @@ impl Theorem {
         }
     }
 
-    pub fn eq_elim(&mut self, h: Theorem, c: Term) {
+    pub fn eq_elim(&mut self, h: Theorem, ctx: Context) {
         let (n1, n2) = match mem::take(&mut self.target).as_eq() {
             Some((n1, n2)) => (n1, n2),
             None => todo!(),
         };
-        let mut m1 = c.clone();
-        m1.fill(&n1);
-        assert!(m1.is_prop());
-        let mut m2 = c;
-        m2.fill(&n2);
-        assert!(m2.is_prop());
-        assert_eq!(m2, h.target);
+        let mut c1 = ctx.clone();
+        c1.fill(&n1);
+        assert!(c1.1.is_prop());
+        let mut c2 = ctx;
+        c2.fill(&n2);
+        assert!(c2.1.is_prop());
+        assert_eq!(c2.1, h.target);
         self.merge(h.spec, h.locals, h.assump);
-        self.target = m1;
+        self.target = c1.1;
     }
 
     pub fn imp_intro(&mut self, p: &Term) {
@@ -128,12 +128,12 @@ impl Theorem {
     }
 
     pub fn forall_elim(&mut self, m: &Term) {
-        let mut f = match mem::take(&mut self.target).as_forall() {
+        let mut ctx = match mem::take(&mut self.target).as_forall() {
             Some(f) => f,
             None => todo!(),
         };
-        f.fill(m);
-        self.target = f;
+        ctx.fill(m);
+        self.target = ctx.1;
     }
 }
 
@@ -150,21 +150,6 @@ impl Term {
             Type::Fvar(Name::Named(name)) => name.as_str() == "Prop",
             _ => false,
         }
-    }
-
-    /// self must be context-like
-    #[doc(hidden)]
-    pub fn fill(&mut self, m: &Term) {
-        if let Term::Abs(_, p) = self {
-            let (t, n) = &mut **p;
-            assert_eq!(m.r#type(), t);
-            let x = Name::fresh();
-            n.open(&x);
-            n.subst(&x, m);
-            *self = mem::take(n);
-            return;
-        }
-        todo!()
     }
 
     fn mk_eq(m1: Term, m2: Term) -> Self {
@@ -213,14 +198,16 @@ impl Term {
         *self = forall;
     }
 
-    pub fn as_forall(mut self) -> Option<Term> {
+    pub fn as_forall(mut self) -> Option<Context> {
         let mut args = self.uncurry();
         if args.len() == 1 {
             if let Term::Const(_, p) = &self {
                 if let (Name::Named(name), _) = &**p {
                     if name.as_str() == "forall" {
                         let f = args.pop().unwrap();
-                        return Some(f);
+                        if let Term::Abs(_, ctx) = f {
+                            return Some(*ctx);
+                        }
                     }
                 }
             }

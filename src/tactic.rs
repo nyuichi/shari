@@ -1,5 +1,5 @@
 use crate::logic::{Spec, Theorem};
-use crate::term::{Name, Term, Type};
+use crate::term::{Context, Name, Term, Type};
 use std::collections::{HashMap, HashSet};
 use std::mem;
 
@@ -46,7 +46,7 @@ enum Op {
         m2: Term,
     },
     EqElim {
-        c: Term,
+        ctx: Context,
     },
     ImpIntro {
         p: Term,
@@ -125,19 +125,14 @@ impl TacticState {
         for p in &seq.assump {
             assert!(p.is_fresh(&name));
         }
-        let c = mem::take(&mut seq.target).as_forall().unwrap();
-        if let Term::Abs(_, p) = c {
-            let (t, mut m) = *p;
-            m.open(&name);
-            seq.target = m;
-            if let Some(_) = seq.locals.insert(name.clone(), t) {
-                todo!();
-            }
-            self.goals.push(seq);
-            self.ops.push(Op::ForallIntro { name });
-        } else {
+        let Context(t, mut m) = mem::take(&mut seq.target).as_forall().unwrap();
+        m.open(&name);
+        seq.target = m;
+        if let Some(_) = seq.locals.insert(name.clone(), t) {
             todo!();
         }
+        self.goals.push(seq);
+        self.ops.push(Op::ForallIntro { name });
     }
 
     pub fn qed(mut self) -> Theorem {
@@ -164,10 +159,10 @@ impl TacticState {
                 } => {
                     stack.push(Theorem::eq_intro(spec, locals, assump, m1, m2));
                 }
-                Op::EqElim { c } => {
+                Op::EqElim { ctx } => {
                     let mut h1 = stack.pop().unwrap();
                     let h2 = stack.pop().unwrap();
-                    h1.eq_elim(h2, c);
+                    h1.eq_elim(h2, ctx);
                     stack.push(h1);
                 }
                 Op::ImpIntro { p } => {

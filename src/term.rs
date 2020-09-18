@@ -170,7 +170,7 @@ impl MvarId {
 pub enum Term {
     Fvar(Type, Name),
     Bvar(Type, usize),
-    Abs(Type, Box<(Type, Term)>),
+    Abs(Type, Box<Context>),
     App(Type, Box<(Term, Term)>),
     Const(Type, Box<(Name, Vec<Type>)>),
     /// Mvar is always closed.
@@ -180,6 +180,18 @@ pub enum Term {
 impl Default for Term {
     fn default() -> Self {
         Self::Bvar(Type::default(), 12345678)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Context(pub Type, pub Term);
+
+impl Context {
+    pub fn fill(&mut self, m: &Term) {
+        assert_eq!(self.0, *m.r#type());
+        let x = Name::fresh();
+        self.1.open(&x);
+        self.1.subst(&x, m);
     }
 }
 
@@ -199,7 +211,7 @@ impl Term {
                 }
             }
             Self::Abs(_, p) => {
-                let (_, n) = &mut **p;
+                let Context(_, n) = &mut **p;
                 n.open_at(name, level + 1);
             }
             Self::App(_, p) => {
@@ -227,7 +239,7 @@ impl Term {
             }
             Self::Bvar(_, _) => {}
             Self::Abs(_, p) => {
-                let (_, m) = &mut **p;
+                let Context(_, m) = &mut **p;
                 m.close_at(name, level + 1);
             }
             Self::App(_, p) => {
@@ -245,7 +257,7 @@ impl Term {
         let mut u = self.r#type().clone();
         u.curry(vec![t.clone()]);
         self.close(name);
-        *self = Self::Abs(u, Box::new((t, mem::take(self))));
+        *self = Self::Abs(u, Box::new(Context(t, mem::take(self))));
     }
 
     #[doc(hidden)]
@@ -265,7 +277,7 @@ impl Term {
             Self::Fvar(_, x) => name != x,
             Self::Bvar(_, _) => true,
             Self::Abs(_, p) => {
-                let (_, m) = &**p;
+                let Context(_, m) = &**p;
                 m.is_closed()
             }
             Self::App(_, p) => {
@@ -282,7 +294,7 @@ impl Term {
             Self::Fvar(_, _) => false,
             Self::Bvar(_, _) => true,
             Self::Abs(_, p) => {
-                let (_, m) = &**p;
+                let Context(_, m) = &**p;
                 m.is_closed()
             }
             Self::App(_, p) => {
@@ -303,7 +315,7 @@ impl Term {
             Self::Fvar(_, _) => true,
             Self::Bvar(_, i) => *i < level,
             Self::Abs(_, p) => {
-                let (_, m) = &**p;
+                let Context(_, m) = &**p;
                 m.is_lclosed_at(level + 1)
             }
             Self::App(_, p) => {
@@ -324,7 +336,7 @@ impl Term {
             Self::Fvar(_, _) => true,
             Self::Bvar(_, _) => true,
             Self::Abs(_, p) => {
-                let (_, m) = &**p;
+                let Context(_, m) = &**p;
                 m.is_ground()
             }
             Self::App(_, p) => {
@@ -350,7 +362,7 @@ impl Term {
                 m2.subst(name, m);
             }
             Self::Abs(_, p) => {
-                let (_, n) = &mut **p;
+                let Context(_, n) = &mut **p;
                 n.subst(name, m);
             }
             Self::Const(_, _) => {}
@@ -368,7 +380,7 @@ impl Term {
                 m2.instantiate(mid, m);
             }
             Self::Abs(_, p) => {
-                let (_, n) = &mut **p;
+                let Context(_, n) = &mut **p;
                 n.instantiate(mid, m);
             }
             Self::Const(_, _) => {}
@@ -385,7 +397,7 @@ impl Term {
     pub fn head(&self) -> &Self {
         let mut m = self;
         while let Self::Abs(_, p) = m {
-            let (_, n) = &**p;
+            let Context(_, n) = &**p;
             m = n;
         }
         while let Self::App(_, p) = m {
@@ -409,7 +421,7 @@ impl Term {
     /// `true` if the term is in β-normal form.
     pub fn is_normal(&self) -> bool {
         if let Self::Abs(_, p) = self {
-            let (_, m) = &**p;
+            let Context(_, m) = &**p;
             m.is_normal()
         } else {
             self.is_neutral()
@@ -479,14 +491,14 @@ impl Term {
                 m1.beta_reduce();
                 m2.beta_reduce();
                 if let Self::Abs(_, p) = m1 {
-                    let (_, m) = &mut **p;
+                    let Context(_, m) = &mut **p;
                     m.open_subst(m2);
                     m.beta_reduce();
                     *self = mem::take(m);
                 }
             }
             Self::Abs(_, p) => {
-                let (_, m) = &mut **p;
+                let Context(_, m) = &mut **p;
                 m.beta_reduce();
             }
         }
@@ -510,7 +522,7 @@ impl Term {
         match self.r#type() {
             Type::Arrow(_) => {
                 if let Self::Abs(_, p) = self {
-                    let (_, m) = &mut **p;
+                    let Context(_, m) = &mut **p;
                     let name = Name::fresh();
                     m.open(&name);
                     let r = m.is_canonical();
@@ -582,7 +594,7 @@ impl Term {
         assert!(self.is_normal());
         match self {
             Self::Abs(_, p) => {
-                let (_, m) = &mut **p;
+                let Context(_, m) = &mut **p;
                 let x = Name::fresh();
                 m.open(&x);
                 m.eta_expand_normal();
@@ -634,7 +646,7 @@ impl From<Term> for Hnf {
         let mut binder = vec![];
         let mut head = m;
         while let Term::Abs(_, p) = head {
-            let (t, mut m) = *p;
+            let Context(t, mut m) = *p;
             let x = Name::fresh();
             m.open(&x);
             binder.push((x, t));

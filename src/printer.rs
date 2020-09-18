@@ -135,7 +135,7 @@ impl term::Term {
                         if args.len() == 1 {
                             let mut arg = args.pop().unwrap();
                             if let term::Term::Abs(_, p) = &mut arg {
-                                let (t, m) = &mut **p;
+                                let term::Context(t, m) = &mut **p;
                                 if !allow_lambda {
                                     write!(f, "(")?;
                                 }
@@ -165,7 +165,7 @@ impl term::Term {
             }
             term::Term::Mvar(_, name) => write!(f, "?{}", name),
             term::Term::Abs(_, p) => {
-                let (t, m) = &mut **p;
+                let term::Context(t, m) = &mut **p;
                 if !allow_lambda {
                     write!(f, "(")?;
                 }
