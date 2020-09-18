@@ -1,5 +1,6 @@
 use crate::parser;
 use crate::term;
+use std::sync::Arc;
 
 impl std::fmt::Display for term::Name {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -69,7 +70,7 @@ impl term::Term {
     ) -> std::fmt::Result {
         let mut args = self.uncurry();
         if let term::Term::Const(_, p) = self {
-            let (name, _) = &mut **p;
+            let (name, _) = &**p;
             if let Some(op) = find_user_notation(name) {
                 match op.fixity {
                     parser::Fixity::Infixl => {
@@ -134,8 +135,8 @@ impl term::Term {
                     "forall" => {
                         if args.len() == 1 {
                             let mut arg = args.pop().unwrap();
-                            if let term::Term::Abs(_, p) = &mut arg {
-                                let term::Context(t, m) = &mut **p;
+                            if let term::Term::Abs(_, c) = &mut arg {
+                                let term::Context(t, m) = Arc::make_mut(c);
                                 if !allow_lambda {
                                     write!(f, "(")?;
                                 }
@@ -160,12 +161,12 @@ impl term::Term {
             term::Term::Bvar(_, i) => write!(f, "{}", i),
             term::Term::Fvar(_, name) => write!(f, "{}", name),
             term::Term::Const(_, p) => {
-                let (name, _) = &mut **p;
+                let (name, _) = &**p;
                 write!(f, "{}", name)
             }
             term::Term::Mvar(_, name) => write!(f, "?{}", name),
-            term::Term::Abs(_, p) => {
-                let term::Context(t, m) = &mut **p;
+            term::Term::Abs(_, c) => {
+                let term::Context(t, m) = Arc::make_mut(c);
                 if !allow_lambda {
                     write!(f, "(")?;
                 }
@@ -179,7 +180,7 @@ impl term::Term {
                 Ok(())
             }
             term::Term::App(_, p) => {
-                let (m1, m2) = &mut **p;
+                let (m1, m2) = Arc::make_mut(p);
                 if prec >= 1024 {
                     write!(f, "(")?;
                     allow_lambda = true;

@@ -1,6 +1,7 @@
 use crate::term::{Context, Name, Scheme, Sign, Term, Type};
 use std::collections::{HashMap, HashSet};
 use std::mem;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct Spec {
@@ -140,7 +141,7 @@ impl Theorem {
 impl Type {
     #[doc(hidden)]
     pub fn mk_prop() -> Type {
-        Type::Fvar(Name::Named(Box::new("Prop".to_owned())))
+        Type::Fvar(Name::Named(Arc::new("Prop".to_owned())))
     }
 }
 
@@ -157,14 +158,12 @@ impl Term {
         let a = m1.r#type().clone();
         let mut t = Type::mk_prop();
         t.curry(vec![a.clone(), a.clone()]);
-        let eq = Term::Const(
+        let mut eq = Term::Const(
             t,
-            Box::new((Name::Named(Box::new("eq".to_owned())), vec![a])),
+            Arc::new((Name::Named(Arc::new("eq".to_owned())), vec![a])),
         );
-        let mut m = eq;
-        m.mk_app(m1);
-        m.mk_app(m2);
-        m
+        eq.curry(vec![m1, m2]);
+        eq
     }
 
     pub fn as_eq(mut self) -> Option<(Term, Term)> {
@@ -185,16 +184,16 @@ impl Term {
 
     fn mk_forall(&mut self, name: &Name, t: Type) {
         assert!(self.is_prop());
-        self.mk_abs(name, t.clone());
+        self.r#abstract(vec![(name.clone(), t.clone())]);
         let mut pred_ty = Type::mk_prop();
         pred_ty.curry(vec![t.clone()]);
         let mut forall_ty = Type::mk_prop();
         forall_ty.curry(vec![pred_ty]);
         let mut forall = Term::Const(
             forall_ty,
-            Box::new((Name::Named(Box::new("forall".to_owned())), vec![t])),
+            Arc::new((Name::Named(Arc::new("forall".to_owned())), vec![t])),
         );
-        forall.mk_app(mem::take(self));
+        forall.curry(vec![mem::take(self)]);
         *self = forall;
     }
 
@@ -205,8 +204,9 @@ impl Term {
                 if let (Name::Named(name), _) = &**p {
                     if name.as_str() == "forall" {
                         let f = args.pop().unwrap();
-                        if let Term::Abs(_, ctx) = f {
-                            return Some(*ctx);
+                        if let Term::Abs(_, mut c) = f {
+                            Arc::make_mut(&mut c);
+                            return Some(Arc::try_unwrap(c).unwrap());
                         }
                     }
                 }
@@ -223,10 +223,9 @@ impl Term {
         t.curry(vec![Type::mk_prop(), Type::mk_prop()]);
         let mut imp = Term::Const(
             t,
-            Box::new((Name::Named(Box::new("imp".to_owned())), vec![])),
+            Arc::new((Name::Named(Arc::new("imp".to_owned())), vec![])),
         );
-        imp.mk_app(p);
-        imp.mk_app(mem::take(self));
+        imp.curry(vec![p, mem::take(self)]);
         *self = imp;
     }
 

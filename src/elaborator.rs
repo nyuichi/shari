@@ -1,6 +1,7 @@
 use crate::parser;
 use crate::term::{self, MvarId, Name, Scheme, Sign};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Debug)]
 struct Env<'a> {
@@ -42,7 +43,7 @@ impl<'a> Env<'a> {
 
 impl From<parser::Name> for Name {
     fn from(name: parser::Name) -> Self {
-        Name::Named(Box::new(name.0))
+        Name::Named(Arc::new(name.0))
     }
 }
 
@@ -88,8 +89,9 @@ impl From<term::Type> for Type {
     fn from(t: term::Type) -> Self {
         match t {
             term::Type::Fvar(name) => Type::Var(name),
-            term::Type::Arrow(p) => {
-                let (t1, t2) = *p;
+            term::Type::Arrow(mut p) => {
+                Arc::make_mut(&mut p);
+                let (t1, t2) = Arc::try_unwrap(p).unwrap();
                 Type::Arrow(Box::new(t1.into()), Box::new(t2.into()))
             }
         }
@@ -195,17 +197,17 @@ impl Term {
             Term::Var(t, name) => term::Term::Fvar(t.certify(), name),
             Term::Abs(name, t, m) => {
                 let mut m = m.certify();
-                m.mk_abs(&name, t.certify());
+                m.r#abstract(vec![(name, t.certify())]);
                 m
             }
             Term::App(m1, m2) => {
                 let mut m = m1.certify();
-                m.mk_app(m2.certify());
+                m.curry(vec![m2.certify()]);
                 m
             }
             Term::Const(t, name, ts) => term::Term::Const(
                 t.certify(),
-                Box::new((name, ts.into_iter().map(Type::certify).collect())),
+                Arc::new((name, ts.into_iter().map(Type::certify).collect())),
             ),
         }
     }
@@ -327,12 +329,12 @@ mod tests {
     #[test]
     fn test_infer() {
         let mut sign = Sign::default();
-        let mut t = term::Type::Fvar(Name::Named(Box::new("B".to_owned())));
-        t.curry(vec![term::Type::Fvar(Name::Named(Box::new(
+        let mut t = term::Type::Fvar(Name::Named(Arc::new("B".to_owned())));
+        t.curry(vec![term::Type::Fvar(Name::Named(Arc::new(
             "A".to_owned(),
         )))]);
         sign.add_const(
-            Name::Named(Box::new("f".to_owned())),
+            Name::Named(Arc::new("f".to_owned())),
             Scheme::<term::Type> {
                 type_vars: vec![],
                 main: t,
