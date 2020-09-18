@@ -84,7 +84,7 @@ impl Theorem {
     }
 
     pub fn eq_elim(&mut self, h: Theorem, ctx: Context) {
-        let (n1, n2) = match mem::take(&mut self.target).as_eq() {
+        let (n1, n2) = match self.target.as_eq() {
             Some((n1, n2)) => (n1, n2),
             None => todo!(),
         };
@@ -108,13 +108,13 @@ impl Theorem {
     }
 
     pub fn imp_elim(&mut self, h: Theorem) {
-        let (p, q) = match mem::take(&mut self.target).as_imp() {
+        let (p, q) = match self.target.as_imp() {
             Some((p, q)) => (p, q),
             None => todo!(),
         };
-        assert_eq!(p, h.target);
+        assert_eq!(*p, h.target);
+        self.target = mem::take(q);
         self.merge(h.spec, h.locals, h.assump);
-        self.target = q;
     }
 
     pub fn forall_intro(&mut self, name: &Name) {
@@ -129,12 +129,12 @@ impl Theorem {
     }
 
     pub fn forall_elim(&mut self, m: &Term) {
-        let mut ctx = match mem::take(&mut self.target).as_forall() {
+        let ctx = match self.target.as_forall() {
             Some(f) => f,
             None => todo!(),
         };
         ctx.fill(m);
-        self.target = ctx.1;
+        self.target = mem::take(&mut ctx.1);
     }
 }
 
@@ -166,10 +166,10 @@ impl Term {
         eq
     }
 
-    pub fn as_eq(mut self) -> Option<(Term, Term)> {
-        let mut args = self.uncurry();
-        if args.len() == 2 {
-            if let Term::Const(_, p) = &self {
+    pub fn as_eq(&mut self) -> Option<(&mut Term, &mut Term)> {
+        let (binder, head, mut args) = self.triple_mut();
+        if binder.len() == 0 && args.len() == 2 {
+            if let Term::Const(_, p) = head {
                 if let (Name::Named(name), _) = &**p {
                     if name.as_str() == "eq" {
                         let n2 = args.pop().unwrap();
@@ -197,16 +197,15 @@ impl Term {
         *self = forall;
     }
 
-    pub fn as_forall(mut self) -> Option<Context> {
-        let mut args = self.uncurry();
-        if args.len() == 1 {
-            if let Term::Const(_, p) = &self {
+    pub fn as_forall(&mut self) -> Option<&mut Context> {
+        let (binder, head, mut args) = self.triple_mut();
+        if binder.len() == 0 && args.len() == 1 {
+            if let Term::Const(_, p) = head {
                 if let (Name::Named(name), _) = &**p {
                     if name.as_str() == "forall" {
                         let f = args.pop().unwrap();
-                        if let Term::Abs(_, mut c) = f {
-                            Arc::make_mut(&mut c);
-                            return Some(Arc::try_unwrap(c).unwrap());
+                        if let Term::Abs(_, c) = f {
+                            return Some(Arc::make_mut(c));
                         }
                     }
                 }
@@ -221,18 +220,18 @@ impl Term {
         assert!(p.is_prop());
         let mut t = Type::mk_prop();
         t.curry(vec![Type::mk_prop(), Type::mk_prop()]);
-        let mut imp = Term::Const(
+        let imp = Term::Const(
             t,
             Arc::new((Name::Named(Arc::new("imp".to_owned())), vec![])),
         );
-        imp.curry(vec![p, mem::take(self)]);
-        *self = imp;
+        let q = mem::replace(self, imp);
+        self.curry(vec![p, q]);
     }
 
-    pub fn as_imp(mut self) -> Option<(Term, Term)> {
-        let mut args = self.uncurry();
-        if args.len() == 2 {
-            if let Term::Const(_, p) = &self {
+    pub fn as_imp(&mut self) -> Option<(&mut Term, &mut Term)> {
+        let (binder, head, mut args) = self.triple_mut();
+        if binder.len() == 0 && args.len() == 2 {
+            if let Term::Const(_, p) = head {
                 if let (Name::Named(name), _) = &**p {
                     if name.as_str() == "imp" {
                         let q = args.pop().unwrap();

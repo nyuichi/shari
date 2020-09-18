@@ -392,9 +392,8 @@ impl Term {
         }
     }
 
-    /// m is in head position of n if n ≡ λv*. m l*
-    /// May return a locally open term
-    pub fn head(&self) -> &Self {
+    /// may return locally open terms
+    pub fn head(&self) -> &Term {
         let mut m = self;
         while let Self::Abs(_, c) = m {
             let Context(_, n) = &**c;
@@ -405,6 +404,26 @@ impl Term {
             m = m1;
         }
         m
+    }
+
+    /// triple(λ (v:t)*, m l*) = (t*, m, l*)
+    /// may return locally open terms
+    pub fn triple_mut(&mut self) -> (Vec<&mut Type>, &mut Term, Vec<&mut Term>) {
+        let mut m = self;
+        let mut binders = vec![];
+        while let Self::Abs(_, c) = m {
+            let Context(t, n) = Arc::make_mut(c);
+            binders.push(t);
+            m = n;
+        }
+        let mut args = vec![];
+        while let Self::App(_, p) = m {
+            let (m1, m2) = Arc::make_mut(p);
+            args.push(m2);
+            m = m1;
+        }
+        args.reverse();
+        (binders, m, args)
     }
 
     fn is_neutral(&self) -> bool {
@@ -614,7 +633,7 @@ impl Term {
 /// A convenient representation of head normal form.
 /// Recall that every (normal) term has form `λv*. m n*`.
 #[derive(Clone)]
-struct Hnf {
+struct Triple {
     /// Outermost-first
     binder: Vec<(Name, Type)>,
     /// Fvar, Const, or Mvar.
@@ -625,7 +644,7 @@ struct Hnf {
     args: Vec<Term>,
 }
 
-impl From<Term> for Hnf {
+impl From<Term> for Triple {
     fn from(mut m: Term) -> Self {
         assert!(m.is_canonical());
         let binder = m.unabstract();
@@ -635,9 +654,9 @@ impl From<Term> for Hnf {
     }
 }
 
-impl From<Hnf> for Term {
-    fn from(m: Hnf) -> Self {
-        let Hnf { binder, head, args } = m;
+impl From<Triple> for Term {
+    fn from(m: Triple) -> Self {
+        let Triple { binder, head, args } = m;
         let mut m = head;
         m.curry(args);
         m.r#abstract(binder);
@@ -645,16 +664,13 @@ impl From<Hnf> for Term {
     }
 }
 
-impl Hnf {
+impl Triple {
     /// See [Vukmirović+, 2020].
     pub fn is_flex(&self) -> bool {
         match self.head {
             Term::Mvar(_, _) => true,
-            Term::Bvar(_, _)
-            | Term::Fvar(_, _)
-            | Term::Const(_, _)
-            | Term::Abs(_, _)
-            | Term::App(_, _) => false,
+            Term::Bvar(_, _) | Term::Fvar(_, _) | Term::Const(_, _) => false,
+            Term::Abs(_, _) | Term::App(_, _) => unreachable!(),
         }
     }
 
@@ -666,7 +682,7 @@ impl Hnf {
     /// Suppose `f ≡ λx*. X t*` and `r ≡ λy*. x u*`.
     /// Imitation: X ↦ λz*. x (Y z*)* (when x = c)
     /// Projection: X ↦ λz*. zᵢ (Y z*)* (when τ(zᵢ) is compatible with τ(x))
-    fn r#match(&self, other: &Hnf) -> Vec<(MvarId, Term)> {
+    fn r#match(&self, other: &Triple) -> Vec<(MvarId, Term)> {
         assert!(self.is_flex());
         assert!(self.is_rigid());
         let (t, mid) = if let Term::Mvar(t, mid) = &self.head {
@@ -726,15 +742,15 @@ impl Hnf {
 #[derive(Default)]
 struct DisagreementSet {
     // rigid-rigid
-    rr: Vec<(Hnf, Hnf)>,
+    rr: Vec<(Triple, Triple)>,
     // flex-rigid
-    fr: Vec<(Hnf, Hnf)>,
+    fr: Vec<(Triple, Triple)>,
     // flex-flex
-    ff: Vec<(Hnf, Hnf)>,
+    ff: Vec<(Triple, Triple)>,
 }
 
 impl DisagreementSet {
-    fn add(&mut self, m1: Hnf, m2: Hnf) {
+    fn add(&mut self, m1: Triple, m2: Triple) {
         match (m1.is_rigid(), m2.is_rigid()) {
             (true, true) => self.rr.push((m1, m2)),
             (true, false) => self.fr.push((m2, m1)),
@@ -761,7 +777,7 @@ impl DisagreementSet {
                 for (mut a1, mut a2) in h1.args.into_iter().zip(h2.args.into_iter()) {
                     a1.r#abstract(h1.binder.clone());
                     a2.r#abstract(h2.binder.clone());
-                    self.add(Hnf::from(a1), Hnf::from(a2));
+                    self.add(Triple::from(a1), Triple::from(a2));
                 }
             } else {
                 return false;
@@ -790,7 +806,7 @@ impl DisagreementSet {
                     let mut m2 = Term::from(m2.clone());
                     m2.instantiate(mid, &m);
                     m2.canonicalize();
-                    new_set.add(Hnf::from(m1), Hnf::from(m2));
+                    new_set.add(Triple::from(m1), Triple::from(m2));
                 }
                 let mut new_subst = subst.clone();
                 new_subst.push((mid, m));
@@ -807,9 +823,9 @@ impl Term {
         assert_eq!(self.r#type(), other.r#type());
         let mut set = DisagreementSet::default();
         self.canonicalize();
-        let h1 = Hnf::from(self.clone());
+        let h1 = Triple::from(self.clone());
         other.canonicalize();
-        let h2 = Hnf::from(mem::take(other));
+        let h2 = Triple::from(mem::take(other));
         set.add(h1, h2);
         let subst = set.solve();
         for (mid, m) in subst {

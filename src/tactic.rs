@@ -89,19 +89,20 @@ impl TacticState {
 
     pub fn eq_intro(&mut self) {
         let mut seq = self.goals.pop().unwrap();
-        let (m1, m2) = mem::take(&mut seq.target).as_eq().unwrap();
+        let (m1, m2) = seq.target.as_eq().unwrap();
         self.ops.push(Op::EqIntro {
             spec: seq.spec,
             locals: seq.locals,
             assump: seq.assump,
-            m1,
-            m2,
+            m1: mem::take(m1),
+            m2: mem::take(m2),
         });
     }
 
     pub fn imp_intro(&mut self) {
         let mut seq = self.goals.pop().unwrap();
-        let (p1, p2) = mem::take(&mut seq.target).as_imp().unwrap();
+        let (p1, p2) = seq.target.as_imp().unwrap();
+        let (p1, p2) = (mem::take(p1), mem::take(p2));
         if !seq.assump.insert(p1.clone()) {
             todo!();
         }
@@ -125,7 +126,7 @@ impl TacticState {
         for p in &seq.assump {
             assert!(p.is_fresh(&name));
         }
-        let Context(t, mut m) = mem::take(&mut seq.target).as_forall().unwrap();
+        let Context(t, mut m) = mem::take(seq.target.as_forall().unwrap());
         m.open(&name);
         seq.target = m;
         if let Some(_) = seq.locals.insert(name.clone(), t) {
