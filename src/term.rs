@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use std::mem;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum Name {
     Named(Arc<String>),
     Anon(usize),
@@ -52,7 +52,7 @@ impl Sign {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd)]
 pub enum Type {
     Fvar(Name),
     Arrow(Arc<(Type, Type)>),
@@ -149,7 +149,7 @@ impl Type {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct MvarId(usize);
 
 impl MvarId {
@@ -167,7 +167,7 @@ impl MvarId {
 
 /// locally nameless representation
 /// See [Charguéraud, 2012].
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd)]
 pub enum Term {
     Fvar(Type, Name),
     Bvar(Type, usize),
@@ -184,7 +184,7 @@ impl Default for Term {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, Ord, PartialOrd)]
 pub struct Context(pub Type, pub Term);
 
 impl Context {
@@ -252,23 +252,6 @@ impl Term {
             Self::Const(_, _) => {}
             Self::Mvar(_, _) => {}
         }
-    }
-
-    fn mk_abs(&mut self, name: &Name, t: Type) {
-        let mut u = self.r#type().clone();
-        u.curry(vec![t.clone()]);
-        self.close(name);
-        *self = Self::Abs(u, Arc::new(Context(t, mem::take(self))));
-    }
-
-    fn mk_app(&mut self, arg: Term) {
-        if let Type::Arrow(p) = self.r#type() {
-            let (t1, t2) = &**p;
-            assert_eq!(t1, arg.r#type());
-            *self = Self::App(t2.clone(), Arc::new((mem::take(self), arg)));
-            return;
-        }
-        panic!("invalid application: {:?} {:?}", self, arg);
     }
 
     /// x # self <==> x ∉ FV(self)
@@ -426,6 +409,19 @@ impl Term {
         (binders, m, args)
     }
 
+    pub fn arguments_mut(&mut self) -> Vec<&mut Term> {
+        self.triple_mut().2
+    }
+
+    pub fn matrix_mut(&mut self) -> &mut Term {
+        let mut m = self;
+        while let Self::Abs(_, c) = m {
+            let Context(_, n) = Arc::make_mut(c);
+            m = n;
+        }
+        m
+    }
+
     fn is_neutral(&self) -> bool {
         match self {
             Self::Abs(_, _) => false,
@@ -485,9 +481,17 @@ impl Term {
     }
 
     pub fn curry(&mut self, ms: Vec<Term>) {
+        let mut head = mem::take(self);
         for m in ms {
-            self.mk_app(m);
+            if let Type::Arrow(p) = head.r#type() {
+                let (t1, t2) = &**p;
+                assert_eq!(t1, m.r#type());
+                head = Self::App(t2.clone(), Arc::new((head, m)));
+            } else {
+                panic!("invalid application: {:?} {:?}", self, m);
+            }
         }
+        *self = head;
     }
 
     pub fn unabstract(&mut self) -> Vec<(Name, Type)> {
@@ -505,9 +509,14 @@ impl Term {
     }
 
     pub fn r#abstract(&mut self, binder: Vec<(Name, Type)>) {
+        let mut m = mem::take(self);
         for (x, t) in binder.into_iter().rev() {
-            self.mk_abs(&x, t);
+            let mut u = m.r#type().clone();
+            u.curry(vec![t.clone()]);
+            m.close(&x);
+            m = Self::Abs(u, Arc::new(Context(t, m)));
         }
+        *self = m;
     }
 
     /// applicative-order (leftmost-innermost) reduction
@@ -584,11 +593,9 @@ impl Term {
     fn eta_expand_neutral(&mut self) {
         assert!(self.is_neutral());
         // [x M₁ ... Mₙ] := x [M₁] ... [Mₙ]
-        let mut args = self.uncurry();
-        for arg in &mut args[1..] {
+        for arg in self.arguments_mut() {
             arg.eta_expand_normal();
         }
-        self.curry(args);
         // [M] := λv₁ v₂ ⋯. M v₁ v₂ ⋯
         let binder: Vec<_> = self
             .r#type()
@@ -609,9 +616,7 @@ impl Term {
     /// 2. [x M₁ ... Mₙ] := λv*. x [M₁] ... [Mₙ] v*
     fn eta_expand_normal(&mut self) {
         assert!(self.is_normal());
-        let binder = self.unabstract();
-        self.eta_expand_neutral();
-        self.r#abstract(binder);
+        self.matrix_mut().eta_expand_neutral();
     }
 
     pub fn canonicalize(&mut self) {

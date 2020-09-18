@@ -1,13 +1,13 @@
 use crate::logic::{Spec, Theorem};
 use crate::term::{Context, Name, Term, Type};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::mem;
 
 #[derive(Clone, Debug)]
 pub struct Sequent {
     spec: Spec,
     locals: HashMap<Name, Type>,
-    assump: HashSet<Term>,
+    assump: BTreeSet<Term>,
     target: Term,
 }
 
@@ -41,7 +41,7 @@ enum Op {
     EqIntro {
         spec: Spec,
         locals: HashMap<Name, Type>,
-        assump: HashSet<Term>,
+        assump: BTreeSet<Term>,
         m1: Term,
         m2: Term,
     },

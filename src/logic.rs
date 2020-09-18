@@ -1,5 +1,5 @@
 use crate::term::{Context, Name, Scheme, Sign, Term, Type};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::mem;
 use std::sync::Arc;
 
@@ -15,7 +15,7 @@ pub struct Spec {
 pub struct Theorem {
     spec: Spec,
     locals: HashMap<Name, Type>,
-    assump: HashSet<Term>,
+    assump: BTreeSet<Term>,
     target: Term,
 }
 
@@ -38,7 +38,7 @@ impl Theorem {
         &self.target
     }
 
-    fn merge(&mut self, spec: Spec, locals: HashMap<Name, Type>, assump: HashSet<Term>) {
+    fn merge(&mut self, spec: Spec, locals: HashMap<Name, Type>, assump: BTreeSet<Term>) {
         assert_eq!(self.spec, spec);
         for (name, t) in locals {
             match self.locals.get(&name) {
@@ -66,7 +66,7 @@ impl Theorem {
     pub fn eq_intro(
         spec: Spec,
         locals: HashMap<Name, Type>,
-        assump: HashSet<Term>,
+        assump: BTreeSet<Term>,
         m1: Term,
         m2: Term,
     ) -> Self {
