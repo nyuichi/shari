@@ -59,17 +59,17 @@ impl<'a> SourceInfo<'a> {
 impl<'a> std::fmt::Display for SourceInfo<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}:{}:{}\n\n", self.filename, self.line, self.column)?;
-        write!(
+        writeln!(
             f,
-            "{}\n",
+            "{}",
             self.input
                 .lines()
                 .nth(self.line - 1)
                 .expect("invalid line number")
         )?;
-        write!(
+        writeln!(
             f,
-            "{}{}\n",
+            "{}{}",
             std::iter::repeat(' ')
                 .take(self.column - 1)
                 .collect::<String>(),

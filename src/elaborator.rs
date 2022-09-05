@@ -43,7 +43,7 @@ impl<'a> Env<'a> {
 
 impl From<parser::Name> for Name {
     fn from(name: parser::Name) -> Self {
-        Name::Named(Arc::new(name.0))
+        Name::Named(name.0)
     }
 }
 
@@ -329,12 +329,10 @@ mod tests {
     #[test]
     fn test_infer() {
         let mut sign = Sign::default();
-        let mut t = term::Type::Fvar(Name::Named(Arc::new("B".to_owned())));
-        t.curry(vec![term::Type::Fvar(Name::Named(Arc::new(
-            "A".to_owned(),
-        )))]);
+        let mut t = term::Type::Fvar(Name::Named("B".to_owned()));
+        t.curry(vec![term::Type::Fvar(Name::Named("A".to_owned()))]);
         sign.add_const(
-            Name::Named(Arc::new("f".to_owned())),
+            Name::Named("f".to_owned()),
             Scheme::<term::Type> {
                 type_vars: vec![],
                 main: t,

@@ -141,7 +141,7 @@ impl Theorem {
 impl Type {
     #[doc(hidden)]
     pub fn mk_prop() -> Type {
-        Type::Fvar(Name::Named(Arc::new("Prop".to_owned())))
+        Type::Fvar(Name::Named("Prop".to_owned()))
     }
 }
 
@@ -158,17 +158,14 @@ impl Term {
         let a = m1.r#type().clone();
         let mut t = Type::mk_prop();
         t.curry(vec![a.clone(), a.clone()]);
-        let mut eq = Term::Const(
-            t,
-            Arc::new((Name::Named(Arc::new("eq".to_owned())), vec![a])),
-        );
+        let mut eq = Term::Const(t, Arc::new((Name::Named("eq".to_owned()), vec![a])));
         eq.curry(vec![m1, m2]);
         eq
     }
 
     pub fn as_eq(&mut self) -> Option<(&mut Term, &mut Term)> {
         let (binder, head, mut args) = self.triple_mut();
-        if binder.len() == 0 && args.len() == 2 {
+        if binder.is_empty() && args.len() == 2 {
             if let Term::Const(_, p) = head {
                 if let (Name::Named(name), _) = &**p {
                     if name.as_str() == "eq" {
@@ -191,7 +188,7 @@ impl Term {
         forall_ty.curry(vec![pred_ty]);
         let mut forall = Term::Const(
             forall_ty,
-            Arc::new((Name::Named(Arc::new("forall".to_owned())), vec![t])),
+            Arc::new((Name::Named("forall".to_owned()), vec![t])),
         );
         forall.curry(vec![mem::take(self)]);
         *self = forall;
@@ -199,7 +196,7 @@ impl Term {
 
     pub fn as_forall(&mut self) -> Option<&mut Context> {
         let (binder, head, mut args) = self.triple_mut();
-        if binder.len() == 0 && args.len() == 1 {
+        if binder.is_empty() && args.len() == 1 {
             if let Term::Const(_, p) = head {
                 if let (Name::Named(name), _) = &**p {
                     if name.as_str() == "forall" {
@@ -220,17 +217,14 @@ impl Term {
         assert!(p.is_prop());
         let mut t = Type::mk_prop();
         t.curry(vec![Type::mk_prop(), Type::mk_prop()]);
-        let imp = Term::Const(
-            t,
-            Arc::new((Name::Named(Arc::new("imp".to_owned())), vec![])),
-        );
+        let imp = Term::Const(t, Arc::new((Name::Named("imp".to_owned()), vec![])));
         let q = mem::replace(self, imp);
         self.curry(vec![p, q]);
     }
 
     pub fn as_imp(&mut self) -> Option<(&mut Term, &mut Term)> {
         let (binder, head, mut args) = self.triple_mut();
-        if binder.len() == 0 && args.len() == 2 {
+        if binder.is_empty() && args.len() == 2 {
             if let Term::Const(_, p) = head {
                 if let (Name::Named(name), _) = &**p {
                     if name.as_str() == "imp" {

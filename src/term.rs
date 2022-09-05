@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum Name {
-    Named(Arc<String>),
+    Named(String),
     Anon(usize),
 }
 

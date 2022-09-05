@@ -97,7 +97,7 @@ impl Prover {
     }
 
     fn type_vars(&self, input: &[&str]) -> Vec<term::Name> {
-        input.into_iter().map(|x| self.name(*x)).collect()
+        input.iter().map(|x| self.name(*x)).collect()
     }
 
     fn term(&self, locals: &[(&str, &str)], input: &str) -> term::Term {
