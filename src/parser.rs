@@ -146,9 +146,10 @@ impl<'a> std::fmt::Display for SourceInfo<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TokenKind {
-    Ident,  // e.g. "foo", "α", "Prop", "#check"
-    Symbol, // e.g. "+", ":", "λ", ",", "_"
-    NumLit, // e.g. 42
+    Ident,   // e.g. "foo", "α", "Prop"
+    Symbol,  // e.g. "+", ":", "λ", ",", "_"
+    NumLit,  // e.g. 42
+    Keyword, // e.g. "def", "#check"
 }
 
 #[derive(Debug, Clone)]
@@ -168,6 +169,10 @@ impl<'a> Token<'a> {
 
     fn is_num_lit(&self) -> bool {
         self.kind == TokenKind::NumLit
+    }
+
+    fn is_keyword(&self) -> bool {
+        self.kind == TokenKind::Keyword
     }
 
     fn as_str(&self) -> &str {
@@ -312,6 +317,11 @@ impl<'a> Iterator for Lex<'a> {
                         "λ" | "_" => {
                             kind = TokenKind::Symbol;
                         }
+                        "def" | "#check" | "infix" | "infixr" | "infixl" | "prefix" | "nofix"
+                        | "constant" | "lemma" | "meta" | "inductive" | "type" | "axiom"
+                        | "class" | "eval" => {
+                            kind = TokenKind::Keyword;
+                        }
                         _ => {
                             kind = TokenKind::Ident;
                         }
@@ -415,6 +425,7 @@ impl TokenTable {
                 }
             }
             TokenKind::NumLit => Some(Led::App),
+            TokenKind::Keyword => None,
         }
     }
 
@@ -432,6 +443,7 @@ impl TokenTable {
                 }
             }
             TokenKind::NumLit => Some(Nud::NumLit),
+            TokenKind::Keyword => None,
         }
     }
 }
@@ -555,6 +567,14 @@ impl<'a, 'b> Parser<'a, 'b> {
         let token = self.any_token()?;
         if !token.is_num_lit() {
             return Self::fail(token, "expected numeral literal");
+        }
+        Ok(token)
+    }
+
+    fn keyword(&mut self) -> Result<Token<'a>, ParseError<'a>> {
+        let token = self.any_token()?;
+        if !token.is_keyword() {
+            return Self::fail(token, "expected keyword");
         }
         Ok(token)
     }
@@ -884,46 +904,46 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     pub fn command(&mut self) -> Result<Command, ParseError<'a>> {
-        let ident = self.ident()?;
+        let keyword = self.keyword()?;
         let cmd;
-        match ident.as_str() {
+        match keyword.as_str() {
             "def" => {
-                let def_cmd = self.def_cmd(ident)?;
+                let def_cmd = self.def_cmd(keyword)?;
                 cmd = Command::DefCmd(def_cmd);
             }
             "#check" => {
-                let check_cmd = self.check_cmd(ident)?;
+                let check_cmd = self.check_cmd(keyword)?;
                 cmd = Command::CheckCmd(check_cmd);
             }
             "infixr" => {
-                let infixr_cmd = self.infixr_cmd(ident)?;
+                let infixr_cmd = self.infixr_cmd(keyword)?;
                 cmd = Command::InfixrCmd(infixr_cmd);
             }
             "infixl" => {
-                let infixl_cmd = self.infixl_cmd(ident)?;
+                let infixl_cmd = self.infixl_cmd(keyword)?;
                 cmd = Command::InfixlCmd(infixl_cmd);
             }
             "infix" => {
-                let infix_cmd = self.infix_cmd(ident)?;
+                let infix_cmd = self.infix_cmd(keyword)?;
                 cmd = Command::InfixCmd(infix_cmd);
             }
             "prefix" => {
-                let prefix_cmd = self.prefix_cmd(ident)?;
+                let prefix_cmd = self.prefix_cmd(keyword)?;
                 cmd = Command::PrefixCmd(prefix_cmd);
             }
             "nofix" => {
-                let nofix_cmd = self.nofix_cmd(ident)?;
+                let nofix_cmd = self.nofix_cmd(keyword)?;
                 cmd = Command::NofixCmd(nofix_cmd);
             }
             "constant" => {
-                let const_cmd = self.const_cmd(ident)?;
+                let const_cmd = self.const_cmd(keyword)?;
                 cmd = Command::ConstCmd(const_cmd);
             }
             "inductive" | "axiom" | "lemma" | "type" | "class" | "meta" | "#eval" => {
                 todo!()
             }
             _ => {
-                return Self::fail(ident, "expected command");
+                return Self::fail(keyword, "expected command");
             }
         }
         Ok(cmd)

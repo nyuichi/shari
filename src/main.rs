@@ -177,8 +177,12 @@ fn main() {
                 // alias to infixl
                 token_table.add(&op, parser::Fixity::Infixl, prec, entity.0.as_str());
             }
-            parser::Command::PrefixCmd(_) => todo!(),
-            parser::Command::NofixCmd(_) => todo!(),
+            parser::Command::NofixCmd(parser::NofixCommand { op, entity }) => {
+                token_table.add(&op, parser::Fixity::Nofix, 12345678, entity.0.as_str());
+            }
+            parser::Command::PrefixCmd(parser::PrefixCommand { op, prec, entity }) => {
+                token_table.add(&op, parser::Fixity::Prefix, prec, entity.0.as_str());
+            }
         }
     }
     /*
