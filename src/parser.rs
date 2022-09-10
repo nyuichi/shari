@@ -20,6 +20,70 @@ pub enum Term {
     App(Box<Term>, Box<Term>),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefCommand {
+    pub name: Name,
+    pub r#type: Type,
+    pub term: Term,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckCommand {
+    pub term: Term,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InfixrCommand {
+    pub op: String,
+    pub prec: usize,
+    pub entity: Name,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InfixlCommand {
+    pub op: String,
+    pub prec: usize,
+    pub entity: Name,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InfixCommand {
+    pub op: String,
+    pub prec: usize,
+    pub entity: Name,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrefixCommand {
+    pub op: String,
+    pub prec: usize,
+    pub entity: Name,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NofixCommand {
+    pub op: String,
+    pub entity: Name,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConstCommand {
+    pub name: Name,
+    pub r#type: Type,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Command {
+    DefCmd(DefCommand),
+    CheckCmd(CheckCommand),
+    InfixrCmd(InfixrCommand),
+    InfixlCmd(InfixlCommand),
+    InfixCmd(InfixCommand),
+    PrefixCmd(PrefixCommand),
+    NofixCmd(NofixCommand),
+    ConstCmd(ConstCommand),
+}
+
 #[derive(Debug, Clone)]
 pub struct SourceInfo<'a> {
     line: usize,   // 1-origin
@@ -82,8 +146,9 @@ impl<'a> std::fmt::Display for SourceInfo<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TokenKind {
-    Ident,  // e.g. "foo", "α", "Prop"
+    Ident,  // e.g. "foo", "α", "Prop", "#check"
     Symbol, // e.g. "+", ":", "λ", ",", "_"
+    NumLit, // e.g. 42
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +164,10 @@ impl<'a> Token<'a> {
 
     fn is_symbol(&self) -> bool {
         self.kind == TokenKind::Symbol
+    }
+
+    fn is_num_lit(&self) -> bool {
+        self.kind == TokenKind::NumLit
     }
 
     fn as_str(&self) -> &str {
@@ -121,6 +190,13 @@ pub struct Lex<'a> {
     filename: &'a str,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct LexState {
+    position: usize,
+    line: usize,
+    column: usize,
+}
+
 #[derive(Debug, Clone, Error)]
 #[error("unrecognizable character at line {line}, column {column}, in file \"{filename}\"")]
 pub struct LexError<'a> {
@@ -140,7 +216,7 @@ impl<'a> From<Lex<'a>> for LexError<'a> {
 }
 
 impl<'a> Lex<'a> {
-    fn new(input: &'a str, filename: &'a str) -> Self {
+    pub fn new(input: &'a str, filename: &'a str) -> Self {
         Self {
             input,
             position: 0,
@@ -148,6 +224,20 @@ impl<'a> Lex<'a> {
             column: 1,
             filename,
         }
+    }
+
+    fn save(&self) -> LexState {
+        LexState {
+            position: self.position,
+            line: self.line,
+            column: self.column,
+        }
+    }
+
+    fn restore(&mut self, state: LexState) {
+        self.position = state.position;
+        self.line = state.line;
+        self.column = state.column;
     }
 
     fn advance(&mut self, bytes: usize) -> SourceInfo<'a> {
@@ -180,6 +270,7 @@ impl<'a> Iterator for Lex<'a> {
             Space,
             Ident,
             Symbol,
+            NumLit,
         };
 
         static RE: Lazy<Regex> = Lazy::new(|| {
@@ -187,12 +278,13 @@ impl<'a> Iterator for Lex<'a> {
                 (Kind::Space, r"\s+|--.*|/-(?s:.*?)-/"),
                 (
                     Kind::Ident,
-                    r"[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*",
+                    r"#?[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*",
                 ),
                 (
                     Kind::Symbol,
                     r"\(|\)|\{|\}|[\p{Symbol}\p{Punctuation}&&[^(){}]]+",
                 ),
+                (Kind::NumLit, r"0|[1-9][0-9]*"),
             ]
             .iter()
             .map(|(kind, re)| format!("(?P<{:?}>{})", kind, re))
@@ -214,14 +306,21 @@ impl<'a> Iterator for Lex<'a> {
             if cap.name(&format!("{:?}", Kind::Space)).is_none() {
                 let text = source_info.as_str();
 
-                let kind = if cap.name(&format!("{:?}", Kind::Ident)).is_some() {
+                let kind;
+                if cap.name(&format!("{:?}", Kind::Ident)).is_some() {
                     match text {
-                        "λ" | "_" => TokenKind::Symbol,
-                        _ => TokenKind::Ident,
+                        "λ" | "_" => {
+                            kind = TokenKind::Symbol;
+                        }
+                        _ => {
+                            kind = TokenKind::Ident;
+                        }
                     }
+                } else if cap.name(&format!("{:?}", Kind::NumLit)).is_some() {
+                    kind = TokenKind::NumLit;
                 } else {
                     assert!(cap.name(&format!("{:?}", Kind::Symbol)).is_some());
-                    TokenKind::Symbol
+                    kind = TokenKind::Symbol;
                 };
                 return Some(Ok(Token { kind, source_info }));
             }
@@ -293,6 +392,7 @@ enum Nud {
     Exists,
     Paren,
     User(Operator),
+    NumLit,
 }
 
 impl TokenTable {
@@ -314,6 +414,7 @@ impl TokenTable {
                     },
                 }
             }
+            TokenKind::NumLit => Some(Led::App),
         }
     }
 
@@ -330,6 +431,7 @@ impl TokenTable {
                     _ => self.nud.get(token.as_str()).map(|op| Nud::User(op.clone())),
                 }
             }
+            TokenKind::NumLit => Some(Nud::NumLit),
         }
     }
 }
@@ -356,17 +458,14 @@ impl<'a> From<LexError<'a>> for ParseError<'a> {
     }
 }
 
-pub struct Parser<'a> {
-    lex: Lex<'a>,
-    token_table: &'a TokenTable,
+pub struct Parser<'a, 'b> {
+    lex: &'b mut Lex<'a>,
+    token_table: &'b TokenTable,
 }
 
-impl<'a> Parser<'a> {
-    pub fn new(input: &'a str, filename: &'a str, token_table: &'a TokenTable) -> Self {
-        Self {
-            lex: Lex::new(input, filename),
-            token_table,
-        }
+impl<'a, 'b> Parser<'a, 'b> {
+    pub fn new(lex: &'b mut Lex<'a>, token_table: &'b TokenTable) -> Self {
+        Self { lex, token_table }
     }
 
     fn fail<R>(token: Token<'a>, message: impl Into<String>) -> Result<R, ParseError> {
@@ -386,11 +485,11 @@ impl<'a> Parser<'a> {
     where
         F: FnOnce(&mut Self) -> Result<R, ParseError<'a>>,
     {
-        let state = self.lex.clone();
+        let state = self.lex.save();
         match f(self) {
             Ok(m) => Some(m),
             Err(_err) => {
-                self.lex = state;
+                self.lex.restore(state);
                 None
             }
         }
@@ -422,6 +521,10 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    pub fn eof_opt(&mut self) -> bool {
+        self.peek_opt().is_none()
+    }
+
     fn any_token(&mut self) -> Result<Token<'a>, ParseError<'a>> {
         self.lex
             .next()
@@ -446,6 +549,22 @@ impl<'a> Parser<'a> {
             }
         }
         None
+    }
+
+    fn num_lit(&mut self) -> Result<Token<'a>, ParseError<'a>> {
+        let token = self.any_token()?;
+        if !token.is_num_lit() {
+            return Self::fail(token, "expected numeral literal");
+        }
+        Ok(token)
+    }
+
+    fn symbol(&mut self) -> Result<Token<'a>, ParseError<'a>> {
+        let token = self.any_token()?;
+        if !token.is_symbol() {
+            return Self::fail(token, "expected symbol");
+        }
+        Ok(token)
     }
 
     fn expect_symbol(&mut self, sym: &str) -> Result<(), ParseError<'a>> {
@@ -615,6 +734,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => unreachable!(),
             },
+            Nud::NumLit => todo!(),
         };
         while let Some(token) = self.peek_opt() {
             let led = match self.token_table.get_led(&token) {
@@ -648,6 +768,166 @@ impl<'a> Parser<'a> {
         }
         Ok(left)
     }
+
+    fn def_cmd(&mut self, _token: Token) -> Result<DefCommand, ParseError<'a>> {
+        let name = self.name()?;
+        let mut params = vec![];
+        while let Some(token) = self.expect_symbol_opt("(") {
+            let (names, t) = self.parameter(token)?;
+            for name in names {
+                params.push((name, t.clone()));
+            }
+        }
+        self.expect_symbol(":")?;
+        let mut t = self.r#type()?;
+        self.expect_symbol(":=")?;
+        let mut m = self.term()?;
+        for (var, ty) in params.into_iter().rev() {
+            m = Term::Abs(var, Some(ty.clone()), Box::new(m));
+            t = Type::Arrow(Box::new(ty), Box::new(t));
+        }
+        Ok(DefCommand {
+            name,
+            r#type: t,
+            term: m,
+        })
+    }
+
+    fn check_cmd(&mut self, _token: Token) -> Result<CheckCommand, ParseError<'a>> {
+        let m = self.term()?;
+        Ok(CheckCommand { term: m })
+    }
+
+    fn infixr_cmd(&mut self, _token: Token) -> Result<InfixrCommand, ParseError<'a>> {
+        let op = self.symbol()?;
+        self.expect_symbol(":")?;
+        let prec_token = self.num_lit()?;
+        let prec = prec_token
+            .as_str()
+            .parse::<usize>()
+            .expect("numeral literal too big");
+        self.expect_symbol(":=")?;
+        let entity = self.name()?;
+        Ok(InfixrCommand {
+            op: op.as_str().to_owned(),
+            prec,
+            entity,
+        })
+    }
+
+    fn infixl_cmd(&mut self, _token: Token) -> Result<InfixlCommand, ParseError<'a>> {
+        let op = self.symbol()?;
+        self.expect_symbol(":")?;
+        let prec_token = self.num_lit()?;
+        let prec = prec_token
+            .as_str()
+            .parse::<usize>()
+            .expect("numeral literal too big");
+        self.expect_symbol(":=")?;
+        let entity = self.name()?;
+        Ok(InfixlCommand {
+            op: op.as_str().to_owned(),
+            prec,
+            entity,
+        })
+    }
+
+    fn infix_cmd(&mut self, _token: Token) -> Result<InfixCommand, ParseError<'a>> {
+        let op = self.symbol()?;
+        self.expect_symbol(":")?;
+        let prec_token = self.num_lit()?;
+        let prec = prec_token
+            .as_str()
+            .parse::<usize>()
+            .expect("numeral literal too big");
+        self.expect_symbol(":=")?;
+        let entity = self.name()?;
+        Ok(InfixCommand {
+            op: op.as_str().to_owned(),
+            prec,
+            entity,
+        })
+    }
+
+    fn prefix_cmd(&mut self, _token: Token) -> Result<PrefixCommand, ParseError<'a>> {
+        let op = self.symbol()?;
+        self.expect_symbol(":")?;
+        let prec_token = self.num_lit()?;
+        let prec = prec_token
+            .as_str()
+            .parse::<usize>()
+            .expect("numeral literal too big");
+        self.expect_symbol(":=")?;
+        let entity = self.name()?;
+        Ok(PrefixCommand {
+            op: op.as_str().to_owned(),
+            prec,
+            entity,
+        })
+    }
+
+    fn nofix_cmd(&mut self, _token: Token) -> Result<NofixCommand, ParseError<'a>> {
+        let op = self.symbol()?;
+        self.expect_symbol(":=")?;
+        let entity = self.name()?;
+        Ok(NofixCommand {
+            op: op.as_str().to_owned(),
+            entity,
+        })
+    }
+
+    fn const_cmd(&mut self, _token: Token) -> Result<ConstCommand, ParseError<'a>> {
+        let name = self.name()?;
+        self.expect_symbol(":")?;
+        let mut t = self.r#type()?;
+        Ok(ConstCommand { name, r#type: t })
+    }
+
+    pub fn command(&mut self) -> Result<Command, ParseError<'a>> {
+        let ident = self.ident()?;
+        let cmd;
+        match ident.as_str() {
+            "def" => {
+                let def_cmd = self.def_cmd(ident)?;
+                cmd = Command::DefCmd(def_cmd);
+            }
+            "#check" => {
+                let check_cmd = self.check_cmd(ident)?;
+                cmd = Command::CheckCmd(check_cmd);
+            }
+            "infixr" => {
+                let infixr_cmd = self.infixr_cmd(ident)?;
+                cmd = Command::InfixrCmd(infixr_cmd);
+            }
+            "infixl" => {
+                let infixl_cmd = self.infixl_cmd(ident)?;
+                cmd = Command::InfixlCmd(infixl_cmd);
+            }
+            "infix" => {
+                let infix_cmd = self.infix_cmd(ident)?;
+                cmd = Command::InfixCmd(infix_cmd);
+            }
+            "prefix" => {
+                let prefix_cmd = self.prefix_cmd(ident)?;
+                cmd = Command::PrefixCmd(prefix_cmd);
+            }
+            "nofix" => {
+                let nofix_cmd = self.nofix_cmd(ident)?;
+                cmd = Command::NofixCmd(nofix_cmd);
+            }
+            "constant" => {
+                let const_cmd = self.const_cmd(ident)?;
+                cmd = Command::ConstCmd(const_cmd);
+            }
+            "inductive" | "axiom" | "lemma" | "type" | "class" | "meta" | "#eval" => {
+                todo!()
+            }
+            _ => {
+                return Self::fail(ident, "expected command");
+            }
+        }
+        Ok(cmd)
+    }
 }
 
 #[cfg(test)]
@@ -655,9 +935,17 @@ pub mod tests {
     use super::*;
 
     pub fn parse_term(input: &str) -> Term {
+        let mut lex = Lex::new(input, "");
         let token_table = TokenTable::default();
-        let mut parser = Parser::new(input, "", &token_table);
+        let mut parser = Parser::new(&mut lex, &token_table);
         parser.term().unwrap()
+    }
+
+    pub fn parse_cmd(input: &str) -> Command {
+        let mut lex = Lex::new(input, "");
+        let token_table = TokenTable::default();
+        let mut parser = Parser::new(&mut lex, &token_table);
+        parser.command().unwrap()
     }
 
     #[test]
@@ -665,5 +953,9 @@ pub mod tests {
         println!("{:?}", parse_term("λ (x : ℕ → ℕ), x y"));
         println!("{:?}", parse_term("p → (p → q) → q"));
         println!("{:?}", parse_term("λ x y, ∀ P, P x → P y"));
+
+        println!("{:?}", parse_cmd("def id₁ (x : α) : α := x"));
+        println!("{:?}", parse_cmd("#check (λ (x : Prop), x)"));
+        println!("{:?}", parse_cmd("infixr + : 50 := add"));
     }
 }

@@ -1,5 +1,5 @@
 use once_cell::sync::Lazy;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::mem;
 use std::sync::Arc;
 
@@ -39,16 +39,28 @@ impl<T> Scheme<T> {
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct Sign {
     consts: HashMap<Name, Scheme<Type>>,
-    // TODO: types: HashSet<Name>,
+    types: HashSet<Name>, // TODO: support base types with arity of one or more
 }
 
 impl Sign {
     pub fn add_const(&mut self, name: Name, t: Scheme<Type>) {
-        self.consts.insert(name, t).map(|_| todo!());
+        if self.consts.insert(name, t).is_some() {
+            todo!()
+        }
     }
 
     pub fn get_const(&self, name: &Name) -> Option<&Scheme<Type>> {
         self.consts.get(name)
+    }
+
+    pub fn add_type(&mut self, name: Name) {
+        if !self.types.insert(name) {
+            todo!()
+        }
+    }
+
+    pub fn is_base(&self, name: &Name) -> bool {
+        self.types.get(name).is_some()
     }
 }
 

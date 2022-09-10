@@ -1,0 +1,83 @@
+/-
+constant eq : α → α → Prop
+
+infix = : 50 := eq
+
+def top : Prop := (λ (p : Prop), p) = (λ p, p)
+
+nofix ⊤ := top
+
+def and (p₁ p₂ : Prop) : Prop := (λ P : Prop → Prop → Prop, P ⊤ ⊤) = (λ P, P p₁ p₂)
+
+infixr ∧ : 35 := and
+
+def imp (p₁ p₂ : Prop) : Prop := p₁ = p₁ ∧ p₂
+
+infixr → : 25 := imp
+
+def forall (P : α → Prop) : Prop := P = λ x, ⊤
+
+-- notation ∀ x, p := forall (λ x, p)
+
+def iff (p₁ p₂ : Prop) : Prop := (p → q) ∧ (q → p)
+
+infix ↔ : 20 := iff
+
+def bot : Prop := ∀ r, r
+
+nofix ⊥ := bot
+
+def not (p : Prop) : Prop := ∀ r, p → r
+
+prefix ¬ : 40 := not
+
+def or (p₁ p₂ : Prop) : Prop := ∀ r, (p₁ → r) ∧ (p₂ → r) → r
+
+infixr ∨ : 30 := or
+
+def exists (P : α → Prop) : Prop := ∀ r, (∀ x, P x → r) → r
+
+-- notation ∃ x, p := exists (λ x, p)
+-/
+
+constant imp : Prop → Prop → Prop
+constant forall : (α → Prop) → Prop
+
+infixr → : 25 := imp
+-- notation ∀ x, p := forall (λ x, p)
+
+def top : Prop := ∀ p, p → p
+
+nofix ⊤ := top
+
+def and (p₁ p₂ : Prop) : Prop := ∀ r, (p₁ → p₂ → r) → r
+
+infixr ∧ : 35 := and
+
+def bot : Prop := ∀ r, r
+
+nofix ⊥ := bot
+
+def or (p₁ p₂ : Prop) : Prop := ∀ r, (p₁ → r) ∧ (p₂ → r) → r
+
+infixr ∨ : 30 := or
+
+def exists (P : α → Prop) : Prop := ∀ r, (∀ x, P x → r) → r
+
+-- notation ∃ x, p := exists (λ x, p)
+
+-- (∀ x, f x = g x) → f = g
+-- (∀ x, ∀ P, P (f x) → P (g x)) → (∀ P, P f → P g)
+
+def not (p : Prop) : Prop := ∀ r, p → r
+
+prefix ¬ : 40 := not
+
+def iff (p₁ p₂ : Prop) : Prop := (p → q) ∧ (q → p)
+
+infix ↔ : 20 := iff
+
+-- Leibniz equality (indiscernibility of identicals)
+def eq (t₁ t₂ : α) : Prop := ∀ p, p t₁ → p t₂
+
+infix = : 50 := eq

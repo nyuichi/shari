@@ -1,6 +1,6 @@
 use crate::parser;
 use crate::term::{self, MvarId, Name, Scheme, Sign};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -129,21 +129,30 @@ impl Type {
         }
     }
 
-    fn certify(self) -> term::Type {
+    fn certify(self, sign: &Sign, tv: &mut HashSet<Name>) -> term::Type {
         match self {
-            Type::Var(name) => term::Type::Fvar(name),
+            Type::Var(name) => {
+                if sign.is_base(&name) {
+                    tv.insert(name.clone());
+                }
+                term::Type::Fvar(name)
+            }
             Type::Arrow(t1, t2) => {
-                let mut t = t2.certify();
-                t.curry(vec![t1.certify()]);
+                let mut t = t2.certify(sign, tv);
+                t.curry(vec![t1.certify(sign, tv)]);
                 t
             }
             Type::Mvar(_) => unreachable!("logic flaw: uninstantiated type meta variable found"),
         }
     }
 
-    pub fn elaborate(self, _sign: &Sign) -> term::Type {
-        // TODO: find undefined base types
-        self.certify()
+    pub fn elaborate(self, sign: &Sign) -> Scheme<term::Type> {
+        let mut tv = HashSet::<Name>::new();
+        let t = self.certify(sign, &mut tv);
+        Scheme {
+            type_vars: tv.into_iter().collect(),
+            main: t,
+        }
     }
 }
 
@@ -192,23 +201,27 @@ impl Term {
         }
     }
 
-    fn certify(self) -> term::Term {
+    fn certify(self, sign: &Sign, tv: &mut HashSet<Name>) -> term::Term {
         match self {
-            Term::Var(t, name) => term::Term::Fvar(t.certify(), name),
+            Term::Var(t, name) => term::Term::Fvar(t.certify(sign, tv), name),
             Term::Abs(name, t, m) => {
-                let mut m = m.certify();
-                m.r#abstract(vec![(name, t.certify())]);
+                let mut m = m.certify(sign, tv);
+                m.r#abstract(vec![(name, t.certify(sign, tv))]);
                 m
             }
             Term::App(m1, m2) => {
-                let mut m = m1.certify();
-                m.curry(vec![m2.certify()]);
+                let mut m = m1.certify(sign, tv);
+                m.curry(vec![m2.certify(sign, tv)]);
                 m
             }
-            Term::Const(t, name, ts) => term::Term::Const(
-                t.certify(),
-                Arc::new((name, ts.into_iter().map(Type::certify).collect())),
-            ),
+            Term::Const(t, name, ts) => {
+                let t = t.certify(sign, tv);
+                let mut cts = vec![];
+                for t in ts {
+                    cts.push(t.certify(sign, tv));
+                }
+                term::Term::Const(t, Arc::new((name, cts)))
+            }
         }
     }
 
@@ -216,15 +229,19 @@ impl Term {
         mut self,
         sign: &Sign,
         local_consts: &HashMap<Name, term::Type>,
-    ) -> term::Term {
+    ) -> Scheme<term::Term> {
         let mut local_env = Env {
             sign,
             local_consts,
             locals: vec![],
         };
         self.infer(&mut local_env);
-        // TODO: make sure no meta type var remains
-        self.certify()
+        let mut tv = Default::default();
+        let m = self.certify(sign, &mut tv);
+        Scheme {
+            type_vars: tv.into_iter().collect(),
+            main: m,
+        }
     }
 }
 
