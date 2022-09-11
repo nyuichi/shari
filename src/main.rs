@@ -163,6 +163,13 @@ fn main() {
             parser::Command::ConstCmd(parser::ConstCommand { name, r#type }) => {
                 sign.add_const(name, r#type.elaborate(&sign))
             }
+            parser::Command::AxiomCmd(parser::AxiomCommand {
+                name: _name,
+                prop: _prop,
+            }) => {
+                // TODO
+                // spec.add_axiom(name, prop.elaborate(&sign))
+            }
             parser::Command::CheckCmd(_) => todo!(),
             parser::Command::InfixrCmd(parser::InfixrCommand { op, prec, entity }) => {
                 token_table.add(&op, parser::Fixity::Infixr, prec, entity);

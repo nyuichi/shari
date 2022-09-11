@@ -2,40 +2,115 @@ constant imp : Prop → Prop → Prop
 constant forall : (α → Prop) → Prop
 
 infixr → : 25 := imp
--- notation ∀ x, p := forall (λ x, p)
+-- notation ∀ x, φ := forall (λ x, φ)
 
-def top : Prop := ∀ p, p → p
+/-
+This adds an axiom
+top_def: [⊢ top = (∀ φ, φ → φ)]
+-/
+def top : Prop := ∀ φ, φ → φ
 
 nofix ⊤ := top
 
-def and (p₁ p₂ : Prop) : Prop := ∀ r, (p₁ → p₂ → r) → r
+def and (φ ψ : Prop) : Prop := ∀ ξ, (φ → ψ → ξ) → ξ
 
 infixr ∧ : 35 := and
 
-def bot : Prop := ∀ r, r
+def bot : Prop := ∀ ξ, ξ
 
 nofix ⊥ := bot
 
-def or (p₁ p₂ : Prop) : Prop := ∀ r, (p₁ → r) ∧ (p₂ → r) → r
+def or (φ ψ : Prop) : Prop := ∀ ξ, (φ → ξ) ∧ (ψ → ξ) → ξ
 
 infixr ∨ : 30 := or
 
-def exists (P : α → Prop) : Prop := ∀ r, (∀ x, P x → r) → r
+def exists (P : α → Prop) : Prop := ∀ ξ, (∀ x, P x → ξ) → ξ
 
--- notation ∃ x, p := exists (λ x, p)
+-- notation ∃ x, φ := exists (λ x, φ)
 
 -- (∀ x, f x = g x) → f = g
 -- (∀ x, ∀ P, P (f x) → P (g x)) → (∀ P, P f → P g)
 
-def not (p : Prop) : Prop := ∀ r, p → r
+def not (φ : Prop) : Prop := ∀ ξ, φ → ξ
 
 prefix ¬ : 40 := not
 
-def iff (p₁ p₂ : Prop) : Prop := (p → q) ∧ (q → p)
+def iff (φ ψ : Prop) : Prop := (φ → ψ) ∧ (ψ → φ)
 
 infix ↔ : 20 := iff
 
 -- Leibniz equality (indiscernibility of identicals)
-def eq (t₁ t₂ : α) : Prop := ∀ P, P t₁ → P t₂
+def eq (x₁ x₂ : α) : Prop := ∀ P, P x₁ → P x₂
 
 infix = : 50 := eq
+
+axiom prop_ext : ∀ φ₁ φ₂, (φ₁ ↔ φ₂) → (φ₁ = φ₂)
+axiom fun_ext : ∀ f₁ f₂, (∀ x, f₁ x = f₂ x) → (f₁ = f₂)
+
+constant nat_zero : ℕ
+constant nat_succ : ℕ → ℕ
+constant nat_rec : α → (α → α) → ℕ → α
+
+constant star : Unit
+
+/-
+def π₀ (p : α × β) : α := p.0
+def π₁ (p : α × β) : β := p.1
+def pair (a : α) (b : β) := ⟨a, b⟩
+-/
+
+-- type Set α := α → Prop
+
+/-
+⊢ φ : τ → Prop
+⊢ rep : subtype φ → τ
+rep_inj : [⊢ ∀ a₁ a₂, rep a₁ = rep a₂ → a₁ = a₂]
+rep_im : [⊢ ∀ x, φ x → ∃ a, rep a = x]
+-/
+
+/-
+This defines
+⊢ Void_rep : Void → Prop
+Void_rep_inj : [⊢ ∀ x₁ x₂, Void_rep x₁ = Void_rep x₂ → x₁ = x₂]
+Void_rep_im : [⊢ ∀ y, ⊥ → ∃ x, Void_rep x = y]
+-/
+-- subtype Void := { x : Set Unit | ⊥ }
+
+-- def inv_image (f : α → β) (V : Set β) : Set α := λ a, V (f a)
+-- def counit (a : α) : Set (Set α) := λ f, f a
+
+/-
+See [SGL, Ch IV, Sec 5]
+-/
+-- subtype Sum α β := { p : Set (Set α × Set β) | counit p = inv_image (λ x, ⟨ inv_image counit (inv_image (inv_image (λ p, p.0)) x), inv_image counit (inv_image (inv_image (λ p, p.1)) x) ⟩) p }
+
+/-
+# Logical rules
+
+h: [Γ ▸ Φ ⊢ φ]
+------------------------
+h: [Γ, x : τ ▸ Φ, ψ ⊢ φ]
+
+h: [Γ ▸ Φ ⊢ φ]
+-----------------
+h: [Γ ▸ Φ, ψ ⊢ φ]
+
+---------------------
+assume φ: [Γ ▸ φ ⊢ φ]
+
+h: [Γ ▸ Φ, φ ⊢ ψ]
+----------------------------
+imp_intro h: [Γ ▸ Φ ⊢ φ → ψ]
+
+h₁: [Γ ▸ Φ ⊢ φ → ψ]  h₂: [Δ ▸ Ψ ⊢ φ]
+-------------------------------------
+imp_elim h₁ h₂: [Γ ∪ Δ ▸ Φ ∪ Ψ ⊢ ψ]
+
+h: [Γ, x : τ ▸ Φ ⊢ φ]
+--------------------------------- (x ∉ FV Φ)
+forall_intro h: [Γ ▸ Φ ⊢ ∀ x, φ)]
+
+h: [Γ ▸ Φ ⊢ ∀ x, C x]
+--------------------------------
+forall_elim h₁ h₂: [Γ ▸ Φ ⊢ C t]
+-/

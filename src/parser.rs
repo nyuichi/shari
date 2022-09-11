@@ -58,6 +58,12 @@ pub struct ConstCommand {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AxiomCommand {
+    pub name: Name,
+    pub prop: Term,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
     DefCmd(DefCommand),
     CheckCmd(CheckCommand),
@@ -67,6 +73,7 @@ pub enum Command {
     PrefixCmd(PrefixCommand),
     NofixCmd(NofixCommand),
     ConstCmd(ConstCommand),
+    AxiomCmd(AxiomCommand),
 }
 
 #[derive(Debug, Clone)]
@@ -884,6 +891,13 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(ConstCommand { name, r#type: t })
     }
 
+    fn axiom_cmd(&mut self, _token: Token) -> Result<AxiomCommand, ParseError<'a>> {
+        let name = self.name()?;
+        self.expect_symbol(":")?;
+        let m = self.term()?;
+        Ok(AxiomCommand { name, prop: m })
+    }
+
     pub fn command(&mut self) -> Result<Command, ParseError<'a>> {
         let keyword = self.keyword()?;
         let cmd;
@@ -920,7 +934,11 @@ impl<'a, 'b> Parser<'a, 'b> {
                 let const_cmd = self.const_cmd(keyword)?;
                 cmd = Command::ConstCmd(const_cmd);
             }
-            "inductive" | "axiom" | "lemma" | "type" | "class" | "meta" | "#eval" => {
+            "axiom" => {
+                let axiom_cmd = self.axiom_cmd(keyword)?;
+                cmd = Command::AxiomCmd(axiom_cmd);
+            }
+            "inductive" | "lemma" | "type" | "class" | "meta" | "#eval" => {
                 todo!()
             }
             _ => {
