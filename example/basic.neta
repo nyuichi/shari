@@ -36,6 +36,6 @@ def iff (p₁ p₂ : Prop) : Prop := (p → q) ∧ (q → p)
 infix ↔ : 20 := iff
 
 -- Leibniz equality (indiscernibility of identicals)
-def eq (t₁ t₂ : α) : Prop := ∀ p, p t₁ → p t₂
+def eq (t₁ t₂ : α) : Prop := ∀ P, P t₁ → P t₂
 
 infix = : 50 := eq

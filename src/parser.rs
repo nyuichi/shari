@@ -119,12 +119,8 @@ impl<'a> std::fmt::Display for SourceInfo<'a> {
         writeln!(
             f,
             "{}{}",
-            std::iter::repeat(' ')
-                .take(self.column - 1)
-                .collect::<String>(),
-            std::iter::repeat('^')
-                .take(self.input.get(self.range.clone()).unwrap().chars().count())
-                .collect::<String>()
+            " ".repeat(self.column - 1),
+            "^".repeat(self.input.get(self.range.clone()).unwrap().chars().count())
         )
     }
 }
@@ -261,7 +257,7 @@ impl<'a> Iterator for Lex<'a> {
             Ident,
             Symbol,
             NumLit,
-        };
+        }
 
         static RE: Lazy<Regex> = Lazy::new(|| {
             let s = &[
@@ -353,12 +349,12 @@ impl TokenTable {
         };
         match fixity {
             Fixity::Infixl | Fixity::Infixr => {
-                if let Some(_) = self.led.insert(symbol.to_owned(), op) {
+                if self.led.insert(symbol.to_owned(), op).is_some() {
                     todo!()
                 }
             }
             Fixity::Nofix | Fixity::Prefix => {
-                if let Some(_) = self.nud.insert(symbol.to_owned(), op) {
+                if self.nud.insert(symbol.to_owned(), op).is_some() {
                     todo!()
                 }
             }
@@ -398,15 +394,13 @@ impl TokenTable {
                 let lit = token.as_str();
                 match self.led.get(lit) {
                     Some(op) => Some(Led::User(op.clone())),
-                    None => match lit {
-                        _ => {
-                            if self.get_nud(token).is_some() {
-                                Some(Led::App)
-                            } else {
-                                None
-                            }
+                    None => {
+                        if self.get_nud(token).is_some() {
+                            Some(Led::App)
+                        } else {
+                            None
                         }
-                    },
+                    }
                 }
             }
             TokenKind::NumLit => Some(Led::App),
@@ -886,7 +880,7 @@ impl<'a, 'b> Parser<'a, 'b> {
     fn const_cmd(&mut self, _token: Token) -> Result<ConstCommand, ParseError<'a>> {
         let name = self.name()?;
         self.expect_symbol(":")?;
-        let mut t = self.r#type()?;
+        let t = self.r#type()?;
         Ok(ConstCommand { name, r#type: t })
     }
 

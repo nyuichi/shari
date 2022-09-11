@@ -115,7 +115,7 @@ impl Type {
         while let Self::Arrow(p) = t {
             let (_, t2) = &**p;
             arity += 1;
-            t = &t2;
+            t = t2;
         }
         arity
     }
@@ -124,7 +124,7 @@ impl Type {
         let mut t = self;
         while let Self::Arrow(p) = t {
             let (_, t2) = &**p;
-            t = &t2;
+            t = t2;
         }
         t
     }

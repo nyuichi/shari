@@ -108,7 +108,7 @@ impl term::Term {
                         }
                     }
                     parser::Fixity::Nofix => {
-                        if args.len() == 0 {
+                        if args.is_empty() {
                             write!(f, "{}", op.symbol)?;
                             return Ok(());
                         }
@@ -142,6 +142,26 @@ impl term::Term {
                                 }
                                 let x = term::Name::fresh();
                                 write!(f, "∀ ({} : {}), ", x, t)?;
+                                m.open(&x);
+                                m.fmt_help(0, true, f)?;
+                                if !allow_lambda {
+                                    write!(f, ")")?;
+                                }
+                                return Ok(());
+                            }
+                            args.push(arg);
+                        }
+                    }
+                    "exists" => {
+                        if args.len() == 1 {
+                            let mut arg = args.pop().unwrap();
+                            if let term::Term::Abs(_, c) = &mut arg {
+                                let term::Context(t, m) = Arc::make_mut(c);
+                                if !allow_lambda {
+                                    write!(f, "(")?;
+                                }
+                                let x = term::Name::fresh();
+                                write!(f, "∃ ({} : {}), ", x, t)?;
                                 m.open(&x);
                                 m.fmt_help(0, true, f)?;
                                 if !allow_lambda {
