@@ -1,148 +1,145 @@
-use shari::elaborator;
-use shari::logic;
 use shari::parser;
-use shari::tactic;
 use shari::term;
 
-#[derive(Default)]
-struct Prover {
-    spec: logic::Spec,
-    token_table: parser::TokenTable,
-}
+// #[derive(Default)]
+// struct Prover {
+//     spec: logic::Spec,
+//     token_table: parser::TokenTable,
+// }
 
-impl Prover {
-    // fn new_const(&mut self, name: &str, type_vars: &[&str], t: &str) {
-    //     self.spec.sign.add_const(
-    //         self.name(name),
-    //         term::Scheme::<term::Type> {
-    //             type_vars: self.type_vars(type_vars),
-    //             main: self.r#type(t),
-    //         },
-    //     )
-    // }
+// impl Prover {
+// fn new_const(&mut self, name: &str, type_vars: &[&str], t: &str) {
+//     self.spec.sign.add_const(
+//         self.name(name),
+//         term::Scheme::<term::Type> {
+//             type_vars: self.type_vars(type_vars),
+//             main: self.r#type(t),
+//         },
+//     )
+// }
 
-    // fn new_infixr(&mut self, name: &str, prec: usize, entity: &str) {
-    //     self.token_table
-    //         .add(name, parser::Fixity::Infixr, prec, entity);
-    // }
+// fn new_infixr(&mut self, name: &str, prec: usize, entity: &str) {
+//     self.token_table
+//         .add(name, parser::Fixity::Infixr, prec, entity);
+// }
 
-    // fn new_infixl(&mut self, name: &str, prec: usize, entity: &str) {
-    //     self.token_table
-    //         .add(name, parser::Fixity::Infixl, prec, entity);
-    // }
+// fn new_infixl(&mut self, name: &str, prec: usize, entity: &str) {
+//     self.token_table
+//         .add(name, parser::Fixity::Infixl, prec, entity);
+// }
 
-    // /// alias to infixl
-    // fn new_infix(&mut self, name: &str, prec: usize, entity: &str) {
-    //     self.new_infixl(name, prec, entity);
-    // }
+// /// alias to infixl
+// fn new_infix(&mut self, name: &str, prec: usize, entity: &str) {
+//     self.new_infixl(name, prec, entity);
+// }
 
-    // fn new_prefix(&mut self, name: &str, prec: usize, entity: &str) {
-    //     self.token_table
-    //         .add(name, parser::Fixity::Prefix, prec, entity);
-    // }
+// fn new_prefix(&mut self, name: &str, prec: usize, entity: &str) {
+//     self.token_table
+//         .add(name, parser::Fixity::Prefix, prec, entity);
+// }
 
-    // fn new_nofix(&mut self, name: &str, entity: &str) {
-    //     self.token_table
-    //         .add(name, parser::Fixity::Nofix, 12345678, entity);
-    // }
+// fn new_nofix(&mut self, name: &str, entity: &str) {
+//     self.token_table
+//         .add(name, parser::Fixity::Nofix, 12345678, entity);
+// }
 
-    // fn new_def(&mut self, name: &str, type_vars: &[&str], t: &str, m: &str) {
-    //     self.new_const(name, type_vars, t);
-    //     let m = self.term(&[], m);
-    //     assert_eq!(*m.r#type(), self.r#type(t));
-    //     self.spec.defs.insert(
-    //         self.name(name),
-    //         term::Scheme {
-    //             type_vars: self.type_vars(type_vars),
-    //             main: m,
-    //         },
-    //     );
-    // }
+// fn new_def(&mut self, name: &str, type_vars: &[&str], t: &str, m: &str) {
+//     self.new_const(name, type_vars, t);
+//     let m = self.term(&[], m);
+//     assert_eq!(*m.r#type(), self.r#type(t));
+//     self.spec.defs.insert(
+//         self.name(name),
+//         term::Scheme {
+//             type_vars: self.type_vars(type_vars),
+//             main: m,
+//         },
+//     );
+// }
 
-    // fn new_axiom(&mut self, name: &str, type_vars: &[&str], m: &str) {
-    //     let m = self.term(&[], m);
-    //     assert_eq!(*m.r#type(), term::Type::Fvar(self.name("Prop")));
-    //     self.spec.axioms.insert(
-    //         self.name(name),
-    //         term::Scheme {
-    //             type_vars: self.type_vars(type_vars),
-    //             main: m,
-    //         },
-    //     );
-    // }
+// fn new_axiom(&mut self, name: &str, type_vars: &[&str], m: &str) {
+//     let m = self.term(&[], m);
+//     assert_eq!(*m.r#type(), term::Type::Fvar(self.name("Prop")));
+//     self.spec.axioms.insert(
+//         self.name(name),
+//         term::Scheme {
+//             type_vars: self.type_vars(type_vars),
+//             main: m,
+//         },
+//     );
+// }
 
-    // fn new_theorem(&mut self, name: &str, type_vars: &[&str], h: logic::Theorem) {
-    //     self.spec.theorems.insert(
-    //         self.name(name),
-    //         term::Scheme {
-    //             type_vars: self.type_vars(type_vars),
-    //             main: h,
-    //         },
-    //     );
-    // }
+// fn new_theorem(&mut self, name: &str, type_vars: &[&str], h: logic::Theorem) {
+//     self.spec.theorems.insert(
+//         self.name(name),
+//         term::Scheme {
+//             type_vars: self.type_vars(type_vars),
+//             main: h,
+//         },
+//     );
+// }
 
-    // fn name(&self, input: &str) -> term::Name {
-    //     let mut lex = parser::Lex::new(input, "");
-    //     let mut parser = parser::Parser::new(&mut lex, &self.token_table);
-    //     let x = parser.name().unwrap_or_else(|_| todo!());
-    //     parser.eof().unwrap_or_else(|_| todo!());
-    //     term::Name::from(x)
-    // }
+// fn name(&self, input: &str) -> term::Name {
+//     let mut lex = parser::Lex::new(input, "");
+//     let mut parser = parser::Parser::new(&mut lex, &self.token_table);
+//     let x = parser.name().unwrap_or_else(|_| todo!());
+//     parser.eof().unwrap_or_else(|_| todo!());
+//     term::Name::from(x)
+// }
 
-    // fn r#type(&self, input: &str) -> term::Type {
-    //     let mut lex = parser::Lex::new(input, "");
-    //     let mut parser = parser::Parser::new(&mut lex, &self.token_table);
-    //     let t = parser.r#type().unwrap_or_else(|_| todo!());
-    //     parser.eof().unwrap_or_else(|_| todo!());
-    //     let t = elaborator::Type::from(t);
-    //     t.elaborate(&self.spec.sign)
-    // }
+// fn r#type(&self, input: &str) -> term::Type {
+//     let mut lex = parser::Lex::new(input, "");
+//     let mut parser = parser::Parser::new(&mut lex, &self.token_table);
+//     let t = parser.r#type().unwrap_or_else(|_| todo!());
+//     parser.eof().unwrap_or_else(|_| todo!());
+//     let t = elaborator::Type::from(t);
+//     t.elaborate(&self.spec.sign)
+// }
 
-    // fn type_vars(&self, input: &[&str]) -> Vec<term::Name> {
-    //     input.iter().map(|x| self.name(*x)).collect()
-    // }
+// fn type_vars(&self, input: &[&str]) -> Vec<term::Name> {
+//     input.iter().map(|x| self.name(*x)).collect()
+// }
 
-    // fn term(&self, locals: &[(&str, &str)], input: &str) -> term::Term {
-    //     let mut lex = parser::Lex::new(input, "");
-    //     let mut parser = parser::Parser::new(&mut lex, &self.token_table);
-    //     let m = parser.term().unwrap_or_else(|_| todo!());
-    //     parser.eof().unwrap_or_else(|_| todo!());
-    //     let m = elaborator::Term::from(m);
-    //     let local_consts = locals
-    //         .iter()
-    //         .map(|(x, t)| (self.name(x), self.r#type(t)))
-    //         .collect();
-    //     m.elaborate(&self.spec.sign, &local_consts)
-    // }
+// fn term(&self, locals: &[(&str, &str)], input: &str) -> term::Term {
+//     let mut lex = parser::Lex::new(input, "");
+//     let mut parser = parser::Parser::new(&mut lex, &self.token_table);
+//     let m = parser.term().unwrap_or_else(|_| todo!());
+//     parser.eof().unwrap_or_else(|_| todo!());
+//     let m = elaborator::Term::from(m);
+//     let local_consts = locals
+//         .iter()
+//         .map(|(x, t)| (self.name(x), self.r#type(t)))
+//         .collect();
+//     m.elaborate(&self.spec.sign, &local_consts)
+// }
 
-    // fn assume(&self, locals: &[(&str, &str)], input: &str) -> logic::Theorem {
-    //     let local_consts = locals
-    //         .iter()
-    //         .map(|(x, t)| (self.name(x), self.r#type(t)))
-    //         .collect();
-    //     let m = self.term(locals, input);
-    //     logic::Theorem::assume(self.spec.clone(), local_consts, m)
-    // }
-}
+// fn assume(&self, locals: &[(&str, &str)], input: &str) -> logic::Theorem {
+//     let local_consts = locals
+//         .iter()
+//         .map(|(x, t)| (self.name(x), self.r#type(t)))
+//         .collect();
+//     let m = self.term(locals, input);
+//     logic::Theorem::assume(self.spec.clone(), local_consts, m)
+// }
+// }
 
-fn elab_name(x: parser::Name) -> term::Name {
-    term::Name::from(x)
-}
+// fn elab_name(x: parser::Name) -> term::Name {
+//     term::Name::from(x)
+// }
 
-fn elab_type(t: parser::Type, spec: &logic::Spec) -> term::Scheme<term::Type> {
-    let t = elaborator::Type::from(t);
-    t.elaborate(&spec.sign)
-}
+// fn elab_type(t: parser::Type, spec: &logic::Spec) -> term::Scheme<term::Type> {
+//     let t = elaborator::Type::from(t);
+//     t.elaborate(&spec.sign)
+// }
 
-fn elab_term(m: parser::Term, spec: &logic::Spec) -> term::Scheme<term::Term> {
-    let m = elaborator::Term::from(m);
-    let local_consts = Default::default();
-    m.elaborate(&spec.sign, &local_consts)
-}
+// fn elab_term(m: parser::Term, spec: &logic::Spec) -> term::Scheme<term::Term> {
+//     let m = elaborator::Term::from(m);
+//     let local_consts = Default::default();
+//     m.elaborate(&spec.sign, &local_consts)
+// }
 
 fn main() {
-    let mut spec = logic::Spec::default();
-    spec.sign.add_type(term::Name::Named("Prop".to_owned()));
+    let mut sign = term::Sign::default();
+    sign.add_type(term::Name::Str("Prop".to_owned()));
     let mut token_table = parser::TokenTable::default();
     let filename = "example/basic.neta";
     let input = std::fs::read_to_string(filename).unwrap();
@@ -155,33 +152,33 @@ fn main() {
         let cmd = parser.command().unwrap();
         println!("{:?}", cmd);
         match cmd {
-            parser::Command::DefCmd(parser::DefCommand { name, r#type, term }) => {
-                let name = elab_name(name);
-                let r#type = elab_type(r#type, &spec);
-                let term = elab_term(term, &spec);
+            parser::Command::DefCmd(parser::DefCommand {
+                name,
+                r#type,
+                term: _term,
+            }) => {
                 //TODO: check integrity of r#type and type of term
-                spec.sign.add_const(name.clone(), r#type);
-                spec.defs.insert(name, term);
+                sign.add_const(name, r#type.elaborate(&sign));
             }
-            parser::Command::ConstCmd(parser::ConstCommand { name, r#type }) => spec
-                .sign
-                .add_const(elab_name(name), elab_type(r#type, &spec)),
+            parser::Command::ConstCmd(parser::ConstCommand { name, r#type }) => {
+                sign.add_const(name, r#type.elaborate(&sign))
+            }
             parser::Command::CheckCmd(_) => todo!(),
             parser::Command::InfixrCmd(parser::InfixrCommand { op, prec, entity }) => {
-                token_table.add(&op, parser::Fixity::Infixr, prec, entity.0.as_str());
+                token_table.add(&op, parser::Fixity::Infixr, prec, entity);
             }
             parser::Command::InfixlCmd(parser::InfixlCommand { op, prec, entity }) => {
-                token_table.add(&op, parser::Fixity::Infixl, prec, entity.0.as_str());
+                token_table.add(&op, parser::Fixity::Infixl, prec, entity);
             }
             parser::Command::InfixCmd(parser::InfixCommand { op, prec, entity }) => {
                 // alias to infixl
-                token_table.add(&op, parser::Fixity::Infixl, prec, entity.0.as_str());
+                token_table.add(&op, parser::Fixity::Infixl, prec, entity);
             }
             parser::Command::NofixCmd(parser::NofixCommand { op, entity }) => {
-                token_table.add(&op, parser::Fixity::Nofix, 12345678, entity.0.as_str());
+                token_table.add(&op, parser::Fixity::Nofix, 12345678, entity);
             }
             parser::Command::PrefixCmd(parser::PrefixCommand { op, prec, entity }) => {
-                token_table.add(&op, parser::Fixity::Prefix, prec, entity.0.as_str());
+                token_table.add(&op, parser::Fixity::Prefix, prec, entity);
             }
         }
     }

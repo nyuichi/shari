@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum Name {
-    Named(String),
+    Str(String),
     Anon(usize),
 }
 
@@ -26,7 +26,7 @@ impl Name {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Scheme<T> {
-    pub type_vars: Vec<Name>,
+    pub type_vars: HashSet<Name>,
     pub main: T,
 }
 
@@ -68,6 +68,7 @@ impl Sign {
 pub enum Type {
     Fvar(Name),
     Arrow(Arc<(Type, Type)>),
+    Mvar(MvarId),
 }
 
 impl Default for Type {
@@ -159,6 +160,33 @@ impl Type {
         }
         *self = t;
     }
+
+    fn certify(&self, sign: &Sign, tv: &mut HashSet<Name>) -> Type {
+        match self {
+            Type::Fvar(name) => {
+                if sign.is_base(name) {
+                    tv.insert(name.clone());
+                }
+                Type::Fvar(name.clone())
+            }
+            Type::Arrow(t) => {
+                let (t1, t2) = &**t;
+                let mut t = t2.certify(sign, tv);
+                t.curry(vec![t1.certify(sign, tv)]);
+                t
+            }
+            Type::Mvar(_) => todo!("uninstantiated type meta variable found"),
+        }
+    }
+
+    pub fn elaborate(&self, sign: &Sign) -> Scheme<Type> {
+        let mut tv = HashSet::<Name>::new();
+        let t = self.certify(sign, &mut tv);
+        Scheme {
+            type_vars: tv,
+            main: t,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -185,7 +213,7 @@ pub enum Term {
     Bvar(Type, usize),
     Abs(Type, Arc<Context>),
     App(Type, Arc<(Term, Term)>),
-    Const(Type, Arc<(Name, Vec<Type>)>),
+    Const(Type, Name),
     /// Mvar is always closed.
     Mvar(Type, MvarId),
 }
@@ -495,13 +523,7 @@ impl Term {
     pub fn curry(&mut self, ms: Vec<Term>) {
         let mut head = mem::take(self);
         for m in ms {
-            if let Type::Arrow(p) = head.r#type() {
-                let (t1, t2) = &**p;
-                assert_eq!(t1, m.r#type());
-                head = Self::App(t2.clone(), Arc::new((head, m)));
-            } else {
-                panic!("invalid application: {:?} {:?}", self, m);
-            }
+            head = Self::App(Type::Mvar(MvarId::fresh()), Arc::new((head, m)));
         }
         *self = head;
     }
@@ -597,6 +619,9 @@ impl Term {
                     Self::Abs(_, _) => false,
                     Self::App(_, _) => unreachable!(),
                 }
+            }
+            Type::Mvar(_) => {
+                todo!("type must be known");
             }
         }
     }

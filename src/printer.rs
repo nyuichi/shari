@@ -5,7 +5,7 @@ use std::sync::Arc;
 impl std::fmt::Display for term::Name {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            term::Name::Named(name) => write!(f, "{}", name),
+            term::Name::Str(name) => write!(f, "{}", name),
             term::Name::Anon(k) => write!(f, "#{}", k),
         }
     }
@@ -21,7 +21,7 @@ impl std::fmt::Display for term::Type {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         fn go(t: &term::Type, prec: usize, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             match t {
-                term::Type::Fvar(name) => write!(f, "{}", name),
+                term::Type::Fvar(name) => write!(f, "{name}"),
                 term::Type::Arrow(p) => {
                     let (t1, t2) = &**p;
                     if prec > 0 {
@@ -35,6 +35,7 @@ impl std::fmt::Display for term::Type {
                     }
                     Ok(())
                 }
+                term::Type::Mvar(mid) => write!(f, "?{mid}"),
             }
         }
         go(self, 0, f)
@@ -49,7 +50,7 @@ struct Operator {
 
 fn find_user_notation(name: &term::Name) -> Option<Operator> {
     match name {
-        term::Name::Named(name) => match name.as_str() {
+        term::Name::Str(name) => match name.as_str() {
             "imp" => Some(Operator {
                 fixity: parser::Fixity::Infixr,
                 prec: 50,
@@ -69,8 +70,7 @@ impl term::Term {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         let mut args = self.uncurry();
-        if let term::Term::Const(_, p) = self {
-            let (name, _) = &**p;
+        if let term::Term::Const(_, name) = self {
             if let Some(op) = find_user_notation(name) {
                 match op.fixity {
                     parser::Fixity::Infixl => {
@@ -130,7 +130,7 @@ impl term::Term {
                     }
                 }
             }
-            if let term::Name::Named(name) = name {
+            if let term::Name::Str(name) = name {
                 match name.as_str() {
                     "forall" => {
                         if args.len() == 1 {
@@ -160,8 +160,7 @@ impl term::Term {
         match self {
             term::Term::Bvar(_, i) => write!(f, "{}", i),
             term::Term::Fvar(_, name) => write!(f, "{}", name),
-            term::Term::Const(_, p) => {
-                let (name, _) = &**p;
+            term::Term::Const(_, name) => {
                 write!(f, "{}", name)
             }
             term::Term::Mvar(_, name) => write!(f, "?{}", name),

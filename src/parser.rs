@@ -1,24 +1,9 @@
+use crate::term::{MvarId, Name, Term, Type};
 use core::ops::Range;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use std::collections::HashMap;
+use std::{collections::HashMap, mem, sync::Arc};
 use thiserror::Error;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Name(pub String);
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Type {
-    Var(Name),
-    Arrow(Box<Type>, Box<Type>),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Term {
-    Var(Name),
-    Abs(Name, Option<Type>, Box<Term>),
-    App(Box<Term>, Box<Term>),
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DefCommand {
@@ -350,7 +335,7 @@ pub enum Fixity {
 struct Operator {
     fixity: Fixity,
     prec: usize,
-    entity: String,
+    entity: Name,
 }
 
 #[derive(Default)]
@@ -360,11 +345,11 @@ pub struct TokenTable {
 }
 
 impl TokenTable {
-    pub fn add(&mut self, symbol: &str, fixity: Fixity, prec: usize, entity: &str) {
+    pub fn add(&mut self, symbol: &str, fixity: Fixity, prec: usize, entity: Name) {
         let op = Operator {
             fixity,
             prec,
-            entity: entity.to_owned(),
+            entity,
         };
         match fixity {
             Fixity::Infixl | Fixity::Infixr => {
@@ -606,17 +591,17 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     pub fn name(&mut self) -> Result<Name, ParseError<'a>> {
-        Ok(Name(self.ident()?.as_str().to_owned()))
+        Ok(Name::Str(self.ident()?.as_str().to_owned()))
     }
 
     fn name_opt(&mut self) -> Option<Name> {
         self.ident_opt()
-            .map(|token| Name(token.as_str().to_owned()))
+            .map(|token| Name::Str(token.as_str().to_owned()))
     }
 
     fn type_primary(&mut self) -> Result<Type, ParseError<'a>> {
         if let Some(name) = self.name_opt() {
-            return Ok(Type::Var(name));
+            return Ok(Type::Fvar(name));
         }
         let token = self.any_token()?;
         if token.is_symbol() && token.as_str() == "(" {
@@ -633,7 +618,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         if let Some(token) = self.peek_opt() {
             if token.is_symbol() && token.as_str() == "→" {
                 self.advance();
-                return Ok(Type::Arrow(t.into(), self.r#type()?.into()));
+                return Ok(Type::Arrow(Arc::new((t, self.r#type()?))));
             }
         }
         Ok(t)
@@ -683,7 +668,8 @@ impl<'a, 'b> Parser<'a, 'b> {
             todo!("empty binding");
         }
         for (name, t) in params.into_iter().rev() {
-            m = Term::Abs(name, t, Box::new(m));
+            let t = t.unwrap_or_else(|| Type::Mvar(MvarId::fresh()));
+            m.r#abstract(vec![(name, t)]);
         }
         Ok(m)
     }
@@ -696,10 +682,11 @@ impl<'a, 'b> Parser<'a, 'b> {
             todo!("empty binding");
         }
         for (name, t) in params.into_iter().rev() {
-            m = Term::App(
-                Box::new(Term::Var(Name("forall".to_owned()))),
-                Box::new(Term::Abs(name, t, Box::new(m))),
-            );
+            let t = t.unwrap_or_else(|| Type::Mvar(MvarId::fresh()));
+            m.r#abstract(vec![(name, t)]);
+            let f = mem::take(&mut m);
+            m = Term::Const(Type::Mvar(MvarId::fresh()), Name::Str("forall".to_owned()));
+            m.curry(vec![f]);
         }
         Ok(m)
     }
@@ -712,20 +699,21 @@ impl<'a, 'b> Parser<'a, 'b> {
             todo!("empty binding");
         }
         for (name, t) in params.into_iter().rev() {
-            m = Term::App(
-                Box::new(Term::Var(Name("exists".to_owned()))),
-                Box::new(Term::Abs(name, t, Box::new(m))),
-            );
+            let t = t.unwrap_or_else(|| Type::Mvar(MvarId::fresh()));
+            m.r#abstract(vec![(name, t)]);
+            let f = mem::take(&mut m);
+            m = Term::Const(Type::Mvar(MvarId::fresh()), Name::Str("exists".to_owned()));
+            m.curry(vec![f]);
         }
         Ok(m)
     }
 
-    fn term_var(&mut self, token: Token, entity: Option<String>) -> Term {
+    fn term_var(&mut self, token: Token, entity: Option<Name>) -> Term {
         let name = match entity {
-            None => Name(token.as_str().to_owned()),
-            Some(s) => Name(s),
+            None => Name::Str(token.as_str().to_owned()),
+            Some(s) => s,
         };
-        Term::Var(name)
+        Term::Fvar(Type::Mvar(MvarId::fresh()), name)
     }
 
     fn subterm(&mut self, rbp: usize) -> Result<Term, ParseError<'a>> {
@@ -748,9 +736,10 @@ impl<'a, 'b> Parser<'a, 'b> {
             Nud::User(op) => match op.fixity {
                 Fixity::Nofix => self.term_var(token, Some(op.entity)),
                 Fixity::Prefix => {
-                    let fun = self.term_var(token, Some(op.entity));
+                    let mut fun = self.term_var(token, Some(op.entity));
                     let arg = self.subterm(op.prec)?;
-                    Term::App(Box::new(fun), Box::new(arg))
+                    fun.curry(vec![arg]);
+                    fun
                 }
                 _ => unreachable!(),
             },
@@ -768,7 +757,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             match led {
                 Led::App => {
                     let right = self.subterm(led.prec())?;
-                    left = Term::App(Box::new(left), Box::new(right));
+                    left.curry(vec![right])
                 }
                 Led::User(op) => {
                     let prec = match op.fixity {
@@ -777,12 +766,10 @@ impl<'a, 'b> Parser<'a, 'b> {
                         _ => unreachable!(),
                     };
                     self.advance();
-                    let fun = self.term_var(token, Some(op.entity));
+                    let mut fun = self.term_var(token, Some(op.entity));
                     let right = self.subterm(prec)?;
-                    left = Term::App(
-                        Box::new(Term::App(Box::new(fun), Box::new(left))),
-                        Box::new(right),
-                    );
+                    fun.curry(vec![left, right]);
+                    left = fun;
                 }
             }
         }
@@ -803,8 +790,8 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.expect_symbol(":=")?;
         let mut m = self.term()?;
         for (var, ty) in params.into_iter().rev() {
-            m = Term::Abs(var, Some(ty.clone()), Box::new(m));
-            t = Type::Arrow(Box::new(ty), Box::new(t));
+            m.r#abstract(vec![(var, ty.clone())]);
+            t = Type::Arrow(Arc::new((ty, t)));
         }
         Ok(DefCommand {
             name,
