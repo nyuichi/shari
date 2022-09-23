@@ -1,20 +1,31 @@
-constant imp : Prop → Prop → Prop
-constant forall : (α → Prop) → Prop
+// the characteristic of the diagonal mono δ : α → α × α
+constant eq : α → α → Prop
 
-infixr → : 25 := imp
--- notation ∀ x, φ := forall (λ x, φ)
+infix = : 50 := eq
+
+// This is definitionally equal to any term of the Unit type by the eta rule.
+constant star : Unit
 
 /-
-This adds an axiom
-top_def: [⊢ top = (∀ φ, φ → φ)]
+This also introduces a constant `top` and:
+axiom top_spec : top = (star = star)
 -/
-def top : Prop := ∀ φ, φ → φ
+def top : Prop := star = star
 
 nofix ⊤ := top
 
-def and (φ ψ : Prop) : Prop := ∀ ξ, (φ → ψ → ξ) → ξ
+def and (φ ψ : Prop) : Prop := ⟨φ, ψ⟩ = ⟨⊤, ⊤⟩
 
 infixr ∧ : 35 := and
+
+/-
+Recall [φ = φ ∧ ψ] means [φ ≤ ψ] in the preorder structure of Prop.
+-/
+def imp (φ ψ : Prop) : Prop := φ = φ ∧ ψ
+
+infixr → : 25 := imp
+
+def forall (P : α → Prop) : Prop := P = (λ x, ⊤)
 
 def bot : Prop := ∀ ξ, ξ
 
@@ -26,12 +37,7 @@ infixr ∨ : 30 := or
 
 def exists (P : α → Prop) : Prop := ∀ ξ, (∀ x, P x → ξ) → ξ
 
--- notation ∃ x, φ := exists (λ x, φ)
-
--- (∀ x, f x = g x) → f = g
--- (∀ x, ∀ P, P (f x) → P (g x)) → (∀ P, P f → P g)
-
-def not (φ : Prop) : Prop := ∀ ξ, φ → ξ
+def not (φ : Prop) : Prop := φ → ⊥
 
 prefix ¬ : 40 := not
 
@@ -39,27 +45,201 @@ def iff (φ ψ : Prop) : Prop := (φ → ψ) ∧ (ψ → φ)
 
 infix ↔ : 20 := iff
 
--- Leibniz equality (indiscernibility of identicals)
-def eq (x₁ x₂ : α) : Prop := ∀ P, P x₁ → P x₂
-
-infix = : 50 := eq
-
-axiom prop_ext : ∀ φ₁ φ₂, (φ₁ ↔ φ₂) → (φ₁ = φ₂)
-axiom fun_ext : ∀ f₁ f₂, (∀ x, f₁ x = f₂ x) → (f₁ = f₂)
-
-constant nat_zero : ℕ
-constant nat_succ : ℕ → ℕ
-constant nat_rec : α → (α → α) → ℕ → α
-
-constant star : Unit
+def uexists (P : α → Prop) : Prop := ∃ x, P x ∧ (∀ y, P y → x = y)
 
 /-
-def π₀ (p : α × β) : α := p.0
-def π₁ (p : α × β) : β := p.1
-def pair (a : α) (b : β) := ⟨a, b⟩
+# Primitive rules
+
+We assume contexts are sets.
+
+h : [Γ ▸ Φ ⊢ φ]
+-------------------------
+h : [Γ, x : τ ▸ Φ, ψ ⊢ φ]
+
+h : [Γ ▸ Φ ⊢ φ]
+------------------
+h : [Γ ▸ Φ, ψ ⊢ φ]
+
+h : [Γ ▸ Φ ⊢ φ]
+------------------------ (φ ≡ ψ)
+change ψ h : [Γ ▸ Φ ⊢ ψ]
+
+----------------------
+assume φ : [Γ ▸ φ ⊢ φ]
+
+--------------------------
+eq_intro t : [Γ ▸ ⊢ t = t]
+
+h₁ : [Γ ▸ Φ ⊢ t = s]  h₂ : [Γ ▸ Ψ ⊢ C t]
+---------------------------------------- [indiscernibility of identicals]
+eq_elim C h₁ h₂ : [Γ ∪ Δ ▸ Φ ∪ Ψ ⊢ C s]
+
+h₁ : [Γ ▸ Φ, φ ⊢ ψ]  h₂ : [Γ ▸ Ψ, ψ ⊢ φ]
+---------------------------------------- [(external) propositional extensionality]
+prop_ext h₁ h₂ : [Γ ∪ Δ ▸ Φ ∪ Ψ ⊢ φ = ψ]
+
+h : [Γ, x : τ ▸ Φ ⊢ t₁ = t₂]
+--------------------------------------------- (x ∉ FV Φ) [(external) function extensionality]
+fun_ext x h : [Γ ▸ Φ ⊢ (λ x, t₁) = (λ x, t₂)]
+
+# Metatheorem
+
+h : [Γ, x : τ ▸ Φ ⊢ φ]
+-----------------------------------
+subst x t h : [Γ ▸ [t/x]Φ ⊢ [t/x]φ]
+
+# Derived rules
+
+h : [Γ ▸ Φ, φ ⊢ ψ]
+-----------------------------
+imp_intro h : [Γ ▸ Φ ⊢ φ → ψ]
+
+h₁ : [Γ ▸ Φ ⊢ φ → ψ]  h₂ : [Δ ▸ Ψ ⊢ φ]
+---------------------------------------
+imp_elim h₁ h₂ : [Γ ∪ Δ ▸ Φ ∪ Ψ ⊢ ψ]
+
+h : [Γ, x : τ ▸ Φ ⊢ φ]
+----------------------------------- (x ∉ FV Φ)
+forall_intro x h : [Γ ▸ Φ ⊢ ∀ x, φ]
+
+h : [Γ ▸ Φ ⊢ ∀ x, φ]
+----------------------------------
+forall_elim t h : [Γ ▸ Φ ⊢ [t/x]φ]
 -/
 
--- type Set α := α → Prop
+/-
+meta constant change : Term → Fact → Fact
+meta constant assume : Term → Fact
+meta constant eq_intro : Term → Fact
+meta constant eq_elim : Term → Fact → Fact → Fact
+meta constant prop_ext : Fact → Fact → Fact
+meta constant fun_ext : Term → Fact → Fact
+
+meta constant subst : Term → Term → Fact → Fact
+
+meta constant imp_intro : Fact → Fact
+meta constant imp_elim : Fact → Fact → Fact
+meta constant forall_intro : Term → Fact → Fact
+meta constant forall_elim : Term → Fact
+-/
+
+/-
+Proof is done by constructing in the meta stage an object of the Fact type whose judgement has the form of [▸ ⊢ φ] when the target formula is φ.
+
+After the symbol `:=` a meta expression constructing the proof object (= Fact) follows.
+
+A `prop` block introduces a new meta object `eq_refl : Fact`.
+-/
+prop eq_refl : ∀ t, t = t :=
+forall_intro `t (eq_intro `t)
+
+prop eq_elim : ∀ t s C, t = s → C t → C s :=
+forall_intro `t (forall_intro `s (forall_intro `C (imp_intro (imp_intro (eq_elim `C (assume `(t = s)) (assume `(C t)))))))
+
+/-
+`{ .. }` syntax is a construct in the meta stage for tactical reasoning.
+-/
+prop eq_symm : ∀ t s, t = s → s = t := {
+  fix t s,
+  assume t = s,
+  have t = s → t = t → s = t ..(1) := {
+    apply eq_elim where C := (λ x, x = t),
+  },
+  show s = t := {
+    apply (1),
+    assumption,
+    apply eq_refl
+  },
+}
+
+prop eq_trans : ∀ t s u, t = s → s = u → t = u := {
+  fix t s u,
+  assume t = s,
+  assume s = u,
+  apply eq_elim where C := (λ x, t = x),
+  assumption,
+  assumption,
+}
+
+prop prod_ext : ∀ t₁ t₂ s₁ s₂, t₁ = t₂ → s₁ = s₂ → ⟨t₁, s₁⟩ = ⟨t₂, s₂⟩ :=
+proof {
+  fix t₁ t₂ s₁ s₂,
+  assume t₁ = t₂,
+  assume s₁ = s₂,
+  have ⟨t₁, s₁⟩ = ⟨t₂, s₁⟩, from eq_elim (λ x, ⟨t₁, s₁⟩ = ⟨x, s₁⟩) (assume (t₁ = t₂)) (eq_intro ⟨t₁, s₁⟩),
+  have ⟨t₂, s₁⟩ = ⟨t₂, s₂⟩, from eq_elim (λ x, ⟨t₂, s₁⟩ = ⟨t₂, x⟩) (assume (s₁ = s₂)) (eq_intro ⟨t₂, s₁⟩),
+  show ⟨t₁, s₁⟩ = ⟨t₂, s₂⟩, {
+    apply eq_trans,
+    assumption ⟪⟨t₁, s₁⟩ = ⟨t₂, s₁⟩⟫,
+    assumption,
+  }
+}
+
+class Inhabited α :=
+(prop inhabited : ∃ (x : α), ⊤)
+
+instance [Inhabited β] : Inhabited (α → β) :=
+(prop inhabited := {
+  show ∃ (x : α → β), ⊤,
+  obtain b from ⟪∃ (x : β), ⊤⟫,
+  construction (λ _, b),
+  trivial,
+})
+
+instance [Inhabited α] [Inhabited β] : Inhabited (α × β) :=
+(prop inhabited := {
+  show ∃ (x : α × β), ⊤,
+  obtain (a : α) from ⟪∃ (x : α), ⊤⟫,
+  obtain (b : β) from ⟪∃ (x : β), ⊤⟫,
+  construction ⟨a, b⟩,
+  trivial,
+})
+
+instance : Inhabited Unit :=
+(prop inhabited := {
+  construction star,
+  trivial,
+})
+
+-- type abbreviation (does not introduce a new opaque type)
+type Set α := α → Prop
+
+def mem (x : α) (s : Set α) := s x
+
+infix ∈ : 50 := mem
+
+def inhabited (s : Set α) : Prop := ∃ a, a ∈ s
+
+/-
+Our standard model is ε-topos.
+-/
+const choice [Inhabited α] : (α → Prop) → α
+
+axiom choice_spec [Inhabited α] : ∀ (P : α → Prop), inhabited P → P (choice P)
+
+prop ac [Inhabited β] : ∀ (P : α → β → Prop), (∀ x, ∃ y, P x y) → ∃ f, ∀ x, P x (f x) := {
+  fix P,
+  assume ∀ x, ∃ y, P x y,
+  construction λ x, choice (P x),
+  show ∀ x, P x (choice (P x)),
+  fix x,
+  show P x (P x (choice (P x))),
+  have inhabited (P x) → (P x (choice (P x))) := by apply choice_spec,
+  have inhabited (P x) := {
+    show ∃ y, y ∈ P x,
+    show ∃ y, P x y,
+    apply ⟪∀ x, ∃ y, P x y⟫,
+  },
+  apply inhabited (P x) → (P x (choice (P x))),
+  assumption,
+}
+
+prop prop_ext : ∀ φ₁ φ₂, (φ₁ ↔ φ₂) → (φ₁ = φ₂) := by sorry
+prop fun_ext : ∀ f₁ f₂, (∀ x, f₁ x = f₂ x) → (f₁ = f₂) := by sorry
+
+def fst (p : α × β) : α := p.0
+def snd (p : α × β) : β := p.1
+def pair (a : α) (b : β) := ⟨a, b⟩
 
 /-
 ⊢ φ : τ → Prop
@@ -68,49 +248,24 @@ rep_inj : [⊢ ∀ a₁ a₂, rep a₁ = rep a₂ → a₁ = a₂]
 rep_im : [⊢ ∀ x, φ x → ∃ a, rep a = x]
 -/
 
-/-
-This defines
-⊢ Void_rep : Void → Prop
-Void_rep_inj : [⊢ ∀ x₁ x₂, Void_rep x₁ = Void_rep x₂ → x₁ = x₂]
-Void_rep_im : [⊢ ∀ y, ⊥ → ∃ x, Void_rep x = y]
--/
--- subtype Void := { x : Set Unit | ⊥ }
+class Subtype β α :=
+(pred : β → Prop)
+(rep : α → β)
+(prop inj : ∀ a₁ a₂, rep a₁ = rep a₂ → a₁ = a₂)
+(prop im : ∀ x, pred x → ∃ a, rep a = x)
 
--- def inv_image (f : α → β) (V : Set β) : Set α := λ a, V (f a)
--- def counit (a : α) : Set (Set α) := λ f, f a
+/-
+This automatically defines a class instance [Subtype Unit Void].
+-/
+subtype Void := { x : Set Unit | ⊥ }
+
+class Abs β α [Subtype β α] [Inhabited α] :=
+(abs : β → α := λ b, choice (λ a, rep a = b))
+
+def inv_image (f : α → β) (V : Set β) : Set α := λ a, V (f a)
+def counit (a : α) : Set (Set α) := λ f, f a
 
 /-
 See [SGL, Ch IV, Sec 5]
 -/
--- subtype Sum α β := { p : Set (Set α × Set β) | counit p = inv_image (λ x, ⟨ inv_image counit (inv_image (inv_image (λ p, p.0)) x), inv_image counit (inv_image (inv_image (λ p, p.1)) x) ⟩) p }
-
-/-
-# Logical rules
-
-h: [Γ ▸ Φ ⊢ φ]
-------------------------
-h: [Γ, x : τ ▸ Φ, ψ ⊢ φ]
-
-h: [Γ ▸ Φ ⊢ φ]
------------------
-h: [Γ ▸ Φ, ψ ⊢ φ]
-
----------------------
-assume φ: [Γ ▸ φ ⊢ φ]
-
-h: [Γ ▸ Φ, φ ⊢ ψ]
-----------------------------
-imp_intro h: [Γ ▸ Φ ⊢ φ → ψ]
-
-h₁: [Γ ▸ Φ ⊢ φ → ψ]  h₂: [Δ ▸ Ψ ⊢ φ]
--------------------------------------
-imp_elim h₁ h₂: [Γ ∪ Δ ▸ Φ ∪ Ψ ⊢ ψ]
-
-h: [Γ, x : τ ▸ Φ ⊢ φ]
---------------------------------- (x ∉ FV Φ)
-forall_intro h: [Γ ▸ Φ ⊢ ∀ x, φ)]
-
-h: [Γ ▸ Φ ⊢ ∀ x, C x]
---------------------------------
-forall_elim h₁ h₂: [Γ ▸ Φ ⊢ C t]
--/
+subtype Sum α β := { p : Set (Set α × Set β) | counit p = inv_image (λ x, ⟨ inv_image counit (inv_image (inv_image (λ p, p.0)) x), inv_image counit (inv_image (inv_image (λ p, p.1)) x) ⟩) p }
