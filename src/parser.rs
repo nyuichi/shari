@@ -64,6 +64,13 @@ pub struct AxiomCommand {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PropCommand {
+    pub name: Name,
+    pub prop: Term,
+    pub proof: Term,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
     DefCmd(DefCommand),
     CheckCmd(CheckCommand),
@@ -74,6 +81,7 @@ pub enum Command {
     NofixCmd(NofixCommand),
     ConstCmd(ConstCommand),
     AxiomCmd(AxiomCommand),
+    PropCmd(PropCommand),
 }
 
 #[derive(Debug, Clone)]
@@ -268,14 +276,14 @@ impl<'a> Iterator for Lex<'a> {
 
         static RE: Lazy<Regex> = Lazy::new(|| {
             let s = &[
-                (Kind::Space, r"\s+|--.*|/-(?s:.*?)-/"),
+                (Kind::Space, r"\s+|--.*|/-"),
                 (
                     Kind::Ident,
                     r"#?[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*",
                 ),
                 (
                     Kind::Symbol,
-                    r"\(|\)|\{|\}|[\p{Symbol}\p{Punctuation}&&[^(){}]]+",
+                    r"[(){}⟨⟩⟪⟫,]|[\p{Symbol}\p{Punctuation}&&[^(){}⟨⟩⟪⟫,]]+",
                 ),
                 (Kind::NumLit, r"0|[1-9][0-9]*"),
             ]
@@ -286,6 +294,9 @@ impl<'a> Iterator for Lex<'a> {
             regex::Regex::new(&format!("^(?:{})", s)).unwrap()
         });
 
+        static RE_BLOCK_COMMENT: Lazy<Regex> =
+            Lazy::new(|| regex::Regex::new("^(?s:.*?)(?:(?P<start>/-)|(?P<end>-/))").unwrap());
+
         loop {
             if self.input.len() == self.position {
                 return None;
@@ -294,34 +305,59 @@ impl<'a> Iterator for Lex<'a> {
                 None => return Some(Err(LexError::from(self.clone()))),
                 Some(cap) => cap,
             };
-            // change the position of the cursor
-            let source_info = self.advance(cap.get(0).unwrap().range().count());
-            if cap.name(&format!("{:?}", Kind::Space)).is_none() {
-                let text = source_info.as_str();
 
-                let kind;
-                if cap.name(&format!("{:?}", Kind::Ident)).is_some() {
-                    match text {
-                        "λ" | "_" => {
-                            kind = TokenKind::Symbol;
+            // skip whitespaces
+            if let Some(m) = cap.name(&format!("{:?}", Kind::Space)) {
+                self.advance(m.range().count());
+                if m.as_str() == "/-" {
+                    let mut nest = 1;
+                    while nest != 0 {
+                        if self.input.len() == self.position {
+                            return None;
                         }
-                        "def" | "#check" | "infix" | "infixr" | "infixl" | "prefix" | "nofix"
-                        | "constant" | "lemma" | "meta" | "inductive" | "type" | "axiom"
-                        | "class" | "eval" => {
-                            kind = TokenKind::Keyword;
-                        }
-                        _ => {
-                            kind = TokenKind::Ident;
+                        let cap = match RE_BLOCK_COMMENT.captures(&self.input[self.position..]) {
+                            None => return Some(Err(LexError::from(self.clone()))),
+                            Some(cap) => cap,
+                        };
+                        if cap.name("start").is_some() {
+                            nest += 1;
+                            self.advance(cap.get(0).unwrap().range().count());
+                        } else {
+                            assert!(cap.name("end").is_some());
+                            nest -= 1;
+                            self.advance(cap.get(0).unwrap().range().count());
                         }
                     }
-                } else if cap.name(&format!("{:?}", Kind::NumLit)).is_some() {
-                    kind = TokenKind::NumLit;
-                } else {
-                    assert!(cap.name(&format!("{:?}", Kind::Symbol)).is_some());
-                    kind = TokenKind::Symbol;
-                };
-                return Some(Ok(Token { kind, source_info }));
+                }
+                continue;
             }
+
+            // change the position of the cursor
+            let source_info = self.advance(cap.get(0).unwrap().range().count());
+            let text = source_info.as_str();
+
+            let kind;
+            if cap.name(&format!("{:?}", Kind::Ident)).is_some() {
+                match text {
+                    "λ" | "_" => {
+                        kind = TokenKind::Symbol;
+                    }
+                    "def" | "#check" | "infix" | "infixr" | "infixl" | "prefix" | "nofix"
+                    | "constant" | "prop" | "meta" | "inductive" | "type" | "axiom" | "class"
+                    | "eval" => {
+                        kind = TokenKind::Keyword;
+                    }
+                    _ => {
+                        kind = TokenKind::Ident;
+                    }
+                }
+            } else if cap.name(&format!("{:?}", Kind::NumLit)).is_some() {
+                kind = TokenKind::NumLit;
+            } else {
+                assert!(cap.name(&format!("{:?}", Kind::Symbol)).is_some());
+                kind = TokenKind::Symbol;
+            };
+            return Some(Ok(Token { kind, source_info }));
         }
     }
 }
@@ -389,6 +425,7 @@ enum Nud {
     Forall,
     Exists,
     Paren,
+    Bracket,
     User(Operator),
     NumLit,
 }
@@ -422,6 +459,7 @@ impl TokenTable {
                 let lit = token.as_str();
                 match lit {
                     "(" => Some(Nud::Paren),
+                    "⟨" => Some(Nud::Bracket),
                     "λ" => Some(Nud::Abs),
                     "∀" => Some(Nud::Forall),
                     "∃" => Some(Nud::Exists),
@@ -661,6 +699,10 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.subterm(0)
     }
 
+    fn term_opt(&mut self) -> Option<Term> {
+        self.optional(|this| this.term())
+    }
+
     fn term_abs(&mut self, _token: Token) -> Result<Term, ParseError<'a>> {
         let params = self.parameters()?;
         self.expect_symbol(",")?;
@@ -728,9 +770,39 @@ impl<'a, 'b> Parser<'a, 'b> {
             Nud::Var => self.term_var(token, None),
             Nud::Abs => self.term_abs(token)?,
             Nud::Paren => {
-                let m = self.subterm(0)?;
+                let m = self.term()?;
                 self.expect_symbol(")")?;
                 m
+            }
+            Nud::Bracket => {
+                let mut terms = vec![];
+                while let Some(m) = self.term_opt() {
+                    terms.push(m);
+                    if self.expect_symbol_opt(",").is_none() {
+                        break;
+                    }
+                }
+                self.expect_symbol("⟩")?;
+                // right associative encoding:
+                // ⟨⟩ ⇒ star
+                // ⟨m⟩ ⇒ m
+                // ⟨m,n,l⟩ ⇒ ⟨m, ⟨n, l⟩⟩
+                match terms.len() {
+                    0 => Term::Const(Type::Mvar(MvarId::fresh()), Name::Str("star".to_owned())),
+                    1 => terms.pop().unwrap(),
+                    _ => {
+                        let mut m = terms.pop().unwrap();
+                        for n in terms.into_iter().rev() {
+                            let mut x = Term::Const(
+                                Type::Mvar(MvarId::fresh()),
+                                Name::Str("tuple".to_owned()),
+                            );
+                            x.curry(vec![n, m]);
+                            m = x;
+                        }
+                        m
+                    }
+                }
             }
             Nud::Forall => self.term_forall(token)?,
             Nud::Exists => self.term_exists(token)?,
@@ -894,8 +966,17 @@ impl<'a, 'b> Parser<'a, 'b> {
     fn axiom_cmd(&mut self, _token: Token) -> Result<AxiomCommand, ParseError<'a>> {
         let name = self.name()?;
         self.expect_symbol(":")?;
-        let m = self.term()?;
-        Ok(AxiomCommand { name, prop: m })
+        let prop = self.term()?;
+        Ok(AxiomCommand { name, prop })
+    }
+
+    fn prop_cmd(&mut self, _token: Token) -> Result<PropCommand, ParseError<'a>> {
+        let name = self.name()?;
+        self.expect_symbol(":")?;
+        let prop = self.term()?;
+        self.expect_symbol(":=")?;
+        let proof = self.term()?;
+        Ok(PropCommand { name, prop, proof })
     }
 
     pub fn command(&mut self) -> Result<Command, ParseError<'a>> {
@@ -938,7 +1019,11 @@ impl<'a, 'b> Parser<'a, 'b> {
                 let axiom_cmd = self.axiom_cmd(keyword)?;
                 cmd = Command::AxiomCmd(axiom_cmd);
             }
-            "inductive" | "lemma" | "type" | "class" | "meta" | "#eval" => {
+            "prop" => {
+                let prop_cmd = self.prop_cmd(keyword)?;
+                cmd = Command::PropCmd(prop_cmd);
+            }
+            "inductive" | "type" | "class" | "meta" | "#eval" => {
                 todo!()
             }
             _ => {
