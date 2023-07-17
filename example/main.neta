@@ -1,0 +1,402 @@
+/- the kernel -/
+
+-- the equality
+constant eq : u → u → Prop
+
+
+/- logic -/
+
+infix = : 50 := eq
+nofix ⊤ := top
+infixr ∧ : 35 := and
+infixr → : 25 := imp
+nofix ⊥ := bot
+infixr ∨ : 30 := or
+prefix ¬ : 40 := not
+infix ↔ : 20 := iff
+
+def top : Prop := (λx : Prop, x) = (λx, x)
+def and (φ ψ : Prop) : Prop := (λf : Prop → Prop → Prop, f φ ψ) = (λ f, f ⊤ ⊤)
+def imp (φ ψ : Prop) : Prop := φ = φ ∧ ψ   -- Recall [x = x ∧ y] means [x ≤ y] in the preorder canonically induced by a lattice structure.
+def forall (P : u → Prop) : Prop := P = (λ x, ⊤)
+def bot : Prop := ∀ ξ, ξ
+def or (φ ψ : Prop) : Prop := ∀ ξ, (φ → ξ) ∧ (ψ → ξ) → ξ
+def exists (P : u → Prop) : Prop := ∀ ξ, (∀ x, P x → ξ) → ξ
+def not (φ : Prop) : Prop := φ → ⊥
+def iff (φ ψ : Prop) : Prop := (φ → ψ) ∧ (ψ → φ)
+def uexists (P : u → Prop) : Prop := ∃ x, P x ∧ (∀ y, P y → x = y)
+
+
+/-
+# Primitive rules
+
+We assume contexts are sets.
+
+h : [Γ ▸ Φ ⊢ φ]
+-------------------------
+h : [Γ, x : τ ▸ Φ, ψ ⊢ φ]
+
+h : [Γ ▸ Φ ⊢ φ]
+------------------
+h : [Γ ▸ Φ, ψ ⊢ φ]
+
+----------------------
+assume φ : [Γ ▸ φ ⊢ φ]
+
+--------------------------
+eq_intro t : [Γ ▸ ⊢ t = t]
+
+h₁ : [Γ ▸ Φ ⊢ t = s]  h₂ : [Γ ▸ Ψ ⊢ C s]
+---------------------------------------- [indiscernibility of identicals]
+eq_elim C h₁ h₂ : [Γ ∪ Δ ▸ Φ ∪ Ψ ⊢ C t]
+
+h₁ : [Γ ▸ Φ, φ ⊢ ψ]  h₂ : [Γ ▸ Ψ, ψ ⊢ φ]
+---------------------------------------- [(external) propositional extensionality]
+prop_ext h₁ h₂ : [Γ ∪ Δ ▸ Φ ∪ Ψ ⊢ φ = ψ]
+
+h : [Γ, x : τ ▸ Φ ⊢ t₁ = t₂]
+--------------------------------------------- (x ∉ FV Φ) [(external) function extensionality]
+fun_ext x h : [Γ ▸ Φ ⊢ (λ x, t₁) = (λ x, t₂)]
+-/
+meta constant assume : term → fact
+meta constant eq_intro : term → fact
+meta constant eq_elim : term → fact → fact → fact
+meta constant prop_ext : fact → fact → fact
+meta constant fun_ext : term → fact → fact
+meta constant subst : term → term → fact → fact
+
+example : (λ x : Prop, x) = (λ x, x) :=
+eq_intro `(λ x : Prop, x)
+
+/-
+
+--------------------
+top_intro : [ ▸ ⊢ ⊤]
+-/
+meta def top_intro : fact :=
+eq_elim `(λ p: Prop, p) top.spec (eq_intro `(λ x : Prop, x))
+
+example : ⊤ :=
+top_intro
+
+/-
+h : [Γ ▸ Φ ⊢ φ]
+------------------------------ [material adequacy]
+ma h : [Γ ▸ Φ ⊢ φ = ⊤]
+-/
+meta def ma (h : fact) : fact :=
+prop_ext top_intro h
+
+/-
+h₁ : [Γ ▸ Φ ⊢ φ]  h₂ : [Δ ▸ Ψ ⊢ ψ]
+-----------------------------------------
+and_intro h₁ h₂ : [Γ ∪ Δ ▸ Φ ∪ Ψ ⊢ φ ∧ ψ]
+-/
+meta def and_intro (h₁ : fact) (h₂ : fact) : fact :=
+let φ := fact.get_target h₁,
+let ψ := fact.get_target h₂,
+eq_elim ``(λ f : Prop → Prop → Prop, f %%φ %%ψ) and.spec 
+▹ eq_elim ``(λ x : Prop, (λ f : Prop → Prop → Prop, f x %%ψ) = (λ f, f ⊤ ⊤)) (ma h₁)
+▹ eq_elim ``(λ x : Prop, (λ f : Prop → Prop → Prop, f ⊤ x) = (λ f, f ⊤ ⊤)) (ma h₂)
+▹ eq_intro ``(λ f : Prop → Prop → Prop, f ⊤ ⊤)
+
+/-
+h : [Γ ▸ Φ ⊢ x = y]
+---------------------------
+eq_symm h : [Γ ▸ Φ ⊢ y = x]
+-/
+meta def eq_symm (h : fact) : fact :=
+eq_elim ``(λ z, y = z) h (eq_intro `y)
+
+/-
+h : [Γ ▸ Φ ⊢ φ ∧ ψ]
+-------------------------
+and_elim₁ h : [Γ ▸ Φ ⊢ φ]
+-/
+meta def and_elim₁ (h : fact) : fact :=
+let ``(and %%φ %%ψ) := fact.get_target h,
+-- h : [Γ ▸ Φ ⊢ (λ f, f φ ψ) = (λ f, f ⊤ ⊤)]
+let h := eq_elim ``(λ f : Prop → Prop → Prop, f %%φ %%ψ) (eq_symm and.spec) h,
+eq_elim ``(λ P : (Prop → Prop → Prop) → Prop, P (λ (x : Prop) (y : Prop), x)) h top_intro
+
+/-
+h : [Γ ▸ Φ ⊢ φ ∧ ψ]
+-------------------------
+and_elim₂ h : [Γ ▸ Φ ⊢ ψ]
+-/
+meta def and_elim₁ (h : fact) : fact :=
+let ``(and %%φ %%ψ) := fact.get_target h,
+-- h : [Γ ▸ Φ ⊢ (λ f, f φ ψ) = (λ f, f ⊤ ⊤)]
+let h := eq_elim ``(λ f : Prop → Prop → Prop, f %%φ %%ψ) (eq_symm and.spec) h,
+eq_elim ``(λ P : (Prop → Prop → Prop) → Prop, P (λ (x : Prop) (y : Prop), y)) h top_intro
+
+/-
+h : [Γ ▸ Φ, φ ⊢ ψ]
+-----------------------------
+imp_intro h : [Γ ▸ Φ ⊢ φ → ψ]
+-/
+meta def imp_intro (φ : term) (h : fact) : fact :=
+let _ := assert ▹ list.elem φ ▹ fact.get_context h,
+let ψ := fact.get_target h,
+-- [Γ ▸ Φ, φ ⊢ φ ∧ ψ]
+let h₁ := and_intro (assume φ) h,
+-- [Γ ▸ Φ, φ ∧ ψ ⊢ φ]
+let h₂ := and_elim₁ (assume ``(and %%φ %%ψ)),
+eq_elim ``(λ f : Prop → Prop → Prop, f %%φ %%ψ) imp.spec
+▹ prop_ext h₁ h₂
+
+/-
+h₁ : [Γ ▸ Φ ⊢ φ → ψ]  h₂ : [Δ ▸ Ψ ⊢ φ]
+---------------------------------------
+imp_elim h₁ h₂ : [Γ ∪ Δ ▸ Φ ∪ Ψ ⊢ ψ]
+-/
+meta def imp_elim (h₁ : fact) (h₂ : fact) : fact :=
+let ``(imp %%φ %%ψ) := fact.get_target h₁,
+-- [Γ ▸ Φ ⊢ φ = φ ∧ ψ]
+let h₁ := eq_elim ``(λ f, f %%φ %%ψ) (eq_symm imp_spec) h₁,
+-- [Γ ▸ Φ ⊢ φ ∧ ψ]
+let h := eq_elim ``(λ p, p) (eq_symm h₁) h,
+and_elim₂ h
+
+/-
+h : [Γ, x : τ ▸ Φ ⊢ φ]
+----------------------------------- (x ∉ FV Φ)
+forall_intro x h : [Γ ▸ Φ ⊢ ∀ x, φ]
+-/
+meta def forall_intro (x : term) (h : fact) : fact :=
+let φ := fact.get_target h,
+let _ := assert ▹ list.member x ▹fact.get_local_context h,
+-- [Γ ▸ Φ ⊢ (λ x, φ) = (λ x, ⊤)]
+let h := fun_ext x (ma h),
+eq_elim ``(λ Q, Q (λ %%x, %%φ)) imp.spec h
+
+/-
+h : [Γ ▸ Φ ⊢ ∀ x, φ]
+----------------------------------
+forall_elim t h : [Γ ▸ Φ ⊢ [t/x]φ]
+-/
+meta def forall_elim (t : term) (h : fact) : fact :=
+let ``(forall %%P) := fact.get_target h,
+let h := eq_elim ``(λ Q, Q %%P) (eq_symm forall_spec) h,
+eq_elim ``(λ P, P %%t) h top_intro,
+
+meta inductive unit :=
+| star : unit
+
+meta inductive bool :=
+| true : bool
+| false : bool
+
+meta def bool.not : bool → bool :=
+| true := false
+| false := true
+
+meta inductive option u :=
+| none : option u
+| some : u → option u
+
+meta inductive list u :=
+| nil : list u
+| cons : u → list u → list u
+
+meta def list.map (f : u → v) : list u → list v :=
+| nil := nil
+| cons x xs := cons (f x) (list.map f xs)
+
+meta inductive type :=
+| base : name → type
+| arrow : type → type → type
+| app : name → type list → type
+
+meta inductive term :=
+| var : name → option type → term
+| abs : name → option type → term → term
+| app : term → term → term
+
+meta constant fact.get_local_context : fact → list term
+meta constant fact.get_context : fact → list term
+meta constant fact.get_target : fact → term
+
+meta type tactic_state
+
+structure functor (f : Type → Type) := {
+  map : (u → v) → f u → f v,
+}
+
+inductive identity u :=
+| mk : u → identity u
+
+def identity.run : identity u → u :=
+| identity.mk x := x
+
+def functor_identity : functor identity := {
+  run := λ f x, f (identity.run x)
+}
+
+class (f : Type → Type) : functor f
+instance : functor identity := functor_identity
+
+
+def app (f : u → v) (x : u) := f x
+
+infixr ▹ : 0 := app
+
+
+/- classical reasoning -/
+
+-- Hilbert's ε-operator (global choice)
+constant choice : (u → Prop) → Prop
+
+def default : u := choice (λ x, ⊤)
+
+
+/- set theory -/
+
+infix ∈ : 50 := mem
+infix ∉ : 50 := notmem
+infix ⊆ : 50 := subseteq
+infixl ∩ : 70 := cap
+infixl ∪ : 65 := cup
+infix \ : 70 := setminus
+nofix ∅ := empty
+infixr ⇒ : 25 := fun
+
+type Set u := u → Prop
+
+def mem (x : u) (A : Set u) : Prop := A x
+def notmem (x : u) (A : Set u) : Prop := ¬ (x ∈ A)
+def sep (A : Set u) (φ : u → Prop) : Set u := λ x, x ∈ A ∧ φ x
+def subseteq (A B : Set u) : Prop := ∀ x, x ∈ A → x ∈ B
+def cap (A B : Set u) : Set u := { x | x ∈ A ∧ x ∈ B }
+def cup (A B : Set u) : Set u := { x | x ∈ A ∨ x ∈ B }
+def bigcup (C : Set (Set u)) : Set u := { x | ∃ A ∈ C, x ∈ A }
+def powerset (A : Set u) : Set (Set u) := { X | X ⊂ A }
+def univ : Set u := λ x, ⊤
+def empty : Set u := λ x, ⊥
+def setminus (A B : Set u) : Set u := { x | x ∈ A ∧ x ∉ B }
+def prod (A : Set u) (B : Set v) : Set (u × v) := { ⟨x, y⟩ | x ∈ A ∧ y ∈ B }
+def sum (A : Set u) (B : Set v) : Set (Set u × Set v) := { ⟨{x}, ∅⟩ | x ∈ B } ∪ { ⟨∅, {y}⟩ | y ∈ B }
+def fun (A : Set u) (B : Set v) : Set (Set (u × v)) := { f ⊆ A × B | ∀ (x ∈ A), ∃! (y ∈ B), ⟨x, y⟩ ∈ f }
+def app (f : Set (u × v)) (x : u) : v := choice (λ y, ⟨x, y⟩ ∈ f)
+def id (A : Set u) : Set (Set (u × v)) := { ⟨x, x⟩ | x ∈ A }
+
+type NumericDomain := (Base → Base) → Base → Base
+
+def zero : NumericDomain := λ f x, x
+def succ (n : NumericDomain) : NumericDomain := λ f x, f (n f x) x
+def ℕ : Set NumericDomain := λ n, ∀ P, P zero → (∀ x, P x → P (succ x)) → P n
+
+def topology (X : Set u) : Set (Set (Set u)) := { C | X ∈ C ∧ (∀ (U ∈ C) (V ∈ C), U ∩ V ∈ C) ∧ (∀ B ⊆ C, bigcup B ∈ C) }
+
+/-
+Proof is done by constructing in the meta stage an object of the Fact type whose judgement has the form of [▸ ⊢ φ] when the target formula is φ.
+
+After the symbol `:=` a meta expression constructing the proof object (= Fact) follows.
+
+This `prop` block introduces a new meta object `eq_refl : Fact`.
+-/
+prop eq_refl : ∀ t, t = t :=
+forall_intro `t (eq_intro `t)
+
+prop eq_elim : ∀ t s C, t = s → C t → C s :=
+forall_intro `t (forall_intro `s (forall_intro `C (imp_intro (imp_intro (eq_elim `C (assume `(t = s)) (assume `(C t)))))))
+
+/-
+`{ .. }` syntax is a construct in the meta stage for tactical reasoning.
+-/
+prop eq_symm : ∀ t s, t = s → s = t := {
+  fix t s,
+  assume t = s,
+  have t = s → t = t → s = t ..(1) := {
+    assume t = s,
+    assume t = t,
+    have 
+    apply eq_elim where C := (λ x, x = t),
+  },
+  show s = t := {
+    apply (1),
+    assumption,
+    apply eq_refl
+  },
+}
+
+prop eq_trans : ∀ t s u, t = s → s = u → t = u := {
+  fix t s u,
+  assume t = s,
+  assume s = u,
+  apply eq_elim where C := (λ x, t = x),
+  assumption,
+  assumption,
+}
+
+prop prod_eq : ∀ t₁ t₂ s₁ s₂, t₁ = t₂ → s₁ = s₂ → ⟨t₁, s₁⟩ = ⟨t₂, s₂⟩ := {
+  fix t₁ t₂ s₁ s₂,
+  assume t₁ = t₂,
+  assume s₁ = s₂,
+  have ⟨t₁, s₁⟩ = ⟨t₂, s₁⟩, from eq_elim (λ x, ⟨t₁, s₁⟩ = ⟨x, s₁⟩) (assume (t₁ = t₂)) (eq_intro ⟨t₁, s₁⟩),
+  have ⟨t₂, s₁⟩ = ⟨t₂, s₂⟩, from eq_elim (λ x, ⟨t₂, s₁⟩ = ⟨t₂, x⟩) (assume (s₁ = s₂)) (eq_intro ⟨t₂, s₁⟩),
+  show ⟨t₁, s₁⟩ = ⟨t₂, s₂⟩, {
+    apply eq_trans,
+    assumption ⟪⟨t₁, s₁⟩ = ⟨t₂, s₁⟩⟫,
+    assumption,
+  }
+}
+
+class Inhabited α :=
+(prop inhabited : ∃ (x : α), ⊤)
+
+instance [Inhabited β] : Inhabited (α → β) :=
+(prop inhabited := {
+  show ∃ (x : α → β), ⊤,
+  obtain b from ⟪∃ (x : β), ⊤⟫,
+  construction (λ _, b),
+  trivial,
+})
+
+instance [Inhabited α] [Inhabited β] : Inhabited (α × β) :=
+(prop inhabited := {
+  show ∃ (x : α × β), ⊤,
+  obtain (a : α) from ⟪∃ (x : α), ⊤⟫,
+  obtain (b : β) from ⟪∃ (x : β), ⊤⟫,
+  construction ⟨a, b⟩,
+  trivial,
+})
+
+instance : Inhabited Unit :=
+(prop inhabited := {
+  construction star,
+  trivial,
+})
+
+def inhabited (s : Set α) : Prop := ∃ a, a ∈ s
+
+/-
+Our standard model is ε-topos.
+-/
+const choice [Inhabited α] : (α → Prop) → α
+
+axiom choice_spec [Inhabited α] : ∀ (P : α → Prop), inhabited P → P (choice P)
+
+prop ac [Inhabited β] : ∀ (P : α → β → Prop), (∀ x, ∃ y, P x y) → ∃ f, ∀ x, P x (f x) := {
+  fix P,
+  assume ∀ x, ∃ y, P x y,
+  construction λ x, choice (P x),
+  show ∀ x, P x (choice (P x)),
+  fix x,
+  show P x (P x (choice (P x))),
+  have inhabited (P x) → (P x (choice (P x))) := by apply choice_spec,
+  have inhabited (P x) := {
+    show ∃ y, y ∈ P x,
+    show ∃ y, P x y,
+    apply ⟪∀ x, ∃ y, P x y⟫,
+  },
+  apply inhabited (P x) → (P x (choice (P x))),
+  assumption,
+}
+
+prop prop_ext : ∀ φ₁ φ₂, (φ₁ ↔ φ₂) → (φ₁ = φ₂) := by sorry
+prop fun_ext : ∀ f₁ f₂, (∀ x, f₁ x = f₂ x) → (f₁ = f₂) := by sorry
+
+def fst (p : α × β) : α := p.0
+def snd (p : α × β) : β := p.1
+def pair (a : α) (b : β) := ⟨a, b⟩

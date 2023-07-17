@@ -1,51 +1,77 @@
-// the characteristic of the diagonal mono δ : α → α × α
-constant eq : α → α → Prop
-
 infix = : 50 := eq
+nofix ⊤ := top
+infixr ∧ : 35 := and
+infixr → : 25 := imp
+nofix ⊥ := bot
+infixr ∨ : 30 := or
+prefix ¬ : 40 := not
+infix ↔ : 20 := iff
 
-// This is definitionally equal to any term of the Unit type by the eta rule.
-constant star : Unit
+infix ∈ : 50 := mem
+infix ∉ : 50 := notmem
+infix ⊆ : 50 := subseteq
+infixl ∩ : 70 := cap
+infixl ∪ : 65 := cup
+infix \ : 70 := setminus
+nofix ∅ := empty
+infixr ⇒ : 25 := fun
+
+-- the characteristic of the diagonal mono δ : u → u × u
+constant eq : u → u → Prop
+
+-- Hilbert's ε-operator a.k.a. global choice
+-- Assuming the standard semantics (with inhabited domains), we can put any formals in prenex normal form:
+-- ((∀ x, φ) → ψ) ≡ (∃ x, φ → ψ)  where  x ∉ FV ψ
+constant choice : (u → Prop) → Prop
+
+-- This is definitionally equal to any term of the unit type by the eta rule.
+constant star : unit
 
 /-
-This also introduces a constant `top` and:
+This introduces a constant `top` and:
 axiom top_spec : top = (star = star)
 -/
 def top : Prop := star = star
-
-nofix ⊤ := top
-
 def and (φ ψ : Prop) : Prop := ⟨φ, ψ⟩ = ⟨⊤, ⊤⟩
+def imp (φ ψ : Prop) : Prop := φ = φ ∧ ψ   -- Recall [x = x ∧ y] means [x ≤ y] in the preorder canonically induced by a lattice structure.
+def forall (P : u → Prop) : Prop := P = (λ x, ⊤)
+def bot : Prop := ∀ ξ, ξ
+def or (φ ψ : Prop) : Prop := ∀ ξ, (φ → ξ) ∧ (ψ → ξ) → ξ
+def exists (P : u → Prop) : Prop := ∀ ξ, (∀ x, P x → ξ) → ξ
+def not (φ : Prop) : Prop := φ → ⊥
+def iff (φ ψ : Prop) : Prop := (φ → ψ) ∧ (ψ → φ)
+def uexists (P : u → Prop) : Prop := ∃ x, P x ∧ (∀ y, P y → x = y)
 
-infixr ∧ : 35 := and
+def default : u := choice (λ x, ⊤)
 
 /-
-Recall [φ = φ ∧ ψ] means [φ ≤ ψ] in the preorder structure of Prop.
--/
-def imp (φ ψ : Prop) : Prop := φ = φ ∧ ψ
+-- type abbreviation (does not introduce a new opaque type)
+type Set u := u → Prop
 
-infixr → : 25 := imp
+def mem (x : u) (A : Set u) : Prop := A x
+def notmem (x : u) (A : Set u) : Prop := ¬ (x ∈ A)
+def sep (A : Set u) (φ : u → Prop) : Set u := λ x, x ∈ A ∧ φ x
+def subseteq (A B : Set u) : Prop := ∀ x, x ∈ A → x ∈ B
+def cap (A B : Set u) : Set u := { x | x ∈ A ∧ x ∈ B }
+def cup (A B : Set u) : Set u := { x | x ∈ A ∨ x ∈ B }
+def bigcup (C : Set (Set u)) : Set u := { x | ∃ A ∈ C, x ∈ A }
+def powerset (A : Set u) : Set (Set u) := { X | X ⊂ A }
+def univ : Set u := λ x, ⊤
+def empty : Set u := λ x, ⊥
+def setminus (A B : Set u) : Set u := { x | x ∈ A ∧ x ∉ B }
+def prod (A : Set u) (B : Set v) : Set (u × v) := { ⟨x, y⟩ | x ∈ A ∧ y ∈ B }
+def sum (A : Set u) (B : Set v) : Set (Set u × Set v) := { ⟨{x}, ∅⟩ | x ∈ B } ∪ { ⟨∅, {y}⟩ | y ∈ B }
+def fun (A : Set u) (B : Set v) : Set (Set (u × v)) := { f ⊆ A × B | ∀ (x ∈ A), ∃! (y ∈ B), ⟨x, y⟩ ∈ f }
+def app [Inhabited v] (f : Set (u × v)) (x : u) : v := choice (λ y, ⟨x, y⟩ ∈ f)
+def id (A : Set u) : Set (Set (u × v)) := { ⟨x, x⟩ | x ∈ A }
 
-def forall (P : α → Prop) : Prop := P = (λ x, ⊤)
+type NumericDomain := (Base → Base) → Base → Base
 
-def bot : Prop := ∀ ξ, ξ
+def zero : NumericDomain := λ f x, x
+def succ (n : NumericDomain) : NumericDomain := λ f x, f (n f x) x
+def ℕ : Set NumericDomain := λ n, ∀ P, P zero → (∀ x, P x → P (succ x)) → P n
 
-nofix ⊥ := bot
-
-def or (φ ψ : Prop) : Prop := ∀ ξ, (φ → ξ) ∧ (ψ → ξ) → ξ
-
-infixr ∨ : 30 := or
-
-def exists (P : α → Prop) : Prop := ∀ ξ, (∀ x, P x → ξ) → ξ
-
-def not (φ : Prop) : Prop := φ → ⊥
-
-prefix ¬ : 40 := not
-
-def iff (φ ψ : Prop) : Prop := (φ → ψ) ∧ (ψ → φ)
-
-infix ↔ : 20 := iff
-
-def uexists (P : α → Prop) : Prop := ∃ x, P x ∧ (∀ y, P y → x = y)
+def topology (X : Set u) : Set (Set (Set u)) := { C | X ∈ C ∧ (∀ (U ∈ C) (V ∈ C), U ∩ V ∈ C) ∧ (∀ B ⊆ C, bigcup B ∈ C) }
 
 /-
 # Primitive rules
@@ -59,10 +85,6 @@ h : [Γ, x : τ ▸ Φ, ψ ⊢ φ]
 h : [Γ ▸ Φ ⊢ φ]
 ------------------
 h : [Γ ▸ Φ, ψ ⊢ φ]
-
-h : [Γ ▸ Φ ⊢ φ]
------------------------- (φ ≡ ψ)
-change ψ h : [Γ ▸ Φ ⊢ ψ]
 
 ----------------------
 assume φ : [Γ ▸ φ ⊢ φ]
@@ -108,7 +130,6 @@ forall_elim t h : [Γ ▸ Φ ⊢ [t/x]φ]
 -/
 
 /-
-meta constant change : Term → Fact → Fact
 meta constant assume : Term → Fact
 meta constant eq_intro : Term → Fact
 meta constant eq_elim : Term → Fact → Fact → Fact
@@ -120,7 +141,7 @@ meta constant subst : Term → Term → Fact → Fact
 meta constant imp_intro : Fact → Fact
 meta constant imp_elim : Fact → Fact → Fact
 meta constant forall_intro : Term → Fact → Fact
-meta constant forall_elim : Term → Fact
+meta constant forall_elim : Term → Fact → Fact
 -/
 
 /-
@@ -128,7 +149,7 @@ Proof is done by constructing in the meta stage an object of the Fact type whose
 
 After the symbol `:=` a meta expression constructing the proof object (= Fact) follows.
 
-A `prop` block introduces a new meta object `eq_refl : Fact`.
+This `prop` block introduces a new meta object `eq_refl : Fact`.
 -/
 prop eq_refl : ∀ t, t = t :=
 forall_intro `t (eq_intro `t)
@@ -143,6 +164,9 @@ prop eq_symm : ∀ t s, t = s → s = t := {
   fix t s,
   assume t = s,
   have t = s → t = t → s = t ..(1) := {
+    assume t = s,
+    assume t = t,
+    have 
     apply eq_elim where C := (λ x, x = t),
   },
   show s = t := {
@@ -161,8 +185,7 @@ prop eq_trans : ∀ t s u, t = s → s = u → t = u := {
   assumption,
 }
 
-prop prod_ext : ∀ t₁ t₂ s₁ s₂, t₁ = t₂ → s₁ = s₂ → ⟨t₁, s₁⟩ = ⟨t₂, s₂⟩ :=
-proof {
+prop prod_eq : ∀ t₁ t₂ s₁ s₂, t₁ = t₂ → s₁ = s₂ → ⟨t₁, s₁⟩ = ⟨t₂, s₂⟩ := {
   fix t₁ t₂ s₁ s₂,
   assume t₁ = t₂,
   assume s₁ = s₂,
@@ -201,13 +224,6 @@ instance : Inhabited Unit :=
   trivial,
 })
 
--- type abbreviation (does not introduce a new opaque type)
-type Set α := α → Prop
-
-def mem (x : α) (s : Set α) := s x
-
-infix ∈ : 50 := mem
-
 def inhabited (s : Set α) : Prop := ∃ a, a ∈ s
 
 /-
@@ -241,13 +257,6 @@ def fst (p : α × β) : α := p.0
 def snd (p : α × β) : β := p.1
 def pair (a : α) (b : β) := ⟨a, b⟩
 
-/-
-⊢ φ : τ → Prop
-⊢ rep : subtype φ → τ
-rep_inj : [⊢ ∀ a₁ a₂, rep a₁ = rep a₂ → a₁ = a₂]
-rep_im : [⊢ ∀ x, φ x → ∃ a, rep a = x]
--/
-
 class Subtype β α :=
 (pred : β → Prop)
 (rep : α → β)
@@ -269,3 +278,4 @@ def counit (a : α) : Set (Set α) := λ f, f a
 See [SGL, Ch IV, Sec 5]
 -/
 subtype Sum α β := { p : Set (Set α × Set β) | counit p = inv_image (λ x, ⟨ inv_image counit (inv_image (inv_image (λ p, p.0)) x), inv_image counit (inv_image (inv_image (λ p, p.1)) x) ⟩) p }
+-/

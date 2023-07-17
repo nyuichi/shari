@@ -4,6 +4,7 @@ use shari::term;
 fn main() {
     let mut sign = term::Sign::default();
     sign.add_type(term::Name::Str("Prop".to_owned()));
+
     let mut token_table = parser::TokenTable::default();
     let filename = "example/basic.neta";
     let input = std::fs::read_to_string(filename).unwrap();
@@ -20,7 +21,7 @@ fn main() {
                 e
             })
             .unwrap();
-        println!("{:?}", cmd);
+        println!("{}", cmd);
         match cmd {
             parser::Command::DefCmd(parser::DefCommand {
                 name,

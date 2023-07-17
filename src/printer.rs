@@ -221,3 +221,73 @@ impl std::fmt::Display for term::Term {
         self.clone().fmt_help(0, true, f)
     }
 }
+
+impl std::fmt::Display for parser::DefCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let parser::DefCommand {
+            name,
+            r#type: ty,
+            term,
+        } = self;
+        write!(f, "def {name} : {ty} := {term}")
+    }
+}
+
+impl std::fmt::Display for parser::InfixrCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let parser::InfixrCommand { op, prec, entity } = self;
+        write!(f, "infixr {op} : {prec} := {entity}")
+    }
+}
+
+impl std::fmt::Display for parser::InfixlCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let parser::InfixlCommand { op, prec, entity } = self;
+        write!(f, "infixl {op} : {prec} := {entity}")
+    }
+}
+
+impl std::fmt::Display for parser::InfixCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let parser::InfixCommand { op, prec, entity } = self;
+        write!(f, "infix {op} : {prec} := {entity}")
+    }
+}
+
+impl std::fmt::Display for parser::NofixCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let parser::NofixCommand { op, entity } = self;
+        write!(f, "nofix {op} := {entity}")
+    }
+}
+
+impl std::fmt::Display for parser::PrefixCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let parser::PrefixCommand { op, entity, prec } = self;
+        write!(f, "prefix {op} : {prec} := {entity}")
+    }
+}
+
+impl std::fmt::Display for parser::ConstCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let parser::ConstCommand { name, r#type: ty } = self;
+        write!(f, "constant {name} : {ty}")
+    }
+}
+
+impl std::fmt::Display for parser::Command {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            parser::Command::DefCmd(cmd) => cmd.fmt(f),
+            parser::Command::CheckCmd(_) => todo!(),
+            parser::Command::InfixrCmd(cmd) => cmd.fmt(f),
+            parser::Command::InfixlCmd(cmd) => cmd.fmt(f),
+            parser::Command::InfixCmd(cmd) => cmd.fmt(f),
+            parser::Command::PrefixCmd(cmd) => cmd.fmt(f),
+            parser::Command::NofixCmd(cmd) => cmd.fmt(f),
+            parser::Command::ConstCmd(cmd) => cmd.fmt(f),
+            parser::Command::AxiomCmd(_) => todo!(),
+            parser::Command::PropCmd(_) => todo!(),
+        }
+    }
+}
