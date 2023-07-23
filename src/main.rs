@@ -135,7 +135,7 @@ fn main() {
         "and",
         [],
         "Prop → Prop → Prop".parse().unwrap(),
-        "λ (φ ψ : Prop), (λf : Prop → Prop → Prop, f φ ψ) = (λ f, f ⊤ ⊤)"
+        "λ (φ ψ : Prop), (λ (f : Prop → Prop → Prop), f φ ψ) = (λ f, f ⊤ ⊤)"
             .parse()
             .unwrap(),
     )
