@@ -1,52 +1,60 @@
 //! [Type] and [Term] may be ill-formed.
 
 // TODO: quasiquote and pattern match
+// TODO: handle type variables in local env
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{bail, Context};
 use core::ops::Range;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use std::collections::{HashMap, VecDeque};
+use std::borrow::Borrow;
+use std::collections::HashMap;
 use std::mem;
-use std::sync::Arc;
+use std::str::FromStr;
+use std::sync::{Arc, RwLock};
 use thiserror::Error;
 
-// TODO: Use string name
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct MvarId(usize);
-
-impl MvarId {
-    // TODO: reclaim unused mvars
-    pub fn fresh() -> Self {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static COUNTER: Lazy<AtomicUsize> = Lazy::new(Default::default);
-        Self(COUNTER.fetch_add(1, Ordering::Relaxed))
-    }
-
-    pub fn id(&self) -> usize {
-        self.0
-    }
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub struct Name {
+    inner: String,
 }
-
-impl std::fmt::Display for MvarId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.id())
-    }
-}
-
-#[derive(Debug, Default, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
-pub struct Name(String);
 
 impl std::fmt::Display for Name {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", self.inner)
     }
 }
 
-impl From<&str> for Name {
-    fn from(value: &str) -> Self {
-        // TODO: validation
-        Self(value.to_owned())
+#[derive(Error, Debug, Clone)]
+#[error("invalid name")]
+pub struct InvalidNameError;
+
+impl TryFrom<String> for Name {
+    type Error = InvalidNameError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        static RE: Lazy<Regex> = Lazy::new(|| {
+            regex::Regex::new(r"[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*").unwrap()
+        });
+        if RE.is_match(&value) {
+            Ok(Name { inner: value })
+        } else {
+            Err(InvalidNameError)
+        }
+    }
+}
+
+impl TryFrom<&str> for Name {
+    type Error = InvalidNameError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        value.to_owned().try_into()
+    }
+}
+
+impl Borrow<str> for Name {
+    fn borrow(&self) -> &str {
+        self.as_str()
     }
 }
 
@@ -56,11 +64,13 @@ impl Name {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static COUNTER: Lazy<AtomicUsize> = Lazy::new(Default::default);
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        Name(format!("#{id}"))
+        Name {
+            inner: format!("{id}"),
+        }
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.inner
     }
 }
 
@@ -68,20 +78,38 @@ impl Name {
 pub enum Type {
     Const(Name),
     Arrow(Arc<(Type, Type)>),
-    // TODO: rename?
-    Mvar(MvarId),
+    Var(Name),
 }
 
 impl Default for Type {
     fn default() -> Self {
-        Type::Const(Name::default())
+        Type::prop()
     }
 }
 
-/// Following notations from [Barendregt+, 06](https://ftp.science.ru.nl/CSI/CompMath.Found/I.pdf).
+impl FromStr for Type {
+    // TODO
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut lex = Lex::new(s);
+        let mut parser = Parser::new(&mut lex);
+        parser.ty().map_err(|_| ())
+    }
+}
+
+impl std::fmt::Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.fmt_type_help(0, f)
+    }
+}
+
+/// See [Barendregt+, 06](https://ftp.science.ru.nl/CSI/CompMath.Found/I.pdf).
 impl Type {
     pub fn prop() -> Type {
-        Type::Const(Name::from("Prop"))
+        Type::Const(Name {
+            inner: "Prop".to_owned(),
+        })
     }
 
     pub fn target(&self) -> &Type {
@@ -126,18 +154,26 @@ impl Type {
         *self = t;
     }
 
-    fn instantiate(&mut self, mid: &MvarId, t: &Type) {
+    pub fn is_closed(&self) -> bool {
+        match self {
+            Type::Const(_) => true,
+            Type::Arrow(p) => p.0.is_closed() && p.1.is_closed(),
+            Type::Var(_) => false,
+        }
+    }
+
+    fn instantiate(&mut self, mvar: &str, t: &Type) {
         match self {
             Self::Const(_) => {}
-            Self::Mvar(x) => {
-                if x == mid {
+            Self::Var(x) => {
+                if x.as_str() == mvar {
                     *self = t.clone();
                 }
             }
             Self::Arrow(p) => {
                 let p = Arc::make_mut(p);
-                p.0.instantiate(mid, t);
-                p.1.instantiate(mid, t);
+                p.0.instantiate(mvar, t);
+                p.1.instantiate(mvar, t);
             }
         }
     }
@@ -153,7 +189,7 @@ pub enum Term {
     Local(Name),
     Const(Arc<(Name, Vec<Type>)>),
     /// Mvar is always closed.
-    Mvar(MvarId),
+    Mvar(Name),
 }
 
 impl Default for Term {
@@ -197,15 +233,15 @@ impl Term {
     }
 
     /// self.close(x) == [0/x]self
-    pub fn close(&mut self, name: &Name) {
+    pub fn close(&mut self, name: &str) {
         assert!(self.is_lclosed());
         self.close_at(name, 0)
     }
 
-    fn close_at(&mut self, name: &Name, level: usize) {
+    fn close_at(&mut self, name: &str, level: usize) {
         match self {
             Self::Local(x) => {
-                if name == x {
+                if name == x.as_str() {
                     *self = Self::Var(level);
                 }
             }
@@ -224,9 +260,9 @@ impl Term {
     }
 
     /// x # self <==> x ∉ FV(self)
-    pub fn is_fresh(&self, name: &Name) -> bool {
+    pub fn is_fresh(&self, name: &str) -> bool {
         match self {
-            Self::Local(x) => name != x,
+            Self::Local(x) => name != x.as_str(),
             Self::Var(_) => true,
             Self::Abs(a) => a.body.is_fresh(name),
             Self::App(p) => p.0.is_fresh(name) && p.1.is_fresh(name),
@@ -291,10 +327,10 @@ impl Term {
         self.fill_at(m, 0);
     }
 
-    fn subst(&mut self, name: &Name, m: &Term) {
+    fn subst(&mut self, name: &str, m: &Term) {
         match self {
             Self::Local(x) => {
-                if name == x {
+                if name == x.as_str() {
                     *self = m.clone();
                 }
             }
@@ -310,6 +346,39 @@ impl Term {
             Self::Const(_) => {}
             Self::Mvar(_) => {}
         }
+    }
+
+    pub fn subst_mvar(&mut self, name: &str, m: &Term) {
+        match self {
+            Self::Local(_) => {}
+            Self::Var(_) => {}
+            Self::App(p) => {
+                let (m1, m2) = Arc::make_mut(p);
+                m1.subst_mvar(name, m);
+                m2.subst_mvar(name, m);
+            }
+            Self::Abs(a) => {
+                Arc::make_mut(a).body.subst_mvar(name, m);
+            }
+            Self::Const(_) => {}
+            Self::Mvar(x) => {
+                if x.as_str() == name {
+                    *self = m.clone();
+                }
+            }
+        }
+    }
+
+    // first-order pattern match.
+    // other must be ground.
+    // ignores types.
+    pub fn match1<'a>(&self, other: &'a Term) -> Option<Subst<&'a Term>> {
+        assert!(other.is_ground());
+        let mut subst = Subst::new();
+        if !subst.match1(self, other) {
+            return None;
+        }
+        Some(subst)
     }
 
     pub fn binders(&self) -> impl Iterator<Item = &Type> {
@@ -369,49 +438,6 @@ impl Term {
         self.triple().2
     }
 
-    // /// triple(λ (v:t)*, m l*) = (t*, m, l*)
-    // /// may return locally open terms
-    // pub fn triple_mut(&mut self) -> (Vec<&mut Type>, &mut Term, Vec<&mut Term>) {
-    //     let mut m = self;
-    //     let mut binders = vec![];
-    //     while let Self::Abs(a) = m {
-    //         let a = Arc::make_mut(a);
-    //         binders.push(&mut a.ty);
-    //         m = &mut a.body;
-    //     }
-    //     let mut args: Vec<&mut Term> = vec![];
-    //     while let Self::App(p) = m {
-    //         let (m1, m2) = Arc::make_mut(p);
-    //         args.push(m2);
-    //         m = m1;
-    //     }
-    //     args.reverse();
-    //     (binders, m, args)
-    // }
-
-    pub fn args_mut(&mut self) -> Vec<&mut Term> {
-        let mut m = self;
-        while let Self::Abs(a) = m {
-            m = &mut Arc::make_mut(a).body;
-        }
-        let mut args: Vec<&mut Term> = vec![];
-        while let Self::App(p) = m {
-            let (m1, m2) = Arc::make_mut(p);
-            args.push(m2);
-            m = m1;
-        }
-        args.reverse();
-        args
-    }
-
-    pub fn matrix_mut(&mut self) -> &mut Term {
-        let mut m = self;
-        while let Self::Abs(a) = m {
-            m = &mut Arc::make_mut(a).body;
-        }
-        m
-    }
-
     pub fn is_neutral(&self) -> bool {
         match self {
             Self::Abs(_) => false,
@@ -467,30 +493,56 @@ impl Term {
         args
     }
 
-    pub fn apply(&mut self, ms: impl IntoIterator<Item = Term>) {
-        for m in ms {
-            *self = Term::App(Arc::new((*self, m)));
+    pub fn apply(&mut self, args: impl IntoIterator<Item = Term>) {
+        let mut m = mem::take(self);
+        for arg in args {
+            m = Term::App(Arc::new((m, arg)));
         }
+        *self = m;
     }
 
-    pub fn undischarge(&mut self) -> Vec<(Name, Type)> {
-        let mut binder = vec![];
+    fn undischarge_locals(&mut self) -> Vec<(Name, Type)> {
+        let mut binders = vec![];
         let mut m = &mut *self;
         while let Term::Abs(a) = m {
             let Abs { binder: t, body: n } = Arc::make_mut(a);
             let x = Name::fresh();
             n.open(&x);
-            binder.push((x, mem::take(t)));
+            binders.push((x, mem::take(t)));
             m = n;
         }
         *self = mem::take(m);
-        binder
+        binders
     }
 
-    pub fn discharge(&mut self, binder: Vec<(Name, Type)>) {
+    fn discharge_locals<'a, T>(&'a mut self, binders: T)
+    where
+        T: IntoIterator<Item = (&'a Name, Type)>,
+        <T as IntoIterator>::IntoIter: DoubleEndedIterator,
+    {
         let mut m = mem::take(self);
-        for (x, t) in binder.into_iter().rev() {
-            m.close(&x);
+        for (x, t) in binders.into_iter().rev() {
+            m.close(x.as_str());
+            m = Self::Abs(Arc::new(Abs { binder: t, body: m }));
+        }
+        *self = m;
+    }
+
+    fn undischarge(&mut self) -> Vec<Type> {
+        let mut xs = vec![];
+        let mut m = &mut *self;
+        while let Term::Abs(a) = m {
+            let Abs { binder: t, body: n } = Arc::make_mut(a);
+            xs.push(mem::take(t));
+            m = n;
+        }
+        *self = mem::take(m);
+        xs
+    }
+
+    fn discharge(&mut self, xs: Vec<Type>) {
+        let mut m = mem::take(self);
+        for t in xs.into_iter().rev() {
             m = Self::Abs(Arc::new(Abs { binder: t, body: m }));
         }
         *self = m;
@@ -529,22 +581,22 @@ impl Term {
         }
     }
 
-    fn instantiate(&mut self, mid: &MvarId, t: &Type) {
+    fn instantiate(&mut self, mvar: &str, t: &Type) {
         match self {
             Self::Abs(a) => {
                 let a = Arc::make_mut(a);
-                a.binder.instantiate(mid, t);
-                a.body.instantiate(mid, t);
+                a.binder.instantiate(mvar, t);
+                a.body.instantiate(mvar, t);
             }
             Self::App(p) => {
                 let p = Arc::make_mut(p);
-                p.0.instantiate(mid, t);
-                p.1.instantiate(mid, t);
+                p.0.instantiate(mvar, t);
+                p.1.instantiate(mvar, t);
             }
             Self::Const(c) => {
                 let c = Arc::make_mut(c);
                 for u in &mut c.1 {
-                    u.instantiate(mid, t);
+                    u.instantiate(mvar, t);
                 }
             }
             Self::Local(_) | Self::Var(_) | Self::Mvar(_) => {}
@@ -553,13 +605,12 @@ impl Term {
 }
 
 #[derive(Debug)]
-pub struct Env {
-    name: Name,
-    consts: HashMap<Name, (Vec<MvarId>, Type)>,
+struct Env {
+    consts: HashMap<Name, (Vec<Name>, Type)>,
     const_types: HashMap<Name, usize>,
-    defs: HashMap<Name, (Vec<MvarId>, Term)>,
-    typedefs: HashMap<Name, (Name, Name, Arc<Fact>)>,
-    axioms: HashMap<Name, (Vec<MvarId>, Term)>,
+    defs: HashMap<Name, (Vec<Name>, Term)>,
+    type_defs: HashMap<Name, (Name, Name, Arc<Fact>)>,
+    axioms: HashMap<Name, (Vec<Name>, Term)>,
     notations: NotationTable,
 }
 
@@ -568,48 +619,74 @@ struct NotationTable {
     // symbol to name
     tt: TokenTable,
     // name to symbol
-    sugar: HashMap<Name, Operator>,
+    pp: HashMap<Name, Operator>,
 }
 
 // TODO: allow table lookup
-static ENV: Lazy<Arc<Env>> = Lazy::new(|| {
-    let mut env = Env::new(Name::from("default"));
+static ENV: Lazy<RwLock<Env>> = Lazy::new(|| {
+    let mut env = Env {
+        consts: Default::default(),
+        const_types: Default::default(),
+        defs: Default::default(),
+        type_defs: Default::default(),
+        axioms: Default::default(),
+        notations: Default::default(),
+    };
+
+    env.add_const_type("Prop", 0).unwrap();
     env.add_notation("=", Fixity::Infix, 50, "eq").unwrap();
-    env.add_notation("⊤", Fixity::Nofix, usize::MAX, "top")
-        .unwrap();
-    env.add_notation("∧", Fixity::Infixr, 35, "and").unwrap();
-    env.add_notation("→", Fixity::Infixr, 25, "imp").unwrap();
-    env.add_notation("⊥", Fixity::Nofix, usize::MAX, "bot")
-        .unwrap();
-    env.add_notation("∨", Fixity::Infixr, 30, "or").unwrap();
-    env.add_notation("¬", Fixity::Prefix, 40, "not").unwrap();
-    env.add_notation("↔", Fixity::Infix, 20, "iff").unwrap();
-    Arc::new(env)
+    env.add_const(
+        Name::try_from("eq").unwrap(),
+        vec![Name::try_from("u").unwrap()],
+        Type::Arrow(Arc::new((
+            Type::Var(Name::try_from("u").unwrap()),
+            Type::Arrow(Arc::new((
+                Type::Var(Name::try_from("u").unwrap()),
+                Type::prop(),
+            ))),
+        ))),
+    )
+    .unwrap();
+
+    RwLock::new(env)
 });
 
-impl PartialEq for Env {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-    }
-}
-
-impl Eq for Env {}
-
 impl Env {
-    pub fn default() -> Arc<Env> {
-        Arc::clone(&ENV)
+    fn get() -> std::sync::RwLockReadGuard<'static, Env> {
+        ENV.read().unwrap()
     }
 
-    fn new(name: Name) -> Env {
-        Env {
-            name,
-            consts: Default::default(),
-            const_types: Default::default(),
-            defs: Default::default(),
-            typedefs: Default::default(),
-            axioms: Default::default(),
-            notations: Default::default(),
+    fn get_mut() -> std::sync::RwLockWriteGuard<'static, Env> {
+        ENV.write().unwrap()
+    }
+
+    fn token_table(&self) -> &TokenTable {
+        &self.notations.tt
+    }
+
+    fn get_const_type(&self, name: &str) -> Option<usize> {
+        self.const_types.get(name).copied()
+    }
+
+    fn add_const_type(&mut self, name: &str, arity: usize) -> anyhow::Result<()> {
+        let Ok(name) = Name::try_from(name) else {
+            bail!("invalid name: {name}");
+        };
+        if self.const_types.insert(name, arity).is_some() {
+            bail!("constant type already defined");
         }
+        Ok(())
+    }
+
+    fn get_const(&self, name: &str) -> Option<(&[Name], &Type)> {
+        self.consts.get(name).map(|v| (v.0.as_slice(), &v.1))
+    }
+
+    fn add_const(&mut self, name: Name, type_vars: Vec<Name>, ty: Type) -> anyhow::Result<()> {
+        if self.consts.insert(name, (type_vars, ty)).is_some() {
+            bail!("constant already defined");
+        }
+        Ok(())
     }
 
     fn add_notation(
@@ -619,7 +696,9 @@ impl Env {
         prec: usize,
         entity: &str,
     ) -> anyhow::Result<()> {
-        let entity = Name::from(entity);
+        let Ok(entity) = Name::try_from(entity) else {
+            bail!("invalid name: {entity}");
+        };
         self.notations
             .tt
             .add(symbol, fixity, prec, entity.clone())?;
@@ -629,10 +708,9 @@ impl Env {
             prec,
             entity: entity.clone(),
         };
-        self.notations
-            .sugar
-            .insert(entity.clone(), op)
-            .ok_or_else(|| anyhow!("notation already defined: {entity}"))?;
+        if self.notations.pp.insert(entity.clone(), op).is_some() {
+            bail!("notation already defined: {entity}");
+        }
         Ok(())
     }
 
@@ -644,10 +722,11 @@ impl Env {
         local_names: &mut Vec<Name>,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-        if m.binders().any(|_| true) {
+        if !m.binders().any(|_| true) {
             let (_, head, mut args) = m.triple();
-            if let Term::Local(name) = head {
-                if let Some(op) = self.notations.sugar.get(name) {
+            if let Term::Const(c) = head {
+                let name = &c.0;
+                if let Some(op) = self.notations.pp.get(name) {
                     match op.fixity {
                         Fixity::Infix | Fixity::Infixl => {
                             if args.len() == 2 {
@@ -763,7 +842,7 @@ impl Env {
                 if !c.1.is_empty() {
                     write!(
                         f,
-                        "{{{}}}",
+                        ".{{{}}}",
                         c.1.iter()
                             .map(ToString::to_string)
                             .collect::<Vec<_>>()
@@ -772,7 +851,7 @@ impl Env {
                 }
                 Ok(())
             }
-            Term::Mvar(name) => write!(f, "?{}", name),
+            Term::Mvar(name) => write!(f, "#{}", name),
             Term::Abs(a) => {
                 if !allow_lambda {
                     write!(f, "(")?;
@@ -811,6 +890,40 @@ impl Env {
     }
 }
 
+pub fn add_notation(symbol: &str, fixity: Fixity, prec: usize, entity: &str) -> anyhow::Result<()> {
+    Env::get_mut().add_notation(symbol, fixity, prec, entity)
+}
+
+pub fn add_definition(
+    name: &str,
+    ty_vars: impl IntoIterator<Item = Name>,
+    ty: Type,
+    mut entity: Term,
+) -> anyhow::Result<()> {
+    let Ok(name) = Name::try_from(name) else {
+        bail!("invalid name: {entity}");
+    };
+    let ty_vars: Vec<_> = ty_vars.into_iter().collect();
+    if !ty_vars.is_empty() {
+        // TODO
+        todo!();
+    }
+    assert!(ty.is_closed(), "{ty}");
+    let Ok(inferred_ty) = LocalEnv::new().infer(&mut entity) else {
+        bail!("term not type-correct");
+    };
+    if inferred_ty != ty {
+        bail!("invalid type");
+    }
+    // TODO check if consts in ty are well-formed.
+    let mut env = Env::get_mut();
+    env.add_const(name.clone(), ty_vars.clone(), ty)?;
+    if env.defs.insert(name, (ty_vars, entity)).is_some() {
+        bail!("multiple definitions");
+    }
+    Ok(())
+}
+
 impl Type {
     fn fmt_type_help(&self, prec: usize, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
@@ -828,22 +941,18 @@ impl Type {
                 }
                 Ok(())
             }
-            Self::Mvar(mid) => write!(f, "?{mid}"),
+            Self::Var(mvar) => write!(f, "{mvar}"),
         }
-    }
-}
-
-impl std::fmt::Display for Type {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        self.fmt_type_help(0, f)
     }
 }
 
 impl std::fmt::Display for Term {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        ENV.fmt_term(self, f)
+        Env::get().fmt_term(self, f)
     }
 }
+
+// struct Printer {}
 
 #[derive(Debug, Clone)]
 pub struct SourceInfo<'a> {
@@ -1173,13 +1282,13 @@ impl Led {
 }
 
 enum Nud {
+    Mvar,
     Var,
     Abs,
     Forall,
     Exists,
     Paren,
     Bracket,
-    Placeholder,
     User(Operator),
 }
 
@@ -1205,7 +1314,13 @@ impl TokenTable {
 
     fn get_nud(&self, token: &Token) -> Option<Nud> {
         match token.kind {
-            TokenKind::Ident => Some(Nud::Var),
+            TokenKind::Ident => {
+                if token.as_str().starts_with('#') {
+                    Some(Nud::Mvar)
+                } else {
+                    Some(Nud::Var)
+                }
+            }
             TokenKind::Symbol => {
                 let lit = token.as_str();
                 match lit {
@@ -1214,7 +1329,6 @@ impl TokenTable {
                     "λ" => Some(Nud::Abs),
                     "∀" => Some(Nud::Forall),
                     "∃" => Some(Nud::Exists),
-                    "_" => Some(Nud::Placeholder),
                     _ => self.nud.get(token.as_str()).map(|op| Nud::User(op.clone())),
                 }
             }
@@ -1246,16 +1360,16 @@ impl<'a> From<LexError> for ParseError<'a> {
 
 pub struct Parser<'a, 'b> {
     lex: &'b mut Lex<'a>,
-    token_table: &'b TokenTable,
-    placeholder: Name,
+    env: std::sync::RwLockReadGuard<'static, Env>,
+    locals: Vec<Name>,
 }
 
 impl<'a, 'b> Parser<'a, 'b> {
-    fn new(lex: &'b mut Lex<'a>, token_table: &'b TokenTable) -> Self {
+    fn new(lex: &'b mut Lex<'a>) -> Self {
         Self {
             lex,
-            token_table,
-            placeholder: Name::default(),
+            env: Env::get(),
+            locals: vec![],
         }
     }
 
@@ -1369,17 +1483,28 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     pub fn name(&mut self) -> Result<Name, ParseError<'a>> {
-        Ok(Name(self.ident()?.as_str().to_owned()))
+        Ok(Name::try_from(self.ident()?.as_str()).expect("logic flaw"))
     }
 
     fn name_opt(&mut self) -> Option<Name> {
         self.ident_opt()
-            .map(|token| Name(token.as_str().to_owned()))
+            .map(|token| Name::try_from(token.as_str()).expect("logic flaw"))
     }
 
     fn type_primary(&mut self) -> Result<Type, ParseError<'a>> {
         if let Some(name) = self.name_opt() {
-            return Ok(Type::Const(name));
+            match self.env.get_const_type(name.as_str()) {
+                Some(arity) => {
+                    if arity != 0 {
+                        // TODO
+                        todo!();
+                    }
+                    return Ok(Type::Const(name));
+                }
+                None => {
+                    return Ok(Type::Var(name));
+                }
+            }
         }
         let token = self.any_token()?;
         if token.is_symbol() && token.as_str() == "(" {
@@ -1435,10 +1560,7 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     pub fn term(&mut self) -> Result<Term, ParseError<'a>> {
-        self.placeholder = Name::fresh();
-        let mut m = self.subterm(0)?;
-        m.open(&self.placeholder);
-        Ok(m)
+        self.subterm(0)
     }
 
     fn term_opt(&mut self) -> Option<Term> {
@@ -1448,29 +1570,54 @@ impl<'a, 'b> Parser<'a, 'b> {
     fn term_abs(&mut self, _token: Token) -> Result<Term, ParseError<'a>> {
         let params = self.parameters()?;
         self.expect_symbol(",")?;
-        let mut m = self.subterm(0)?;
         if params.is_empty() {
             todo!("empty binding");
         }
+        for (name, _) in &params {
+            self.locals.push(name.clone());
+        }
+        let mut m = self.subterm(0)?;
+        for _ in 0..params.len() {
+            self.locals.pop();
+        }
         for (name, t) in params.into_iter().rev() {
-            let t = t.unwrap_or_else(|| Type::Mvar(MvarId::fresh()));
-            m.discharge(vec![(name, t)]);
+            let t = t.unwrap_or_else(|| Type::Var(Name::fresh()));
+            m.discharge_locals([(&name, t)]);
         }
         Ok(m)
+    }
+
+    // TODO remove
+    fn mk_const_unchecked(&self, name: &str) -> Term {
+        let (ty_params, _) = self.env.get_const(name).expect("unknown constant");
+        let mut ty_args = vec![];
+        for _ in ty_params {
+            ty_args.push(Type::Var(Name::fresh()));
+        }
+        Term::Const(Arc::new((
+            Name::try_from(name).expect("invalid name"),
+            ty_args,
+        )))
     }
 
     fn term_forall(&mut self, _token: Token) -> Result<Term, ParseError<'a>> {
         let params = self.parameters()?;
         self.expect_symbol(",")?;
-        let mut m = self.subterm(0)?;
         if params.is_empty() {
             todo!("empty binding");
         }
+        for (name, _) in &params {
+            self.locals.push(name.clone());
+        }
+        let mut m = self.subterm(0)?;
+        for _ in 0..params.len() {
+            self.locals.pop();
+        }
         for (name, t) in params.into_iter().rev() {
-            let t = t.unwrap_or_else(|| Type::Mvar(MvarId::fresh()));
-            m.discharge(vec![(name, t)]);
+            let t = t.unwrap_or_else(|| Type::Var(Name::fresh()));
+            m.discharge_locals([(&name, t)]);
             let f = mem::take(&mut m);
-            m = Term::Local(Name("forall".to_owned()));
+            m = self.mk_const_unchecked("forall");
             m.apply(vec![f]);
         }
         Ok(m)
@@ -1479,43 +1626,62 @@ impl<'a, 'b> Parser<'a, 'b> {
     fn term_exists(&mut self, _token: Token) -> Result<Term, ParseError<'a>> {
         let params = self.parameters()?;
         self.expect_symbol(",")?;
-        let mut m = self.subterm(0)?;
         if params.is_empty() {
             todo!("empty binding");
         }
+        for (name, _) in &params {
+            self.locals.push(name.clone());
+        }
+        let mut m = self.subterm(0)?;
+        for _ in 0..params.len() {
+            self.locals.pop();
+        }
         for (name, t) in params.into_iter().rev() {
-            let t = t.unwrap_or_else(|| Type::Mvar(MvarId::fresh()));
-            m.discharge(vec![(name, t)]);
+            let t = t.unwrap_or_else(|| Type::Var(Name::fresh()));
+            m.discharge_locals([(&name, t)]);
             let f = mem::take(&mut m);
-            m = Term::Local(Name("exists".to_owned()));
+            m = self.mk_const_unchecked("exists");
             m.apply(vec![f]);
         }
         Ok(m)
     }
 
-    fn term_var(&mut self, token: Token, entity: Option<Name>) -> Term {
+    fn term_var(&mut self, token: Token<'a>, entity: Option<Name>) -> Result<Term, ParseError<'a>> {
         let name = match entity {
-            None => Name(token.as_str().to_owned()),
+            None => Name::try_from(token.as_str()).expect("logic flaw"),
             Some(s) => s,
         };
-        // TODO: parse as const
-        Term::Local(name)
+        for local in &self.locals {
+            if local == &name {
+                return Ok(Term::Local(name));
+            }
+        }
+        let Some((tv, _)) = self.env.get_const(name.as_str()) else {
+            return Self::fail(token, "constant not found");
+        };
+        // TODO: parse type parameters
+        let mut type_args = vec![];
+        for _ in tv {
+            type_args.push(Type::Var(Name::fresh()));
+        }
+        Ok(Term::Const(Arc::new((name, type_args))))
     }
 
-    fn term_placeholder(&mut self, _token: Token) -> Term {
-        Term::Local(self.placeholder.clone())
+    fn term_mvar(&mut self, token: Token) -> Term {
+        let name = Name::try_from(&token.as_str()[1..]).expect("logic flaw");
+        Term::Mvar(name)
     }
 
     fn subterm(&mut self, rbp: usize) -> Result<Term, ParseError<'a>> {
         let token = self.any_token()?;
         // nud
-        let nud = match self.token_table.get_nud(&token) {
+        let nud = match self.env.token_table().get_nud(&token) {
             None => todo!("nud unknown: {}", token),
             Some(nud) => nud,
         };
         let mut left = match nud {
-            Nud::Var => self.term_var(token, None),
-            Nud::Placeholder => self.term_placeholder(token),
+            Nud::Var => self.term_var(token, None)?,
+            Nud::Mvar => self.term_mvar(token),
             Nud::Abs => self.term_abs(token)?,
             Nud::Paren => {
                 let m = self.term()?;
@@ -1536,12 +1702,12 @@ impl<'a, 'b> Parser<'a, 'b> {
                 // ⟨m⟩ ⇒ m
                 // ⟨m,n,l⟩ ⇒ ⟨m, ⟨n, l⟩⟩
                 match terms.len() {
-                    0 => Term::Local(Name("star".to_owned())),
+                    0 => self.mk_const_unchecked("star"),
                     1 => terms.pop().unwrap(),
                     _ => {
                         let mut m = terms.pop().unwrap();
                         for n in terms.into_iter().rev() {
-                            let mut x = Term::Local(Name("tuple".to_owned()));
+                            let mut x = self.mk_const_unchecked("pair");
                             x.apply(vec![n, m]);
                             m = x;
                         }
@@ -1552,9 +1718,9 @@ impl<'a, 'b> Parser<'a, 'b> {
             Nud::Forall => self.term_forall(token)?,
             Nud::Exists => self.term_exists(token)?,
             Nud::User(op) => match op.fixity {
-                Fixity::Nofix => self.term_var(token, Some(op.entity)),
+                Fixity::Nofix => self.term_var(token, Some(op.entity))?,
                 Fixity::Prefix => {
-                    let mut fun = self.term_var(token, Some(op.entity));
+                    let mut fun = self.term_var(token, Some(op.entity))?;
                     let arg = self.subterm(op.prec)?;
                     fun.apply(vec![arg]);
                     fun
@@ -1563,7 +1729,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             },
         };
         while let Some(token) = self.peek_opt() {
-            let led = match self.token_table.get_led(&token) {
+            let led = match self.env.token_table().get_led(&token) {
                 None => break,
                 Some(led) => led,
             };
@@ -1580,10 +1746,10 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let prec = match op.fixity {
                         Fixity::Infixl => prec,
                         Fixity::Infixr => prec - 1,
-                        _ => unreachable!(),
+                        _ => unreachable!("op = {op:?}"),
                     };
                     self.advance();
-                    let mut fun = self.term_var(token, Some(op.entity));
+                    let mut fun = self.term_var(token, Some(op.entity))?;
                     let right = self.subterm(prec)?;
                     fun.apply(vec![left, right]);
                     left = fun;
@@ -1594,30 +1760,45 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 }
 
-impl std::str::FromStr for Term {
+impl FromStr for Term {
     // TODO: add ParseErrorOwned
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut lex = Lex::new(s);
-        let mut parser = Parser::new(&mut lex, &ENV.notations.tt);
+        let mut parser = Parser::new(&mut lex);
         parser.term().map_err(|_| ())
     }
 }
 
 #[derive(Clone, Debug, Default)]
-struct Subst<T>(Vec<(MvarId, T)>);
+pub struct Subst<T>(Vec<(Name, T)>);
+
+impl<T> Subst<T> {
+    fn new() -> Self {
+        Self(vec![])
+    }
+
+    pub fn get(&self, name: &str) -> Option<&T> {
+        for (k, v) in &self.0 {
+            if k.as_str() == name {
+                return Some(v);
+            }
+        }
+        None
+    }
+}
 
 impl Subst<Type> {
     fn apply_type(&self, t: &mut Type) {
-        for (mid, u) in &self.0 {
-            t.instantiate(mid, u);
+        for (mvar, u) in &self.0 {
+            t.instantiate(mvar.as_str(), u);
         }
     }
 
     fn apply_term(&self, m: &mut Term) {
-        for (mid, t) in &self.0 {
-            m.instantiate(mid, t);
+        for (mvar, t) in &self.0 {
+            m.instantiate(mvar.as_str(), t);
         }
     }
 
@@ -1634,12 +1815,12 @@ impl Subst<Type> {
                 self.unify(t11, t21)?;
                 self.unify(t12, t22)?;
             }
-            (Type::Mvar(i), t) | (t, Type::Mvar(i)) => {
+            (Type::Var(i), t) | (t, Type::Var(i)) => {
                 if !self.0.iter().any(|(j, _)| j == i) {
                     // TODO: occur check
-                    self.0.push((*i, t.clone()));
+                    self.0.push((i.clone(), t.clone()));
                 } else {
-                    let mut u = Type::Mvar(*i);
+                    let mut u = Type::Var(i.clone());
                     self.apply_type(&mut u);
                     self.unify(&mut u, t)?;
                 }
@@ -1652,39 +1833,60 @@ impl Subst<Type> {
     }
 }
 
+impl<'a> Subst<&'a Term> {
+    fn match1(&mut self, this: &Term, that: &'a Term) -> bool {
+        match (this, that) {
+            (Term::Var(i), Term::Var(j)) if i == j => true,
+            (Term::Abs(a1), Term::Abs(a2)) => self.match1(&a1.body, &a2.body),
+            (Term::App(p1), Term::App(p2)) => {
+                self.match1(&p1.0, &p2.0) && self.match1(&p1.1, &p2.1)
+            }
+            (Term::Local(x), Term::Local(y)) if x == y => true,
+            (Term::Const(c1), Term::Const(c2)) => c1.0 == c2.0,
+            (Term::Mvar(name), m) => {
+                self.0.push((name.clone(), m));
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct LocalEnv {
-    env: Arc<Env>,
+    // ty_vars: Vec<Name>,
     locals: Vec<(Name, Type)>,
 }
 
 impl std::fmt::Display for LocalEnv {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ▶", self.env.name)?;
-        if self.locals.is_empty() {
-            write!(f, " ")?;
-        } else {
-            for (x, t) in &self.locals {
-                write!(f, " ({} : {})", x, t)?;
+        for (i, (x, t)) in self.locals.iter().enumerate() {
+            if i != 0 {
+                write!(f, " ")?;
             }
+            write!(f, "({} : {})", x, t)?;
         }
         Ok(())
     }
 }
 
 impl LocalEnv {
-    fn get_local(&self, name: &Name) -> Option<&Type> {
+    pub fn new() -> Self {
+        LocalEnv { locals: vec![] }
+    }
+
+    fn get_local(&self, name: &str) -> Option<&Type> {
         for (x, t) in self.locals.iter().rev() {
-            if x == name {
+            if x.as_str() == name {
                 return Some(t);
             }
         }
         None
     }
 
-    fn get_const(&self, name: &Name) -> Option<&(Vec<MvarId>, Type)> {
-        if let Some(s) = self.env.consts.get(name) {
-            return Some(s);
+    fn get_const(&self, name: &str) -> Option<(Vec<Name>, Type)> {
+        if let Some(s) = Env::get().consts.get(name) {
+            return Some(s.clone());
         }
         None
     }
@@ -1707,7 +1909,7 @@ impl LocalEnv {
     ) -> anyhow::Result<Type> {
         match m {
             Term::Local(name) => {
-                if let Some(u) = self.get_local(name) {
+                if let Some(u) = self.get_local(name.as_str()) {
                     return Ok(u.clone());
                 }
                 bail!("local variable not found: {name}");
@@ -1730,7 +1932,7 @@ impl LocalEnv {
                 let p = Arc::make_mut(p);
                 let mut t1 = self.infer_help(&mut p.0, var_stack, subst)?;
                 let t2 = self.infer_help(&mut p.1, var_stack, subst)?;
-                let mut t = Type::Arrow(Arc::new((t2, Type::Mvar(MvarId::fresh()))));
+                let mut t = Type::Arrow(Arc::new((t2, Type::Var(Name::fresh()))));
                 subst.unify(&mut t1, &mut t)?;
                 let Type::Arrow(mut p) = t else {
                     panic!("logic flaw");
@@ -1739,16 +1941,16 @@ impl LocalEnv {
             }
             Term::Const(c) => {
                 let c = Arc::make_mut(c);
-                if let Some((tv, ty)) = self.get_const(&c.0) {
+                if let Some((tv, ty)) = self.get_const(c.0.as_str()) {
                     if tv.len() != c.1.len() {
                         bail!("number of type variables mismatch");
                     }
-                    let mut new_tv: Vec<_> = std::iter::repeat_with(|| Type::Mvar(MvarId::fresh()))
+                    let mut new_tv: Vec<_> = std::iter::repeat_with(|| Type::Var(Name::fresh()))
                         .take(tv.len())
                         .collect();
                     let mut ty = ty.clone();
                     for (old, new) in std::iter::zip(tv, &new_tv) {
-                        ty.instantiate(old, new);
+                        ty.instantiate(old.as_str(), new);
                     }
                     for (t1, t2) in std::iter::zip(&mut c.1, &mut new_tv) {
                         subst.unify(t1, t2)?;
@@ -1773,9 +1975,9 @@ impl LocalEnv {
         Ok(t)
     }
 
-    pub fn infer_unchecked_help<'a>(&self, m: &'a Term, var_stack: &mut Vec<&'a Type>) -> Type {
+    fn infer_unchecked_help<'a>(&self, m: &'a Term, var_stack: &mut Vec<&'a Type>) -> Type {
         match m {
-            Term::Local(name) => self.get_local(name).unwrap().clone(),
+            Term::Local(name) => self.get_local(name.as_str()).unwrap().clone(),
             Term::Var(i) => var_stack[var_stack.len() - 1 - i].clone(),
             Term::Abs(a) => {
                 let arg_ty = a.binder.clone();
@@ -1791,10 +1993,10 @@ impl LocalEnv {
                 p.0.clone()
             }
             Term::Const(c) => {
-                let (mvars, ty) = self.get_const(&c.0).unwrap();
+                let (mvars, ty) = self.get_const(c.0.as_str()).unwrap();
                 let mut ty = ty.clone();
-                for (mid, t) in std::iter::zip(mvars, &c.1) {
-                    ty.instantiate(mid, t);
+                for (mvar, t) in std::iter::zip(mvars, &c.1) {
+                    ty.instantiate(mvar.as_str(), t);
                 }
                 ty
             }
@@ -1802,7 +2004,7 @@ impl LocalEnv {
         }
     }
 
-    pub fn infer_unchecked(&self, m: &Term) -> Type {
+    fn infer_unchecked(&self, m: &Term) -> Type {
         let mut var_stack = vec![];
         let t = self.infer_unchecked_help(m, &mut var_stack);
         assert!(var_stack.is_empty());
@@ -1823,12 +2025,23 @@ impl LocalEnv {
     /// https://math.stackexchange.com/q/3334730
     /// [m] must be ground and locally closed.
     fn is_canonical(&self, m: &Term) -> bool {
+        assert!(m.is_lclosed());
+        let mut var_stack = vec![];
+        let r = self.is_canonical_help(m, &mut var_stack);
+        assert!(var_stack.is_empty());
+        r
+    }
+
+    fn is_canonical_help<'a>(&self, m: &'a Term, var_stack: &mut Vec<&'a Type>) -> bool {
         // TODO: avoid quadratic cost
-        let t = self.infer_unchecked(m);
+        let t = self.infer_unchecked_help(m, var_stack);
         match t {
             Type::Arrow(_) => {
                 if let Term::Abs(a) = m {
-                    self.is_canonical(&a.body)
+                    var_stack.push(&a.binder);
+                    let r = self.is_canonical_help(&a.body, var_stack);
+                    var_stack.pop();
+                    r
                 } else {
                     false
                 }
@@ -1836,7 +2049,7 @@ impl LocalEnv {
             Type::Const(_) => {
                 let mut m = m;
                 while let Term::App(p) = m {
-                    if !self.is_canonical(&p.1) {
+                    if !self.is_canonical_help(&p.1, var_stack) {
                         return false;
                     }
                     m = &p.0;
@@ -1847,7 +2060,7 @@ impl LocalEnv {
                     Term::App(_) => unreachable!(),
                 }
             }
-            Type::Mvar(_) => {
+            Type::Var(_) => {
                 // type must be known
                 false
             }
@@ -1855,29 +2068,37 @@ impl LocalEnv {
     }
 
     /// [x M₁ ... Mₙ] := λv*. x [M₁] ... [Mₙ] v*
-    fn eta_expand_neutral(&self, m: &mut Term) {
+    fn eta_expand_neutral(&self, m: &mut Term, var_stack: &mut Vec<Type>) {
         assert!(m.is_neutral());
         // [x M₁ ... Mₙ] := x [M₁] ... [Mₙ]
-        for arg in m.args_mut() {
-            self.eta_expand_normal(arg);
+        let mut args = m.unapply();
+        for arg in &mut args {
+            self.eta_expand_normal(arg, var_stack);
         }
+        m.apply(args);
         // TODO avoid quadratic cost
-        let t = self.infer_unchecked(m);
-        // [M] := λv₁ v₂ ⋯. M v₁ v₂ ⋯
-        let binders: Vec<_> = t
-            .args()
-            .into_iter()
-            .map(|t| (Name::fresh(), t.clone()))
-            .collect();
-        m.apply(binders.iter().map(|(x, _)| Term::Local(x.to_owned())));
-        m.discharge(binders);
+        let mut var_ref_stack = vec![];
+        for ty_ref in &*var_stack {
+            var_ref_stack.push(ty_ref);
+        }
+        let t = self.infer_unchecked_help(m, &mut var_ref_stack);
+        assert_eq!(var_ref_stack.len(), var_stack.len());
+        // [M] := λv₁ ⋯ vₙ. M v₁ ⋯ vₙ
+        let vs: Vec<_> = t.args().into_iter().cloned().collect();
+        m.apply((0..vs.len()).rev().map(Term::Var));
+        m.discharge(vs);
     }
 
     /// 1. [λx.M] := λx.[M]
     /// 2. [x M₁ ... Mₙ] := λv*. x [M₁] ... [Mₙ] v*
-    fn eta_expand_normal(&self, m: &mut Term) {
+    fn eta_expand_normal(&self, m: &mut Term, var_stack: &mut Vec<Type>) {
         assert!(m.is_normal());
-        self.eta_expand_neutral(m.matrix_mut());
+        let mut xs = m.undischarge();
+        let num_xs = xs.len();
+        var_stack.append(&mut xs);
+        self.eta_expand_neutral(m, var_stack);
+        xs.extend(var_stack.drain(var_stack.len() - num_xs..));
+        m.discharge(xs);
     }
 
     /// [m] must be type-correct, ground, and locally closed.
@@ -1886,7 +2107,9 @@ impl LocalEnv {
         assert!(m.is_lclosed());
         assert!(self.type_correct(m));
         m.beta_reduce();
-        self.eta_expand_normal(m);
+        let mut var_stack = vec![];
+        self.eta_expand_normal(m, &mut var_stack);
+        assert!(var_stack.is_empty())
     }
 
     /// [m1] and [m2] must be type-correct and type-equal under the same environment.
@@ -1898,36 +2121,35 @@ impl LocalEnv {
         m1 == m2
     }
 
-    pub fn merge(&mut self, other: &mut Self) -> anyhow::Result<()> {
-        if self.env.name != other.env.name {
-            bail!(
-                "environment mismatch: {} and {}",
-                self.env.name,
-                other.env.name
-            );
-        }
-        for (name, ty) in &mut other.locals {
-            let mut found = false;
-            for (n, t) in &self.locals {
-                if name == n {
-                    if ty == t {
-                        found = true;
-                        break;
-                    } else {
-                        bail!("type mismatch in locals: ({name} : {ty}) and ({n} : {t})");
-                    }
+    pub fn add(&mut self, name: Name, ty: Type) -> anyhow::Result<()> {
+        match self.get_local(name.as_str()) {
+            Some(t) => {
+                if t == &ty {
+                    Ok(())
+                } else {
+                    bail!("type mismatch in locals: ({name} : {ty}) and ({name} : {t})");
                 }
             }
-            if !found {
-                self.locals.push((mem::take(name), mem::take(ty)));
+            None => {
+                self.locals.push((name, ty));
+                Ok(())
             }
+        }
+    }
+
+    fn merge(&mut self, other: Self) -> anyhow::Result<()> {
+        for (name, ty) in other.locals {
+            self.add(name, ty)?;
         }
         Ok(())
     }
 }
 
-fn mk_const(name: &str) -> Term {
-    Term::Local(Name::from(name))
+fn mk_const(name: &str, tv: impl IntoIterator<Item = Type>) -> Term {
+    Term::Const(Arc::new((
+        Name::try_from(name).expect("logic flaw"),
+        tv.into_iter().collect(),
+    )))
 }
 
 fn dest_call(m: &mut Term, f: &str) -> Option<Vec<Term>> {
@@ -1939,10 +2161,10 @@ fn dest_call(m: &mut Term, f: &str) -> Option<Vec<Term>> {
         m = &mut p.0;
     }
     args.reverse();
-    let Term::Local(name) = m else {
+    let Term::Const(c) = m else {
         return None;
     };
-    if name.as_str() != f {
+    if c.0.as_str() != f {
         return None;
     }
     Some(args)
@@ -1968,11 +2190,11 @@ pub struct Fact {
 
 impl std::fmt::Display for Fact {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ▶ ", self.local_env.env.name)?;
-        for (x, t) in &self.local_env.locals {
-            write!(f, "({} : {}) ", x, t)?;
+        if self.local_env.locals.is_empty() {
+            write!(f, "▶ ")?;
+        } else {
+            write!(f, "{} ▶ ", self.local_env)?;
         }
-        write!(f, "| ")?;
         for p in &self.ctx {
             write!(f, "({}) ", p)?;
         }
@@ -2004,9 +2226,8 @@ impl Fact {
 /// assume φ : [Γ ▸ φ ⊢ φ]
 /// ```
 pub fn assume(local_env: LocalEnv, mut target: Term) -> anyhow::Result<Fact> {
-    let ty = local_env
-        .infer(&mut target)
-        .with_context(|| format!("infer: {local_env} ⊢ {target}"))?;
+    // TODO: well-formedness check for local_env
+    let ty = local_env.infer(&mut target)?;
     if ty != Type::prop() {
         bail!("expected Prop, but got {ty}");
     }
@@ -2023,25 +2244,16 @@ pub fn assume(local_env: LocalEnv, mut target: Term) -> anyhow::Result<Fact> {
 /// eq_intro t : [Γ ▸ ⊢ m = m]
 /// ```
 pub fn eq_intro(local_env: LocalEnv, mut m1: Term, mut m2: Term) -> anyhow::Result<Fact> {
-    if !m1.is_ground() {
-        bail!("term not ground: {m1}");
-    }
-    if !m2.is_ground() {
-        bail!("term not ground: {m2}");
-    }
-    let t1 = local_env
-        .infer(&mut m1)
-        .with_context(|| format!("infer: {local_env} ⊢ {m1}"))?;
-    let t2 = local_env
-        .infer(&mut m2)
-        .with_context(|| format!("infer: {local_env} ⊢ {m2}"))?;
+    // TODO: well-formedness check for local_env
+    let t1 = local_env.infer(&mut m1)?;
+    let t2 = local_env.infer(&mut m2)?;
     if t1 != t2 {
         bail!("type mismatch: {t1} and {t2}");
     }
     if !local_env.eq(&m1, &m2) {
         bail!("terms not definitionally equal: {m1} and {m2}");
     }
-    let mut target = mk_const("eq");
+    let mut target = mk_const("eq", [t1]);
     target.apply([m1, m2]);
     Ok(Fact {
         local_env,
@@ -2055,41 +2267,31 @@ pub fn eq_intro(local_env: LocalEnv, mut m1: Term, mut m2: Term) -> anyhow::Resu
 /// -------------------------------------------- [indiscernibility of identicals]
 /// eq_elim C[-] h₁ h₂ : [Γ ∪ Δ ▸ Φ ∪ Ψ ⊢ C[m₁]]
 /// ```
-pub fn eq_elim(c: &Term, h1: &Fact, h2: &Fact) -> anyhow::Result<Fact> {
+pub fn eq_elim(c: Term, mut h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     if !c.is_contextual() {
         bail!("expected context, but got {c}");
     }
-    if !c.is_ground() {
-        bail!("context not ground: {c}");
-    }
-    let Some((m1, m2)) = dest_call2(&mut h1.target.clone(), "eq") else {
-        bail!("expected equality, but got {}", h1.target);
+    let Some((m1, m2)) = dest_call2(&mut h1.target, "eq") else {
+        bail!("expected equality");
     };
     let mut cm2 = c.clone();
     cm2.fill(&m2);
     let t = h2
         .local_env
         .infer(&mut cm2)
-        .with_context(|| format!("the context term is not type-correct: {c}"))?;
+        .with_context(|| format!("context term is not type-correct: {c}"))?;
     if t != Type::prop() {
         bail!("expected Prop, but got {t}");
     }
-    if !h2.local_env.eq(&h2.target, &cm2) {
-        bail!("terms not definitionally equal: {} and {}", h2.target, cm2);
+    if h2.target != cm2 {
+        bail!("terms not literally equal: {} and {}", h2.target, cm2);
     }
-    let mut local_env = h1.local_env.clone();
-    local_env
-        .merge(&mut h2.local_env.clone())
-        .context("merge local environments")?;
-    let mut ctx: Vec<_> = h1
-        .ctx
-        .iter()
-        .cloned()
-        .chain(h2.ctx.iter().cloned())
-        .collect();
+    let mut local_env = h1.local_env;
+    local_env.merge(h2.local_env)?;
+    let mut ctx: Vec<_> = h1.ctx.into_iter().chain(h2.ctx.into_iter()).collect();
     ctx.sort();
     ctx.dedup();
-    let mut target = c.clone();
+    let mut target = c;
     target.fill(&m1);
     local_env.infer(&mut target).expect("logic flaw");
     Ok(Fact {
@@ -2104,20 +2306,19 @@ pub fn eq_elim(c: &Term, h1: &Fact, h2: &Fact) -> anyhow::Result<Fact> {
 /// -------------------------------------------------------- [(external) propositional extensionality]
 /// prop_ext h₁ h₂ : [Γ ∪ Δ ▸ (Φ - {ψ}) ∪ (Ψ - {φ}) ⊢ φ = ψ]
 /// ```
-pub fn prop_ext(h1: &Fact, h2: &Fact) -> anyhow::Result<Fact> {
-    let mut local_env = h1.local_env.clone();
-    local_env.merge(&mut h2.local_env.clone())?;
+pub fn prop_ext(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
+    let mut local_env = h1.local_env;
+    local_env.merge(h2.local_env)?;
     let mut ctx: Vec<_> = h1
         .ctx
-        .iter()
-        .cloned()
+        .into_iter()
         .filter(|p| p != &h2.target)
-        .chain(h2.ctx.iter().cloned().filter(|p| p != &h1.target))
+        .chain(h2.ctx.into_iter().filter(|p| p != &h1.target))
         .collect();
     ctx.sort();
     ctx.dedup();
-    let mut target = mk_const("eq");
-    target.apply([h1.target.clone(), h2.target.clone()]);
+    let mut target = mk_const("eq", [Type::prop()]);
+    target.apply([h1.target, h2.target]);
     Ok(Fact {
         local_env,
         ctx,
@@ -2130,237 +2331,72 @@ pub fn prop_ext(h1: &Fact, h2: &Fact) -> anyhow::Result<Fact> {
 /// --------------------------------------------------------- (x ∉ FV Φ) [(external) function extensionality]
 /// fun_ext x τ h : [Γ - {x : τ} ▸ Φ ⊢ (λ x, m₁) = (λ x, m₂)]
 /// ```
-pub fn fun_ext(x: &Name, t: &Type, h: &Fact) -> anyhow::Result<Fact> {
-    let Some((mut m1, mut m2)) = dest_call2(&mut h.target.clone(), "eq") else {
-        bail!("expected equality, but got {}", h.target);
+pub fn fun_ext(x: &Name, t: Type, mut h: Fact) -> anyhow::Result<Fact> {
+    let Some((mut m1, mut m2)) = dest_call2(&mut h.target, "eq") else {
+        bail!("expected equality");
     };
-    if h.local_env.get_const(x).is_some() {
+    // this is optional
+    if h.local_env.get_const(x.as_str()).is_some() {
         bail!("cannot quantify over constant variable: {x}");
     }
-    if let Some(s) = h.local_env.get_local(x) {
-        if s != t {
+    if let Some(s) = h.local_env.get_local(x.as_str()) {
+        if s != &t {
             bail!("variable type not compatible: expected ({x} : {t}), but got ({x} : {s})");
         }
     }
-    if !h.ctx.iter().all(|m| m.is_fresh(x)) {
+    if !h.ctx.iter().all(|m| m.is_fresh(x.as_str())) {
         bail!("eigenvariable condition fails");
     }
     let local_env = LocalEnv {
-        env: Arc::clone(&h.local_env.env),
         locals: h
             .local_env
             .locals
-            .iter()
-            .cloned()
+            .into_iter()
             .filter(|p| &p.0 != x)
             .collect(),
     };
-    m1.discharge(vec![(x.clone(), t.clone())]);
-    m2.discharge(vec![(x.clone(), t.clone())]);
-    let mut target = mk_const("eq");
+    m1.discharge_locals([(x, t.clone())]);
+    m2.discharge_locals([(x, t)]);
+    let t = local_env.infer_unchecked(&m1);
+    let mut target = mk_const("eq", [t]);
     target.apply([m1, m2]);
     Ok(Fact {
         local_env,
-        ctx: h.ctx.clone(),
+        ctx: h.ctx,
         target,
     })
 }
 
-/// A convenient representation of head normal form.
-/// Recall that every (normal) term has form `λv*. m n*`.
-#[derive(Clone)]
-struct Triple {
-    /// Outermost-first
-    binders: Vec<Type>,
-    /// Var, Const, or Mvar.
-    /// Using locally nameless forms directly.
-    head: Term,
-    /// Huch calls these parts "arguments" [Huch, 2020](https://www21.in.tum.de/teaching/sar/SS20/5.pdf).
-    /// See also Notation 2.29 in The Clausal Theory of Types [Wolfram, 2009].
-    args: Vec<Term>,
-}
-
-// impl From<Term> for Triple {
-//     fn from(mut m: Term) -> Self {
-//         assert!(m.is_canonical());
-//         let binder = m.unabstract();
-//         let args = m.uncurry();
-//         let head = m;
-//         Self {
-//             binders: binder,
-//             head,
-//             args,
-//         }
-//     }
-// }
-
-impl From<Triple> for Term {
-    fn from(m: Triple) -> Self {
-        let Triple {
-            binders,
-            head,
-            args,
-        } = m;
-        let mut m = head;
-        m.apply(args);
-        for t in binders.into_iter().rev() {
-            m = Self::Abs(Arc::new(Abs { binder: t, body: m }));
+/// ```text
+///
+/// -------------------------------------------------------- (foo := m) [definition]
+/// by_def "foo": [ ▸ | foo = m]
+/// ```
+pub fn by_def(name: &Name) -> anyhow::Result<Fact> {
+    let env = Env::get();
+    match env.defs.get(name) {
+        Some((ty_vars, entity)) => {
+            // TODO: add ty_vars to local env
+            let mut entity = entity.clone();
+            let ty = LocalEnv::new().infer(&mut entity)?;
+            let target = Term::App(Arc::new((
+                Term::App(Arc::new((
+                    Term::Const(Arc::new((Name::try_from("eq").unwrap(), vec![ty]))),
+                    Term::Const(Arc::new((
+                        name.clone(),
+                        ty_vars.iter().map(|tv| Type::Var(tv.clone())).collect(),
+                    ))),
+                ))),
+                entity,
+            )));
+            Ok(Fact {
+                local_env: LocalEnv::new(),
+                ctx: vec![],
+                target,
+            })
         }
-        m
-    }
-}
-
-impl Triple {
-    /// See [Vukmirović+, 2020].
-    pub fn is_flex(&self) -> bool {
-        match self.head {
-            Term::Mvar(_) => true,
-            Term::Var(_) | Term::Local(_) | Term::Const(_) => false,
-            Term::Abs(_) | Term::App(_) => unreachable!(),
+        None => {
+            bail!("definition not found")
         }
-    }
-
-    /// See [Vukmirović+, 2020].
-    pub fn is_rigid(&self) -> bool {
-        !self.is_flex()
-    }
-}
-
-/// In Huet's original paper a disagreement set is just a finite set of pairs of terms.
-/// For performance improvement, we classify pairs into rigid/rigid, flex/rigid, and flex/flex
-/// at the preprocessing phase.
-#[derive(Default)]
-struct DisagreementSet {
-    // rigid-rigid
-    rr: Vec<(Triple, Triple)>,
-    // flex-rigid
-    fr: Vec<(Triple, Triple)>,
-    // flex-flex
-    ff: Vec<(Triple, Triple)>,
-}
-
-impl DisagreementSet {
-    fn add(&mut self, m1: Triple, m2: Triple) {
-        match (m1.is_rigid(), m2.is_rigid()) {
-            (true, true) => self.rr.push((m1, m2)),
-            (true, false) => self.fr.push((m2, m1)),
-            (false, true) => self.fr.push((m1, m2)),
-            (false, false) => self.ff.push((m1, m2)),
-        }
-    }
-
-    /// decompose rigid-rigid pairs by chopping into smaller ones
-    fn simplify(&mut self) -> bool {
-        while let Some((h1, h2)) = self.rr.pop() {
-            assert_eq!(h1.binders, h2.binders);
-            if h1.head != h2.head {
-                return false;
-            }
-            assert_eq!(h1.args.len(), h2.args.len());
-            for (a1, a2) in h1.args.into_iter().zip(h2.args.into_iter()) {
-                // TODO: fixme. a1 and a2 may be abstractions
-                let a1 = Triple {
-                    binders: h1.binders.clone(),
-                    head: a1,
-                    args: vec![],
-                };
-                let a2 = Triple {
-                    binders: h2.binders.clone(),
-                    head: a2,
-                    args: vec![],
-                };
-                self.add(a1, a2);
-            }
-        }
-        true
-    }
-
-    /// Suppose `f ≡ λx*. X t*` and `r ≡ λy*. x u*`.
-    /// Imitation: X ↦ λz*. c (Y z*)* (when x = c)
-    /// Projection: X ↦ λz*. zᵢ (Y z*)* (when τ(zᵢ) is compatible with τ(x))
-    fn r#match(this: &Triple, that: &Triple) -> Vec<(MvarId, Term)> {
-        assert!(this.is_flex());
-        assert!(that.is_rigid());
-        assert_eq!(this.binders, that.binders);
-        let Term::Mvar(mid) = this.head else {
-            panic!("self is not flex")
-        };
-        let mut heads = vec![];
-        // λz*
-        let mut binders = vec![];
-        for arg in &this.args {
-            binders.push(arg.ty());
-        }
-        // imitation
-        match that.head {
-            Term::Local(_) | Term::Const(_) => {
-                heads.push(that.head.clone());
-            }
-            Term::Var(_) => {}
-            Term::Abs(_) | Term::App(_) | Term::Mvar(_) => {
-                panic!("logic flaw")
-            }
-        };
-        // projection
-        for (level, t) in binders.iter().rev().enumerate() {
-            if t.target() == that.ty().target() {
-                heads.push(Term::Var(level));
-            }
-        }
-        let mut subst = vec![];
-        for head in heads {
-            let head_ty = match &head {
-                Term::Local(_) | Term::Const(_) => head.ty(),
-                Term::Var(i) => this.args[this.args.len() - i - 1].ty(),
-                Term::Abs(_) | Term::App(_) | Term::Mvar(_) => panic!("logic flaw"),
-            };
-            let mut args = vec![];
-            for _ in head_ty.args() {
-                let mut y = Term::Mvar(MvarId::fresh());
-                let mut zs = vec![];
-                for i in 0..binders.len() {
-                    zs.push(Term::Var(i));
-                }
-                y.apply(zs);
-                args.push(y);
-            }
-            let mut m = Triple {
-                binders: binders.clone(),
-                head,
-                args,
-            };
-            subst.push((mid, m.into()));
-        }
-        subst
-    }
-
-    fn solve(self) -> Vec<(MvarId, Term)> {
-        let mut queue = VecDeque::new();
-        queue.push_back((self, vec![]));
-        while let Some((mut set, subst)) = queue.pop_front() {
-            if !set.simplify() {
-                continue;
-            }
-            if set.fr.is_empty() {
-                return subst;
-            }
-            let (h1, h2) = &set.fr[0];
-            for (mid, m) in h1.r#match(h2) {
-                let mut new_set = DisagreementSet::default();
-                for (m1, m2) in set.fr.iter().chain(set.ff.iter()) {
-                    let mut m1 = Term::from(m1.clone());
-                    m1.subst_mvar(mid, &m);
-                    m1.canonicalize();
-                    let mut m2 = Term::from(m2.clone());
-                    m2.subst_mvar(mid, &m);
-                    m2.canonicalize();
-                    new_set.add(Triple::from(m1), Triple::from(m2));
-                }
-                let mut new_subst = subst.clone();
-                new_subst.push((mid, m));
-                queue.push_back((new_set, new_subst));
-            }
-        }
-        todo!("no solution found");
     }
 }
