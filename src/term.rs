@@ -527,20 +527,6 @@ impl Term {
         *self = m;
     }
 
-    // fn undischarge_locals(&mut self) -> Vec<(Name, Type)> {
-    //     let mut binders = vec![];
-    //     let mut m = &mut *self;
-    //     while let Term::Abs(inner) = m {
-    //         let Abs { binder: t, body: n } = Arc::make_mut(a);
-    //         let x = Name::fresh();
-    //         n.open(&x);
-    //         binders.push((x, mem::take(t)));
-    //         m = n;
-    //     }
-    //     *self = mem::take(m);
-    //     binders
-    // }
-
     // TODO remove
     fn discharge_locals<'a, T>(&'a mut self, binders: T)
     where
