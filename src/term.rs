@@ -182,7 +182,7 @@ impl Type {
         }
     }
 
-    pub fn infer_kind(&self) -> anyhow::Result<Kind> {
+    pub fn infer(&self) -> anyhow::Result<Kind> {
         match self {
             Type::Const(name) => {
                 if let Some(kind) = Env::get().get_const_type(name.as_str()) {
@@ -196,10 +196,10 @@ impl Type {
                 }
             }
             Type::Arrow(inner) => {
-                if !inner.dom.infer_kind()?.is_base() {
+                if !inner.dom.infer()?.is_base() {
                     bail!("not a type");
                 }
-                if !inner.cod.infer_kind()?.is_base() {
+                if !inner.cod.infer()?.is_base() {
                     bail!("not a type");
                 }
                 Ok(Kind::base())
@@ -527,20 +527,6 @@ impl Term {
         *self = m;
     }
 
-    // TODO remove
-    fn discharge_locals<'a, T>(&'a mut self, binders: T)
-    where
-        T: IntoIterator<Item = (&'a Name, Type)>,
-        <T as IntoIterator>::IntoIter: DoubleEndedIterator,
-    {
-        let mut m = mem::take(self);
-        for (x, t) in binders.into_iter().rev() {
-            m.close(x.as_str(), &t);
-            m = mk_abs(t, m);
-        }
-        *self = m;
-    }
-
     // TODO: return Undischarge<'_> to avoid unnecessary allocation
     pub fn undischarge(&mut self) -> Vec<Type> {
         let mut xs = vec![];
@@ -557,7 +543,8 @@ impl Term {
         xs
     }
 
-    fn discharge(&mut self, xs: Vec<Type>) {
+    // TODO: optimize. usually only used in a way like m.discharge(vec![t])
+    pub fn discharge(&mut self, xs: Vec<Type>) {
         let mut m = mem::take(self);
         for t in xs.into_iter().rev() {
             m = mk_abs(t, m);
@@ -585,24 +572,24 @@ impl Term {
     }
 
     /// Check also that [m] and types involved are well-formed.
-    pub fn infer_type(&mut self) -> anyhow::Result<Type> {
+    pub fn infer(&mut self) -> anyhow::Result<Type> {
         let mut subst = Subst::<Type>::default();
         let mut var_stack = vec![];
-        let mut t = self.infer_type_help(&mut var_stack, &mut subst)?;
+        let mut t = self.infer_help(&mut var_stack, &mut subst)?;
         assert!(var_stack.is_empty());
         subst.apply_type(&mut t);
         subst.apply_term(self);
         Ok(t)
     }
 
-    fn infer_type_help(
+    fn infer_help(
         &mut self,
         var_stack: &mut Vec<Type>,
         subst: &mut Subst<Type>,
     ) -> anyhow::Result<Type> {
         match self {
             Term::Local(inner) => {
-                if !inner.ty.infer_kind()?.is_base() {
+                if !inner.ty.infer()?.is_base() {
                     bail!("not a type");
                 }
                 Ok(inner.ty.clone())
@@ -616,18 +603,18 @@ impl Term {
             }
             Term::Abs(inner) => {
                 let inner = Arc::make_mut(inner);
-                if !inner.binder_type.infer_kind()?.is_base() {
+                if !inner.binder_type.infer()?.is_base() {
                     bail!("not a type");
                 }
                 var_stack.push(mem::take(&mut inner.binder_type));
-                let u = inner.body.infer_type_help(var_stack, subst)?;
+                let u = inner.body.infer_help(var_stack, subst)?;
                 inner.binder_type = var_stack.pop().unwrap();
                 Ok(mk_arrow(inner.binder_type.clone(), u))
             }
             Term::App(inner) => {
                 let inner = Arc::make_mut(inner);
-                let mut t1 = inner.fun.infer_type_help(var_stack, subst)?;
-                let t2 = inner.arg.infer_type_help(var_stack, subst)?;
+                let mut t1 = inner.fun.infer_help(var_stack, subst)?;
+                let t2 = inner.arg.infer_help(var_stack, subst)?;
                 let mut t = mk_arrow(t2, Type::Var(Name::fresh()));
                 subst.unify(&mut t1, &mut t)?;
                 let Type::Arrow(mut p) = t else {
@@ -649,7 +636,7 @@ impl Term {
                         ty.instantiate(old.as_str(), new);
                     }
                     for (t1, t2) in std::iter::zip(&mut inner.ty_args, &mut new_tv) {
-                        if !t1.infer_kind()?.is_base() {
+                        if !t1.infer()?.is_base() {
                             bail!("not a type");
                         }
                         subst.unify(t1, t2)?;
@@ -661,25 +648,25 @@ impl Term {
         }
     }
 
-    fn infer_type_unchecked(&self) -> Type {
+    fn infer_unchecked(&self) -> Type {
         let mut var_stack = vec![];
-        let t = self.infer_type_unchecked_help(&mut var_stack);
+        let t = self.infer_unchecked_help(&mut var_stack);
         assert!(var_stack.is_empty());
         t
     }
 
-    fn infer_type_unchecked_help<'a>(&'a self, var_stack: &mut Vec<&'a Type>) -> Type {
+    fn infer_unchecked_help<'a>(&'a self, var_stack: &mut Vec<&'a Type>) -> Type {
         match self {
             Term::Var(i) => var_stack[var_stack.len() - 1 - i].clone(),
             Term::Abs(inner) => {
                 var_stack.push(&inner.binder_type);
-                let cod_ty = inner.body.infer_type_unchecked_help(var_stack);
+                let cod_ty = inner.body.infer_unchecked_help(var_stack);
                 var_stack.pop();
                 let dom_ty = inner.binder_type.clone();
                 mk_arrow(dom_ty, cod_ty)
             }
             Term::App(inner) => {
-                let t = inner.fun.infer_type_unchecked_help(var_stack);
+                let t = inner.fun.infer_unchecked_help(var_stack);
                 let Type::Arrow(inner) = t else {
                     panic!("expected an arrow, but got {t}");
                 };
@@ -698,13 +685,163 @@ impl Term {
         }
     }
 
-    // TODO: avoid cloning using bidirectional typechecking
-    fn is_type_correct(&self) -> bool {
-        let mut n = self.clone();
-        let Ok(_) = n.infer_type() else {
-                return false;
-            };
-        &n == self
+    // type-correct implies locally closed
+    pub fn is_type_correct(&self) -> bool {
+        self.synthesize().is_some()
+    }
+
+    // bidirectional type checking (check)
+    // target must be well-formed.
+    pub fn check(&self, target: &Type) -> bool {
+        let Ok(kind) = target.infer() else {
+            return false;
+        };
+        if !kind.is_base() {
+            return false;
+        }
+        let mut var_stack = vec![];
+        let ret = self.check_help(target, &mut var_stack);
+        assert!(var_stack.is_empty());
+        ret
+    }
+
+    fn check_help<'a>(&'a self, target: &Type, var_stack: &mut Vec<&'a Type>) -> bool {
+        match self {
+            &Term::Var(i) => {
+                if i >= var_stack.len() {
+                    return false;
+                }
+                var_stack[var_stack.len() - i - 1] == target
+            }
+            Term::Abs(inner) => {
+                let Ok(kind) = inner.binder_type.infer() else {
+                    return false;
+                };
+                if !kind.is_base() {
+                    return false;
+                }
+                let Type::Arrow(arr_inner) = target else {
+                    return false;
+                };
+                if arr_inner.dom != inner.binder_type {
+                    return false;
+                }
+                var_stack.push(&inner.binder_type);
+                inner.body.check_help(&arr_inner.cod, var_stack)
+            }
+            Term::App(inner) => {
+                let Some(arg_ty) = inner.arg.synthesize_help(var_stack) else {
+                    return false;
+                };
+                let arr_ty = mk_arrow(arg_ty, target.clone());
+                inner.fun.check_help(&arr_ty, var_stack)
+            }
+            Term::Local(inner) => {
+                let Ok(kind) = inner.ty.infer() else {
+                    return false;
+                };
+                if !kind.is_base() {
+                    return false;
+                }
+                &inner.ty == target
+            }
+            Term::Const(inner) => {
+                let env = Env::get();
+                let Some((ty_vars, ty)) = env.get_const(inner.name.as_str()) else {
+                    return false;
+                };
+                if ty_vars.len() != inner.ty_args.len() {
+                    return false;
+                }
+                if ty_vars.is_empty() {
+                    return ty == target;
+                }
+                for ty_arg in &inner.ty_args {
+                    let Ok(kind) = ty_arg.infer() else {
+                        return false;
+                    };
+                    if !kind.is_base() {
+                        return false;
+                    }
+                }
+                let mut ty = ty.clone();
+                for (ty_var, ty_arg) in std::iter::zip(ty_vars, &inner.ty_args) {
+                    ty.instantiate(ty_var.as_str(), ty_arg);
+                }
+                &ty == target
+            }
+        }
+    }
+
+    // bidirectional type checking (synthesize)
+    pub fn synthesize(&self) -> Option<Type> {
+        let mut var_stack = vec![];
+        let ty = self.synthesize_help(&mut var_stack)?;
+        assert!(var_stack.is_empty());
+        Some(ty)
+    }
+
+    fn synthesize_help<'a>(&'a self, var_stack: &mut Vec<&'a Type>) -> Option<Type> {
+        match self {
+            &Term::Var(i) => {
+                if i >= var_stack.len() {
+                    return None;
+                }
+                Some(var_stack[var_stack.len() - i - 1].clone())
+            }
+            Term::Abs(inner) => {
+                let Ok(kind) = inner.binder_type.infer() else {
+                    return None;
+                };
+                if !kind.is_base() {
+                    return None;
+                }
+                var_stack.push(&inner.binder_type);
+                let cod_ty = inner.body.synthesize_help(var_stack)?;
+                var_stack.pop();
+                let dom_ty = inner.binder_type.clone();
+                Some(mk_arrow(dom_ty, cod_ty))
+            }
+            Term::App(inner) => {
+                let fun_ty = inner.fun.synthesize_help(var_stack)?;
+                let Type::Arrow(arr_inner) = fun_ty else {
+                    return None;
+                };
+                if !inner.arg.check_help(&arr_inner.dom, var_stack) {
+                    return None;
+                }
+                Some(arr_inner.cod.clone())
+            }
+            Term::Local(inner) => {
+                let Ok(kind) = inner.ty.infer() else {
+                    return None;
+                };
+                if !kind.is_base() {
+                    return None;
+                }
+                Some(inner.ty.clone())
+            }
+            Term::Const(inner) => {
+                let env = Env::get();
+                let Some((ty_vars, ty)) = env.get_const(inner.name.as_str()) else {
+                    return None;
+                };
+                if ty_vars.len() != inner.ty_args.len() {
+                    return None;
+                }
+                let mut ty = ty.clone();
+                for (ty_var, ty_arg) in std::iter::zip(ty_vars, &inner.ty_args) {
+                    let Ok(kind) = ty_arg.infer() else {
+                        return None;
+                    };
+                    if !kind.is_base() {
+                        return None;
+                    }
+                    ty.instantiate(ty_var.as_str(), ty_arg);
+                }
+                Some(ty)
+            }
+        }
     }
 
     /// Check if the term is in η-long β-normal form.
@@ -712,7 +849,6 @@ impl Term {
     /// https://math.stackexchange.com/q/3334730
     /// [m] must be locally closed and type-correct.
     pub fn is_canonical(&self) -> bool {
-        assert!(self.is_lclosed());
         assert!(self.is_type_correct());
         let mut var_stack = vec![];
         let r = self.is_canonical_help(&mut var_stack);
@@ -722,7 +858,7 @@ impl Term {
 
     fn is_canonical_help<'a>(&'a self, var_stack: &mut Vec<&'a Type>) -> bool {
         // TODO: avoid quadratic cost
-        let t = self.infer_type_unchecked_help(var_stack);
+        let t = self.infer_unchecked_help(var_stack);
         match t {
             Type::Arrow(_) => {
                 if let Term::Abs(inner) = self {
@@ -765,7 +901,7 @@ impl Term {
         for ty_ref in &*var_stack {
             var_ref_stack.push(ty_ref);
         }
-        let t = self.infer_type_unchecked_help(&mut var_ref_stack);
+        let t = self.infer_unchecked_help(&mut var_ref_stack);
         assert_eq!(var_ref_stack.len(), var_stack.len());
         // [M] := λv₁ ⋯ vₙ. M v₁ ⋯ vₙ
         let vs: Vec<_> = t.args().into_iter().cloned().collect();
@@ -804,7 +940,7 @@ impl Term {
         m1 == m2
     }
 
-    fn instantiate(&mut self, name: &str, t: &Type) {
+    pub fn instantiate(&mut self, name: &str, t: &Type) {
         match self {
             Term::Var(_) => {}
             Term::Abs(inner) => {
@@ -979,7 +1115,7 @@ pub fn add_const(name: Name, type_vars: Vec<Name>, ty: Type) -> anyhow::Result<(
 }
 
 pub fn add_axiom(mut p: Term) -> anyhow::Result<Fact> {
-    let ty = p.infer_type()?;
+    let ty = p.infer()?;
     if ty != Type::prop() {
         bail!("not a formula");
     }
@@ -1048,7 +1184,7 @@ fn dest_eq(m: &mut Term) -> Option<(Term, Term)> {
 /// assume φ : [φ ⊢ φ]
 /// ```
 pub fn assume(mut target: Term) -> anyhow::Result<Fact> {
-    let ty = target.infer_type()?;
+    let ty = target.infer()?;
     if ty != Type::prop() {
         bail!("expected Prop, but got {ty}");
     }
@@ -1060,12 +1196,12 @@ pub fn assume(mut target: Term) -> anyhow::Result<Fact> {
 
 /// ```text
 ///
-/// ------------------------ (m₁ ≡ m₂)
-/// eq_intro t : [⊢ m₁ = m₂]
+/// ---------------------------- (m₁ ≡ m₂)
+/// eq_intro m₁ m₂ : [⊢ m₁ = m₂]
 /// ```
 pub fn eq_intro(mut m1: Term, mut m2: Term) -> anyhow::Result<Fact> {
-    let t1 = m1.infer_type()?;
-    let t2 = m2.infer_type()?;
+    let t1 = m1.infer()?;
+    let t2 = m2.infer()?;
     if t1 != t2 {
         bail!("type mismatch: {t1} and {t2}");
     }
@@ -1093,7 +1229,7 @@ pub fn eq_elim(c: Term, mut h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     let mut cm2 = c.clone();
     cm2.open(&m2);
     let t = cm2
-        .infer_type()
+        .infer()
         .with_context(|| format!("context term is not type-correct: {c}"))?;
     if t != Type::prop() {
         bail!("expected Prop, but got {t}");
@@ -1110,7 +1246,7 @@ pub fn eq_elim(c: Term, mut h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     ctx.dedup();
     let mut target = c;
     target.open(&m1);
-    target.infer_type().expect("logic flaw");
+    target.infer().expect("logic flaw");
     Ok(Fact {
         local_context: ctx,
         target,
@@ -1143,7 +1279,7 @@ pub fn prop_ext(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
 /// fun_ext x τ h : [Φ ⊢ (λ (x : τ), m₁) = (λ (x : τ), m₂)]
 /// ```
 pub fn fun_ext(x: &Name, t: Type, mut h: Fact) -> anyhow::Result<Fact> {
-    if !t.infer_kind()?.is_base() {
+    if !t.infer()?.is_base() {
         bail!("not a type");
     }
     let Some((mut m1, mut m2)) = dest_eq(&mut h.target) else {
@@ -1152,9 +1288,11 @@ pub fn fun_ext(x: &Name, t: Type, mut h: Fact) -> anyhow::Result<Fact> {
     if !h.local_context.iter().all(|m| m.is_fresh(x.as_str(), &t)) {
         bail!("eigenvariable condition fails");
     }
-    m1.discharge_locals([(x, t.clone())]);
-    m2.discharge_locals([(x, t)]);
-    let t = m1.infer_type_unchecked();
+    m1.close(x.as_str(), &t);
+    m1.discharge(vec![t.clone()]);
+    m2.close(x.as_str(), &t);
+    m2.discharge(vec![t]);
+    let t = m1.infer_unchecked();
     Ok(Fact {
         local_context: h.local_context,
         target: mk_eq(t, m1, m2),
@@ -1167,7 +1305,7 @@ pub fn fun_ext(x: &Name, t: Type, mut h: Fact) -> anyhow::Result<Fact> {
 /// inst u τ h : [[τ/u]Φ ⊢ [τ/u]φ]
 /// ```
 pub fn inst(name: &Name, ty: &Type, mut h: Fact) -> anyhow::Result<Fact> {
-    if !ty.infer_kind()?.is_base() {
+    if !ty.infer()?.is_base() {
         bail!("not a type");
     }
     for p in &mut h.local_context {
@@ -1799,7 +1937,8 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.pop();
         }
         for (name, t) in binders.into_iter().rev() {
-            m.discharge_locals([(&name, t)]);
+            m.close(name.as_str(), &t);
+            m.discharge(vec![t]);
         }
         Ok(m)
     }
@@ -1836,7 +1975,8 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.pop();
         }
         for (name, t) in binders.into_iter().rev() {
-            m.discharge_locals([(&name, t)]);
+            m.close(name.as_str(), &t);
+            m.discharge(vec![t]);
             let f = mem::take(&mut m);
             m = self.mk_const_unchecked("forall");
             m.apply(vec![f]);
@@ -1866,7 +2006,8 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.pop();
         }
         for (name, t) in binders.into_iter().rev() {
-            m.discharge_locals([(&name, t)]);
+            m.close(name.as_str(), &t);
+            m.discharge(vec![t]);
             let f = mem::take(&mut m);
             m = self.mk_const_unchecked("exists");
             m.apply(vec![f]);

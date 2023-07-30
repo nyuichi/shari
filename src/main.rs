@@ -28,7 +28,7 @@ fn add_definition(
         todo!();
         // check if ty_vars are pointwise distinct
     }
-    let ty = entity.infer_type()?;
+    let ty = entity.infer()?;
     add_const(name.clone(), ty_vars.clone(), ty.clone())?;
     let target = Term::App(Arc::new(TermApp {
         fun: Term::App(Arc::new(TermApp {
