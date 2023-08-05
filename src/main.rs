@@ -3,8 +3,8 @@ mod term;
 use anyhow::bail;
 use std::sync::Arc;
 use term::{
-    add_definition, add_notation, assume, eq_elim, eq_intro, fun_ext, prop_ext, Fact, Fixity, Name,
-    Term, TermLocal, Type,
+    add_axiom, add_const, add_const_type, add_definition, add_notation, assume, eq_elim, eq_intro,
+    fun_ext, get_fact, inst, prop_ext, Fact, Fixity, Kind, Name, Term, TermLocal, Type,
 };
 
 fn lhs(m: &Term) -> anyhow::Result<&Term> {
@@ -509,37 +509,396 @@ fn test_forall() {
     insta::assert_display_snapshot!(forall_elim("q".parse().unwrap(), h).unwrap(), @"⊢ (q : Prop) → (q : Prop)");
 }
 
-#[cfg(test)]
-#[ctor::ctor]
+/// ```text
+/// h : [Φ ⊢ φ]
+/// ---------------------------
+/// or_intro1 ψ h : [Φ ⊢ φ ∨ ψ]
+/// ```
+fn or_intro1(q: Term, h: Fact) -> anyhow::Result<Fact> {
+    let p = h.target();
+    let mut goal: Term = "λ p q, p ∨ q".parse().unwrap();
+    goal.undischarge();
+    goal.open_at(p, 1);
+    goal.open(&q);
+    let r = Name::fresh();
+    let mut c: Term = "λ p q r, (p → r) ∧ (q → r)".parse().unwrap();
+    c.undischarge();
+    c.open_at(p, 2);
+    c.open_at(&q, 1);
+    c.open(&Term::Local(Arc::new(TermLocal {
+        name: r.clone(),
+        ty: Type::prop(),
+    })));
+    // ha: (φ → ξ) ∧ (ψ → ξ) ⊢ (φ → ξ) ∧ (ψ → ξ)
+    let ha = assume(c.clone()).unwrap();
+    // ha: (φ → ξ) ∧ (ψ → ξ) ⊢ φ → ξ
+    let ha = and_elim1(ha).unwrap();
+    // ha: Φ, (φ → ξ) ∧ (ψ → ξ) ⊢ ξ
+    let ha = imp_elim(ha, h)?;
+    // ha: Φ ⊢ (φ → ξ) ∧ (ψ → ξ) → ξ
+    let ha = imp_intro(c, ha).unwrap();
+    // ha: Φ ⊢ ∀ ξ, (φ → ξ) ∧ (ψ → ξ) → ξ
+    let ha = forall_intro(&r, Type::prop(), ha).unwrap();
+    change(goal, ha)
+}
+
+/// ```text
+/// h : [Φ ⊢ ψ]
+/// ---------------------------
+/// or_intro2 φ h : [Φ ⊢ φ ∨ ψ]
+/// ```
+fn or_intro2(p: Term, h: Fact) -> anyhow::Result<Fact> {
+    let q = h.target();
+    let mut goal: Term = "λ p q, p ∨ q".parse().unwrap();
+    goal.undischarge();
+    goal.open_at(&p, 1);
+    goal.open(q);
+    let r = Name::fresh();
+    let mut c: Term = "λ p q r, (p → r) ∧ (q → r)".parse().unwrap();
+    c.undischarge();
+    c.open_at(&p, 2);
+    c.open_at(q, 1);
+    c.open(&Term::Local(Arc::new(TermLocal {
+        name: r.clone(),
+        ty: Type::prop(),
+    })));
+    // ha: (φ → ξ) ∧ (ψ → ξ) ⊢ (φ → ξ) ∧ (ψ → ξ)
+    let ha = assume(c.clone()).unwrap();
+    // ha: (φ → ξ) ∧ (ψ → ξ) ⊢ ψ → ξ
+    let ha = and_elim2(ha).unwrap();
+    // ha: Φ, (φ → ξ) ∧ (ψ → ξ) ⊢ ξ
+    let ha = imp_elim(ha, h)?;
+    // ha: Φ ⊢ (φ → ξ) ∧ (ψ → ξ) → ξ
+    let ha = imp_intro(c, ha).unwrap();
+    // ha: Φ ⊢ ∀ ξ, (φ → ξ) ∧ (ψ → ξ) → ξ
+    let ha = forall_intro(&r, Type::prop(), ha).unwrap();
+    change(goal, ha)
+}
+
+/// ```text
+/// h₁ : [Φ ⊢ φ ∨ ψ]  h₂ : [Ψ ⊢ ξ]  h₃ : [Ξ ⊢ ξ]
+/// ---------------------------------------------
+/// or_elim ψ h : [Φ ∪ (Ψ - {φ}) ∪ (Ξ - {ψ}) ⊢ ξ]
+/// ```
+fn or_elim(h1: Fact, h2: Fact, h3: Fact) -> anyhow::Result<Fact> {
+    let p = lhs(h1.target())?.clone();
+    let q = rhs(h1.target())?.clone();
+    let r = h2.target().clone();
+    let mut c: Term = "λ p q, ∀ r, (p → r) ∧ (q → r) → r".parse().unwrap();
+    c.undischarge();
+    c.open_at(&p, 1);
+    c.open(&q);
+    let h1 = change(c, h1)?;
+    let h1 = forall_elim(r, h1)?;
+    let h2 = imp_intro(p, h2)?;
+    let h3 = imp_intro(q, h3)?;
+    let ha = and_intro(h2, h3).unwrap();
+    imp_elim(h1, ha)
+}
+
+/// TODO: refine
+/// ```text
+/// h : [Φ ⊢ φ m]
+/// ---------------------------------------
+/// exists_intro φ m h : [Φ ⊢ ∃ (x : τ), φ]
+/// ```
+fn exists_intro(p: Term, m: Term, h: Fact) -> anyhow::Result<Fact> {
+    let mut goal: Term = "λ p, exists p".parse().unwrap();
+    goal.undischarge();
+    goal.open(&p);
+    let r = Name::fresh();
+    let mut c: Term = "λ P r, ∀ x, P x → r".parse().unwrap();
+    c.undischarge();
+    c.open_at(&p, 1);
+    c.open(&Term::Local(Arc::new(TermLocal {
+        name: r.clone(),
+        ty: Type::prop(),
+    })));
+    let mut q = p.clone();
+    q.apply([m.clone()]);
+    let h = change(q, h)?;
+    let ha = assume(c.clone())?;
+    let ha = forall_elim(m, ha)?;
+    let h = imp_elim(ha, h)?;
+    let h = imp_intro(c, h)?;
+    let h = forall_intro(&r, Type::prop(), h)?;
+    change(goal, h)
+}
+
+/// TODO: refine
+/// ```text
+/// h₁ : [Φ ⊢ φ → ψ]  h₂ : [Φ ⊢ φ']
+/// -------------------------------  (φ ≡ φ')
+/// mp h₁ h₂ : [Φ ⊢ ψ]
+/// ```
+fn mp(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
+    let p1 = lhs(h1.target())?;
+    let h2 = change(p1.clone(), h2)?;
+    imp_elim(h1, h2)
+}
+
+fn beta_reduce(h: Fact) -> anyhow::Result<Fact> {
+    let mut target = h.target().clone();
+    target.beta_reduce();
+    change(target, h)
+}
+
+/// ```text
+/// h : [Φ ⊢ ⊥]
+/// -------------------------
+/// not_intro φ h : [Φ ⊢ ¬φ]
+/// ```
+fn not_intro(p: Term, h: Fact) -> anyhow::Result<Fact> {
+    let mut goal: Term = "λ p, ¬ p".parse().unwrap();
+    goal.undischarge();
+    goal.open(&p);
+    let h = imp_intro(p, h)?;
+    change(goal, h)
+}
+
+/// ```text
+/// h : [Φ ⊢ ¬φ]
+/// -------------------------
+/// not_elim h : [Φ ⊢ φ → ⊥]
+/// ```
+fn not_elim(h: Fact) -> anyhow::Result<Fact> {
+    let p = arg(h.target())?;
+    let mut goal: Term = "λ p, p → ⊥".parse().unwrap();
+    goal.undischarge();
+    goal.open(&p);
+    change(goal, h)
+}
+
+fn imp_trans(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
+    let p1 = lhs(h1.target())?.clone();
+    let h = assume(p1.clone())?;
+    let h = imp_elim(h1, h)?;
+    let h = imp_elim(h2, h)?;
+    imp_intro(p1, h)
+}
+
+/// ```text
+/// h₁ : [Φ ⊢ φ → ψ]  h₂ : [Ψ ⊢ ¬ψ]
+/// -------------------------------
+/// mt h₁ h₂ : [Φ ∪ Ψ ⊢ ¬φ]
+/// ```
+fn mt(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
+    let h2 = not_elim(h2)?;
+    let h = imp_trans(h1, h2)?;
+    let p = lhs(h.target())?;
+    let mut goal: Term = "λ p, ¬ p".parse().unwrap();
+    goal.undischarge();
+    goal.open(p);
+    change(goal, h)
+}
+
+/// ```text
+///
+/// --------------------------
+/// top_ne_bot : [⊢ ¬(⊤ = ⊥)]
+/// ```
+fn top_ne_bot() -> Fact {
+    let p: Term = "⊤ = ⊥".parse().unwrap();
+    let h1 = assume(p.clone()).unwrap();
+    let h = eq_mp(h1, top_intro().unwrap()).unwrap();
+    not_intro(p, h).unwrap()
+}
+
+fn init_classic() {
+    // emulate the `inhabited` type class by dictionary passing
+    add_const_type("inhabited".try_into().unwrap(), Kind(1)).unwrap();
+
+    add_const(
+        "inhabited_prop".try_into().unwrap(),
+        vec![],
+        "inhabited Prop".parse().unwrap(),
+    )
+    .unwrap();
+
+    add_const(
+        "choice".try_into().unwrap(),
+        vec!["u".try_into().unwrap()],
+        "inhabited u → (u → Prop) → u".parse().unwrap(),
+    )
+    .unwrap();
+
+    add_axiom(
+        "choice_spec".try_into().unwrap(),
+        "∀ (h : inhabited u), ∀ (P : u → Prop), (∃ x, P x) → P (choice h P)"
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+}
+
+fn em() -> Fact {
+    // Diaconescu's argument
+    // λ x, x = ⊤ ∨ p
+    let uu = {
+        let p: Term = "p".parse().unwrap();
+        let mut pred: Term = "λ p x, x = ⊤ ∨ p".parse().unwrap();
+        pred.undischarge();
+        pred.open_at(&p, 1);
+        pred.discharge(vec![("x".try_into().unwrap(), Type::prop())]);
+        pred
+    };
+    // λ x, x = ⊥ ∨ p
+    let vv = {
+        let p: Term = "p".parse().unwrap();
+        let mut pred: Term = "λ p x, x = ⊥ ∨ p".parse().unwrap();
+        pred.undischarge();
+        pred.open_at(&p, 1);
+        pred.discharge(vec![("x".try_into().unwrap(), Type::prop())]);
+        pred
+    };
+    // ex_uu : ⊢ ∃ x, uu x
+    let ex_uu = {
+        let p: Term = "p".parse().unwrap();
+        let h = eq_refl("⊤".parse().unwrap()).unwrap();
+        let h: Fact = or_intro1(p, h).unwrap();
+        exists_intro(uu.clone(), "⊤".parse().unwrap(), h).unwrap()
+    };
+    // ex_vv : ⊢ ∃ x, vv x
+    let ex_vv = {
+        let p: Term = "p".parse().unwrap();
+        let h = eq_refl("⊥".parse().unwrap()).unwrap();
+        let h: Fact = or_intro1(p, h).unwrap();
+        exists_intro(vv.clone(), "⊥".parse().unwrap(), h).unwrap()
+    };
+    let u: Term = {
+        let mut c: Term = "λ p, choice inhabited_prop p".parse().unwrap();
+        c.undischarge();
+        c.open(&uu);
+        c
+    };
+    let v = {
+        let mut c: Term = "λ p, choice inhabited_prop p".parse().unwrap();
+        c.undischarge();
+        c.open(&vv);
+        c
+    };
+    let u_spec = {
+        let h = get_fact("choice_spec").unwrap();
+        let h = inst(&"u".try_into().unwrap(), &Type::prop(), h).unwrap();
+        let h = forall_elim("inhabited_prop".parse().unwrap(), h).unwrap();
+        let h = forall_elim(uu.clone(), h).unwrap();
+        let h = mp(h, ex_uu).unwrap();
+        beta_reduce(h).unwrap()
+    };
+    let v_spec = {
+        let h = get_fact("choice_spec").unwrap();
+        let h = inst(&"u".try_into().unwrap(), &Type::prop(), h).unwrap();
+        let h = forall_elim("inhabited_prop".parse().unwrap(), h).unwrap();
+        let h = forall_elim(vv.clone(), h).unwrap();
+        let h = mp(h, ex_vv).unwrap();
+        beta_reduce(h).unwrap()
+    };
+    let mut u_ne_v: Term = "λ u v, ¬ (u = v)".parse().unwrap();
+    u_ne_v.undischarge();
+    u_ne_v.open_at(&u, 1);
+    u_ne_v.open(&v);
+    let u_ne_v_or_p = {
+        // h1: (u = ⊤) (v = ⊥) ⊢ ¬ (u = v) ∨ p
+        let h1 = {
+            let p = "choice inhabited_prop (λ (x : Prop), x = ⊤ ∨ p) = ⊤"
+                .parse()
+                .unwrap();
+            let h1 = assume(p).unwrap();
+            let mut c: Term = "λ p, ¬ (p = ⊥)".parse().unwrap();
+            c.undischarge();
+            let h = eq_elim(c, eq_symm(h1).unwrap(), top_ne_bot()).unwrap();
+            let q = "choice inhabited_prop (λ (x : Prop), x = ⊥ ∨ p) = ⊥"
+                .parse()
+                .unwrap();
+            let h2 = assume(q).unwrap();
+            let mut c: Term = "λ p q, ¬ (p = q)".parse().unwrap();
+            c.undischarge();
+            c.open_at(&u, 1);
+            let h = eq_elim(c, eq_symm(h2).unwrap(), h).unwrap();
+            or_intro1("p".parse().unwrap(), h).unwrap()
+        };
+        // h2: p ⊢ (¬ (u = v)) ∨ p
+        let h2 = {
+            let p = "p".parse().unwrap();
+            let h = assume(p).unwrap();
+            or_intro2(u_ne_v.clone(), h).unwrap()
+        };
+        let h = or_elim(v_spec, h1, h2.clone()).unwrap();
+        or_elim(u_spec, h, h2).unwrap()
+    };
+    let p_imp_u_eq_v = {
+        let p_imp_uu_eq_vv = {
+            // h1: p ⊢ x = ⊤ ∨ p
+            let h1 = {
+                let p: Term = "p".parse().unwrap();
+                let h = assume(p).unwrap();
+                let q: Term = "x = ⊤".parse().unwrap();
+                or_intro2(q, h).unwrap()
+            };
+            // h2: p ⊢ x = ⊥ ∨ p
+            let h2 = {
+                let p: Term = "p".parse().unwrap();
+                let h = assume(p).unwrap();
+                let q: Term = "x = ⊥".parse().unwrap();
+                or_intro2(q, h).unwrap()
+            };
+            let h = prop_ext(h1, h2).unwrap();
+            fun_ext(&"x".try_into().unwrap(), Type::prop(), h).unwrap()
+        };
+        let f: Term = "choice inhabited_prop".parse().unwrap();
+        let h = congr_arg(f, p_imp_uu_eq_vv).unwrap();
+        imp_intro("p".parse().unwrap(), h).unwrap()
+    };
+    // h1: ¬(u = v) ⊢ p ∨ ¬p
+    let h1 = {
+        let h = mt(p_imp_u_eq_v, assume(u_ne_v).unwrap()).unwrap();
+        or_intro2("p".parse().unwrap(), h).unwrap()
+    };
+    // h2: p ⊢ p ∨ ¬p
+    let h2 = or_intro1("¬p".parse().unwrap(), assume("p".parse().unwrap()).unwrap()).unwrap();
+    let h = or_elim(u_ne_v_or_p, h1, h2).unwrap();
+    forall_intro(&"p".try_into().unwrap(), Type::prop(), h).unwrap()
+}
+
 fn init() {
     init_logic();
+    init_classic();
+}
+
+#[cfg(test)]
+#[ctor::ctor]
+fn dev_init() {
+    init()
 }
 
 fn main() {
-    init_logic();
+    init();
 
-    let id = "λ (x : Prop), x".parse::<Term>().unwrap();
-    let idf = "(λ (f : Prop → Prop), f) (λ (x : Prop), x)"
-        .parse::<Term>()
-        .unwrap();
-    let h1 = eq_intro(id, idf).unwrap();
-    println!("h1: {h1}");
-    let h2 = eq_symm(h1).unwrap();
-    println!("h2: {h2}");
+    let em = em();
+    println!("{em}");
 
-    let h = top_intro().unwrap();
-    println!("{h}");
+    // let id = "λ (x : Prop), x".parse::<Term>().unwrap();
+    // let idf = "(λ (f : Prop → Prop), f) (λ (x : Prop), x)"
+    //     .parse::<Term>()
+    //     .unwrap();
+    // let h1 = eq_intro(id, idf).unwrap();
+    // println!("h1: {h1}");
+    // let h2 = eq_symm(h1).unwrap();
+    // println!("h2: {h2}");
 
-    let h3 = mar(h2).unwrap();
-    println!("h3: {h3}");
+    // let h = top_intro().unwrap();
+    // println!("{h}");
 
-    let h4 = ma(h3).unwrap();
-    println!("h4: {h4}");
+    // let h3 = mar(h2).unwrap();
+    // println!("h3: {h3}");
 
-    let h5 = and_intro(
-        eq_refl("λ (x : Prop), x".parse().unwrap()).unwrap(),
-        top_intro().unwrap(),
-    )
-    .unwrap();
-    println!("h5: {h5}");
+    // let h4 = ma(h3).unwrap();
+    // println!("h4: {h4}");
+
+    // let h5 = and_intro(
+    //     eq_refl("λ (x : Prop), x".parse().unwrap()).unwrap(),
+    //     top_intro().unwrap(),
+    // )
+    // .unwrap();
+    // println!("h5: {h5}");
 }
