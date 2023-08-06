@@ -3,8 +3,9 @@ mod term;
 use anyhow::bail;
 use std::sync::Arc;
 use term::{
-    add_axiom, add_const, add_const_type, add_definition, add_notation, assume, eq_elim, eq_intro,
-    fun_ext, get_fact, inst, prop_ext, Fact, Fixity, Kind, Name, Term, TermLocal, Type,
+    add_axiom, add_const, add_const_type, add_definition, add_lemma, add_notation, assume, eq_elim,
+    eq_intro, fun_ext, get_decls, get_fact, inst, prop_ext, Decl, DeclAxiom, DeclConst, DeclDef,
+    DeclLemma, DeclTypeConst, Fact, Fixity, Kind, Name, Term, TermLocal, Type,
 };
 
 fn lhs(m: &Term) -> anyhow::Result<&Term> {
@@ -237,16 +238,16 @@ fn init_logic() {
 /// ------------------
 /// top_intro : [⊢ ⊤]
 /// ```
-fn top_intro() -> anyhow::Result<Fact> {
+fn top_intro() -> Fact {
     let id = "λ (x : Prop), x".parse().unwrap();
-    let h = eq_refl(id)?;
+    let h = eq_refl(id).unwrap();
     let top = "top".parse().unwrap();
-    change(top, h)
+    change(top, h).unwrap()
 }
 
 #[test]
 fn test_top_intro() {
-    insta::assert_display_snapshot!(top_intro().unwrap(), @"⊢ ⊤");
+    insta::assert_display_snapshot!(top_intro(), @"⊢ ⊤");
 }
 
 /// ```text
@@ -254,14 +255,14 @@ fn test_top_intro() {
 /// -------------------- [reverse of material adequacy]
 /// mar h : [Φ ⊢ φ = ⊤]
 /// ```
-fn mar(h: Fact) -> anyhow::Result<Fact> {
-    prop_ext(h, top_intro()?)
+fn mar(h: Fact) -> Fact {
+    prop_ext(h, top_intro()).unwrap()
 }
 
 #[test]
 fn test_mar() {
     let p = "p".parse().unwrap();
-    insta::assert_display_snapshot!(mar(assume(p).unwrap()).unwrap(), @"((p : Prop)) ⊢ (p : Prop) = ⊤");
+    insta::assert_display_snapshot!(mar(assume(p).unwrap()), @"((p : Prop)) ⊢ (p : Prop) = ⊤");
 }
 
 /// ```text
@@ -270,13 +271,13 @@ fn test_mar() {
 /// ma h : [Φ ⊢ φ]
 /// ```
 fn ma(h: Fact) -> anyhow::Result<Fact> {
-    eq_mp(eq_symm(h)?, top_intro()?)
+    eq_mp(eq_symm(h)?, top_intro())
 }
 
 #[test]
 fn test_ma() {
     let p = "p".parse().unwrap();
-    insta::assert_display_snapshot!(ma(mar(assume(p).unwrap()).unwrap()).unwrap(), @"((p : Prop)) ⊢ (p : Prop)");
+    insta::assert_display_snapshot!(ma(mar(assume(p).unwrap())).unwrap(), @"((p : Prop)) ⊢ (p : Prop)");
 }
 
 /// ```text
@@ -292,9 +293,9 @@ fn and_intro(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     p.open_at(p1, 1);
     p.open_at(p2, 0);
     // h1: φ = ⊤
-    let h1 = mar(h1)?;
+    let h1 = mar(h1);
     // h2: ψ = ⊤
-    let h2 = mar(h2)?;
+    let h2 = mar(h2);
     let f = TermLocal {
         name: Name::fresh(),
         ty: "Prop → Prop → Prop".parse().unwrap(),
@@ -426,7 +427,7 @@ fn test_imp() {
 
     // weakening
     let p: Term = "p".parse().unwrap();
-    insta::assert_display_snapshot!(imp_intro(p, top_intro().unwrap()).unwrap(), @"⊢ (p : Prop) → ⊤");
+    insta::assert_display_snapshot!(imp_intro(p, top_intro()).unwrap(), @"⊢ (p : Prop) → ⊤");
 
     let p = "p".parse().unwrap();
     let q = "q".parse().unwrap();
@@ -449,7 +450,7 @@ fn test_imp() {
 /// forall_intro x τ h : [Φ ⊢ ∀ (x : τ), φ]
 /// ```
 fn forall_intro(x: &Name, t: Type, h: Fact) -> anyhow::Result<Fact> {
-    let h = mar(h)?;
+    let h = mar(h);
     // h: (λ x, φ) = (λ x, ⊤)
     let h = fun_ext(x, t, h)?;
     let p = lhs(h.target())?;
@@ -499,7 +500,7 @@ fn test_forall() {
     insta::assert_display_snapshot!(forall_intro(&"p".try_into().unwrap(), Type::prop(), h).unwrap(), @"⊢ ∀ (p : Prop), p → p");
 
     // weakening
-    let h = top_intro().unwrap();
+    let h = top_intro();
     insta::assert_display_snapshot!(forall_intro(&"p".try_into().unwrap(), Type::prop(), h).unwrap(), @"⊢ ∀ (p : Prop), ⊤");
 
     let p: Term = "p".parse().unwrap();
@@ -665,7 +666,7 @@ fn not_elim(h: Fact) -> anyhow::Result<Fact> {
     let p = arg(h.target())?;
     let mut goal: Term = "λ p, p → ⊥".parse().unwrap();
     goal.undischarge();
-    goal.open(&p);
+    goal.open(p);
     change(goal, h)
 }
 
@@ -700,7 +701,7 @@ fn mt(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
 fn top_ne_bot() -> Fact {
     let p: Term = "⊤ = ⊥".parse().unwrap();
     let h1 = assume(p.clone()).unwrap();
-    let h = eq_mp(h1, top_intro().unwrap()).unwrap();
+    let h = eq_mp(h1, top_intro()).unwrap();
     not_intro(p, h).unwrap()
 }
 
@@ -729,6 +730,8 @@ fn init_classic() {
             .unwrap(),
     )
     .unwrap();
+
+    add_lemma("em".try_into().unwrap(), em()).unwrap();
 }
 
 fn em() -> Fact {
@@ -874,9 +877,33 @@ fn dev_init() {
 fn main() {
     init();
 
-    let em = em();
-    println!("{em}");
-
+    let decls = get_decls();
+    for (name, decl) in decls {
+        match decl {
+            Decl::Const(DeclConst { local_types, ty }) => {
+                let v: Vec<_> = local_types.iter().map(ToString::to_string).collect();
+                println!("constant {name}.{{{}}} : {ty}", v.join(", "));
+            }
+            Decl::Def(DeclDef {
+                local_types,
+                target,
+                ty,
+            }) => {
+                let v: Vec<_> = local_types.iter().map(ToString::to_string).collect();
+                println!("def {name}.{{{}}} : {ty} := {target}", v.join(", "));
+            }
+            Decl::TypeConst(DeclTypeConst { kind }) => {
+                println!("type constant {name} : {kind}");
+            }
+            Decl::Axiom(DeclAxiom { formula }) => {
+                println!("axiom {name} : {formula}");
+            }
+            Decl::Lemma(DeclLemma { fact }) => {
+                let target = fact.target();
+                println!("lemma {name} : {target}");
+            }
+        }
+    }
     // let id = "λ (x : Prop), x".parse::<Term>().unwrap();
     // let idf = "(λ (f : Prop → Prop), f) (λ (x : Prop), x)"
     //     .parse::<Term>()

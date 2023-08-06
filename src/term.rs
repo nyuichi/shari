@@ -1148,6 +1148,16 @@ impl Term {
         assert!(var_stack.is_empty())
     }
 
+    fn size(&self) -> usize {
+        match self {
+            Term::Var(_) => 1,
+            Term::Abs(inner) => 1 + inner.body.size(),
+            Term::App(inner) => inner.fun.size() + inner.arg.size(),
+            Term::Local(_) => 1,
+            Term::Const(_) => 1,
+        }
+    }
+
     /// [m1] and [m2] must be type-correct and type-equal under the same environment.
     pub fn equiv(&self, other: &Term) -> bool {
         let mut m1 = self.clone();
@@ -2379,55 +2389,48 @@ fn test_parse_print() {
 
 #[derive(Debug, Default)]
 struct Env {
-    decls: HashMap<Name, Decl>,
-    type_decls: HashMap<Name, TypeDecl>,
-    meta_decls: HashMap<Name, MetaDecl>,
+    decls: Vec<(Name, Decl)>,
+    term_decls: HashMap<Name, usize>,
+    type_decls: HashMap<Name, usize>,
+    meta_decls: HashMap<Name, usize>,
     notations: NotationTable,
 }
 
 #[derive(Debug, Clone)]
-enum Decl {
+pub enum Decl {
     Const(DeclConst),
     Def(DeclDef),
+    TypeConst(DeclTypeConst),
+    Axiom(DeclAxiom),
+    Lemma(DeclLemma),
 }
 
 #[derive(Debug, Clone)]
-struct DeclConst {
-    local_types: Vec<Name>,
-    ty: Type,
+pub struct DeclConst {
+    pub local_types: Vec<Name>,
+    pub ty: Type,
 }
 
 #[derive(Debug, Clone)]
-struct DeclDef {
-    local_types: Vec<Name>,
-    target: Term,
-    ty: Type,
+pub struct DeclDef {
+    pub local_types: Vec<Name>,
+    pub target: Term,
+    pub ty: Type,
 }
 
 #[derive(Debug, Clone)]
-enum TypeDecl {
-    Const(TypeDeclConst),
+pub struct DeclTypeConst {
+    pub kind: Kind,
 }
 
 #[derive(Debug, Clone)]
-struct TypeDeclConst {
-    kind: Kind,
+pub struct DeclAxiom {
+    pub formula: Term,
 }
 
 #[derive(Debug, Clone)]
-enum MetaDecl {
-    Axiom(MetaDeclAxiom),
-    Lemma(MetaDeclLemma),
-}
-
-#[derive(Debug, Clone)]
-struct MetaDeclAxiom {
-    formula: Term,
-}
-
-#[derive(Debug, Clone)]
-struct MetaDeclLemma {
-    fact: Fact,
+pub struct DeclLemma {
+    pub fact: Fact,
 }
 
 #[derive(Debug, Default)]
@@ -2438,18 +2441,103 @@ struct NotationTable {
     pp: PrettyPrinter,
 }
 
+#[derive(Debug, Clone)]
+enum TermDecl {
+    Const(DeclConst),
+    Def(DeclDef),
+}
+
+#[derive(Debug, Clone)]
+enum TypeDecl {
+    Const(DeclTypeConst),
+}
+
+#[derive(Debug, Clone)]
+enum MetaDecl {
+    Axiom(DeclAxiom),
+    Lemma(DeclLemma),
+}
+
+impl From<TermDecl> for Decl {
+    fn from(value: TermDecl) -> Self {
+        match value {
+            TermDecl::Const(d) => Decl::Const(d),
+            TermDecl::Def(d) => Decl::Def(d),
+        }
+    }
+}
+
+impl From<TypeDecl> for Decl {
+    fn from(value: TypeDecl) -> Self {
+        match value {
+            TypeDecl::Const(d) => Decl::TypeConst(d),
+        }
+    }
+}
+
+impl From<MetaDecl> for Decl {
+    fn from(value: MetaDecl) -> Self {
+        match value {
+            MetaDecl::Axiom(d) => Decl::Axiom(d),
+            MetaDecl::Lemma(d) => Decl::Lemma(d),
+        }
+    }
+}
+
+impl TryFrom<Decl> for TermDecl {
+    type Error = ();
+
+    fn try_from(value: Decl) -> Result<Self, Self::Error> {
+        match value {
+            Decl::Const(d) => Ok(TermDecl::Const(d)),
+            Decl::Def(d) => Ok(TermDecl::Def(d)),
+            Decl::TypeConst(_) => Err(()),
+            Decl::Axiom(_) => Err(()),
+            Decl::Lemma(_) => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Decl> for TypeDecl {
+    type Error = ();
+
+    fn try_from(value: Decl) -> Result<Self, Self::Error> {
+        match value {
+            Decl::Const(_) => Err(()),
+            Decl::Def(_) => Err(()),
+            Decl::TypeConst(d) => Ok(TypeDecl::Const(d)),
+            Decl::Axiom(_) => Err(()),
+            Decl::Lemma(_) => Err(()),
+        }
+    }
+}
+
+impl TryFrom<Decl> for MetaDecl {
+    type Error = ();
+
+    fn try_from(value: Decl) -> Result<Self, Self::Error> {
+        match value {
+            Decl::Const(_) => Err(()),
+            Decl::Def(_) => Err(()),
+            Decl::TypeConst(_) => Err(()),
+            Decl::Axiom(d) => Ok(MetaDecl::Axiom(d)),
+            Decl::Lemma(d) => Ok(MetaDecl::Lemma(d)),
+        }
+    }
+}
+
 static ENV: Lazy<RwLock<Env>> = Lazy::new(|| {
     let mut env = Env::default();
 
     env.add_type_decl(
         "Prop".try_into().unwrap(),
-        TypeDecl::Const(TypeDeclConst { kind: Kind::base() }),
+        TypeDecl::Const(DeclTypeConst { kind: Kind::base() }),
     )
     .unwrap();
 
-    env.add_decl(
+    env.add_term_decl(
         "eq".try_into().unwrap(),
-        Decl::Const(DeclConst {
+        TermDecl::Const(DeclConst {
             local_types: vec!["u".try_into().unwrap()],
             ty: mk_arrow(
                 Type::Local("u".try_into().unwrap()),
@@ -2479,36 +2567,45 @@ impl Env {
     }
 
     fn add_type_decl(&mut self, name: Name, decl: TypeDecl) -> anyhow::Result<()> {
-        if self.type_decls.insert(name, decl).is_some() {
+        let index = self.decls.len();
+        if self.type_decls.insert(name.clone(), index).is_some() {
             bail!("type declaration with given name already defined");
         }
+        self.decls.push((name, decl.into()));
         Ok(())
     }
 
-    fn add_decl(&mut self, name: Name, decl: Decl) -> anyhow::Result<()> {
-        if self.decls.insert(name, decl).is_some() {
+    fn add_term_decl(&mut self, name: Name, decl: TermDecl) -> anyhow::Result<()> {
+        let index = self.decls.len();
+        if self.term_decls.insert(name.clone(), index).is_some() {
             bail!("declaration with given name already defined");
         }
+        self.decls.push((name, decl.into()));
         Ok(())
     }
 
     fn add_meta_decl(&mut self, name: Name, decl: MetaDecl) -> anyhow::Result<()> {
-        if self.meta_decls.insert(name, decl).is_some() {
+        let index = self.decls.len();
+        if self.meta_decls.insert(name.clone(), index).is_some() {
             bail!("meta declaration with given name already defined");
         }
+        self.decls.push((name, decl.into()));
         Ok(())
     }
 
     fn get_type_decl(&self, name: &str) -> Option<TypeDecl> {
-        self.type_decls.get(name).cloned()
+        let &index = self.type_decls.get(name)?;
+        Some(self.decls[index].1.clone().try_into().unwrap())
     }
 
-    fn get_decl(&self, name: &str) -> Option<Decl> {
-        self.decls.get(name).cloned()
+    fn get_term_decl(&self, name: &str) -> Option<TermDecl> {
+        let &index = self.term_decls.get(name)?;
+        Some(self.decls[index].1.clone().try_into().unwrap())
     }
 
     fn get_meta_decl(&self, name: &str) -> Option<MetaDecl> {
-        self.meta_decls.get(name).cloned()
+        let &index = self.meta_decls.get(name)?;
+        Some(self.decls[index].1.clone().try_into().unwrap())
     }
 
     fn add_notation(
@@ -2549,11 +2646,11 @@ pub fn add_const(name: Name, local_types: Vec<Name>, ty: Type) -> anyhow::Result
     if !ty.is_ground() {
         bail!("type not fully instantiated");
     }
-    Env::get_mut().add_decl(name, Decl::Const(DeclConst { local_types, ty }))
+    Env::get_mut().add_term_decl(name, TermDecl::Const(DeclConst { local_types, ty }))
 }
 
 pub fn add_const_type(name: Name, kind: Kind) -> anyhow::Result<()> {
-    Env::get_mut().add_type_decl(name, TypeDecl::Const(TypeDeclConst { kind }))
+    Env::get_mut().add_type_decl(name, TypeDecl::Const(DeclTypeConst { kind }))
 }
 
 pub fn add_axiom(name: Name, mut p: Term) -> anyhow::Result<()> {
@@ -2564,7 +2661,7 @@ pub fn add_axiom(name: Name, mut p: Term) -> anyhow::Result<()> {
     if !p.is_closed() {
         bail!("formula not closed");
     }
-    Env::get_mut().add_meta_decl(name, MetaDecl::Axiom(MetaDeclAxiom { formula: p }))
+    Env::get_mut().add_meta_decl(name, MetaDecl::Axiom(DeclAxiom { formula: p }))
 }
 
 pub fn add_lemma(name: Name, fact: Fact) -> anyhow::Result<()> {
@@ -2574,7 +2671,7 @@ pub fn add_lemma(name: Name, fact: Fact) -> anyhow::Result<()> {
     if !fact.target().is_closed() {
         bail!("formula not closed");
     }
-    Env::get_mut().add_meta_decl(name, MetaDecl::Lemma(MetaDeclLemma { fact }))
+    Env::get_mut().add_meta_decl(name, MetaDecl::Lemma(DeclLemma { fact }))
 }
 
 pub fn add_definition(name: Name, local_types: Vec<Name>, mut target: Term) -> anyhow::Result<()> {
@@ -2592,9 +2689,9 @@ pub fn add_definition(name: Name, local_types: Vec<Name>, mut target: Term) -> a
     if !target.is_closed() {
         bail!("term not closed");
     }
-    Env::get_mut().add_decl(
+    Env::get_mut().add_term_decl(
         name,
-        Decl::Def(DeclDef {
+        TermDecl::Def(DeclDef {
             local_types,
             target,
             ty,
@@ -2605,15 +2702,15 @@ pub fn add_definition(name: Name, local_types: Vec<Name>, mut target: Term) -> a
 fn get_kind(name: &str) -> Option<Kind> {
     let decl = Env::get().get_type_decl(name)?;
     match decl {
-        TypeDecl::Const(TypeDeclConst { kind }) => Some(kind),
+        TypeDecl::Const(DeclTypeConst { kind }) => Some(kind),
     }
 }
 
 fn get_type(name: &str) -> Option<(Vec<Name>, Type)> {
-    let decl = Env::get().get_decl(name)?;
+    let decl = Env::get().get_term_decl(name)?;
     match decl {
-        Decl::Const(DeclConst { local_types, ty }) => Some((local_types, ty)),
-        Decl::Def(DeclDef {
+        TermDecl::Const(DeclConst { local_types, ty }) => Some((local_types, ty)),
+        TermDecl::Def(DeclDef {
             local_types,
             target: _,
             ty,
@@ -2622,22 +2719,26 @@ fn get_type(name: &str) -> Option<(Vec<Name>, Type)> {
 }
 
 fn get_def(name: &str) -> Option<DeclDef> {
-    let decl = Env::get().get_decl(name)?;
+    let decl = Env::get().get_term_decl(name)?;
     match decl {
-        Decl::Const(_) => None,
-        Decl::Def(decl_def) => Some(decl_def),
+        TermDecl::Const(_) => None,
+        TermDecl::Def(decl_def) => Some(decl_def),
     }
 }
 
 pub fn get_fact(name: &str) -> Option<Fact> {
     let decl = Env::get().get_meta_decl(name)?;
     match decl {
-        MetaDecl::Axiom(MetaDeclAxiom { formula }) => Some(Fact {
+        MetaDecl::Axiom(DeclAxiom { formula }) => Some(Fact {
             local_context: vec![],
             target: formula,
         }),
-        MetaDecl::Lemma(MetaDeclLemma { fact }) => Some(fact),
+        MetaDecl::Lemma(DeclLemma { fact }) => Some(fact),
     }
+}
+
+pub fn get_decls() -> Vec<(Name, Decl)> {
+    Env::get().decls.clone()
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -2858,208 +2959,3 @@ pub fn inst(name: &Name, ty: &Type, mut h: Fact) -> anyhow::Result<Fact> {
     h.target.instantiate_local(name.as_str(), ty);
     Ok(h)
 }
-
-// /// A convenient representation of head normal form.
-// /// Recall that every (normal) term has form `λv*. m n*`.
-// #[derive(Clone)]
-// struct Triple {
-//     /// Outermost-first
-//     binder: Vec<(Name, Type)>,
-//     /// Fvar, Const, or Mvar.
-//     // TODO: use locally nameless forms directly.
-//     head: Term,
-//     /// Huch calls these parts "arguments" [Huch, 2020](https://www21.in.tum.de/teaching/sar/SS20/5.pdf).
-//     /// See also Notation 2.29 in The Clausal Theory of Types [Wolfram, 2009].
-//     args: Vec<Term>,
-// }
-
-// impl From<Term> for Triple {
-//     fn from(mut m: Term) -> Self {
-//         assert!(m.is_canonical());
-//         let binder = m.unabstract();
-//         let args = m.uncurry();
-//         let head = m;
-//         Self { binder, head, args }
-//     }
-// }
-
-// impl From<Triple> for Term {
-//     fn from(m: Triple) -> Self {
-//         let Triple { binder, head, args } = m;
-//         let mut m = head;
-//         m.curry(args);
-//         m.r#abstract(binder);
-//         m
-//     }
-// }
-
-// impl Triple {
-//     /// See [Vukmirović+, 2020].
-//     pub fn is_flex(&self) -> bool {
-//         match self.head {
-//             Term::Mvar(_, _) => true,
-//             Term::Bvar(_, _) | Term::Fvar(_, _) | Term::Const(_, _) => false,
-//             Term::Abs(_, _) | Term::App(_, _) => unreachable!(),
-//         }
-//     }
-
-//     /// See [Vukmirović+, 2020].
-//     pub fn is_rigid(&self) -> bool {
-//         !self.is_flex()
-//     }
-
-//     /// Suppose `f ≡ λx*. X t*` and `r ≡ λy*. x u*`.
-//     /// Imitation: X ↦ λz*. x (Y z*)* (when x = c)
-//     /// Projection: X ↦ λz*. zᵢ (Y z*)* (when τ(zᵢ) is compatible with τ(x))
-//     fn r#match(&self, other: &Triple) -> Vec<(MvarId, Term)> {
-//         assert!(self.is_flex());
-//         assert!(self.is_rigid());
-//         let (t, mid) = if let Term::Mvar(t, mid) = &self.head {
-//             (t, *mid)
-//         } else {
-//             panic!("self is not flex")
-//         };
-//         let binder: Vec<_> = t
-//             .components()
-//             .into_iter()
-//             .map(|t| (Name::fresh(), t.clone()))
-//             .collect();
-//         let mut heads = vec![];
-//         // projection
-//         for (x, u) in &binder {
-//             if t.target() == u.target() {
-//                 heads.push(Term::Fvar((*u).clone(), x.to_owned()));
-//             }
-//         }
-//         // imitation
-//         match other.head {
-//             Term::Fvar(_, _) | Term::Const(_, _) => {
-//                 heads.push(other.head.clone());
-//             }
-//             _ => {}
-//         };
-//         let mut subst = vec![];
-//         for mut head in heads {
-//             head.curry(
-//                 head.r#type()
-//                     .components()
-//                     .into_iter()
-//                     .map(|t| {
-//                         let mut t = t.clone();
-//                         t.curry(binder.iter().map(|(_, t)| (*t).clone()).collect());
-//                         let mut m = Term::Mvar(t, MvarId::fresh());
-//                         m.curry(
-//                             binder
-//                                 .iter()
-//                                 .map(|(x, t)| Term::Fvar(t.clone(), x.to_owned()))
-//                                 .collect(),
-//                         );
-//                         m
-//                     })
-//                     .collect(),
-//             );
-//             head.r#abstract(binder.clone());
-//             subst.push((mid, head));
-//         }
-//         subst
-//     }
-// }
-
-// /// In Huet's original paper a disagreement set is just a finite set of pairs of terms.
-// /// For performance improvement, we classify pairs into rigid/rigid, flex/rigid, and flex/flex
-// /// at the preprocessing phase.
-// #[derive(Default)]
-// struct DisagreementSet {
-//     // rigid-rigid
-//     rr: Vec<(Triple, Triple)>,
-//     // flex-rigid
-//     fr: Vec<(Triple, Triple)>,
-//     // flex-flex
-//     ff: Vec<(Triple, Triple)>,
-// }
-
-// impl DisagreementSet {
-//     fn add(&mut self, m1: Triple, m2: Triple) {
-//         match (m1.is_rigid(), m2.is_rigid()) {
-//             (true, true) => self.rr.push((m1, m2)),
-//             (true, false) => self.fr.push((m2, m1)),
-//             (false, true) => self.fr.push((m1, m2)),
-//             (false, false) => self.ff.push((m1, m2)),
-//         }
-//     }
-
-//     /// decompose rigid-rigid pairs by chopping into smaller ones
-//     fn simplify(&mut self) -> bool {
-//         while let Some((h1, h2)) = self.rr.pop() {
-//             assert_eq!(h1.binder.len(), h2.binder.len());
-//             let has_same_heading = {
-//                 let mut head2 = h2.head.clone();
-//                 for ((x, t1), (y, t2)) in h1.binder.iter().zip(h2.binder.iter()) {
-//                     assert_eq!(t1, t2);
-//                     let m = Term::Fvar(t1.clone(), x.to_owned());
-//                     head2.subst(y, &m);
-//                 }
-//                 h1.head == head2
-//             };
-//             if has_same_heading {
-//                 assert_eq!(h1.args.len(), h2.args.len());
-//                 for (mut a1, mut a2) in h1.args.into_iter().zip(h2.args.into_iter()) {
-//                     a1.r#abstract(h1.binder.clone());
-//                     a2.r#abstract(h2.binder.clone());
-//                     self.add(Triple::from(a1), Triple::from(a2));
-//                 }
-//             } else {
-//                 return false;
-//             }
-//         }
-//         true
-//     }
-
-//     fn solve(self) -> Vec<(MvarId, Term)> {
-//         let mut queue = VecDeque::new();
-//         queue.push_back((self, vec![]));
-//         while let Some((mut set, subst)) = queue.pop_front() {
-//             if !set.simplify() {
-//                 continue;
-//             }
-//             if set.fr.is_empty() {
-//                 return subst;
-//             }
-//             let (h1, h2) = &set.fr[0];
-//             for (mid, m) in h1.r#match(h2) {
-//                 let mut new_set = DisagreementSet::default();
-//                 for (m1, m2) in set.fr.iter().chain(set.ff.iter()) {
-//                     let mut m1 = Term::from(m1.clone());
-//                     m1.instantiate(mid, &m);
-//                     m1.canonicalize();
-//                     let mut m2 = Term::from(m2.clone());
-//                     m2.instantiate(mid, &m);
-//                     m2.canonicalize();
-//                     new_set.add(Triple::from(m1), Triple::from(m2));
-//                 }
-//                 let mut new_subst = subst.clone();
-//                 new_subst.push((mid, m));
-//                 queue.push_back((new_set, new_subst));
-//             }
-//         }
-//         todo!("no solution found");
-//     }
-// }
-
-// impl Term {
-//     /// `self` and `other` must be type-correct and type-equal under the same environment.
-//     pub fn unify(&mut self, other: &mut Term) {
-//         assert_eq!(self.r#type(), other.r#type());
-//         let mut set = DisagreementSet::default();
-//         self.canonicalize();
-//         let h1 = Triple::from(self.clone());
-//         other.canonicalize();
-//         let h2 = Triple::from(mem::take(other));
-//         set.add(h1, h2);
-//         let subst = set.solve();
-//         for (mid, m) in subst {
-//             self.instantiate(mid, &m);
-//         }
-//         *other = self.clone();
-//     }
-// }
