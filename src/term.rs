@@ -264,7 +264,7 @@ impl Type {
             }
             Type::Local(name) => {
                 if !locals.contains(name) {
-                    bail!("unknown local");
+                    bail!("unknown local: {name}");
                 }
                 Ok(Kind::base())
             }
@@ -1159,7 +1159,11 @@ impl Term {
     }
 
     /// [m1] and [m2] must be type-correct and type-equal under the same environment.
+    /// TODO: optimize
     pub fn equiv(&self, other: &Term) -> bool {
+        if self == other {
+            return true;
+        }
         let mut m1 = self.clone();
         let mut m2 = other.clone();
         m1.canonicalize();
@@ -1626,6 +1630,7 @@ enum Nud {
     Exists,
     Paren,
     Bracket,
+    Brace,
     User(Operator),
 }
 
@@ -1660,6 +1665,7 @@ impl TokenTable {
                     "λ" => Some(Nud::Abs),
                     "∀" => Some(Nud::Forall),
                     "∃" => Some(Nud::Exists),
+                    "{" => Some(Nud::Brace),
                     _ => self.nud.get(token.as_str()).map(|op| Nud::User(op.clone())),
                 }
             }
@@ -1983,6 +1989,18 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(m)
     }
 
+    fn term_setsep(&mut self, _token: Token<'a>) -> Result<Term, ParseError> {
+        let name = self.name()?;
+        self.expect_symbol("|")?;
+        let t = Type::Mvar(Name::fresh());
+        self.locals.push((name.clone(), t.clone()));
+        let mut m = self.subterm(0)?;
+        self.locals.pop();
+        m.discharge_local(name, t);
+        self.expect_symbol("}")?;
+        Ok(m)
+    }
+
     fn term_var(&mut self, token: Token<'a>, entity: Option<Name>) -> Result<Term, ParseError> {
         let name = match entity {
             None => Name::try_from(token.as_str()).expect("logic flaw"),
@@ -2054,6 +2072,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             }
             Nud::Forall => self.term_forall(token)?,
             Nud::Exists => self.term_exists(token)?,
+            Nud::Brace => self.term_setsep(token)?,
             Nud::User(op) => match op.fixity {
                 Fixity::Nofix => self.term_var(token, Some(op.entity))?,
                 Fixity::Prefix => {
@@ -2665,7 +2684,7 @@ pub fn add_axiom(name: Name, mut p: Term) -> anyhow::Result<()> {
 }
 
 pub fn add_lemma(name: Name, fact: Fact) -> anyhow::Result<()> {
-    if !fact.local_context().is_empty() {
+    if !fact.context().is_empty() {
         bail!("local context is not empty");
     }
     if !fact.target().is_closed() {
@@ -2730,7 +2749,7 @@ pub fn get_fact(name: &str) -> Option<Fact> {
     let decl = Env::get().get_meta_decl(name)?;
     match decl {
         MetaDecl::Axiom(DeclAxiom { formula }) => Some(Fact {
-            local_context: vec![],
+            context: vec![],
             target: formula,
         }),
         MetaDecl::Lemma(DeclLemma { fact }) => Some(fact),
@@ -2743,13 +2762,13 @@ pub fn get_decls() -> Vec<(Name, Decl)> {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Fact {
-    local_context: Vec<Term>,
+    context: Vec<Term>,
     target: Term,
 }
 
 impl Display for Fact {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for p in &self.local_context {
+        for p in &self.context {
             write!(f, "({}) ", p)?;
         }
         write!(f, "⊢ {}", self.target)
@@ -2761,8 +2780,8 @@ impl Fact {
         &self.target
     }
 
-    pub fn local_context(&self) -> &Vec<Term> {
-        &self.local_context
+    pub fn context(&self) -> &Vec<Term> {
+        &self.context
     }
 }
 
@@ -2807,7 +2826,7 @@ pub fn assume(mut target: Term) -> anyhow::Result<Fact> {
         bail!("not fully instantiated");
     }
     Ok(Fact {
-        local_context: vec![target.clone()],
+        context: vec![target.clone()],
         target,
     })
 }
@@ -2861,7 +2880,7 @@ pub fn eq_intro(m1: Term, m2: Term) -> anyhow::Result<Fact> {
         bail!("terms not definitionally equal: {m1} and {m2}");
     }
     Ok(Fact {
-        local_context: vec![],
+        context: vec![],
         target,
     })
 }
@@ -2888,9 +2907,9 @@ pub fn eq_elim(c: Term, mut h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
         bail!("terms not literally equal: {} and {}", h2.target, cm1);
     }
     let mut ctx: Vec<_> = h1
-        .local_context
+        .context
         .into_iter()
-        .chain(h2.local_context.into_iter())
+        .chain(h2.context.into_iter())
         .collect();
     ctx.sort();
     ctx.dedup();
@@ -2899,7 +2918,7 @@ pub fn eq_elim(c: Term, mut h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     target.infer(&mut Type::prop()).expect("logic flaw");
     assert!(target.is_fully_instantiated());
     Ok(Fact {
-        local_context: ctx,
+        context: ctx,
         target,
     })
 }
@@ -2911,15 +2930,15 @@ pub fn eq_elim(c: Term, mut h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
 /// ```
 pub fn prop_ext(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     let mut ctx: Vec<_> = h1
-        .local_context
+        .context
         .into_iter()
         .filter(|p| p != &h2.target)
-        .chain(h2.local_context.into_iter().filter(|p| p != &h1.target))
+        .chain(h2.context.into_iter().filter(|p| p != &h1.target))
         .collect();
     ctx.sort();
     ctx.dedup();
     Ok(Fact {
-        local_context: ctx,
+        context: ctx,
         target: mk_eq(Type::prop(), h1.target, h2.target),
     })
 }
@@ -2934,14 +2953,14 @@ pub fn fun_ext(x: &Name, t: Type, mut h: Fact) -> anyhow::Result<Fact> {
     let Some((mut m1, mut m2)) = dest_eq(&mut h.target) else {
         bail!("expected equality");
     };
-    if !h.local_context.iter().all(|m| m.is_fresh(x.as_str(), &t)) {
+    if !h.context.iter().all(|m| m.is_fresh(x.as_str(), &t)) {
         bail!("eigenvariable condition fails");
     }
     m1.discharge_local(x.clone(), t.clone());
     m2.discharge_local(x.clone(), t);
     let t = m1.synthesize_unchecked();
     Ok(Fact {
-        local_context: h.local_context,
+        context: h.context,
         target: mk_eq(t, m1, m2),
     })
 }
@@ -2953,7 +2972,7 @@ pub fn fun_ext(x: &Name, t: Type, mut h: Fact) -> anyhow::Result<Fact> {
 /// ```
 pub fn inst(name: &Name, ty: &Type, mut h: Fact) -> anyhow::Result<Fact> {
     ty.check_kind(&Kind::base())?;
-    for p in &mut h.local_context {
+    for p in &mut h.context {
         p.instantiate_local(name.as_str(), ty);
     }
     h.target.instantiate_local(name.as_str(), ty);
