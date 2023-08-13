@@ -114,8 +114,10 @@ pub struct TypeArrow {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct TypeApp {
-    pub fun: Type,
-    pub arg: Type,
+    // Never be an `App`.
+    pub head: Type,
+    // Never be empty.
+    pub args: Vec<Type>,
 }
 
 impl Default for Type {
@@ -146,10 +148,6 @@ fn mk_arrow(dom: Type, cod: Type) -> Type {
     Type::Arrow(Arc::new(TypeArrow { dom, cod }))
 }
 
-fn mk_tyapp(fun: Type, arg: Type) -> Type {
-    Type::App(Arc::new(TypeApp { fun, arg }))
-}
-
 /// See [Barendregt+, 06](https://ftp.science.ru.nl/CSI/CompMath.Found/I.pdf).
 impl Type {
     pub fn prop() -> Type {
@@ -159,7 +157,7 @@ impl Type {
     }
 
     /// If [self] is `t₁ → … → tₙ → t`, [args] returns `[t₁, …, tₙ]`.
-    pub fn args(&self) -> Vec<&Type> {
+    pub fn components(&self) -> Vec<&Type> {
         let mut ts = vec![];
         let mut t = self;
         while let Self::Arrow(inner) = t {
@@ -167,6 +165,21 @@ impl Type {
             t = &inner.cod;
         }
         ts
+    }
+
+    pub fn apply(&mut self, args: impl IntoIterator<Item = Type>) {
+        match self {
+            Type::App(inner) => {
+                let inner = Arc::make_mut(inner);
+                inner.args.extend(args);
+            }
+            Type::Const(_) | Type::Arrow(_) | Type::Local(_) | Type::Mvar(_) => {
+                *self = Type::App(Arc::new(TypeApp {
+                    head: mem::take(self),
+                    args: args.into_iter().collect(),
+                }));
+            }
+        }
     }
 
     /// Substitute [t] for locals with name [name].
@@ -186,8 +199,10 @@ impl Type {
             }
             Self::App(inner) => {
                 let inner = Arc::make_mut(inner);
-                inner.fun.subst(name, t);
-                inner.arg.subst(name, t);
+                inner.head.subst(name, t);
+                for arg in &mut inner.args {
+                    arg.subst(name, t);
+                }
             }
         }
     }
@@ -211,14 +226,16 @@ impl Type {
                 Ok(Kind::base())
             }
             Type::App(inner) => {
-                let fun_kind = inner.fun.infer_kind()?;
-                if fun_kind.is_base() {
-                    bail!("not a type operator");
+                let head_kind = inner.head.infer_kind()?;
+                if head_kind.0 < inner.args.len() {
+                    bail!("too many type arguments");
                 }
-                if !inner.arg.infer_kind()?.is_base() {
-                    bail!("not a type");
+                for arg in &inner.args {
+                    if !arg.infer_kind()?.is_base() {
+                        bail!("not a type");
+                    }
                 }
-                Ok(Kind(fun_kind.0 - 1))
+                Ok(Kind(head_kind.0 - inner.args.len()))
             }
             Type::Local(_) => Ok(Kind::base()),
             // no higher-kinded polymorphism
@@ -253,14 +270,16 @@ impl Type {
                 Ok(Kind::base())
             }
             Type::App(inner) => {
-                let fun_kind = inner.fun.infer_kind_under(locals)?;
-                if fun_kind.is_base() {
-                    bail!("not a type operator");
+                let head_kind = inner.head.infer_kind_under(locals)?;
+                if head_kind.0 < inner.args.len() {
+                    bail!("too many type arguments");
                 }
-                if !inner.arg.infer_kind_under(locals)?.is_base() {
-                    bail!("not a type");
+                for arg in &inner.args {
+                    if !arg.infer_kind_under(locals)?.is_base() {
+                        bail!("not a type");
+                    }
                 }
-                Ok(Kind(fun_kind.0 - 1))
+                Ok(Kind(head_kind.0 - inner.args.len()))
             }
             Type::Local(name) => {
                 if !locals.contains(name) {
@@ -287,7 +306,7 @@ impl Type {
         match self {
             Type::Const(_) => true,
             Type::Arrow(inner) => inner.dom.is_ground() && inner.cod.is_ground(),
-            Type::App(inner) => inner.fun.is_ground() && inner.arg.is_ground(),
+            Type::App(inner) => inner.head.is_ground() && inner.args.iter().all(Type::is_ground),
             Type::Local(_) => true,
             Type::Mvar(_) => false,
         }
@@ -309,8 +328,10 @@ impl Type {
             }
             Self::App(inner) => {
                 let inner = Arc::make_mut(inner);
-                inner.fun.instantiate(name, t);
-                inner.arg.instantiate(name, t);
+                inner.head.instantiate(name, t);
+                for arg in &mut inner.args {
+                    arg.instantiate(name, t);
+                }
             }
         }
     }
@@ -319,7 +340,10 @@ impl Type {
 #[test]
 fn test_type_args() {
     let t: Type = "a → b → c".parse().unwrap();
-    assert_eq!(t.args(), [&"a".parse().unwrap(), &"b".parse().unwrap()]);
+    assert_eq!(
+        t.components(),
+        [&"a".parse().unwrap(), &"b".parse().unwrap()]
+    );
 }
 
 /// Locally nameless representation. See [Charguéraud, 2012].
@@ -1111,7 +1135,7 @@ impl Term {
         let t = self.synthesize_unchecked_help(&mut var_ref_stack);
         assert_eq!(var_ref_stack.len(), var_stack.len());
         // [M] := λv₁ ⋯ vₙ. M v₁ ⋯ vₙ
-        let args = t.args();
+        let args = t.components();
         self.apply((0..args.len()).rev().map(Term::Var));
         let vs: Vec<_> = args
             .into_iter()
@@ -1285,10 +1309,16 @@ impl Subst<Type> {
                 }
             }
             (Type::App(inner1), Type::App(inner2)) => {
+                // Since we have no higher-kinded polymorphism, mvars will only be typed as `Type`,
+                // so heads must be the same and args must be in the same length.
+                if inner1.head != inner2.head || inner1.args.len() != inner2.args.len() {
+                    bail!("type mismatch");
+                }
                 let inner1 = Arc::make_mut(inner1);
                 let inner2 = Arc::make_mut(inner2);
-                self.unify(&mut inner1.fun, &mut inner2.fun)?;
-                self.unify(&mut inner1.arg, &mut inner2.arg)?;
+                for (arg1, arg2) in std::iter::zip(&mut inner1.args, &mut inner2.args) {
+                    self.unify(arg1, arg2)?;
+                }
             }
             (_, _) => {
                 bail!("type mismatch");
@@ -1845,7 +1875,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                 self.advance();
                 t = mk_arrow(t, self.subty(24)?);
             } else if token.is_ident() || (token.is_symbol() && token.as_str() == "(") {
-                t = mk_tyapp(t, self.subty(1024)?);
+                t.apply([self.subty(1024)?]);
             } else {
                 break;
             }
@@ -2384,9 +2414,11 @@ impl PrettyPrinter {
                 if prec >= 1024 {
                     write!(f, "(")?;
                 }
-                self.fmt_type_help(&inner.fun, 1023, f)?;
-                write!(f, " ")?;
-                self.fmt_type_help(&inner.arg, 1024, f)?;
+                self.fmt_type_help(&inner.head, 1023, f)?;
+                for arg in &inner.args {
+                    write!(f, " ")?;
+                    self.fmt_type_help(&arg, 1024, f)?;
+                }
                 if prec >= 1024 {
                     write!(f, ")")?;
                 }
