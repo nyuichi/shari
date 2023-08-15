@@ -1,8 +1,8 @@
-mod term;
+mod tt;
 
 use anyhow::bail;
 use std::sync::Arc;
-use term::{
+use tt::{
     add_axiom, add_const, add_const_type, add_definition, add_lemma, add_notation, assume, eq_elim,
     eq_intro, fun_ext, get_decls, get_fact, inst, prop_ext, Decl, DeclAxiom, DeclConst, DeclDef,
     DeclLemma, DeclTypeConst, Fact, Fixity, Kind, Name, Term, TermLocal, Type,
