@@ -664,7 +664,7 @@ impl Term {
     }
 
     /// may return locally open terms
-    fn head(&self) -> &Term {
+    pub fn head(&self) -> &Term {
         self.triple().1
     }
 
@@ -1719,7 +1719,7 @@ impl<'a> Iterator for Lex<'a> {
                 ),
                 (
                     Kind::Symbol,
-                    r"[(){}⟨⟩⟪⟫,]|[\p{Symbol}\p{Punctuation}&&[^(){}⟨⟩⟪⟫,]]+",
+                    r"[(){}⟨⟩⟪⟫,]|\.\{|[\p{Symbol}\p{Punctuation}&&[^(){}⟨⟩⟪⟫,]]+",
                 ),
                 (Kind::NumLit, r"0|[1-9][0-9]*"),
             ]
@@ -2244,18 +2244,29 @@ impl<'a, 'b> Parser<'a, 'b> {
                 })));
             }
         }
-        if let Some((tv, _)) = get_type(name) {
-            // TODO: parse type parameters
-            let mut ty_args = vec![];
+        let Some((tv, _)) = get_type(name) else {
+            return Ok(Term::Local(Arc::new(TermLocal {
+                name,
+                ty: mk_fresh_type_mvar(),
+            })));
+        };
+        let mut ty_args = vec![];
+        if let Some(_token) = self.expect_symbol_opt(".{") {
+            if self.expect_symbol_opt("}").is_none() {
+                loop {
+                    ty_args.push(self.ty()?);
+                    if self.expect_symbol_opt(",").is_none() {
+                        break;
+                    }
+                }
+                self.expect_symbol("}")?;
+            }
+        } else {
             for _ in tv {
                 ty_args.push(mk_fresh_type_mvar());
             }
-            return Ok(mk_const(name, ty_args));
         }
-        Ok(Term::Local(Arc::new(TermLocal {
-            name,
-            ty: mk_fresh_type_mvar(),
-        })))
+        Ok(mk_const(name, ty_args))
     }
 
     fn subterm(&mut self, rbp: usize) -> Result<Term, ParseError> {
@@ -2635,6 +2646,9 @@ fn test_parse_print() {
     insta::assert_display_snapshot!("λ (p q r : Prop), p q r".parse::<Term>().unwrap(), @"λ (p : Prop), λ (q : Prop), λ (r : Prop), p q r");
     insta::assert_display_snapshot!("λ (φ ψ : Prop), (λ (f : Prop → Prop → Prop), f φ ψ) = (λ (f : Prop → Prop → Prop), f ⊤ ⊤)".parse::<Term>().unwrap(), @"λ (φ : Prop), λ (ψ : Prop), (λ (f : Prop → Prop → Prop), f φ ψ) = λ (f : Prop → Prop → Prop), f ⊤ ⊤");
     insta::assert_display_snapshot!("λ (p q : Prop), p = (p ∧ q)".parse::<Term>().unwrap(), @"λ (p : Prop), λ (q : Prop), p = (p ∧ q)");
+    insta::assert_display_snapshot!("λ (a b : Prop), (¬a) = b".parse::<Term>().unwrap(), @"λ (a : Prop), λ (b : Prop), (¬a) = b");
+    insta::assert_display_snapshot!("λ (a b : Prop), ¬a = b".parse::<Term>().unwrap(), @"λ (a : Prop), λ (b : Prop), ¬a = b");
+    insta::assert_display_snapshot!("λ (x : w), eq.{u → v} x".parse::<Term>().unwrap(), @"λ (x : w), eq.{u → v} x");
 }
 
 #[derive(Debug, Default)]

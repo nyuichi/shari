@@ -52,6 +52,20 @@ fn change(m: Term, h: Fact) -> anyhow::Result<Fact> {
     eq_elim(Term::Var(0), h_eqv, h)
 }
 
+fn apply(
+    mut h: Fact,
+    terms: impl IntoIterator<Item = Term>,
+    facts: impl IntoIterator<Item = Fact>,
+) -> anyhow::Result<Fact> {
+    for m in terms {
+        h = forall_elim(m, h)?;
+    }
+    for fact in facts {
+        h = imp_elim(h, fact)?;
+    }
+    Ok(h)
+}
+
 /// ```text
 ///
 /// ---------------------
@@ -150,23 +164,6 @@ fn congr(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     eq_trans(h3, h4)
 }
 
-fn apply(
-    name: Name,
-    terms: impl IntoIterator<Item = Term>,
-    facts: impl IntoIterator<Item = Fact>,
-) -> anyhow::Result<Fact> {
-    let Some(mut h) = get_fact(name) else {
-        bail!("fact not found: {name}");
-    };
-    for m in terms {
-        h = forall_elim(m, h)?;
-    }
-    for fact in facts {
-        h = imp_elim(h, fact)?;
-    }
-    Ok(h)
-}
-
 fn init_logic() {
     add_notation("⊤", Fixity::Nofix, usize::MAX, "top").unwrap();
     add_notation("∧", Fixity::Infixr, 35, "and").unwrap();
@@ -175,6 +172,7 @@ fn init_logic() {
     add_notation("∨", Fixity::Infixr, 30, "or").unwrap();
     add_notation("¬", Fixity::Prefix, 40, "not").unwrap();
     add_notation("↔", Fixity::Infix, 20, "iff").unwrap();
+    add_notation("≠", Fixity::Infix, 50, "ne").unwrap();
 
     // Equality-based representation by Andrews [Andrews, 1986]
 
@@ -246,6 +244,13 @@ fn init_logic() {
         "λ (P : u → Prop), ∃ x, P x ∧ (∀ y, P y → x = y)"
             .parse()
             .unwrap(),
+    )
+    .unwrap();
+
+    add_definition(
+        "ne".try_into().unwrap(),
+        vec!["u".try_into().unwrap()],
+        "λ (x y : u), ¬ x = y".parse().unwrap(),
     )
     .unwrap();
 
@@ -340,7 +345,12 @@ fn init_logic() {
                 // ⊥ ⊢ ⊥
                 let h = assume("⊥".parse().unwrap()).unwrap();
                 // ⊥ ⊢ p
-                apply("bot_elim".try_into().unwrap(), ["p".parse().unwrap()], [h]).unwrap()
+                apply(
+                    get_fact("bot_elim".try_into().unwrap()).unwrap(),
+                    ["p".parse().unwrap()],
+                    [h],
+                )
+                .unwrap()
             };
             let h2 = {
                 // ¬p ⊢ ¬p
@@ -360,12 +370,12 @@ fn init_logic() {
     })
     .unwrap();
 
-    add_lemma("neg_is_fixpoint_free".try_into().unwrap(), {
+    add_lemma("not_is_fixpoint_free".try_into().unwrap(), {
         let h = assume("(¬p) = p".parse().unwrap()).unwrap();
         let p_holds = assume("p".parse().unwrap()).unwrap();
         let np_holds = eq_mp(eq_symm(h.clone()).unwrap(), p_holds.clone()).unwrap();
         let bot_holds = apply(
-            "contradiction".try_into().unwrap(),
+            get_fact("contradiction".try_into().unwrap()).unwrap(),
             ["p".parse().unwrap()],
             [p_holds, np_holds],
         )
@@ -377,13 +387,13 @@ fn init_logic() {
         .unwrap();
         let p_holds = eq_mp(h, np_holds.clone()).unwrap();
         let bot_holds = apply(
-            "contradiction".try_into().unwrap(),
+            get_fact("contradiction".try_into().unwrap()).unwrap(),
             ["p".parse().unwrap()],
             [p_holds, np_holds],
         )
         .unwrap();
         let h = imp_intro("(¬p) = p".parse().unwrap(), bot_holds).unwrap();
-        let h = change("¬((¬p) = p)".parse().unwrap(), h).unwrap();
+        let h = change("(¬p) ≠ p".parse().unwrap(), h).unwrap();
         forall_intro("p".try_into().unwrap(), Type::prop(), h).unwrap()
     })
     .unwrap();
@@ -861,6 +871,31 @@ fn top_ne_bot() -> Fact {
     not_intro(p, h).unwrap()
 }
 
+fn init_function() {
+    add_definition(
+        "injective".try_into().unwrap(),
+        vec!["u".try_into().unwrap(), "v".try_into().unwrap()],
+        "λ (f : u → v), ∀ x y, f x = f y → x = y".parse().unwrap(),
+    )
+    .unwrap();
+
+    add_definition(
+        "surjective".try_into().unwrap(),
+        vec!["u".try_into().unwrap(), "v".try_into().unwrap()],
+        "λ (f : u → v), ∀ y, ∃ x, f x = y".parse().unwrap(),
+    )
+    .unwrap();
+
+    // add_lemma("lawvere_fixpoint".try_into().unwrap(), {
+    //     let h = assume("surjective.{u, u → v} e".parse().unwrap()).unwrap();
+    //     let h = change("∀ (y : u → v), ∃ (x : u), e x = y".parse().unwrap(), h).unwrap();
+    //     let h = apply(h, ["λ x, f (e x x)".parse().unwrap()], []).unwrap();
+    //     println!("{h}");
+    //     h
+    // })
+    // .unwrap()
+}
+
 fn init_classic() {
     // emulate the `inhabited` type class by dictionary passing
     add_const_type("inhabited".try_into().unwrap(), Kind(1)).unwrap();
@@ -1192,25 +1227,6 @@ fn init_set() {
     .unwrap();
 
     add_definition(
-        "injective".try_into().unwrap(),
-        vec!["u".try_into().unwrap(), "v".try_into().unwrap()],
-        "λ (f : u → v), ∀ x y, f x = f y → x = y".parse().unwrap(),
-    )
-    .unwrap();
-
-    add_definition(
-        "surjective".try_into().unwrap(),
-        vec!["u".try_into().unwrap(), "v".try_into().unwrap()],
-        "λ (f : u → v), ∀ y, ∃ x, f x = y".parse().unwrap(),
-    )
-    .unwrap();
-
-    // h: ∀ f : u → (u → Prop), ¬ surjective f
-    // t := { x | x ∉ f x }
-    // ∃ a, f a = t
-    // a ∈ f a = a ∉ f a
-
-    add_definition(
         "inj_on".try_into().unwrap(),
         vec!["u".try_into().unwrap(), "v".try_into().unwrap()],
         "λ (s : u → Prop) (f : u → v), ∀ x y, x ∈ s ∧ y ∈ s → f x = f y → x = y"
@@ -1222,6 +1238,7 @@ fn init_set() {
 
 fn init() {
     init_logic();
+    init_function();
     init_classic();
     init_set();
 }
