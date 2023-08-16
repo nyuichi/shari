@@ -682,14 +682,14 @@ fn init_classic() {
     add_const(
         "inhabited_prop".try_into().unwrap(),
         vec![],
-        q!("inhabited Prop"),
+        "inhabited Prop".parse().unwrap(),
     )
     .unwrap();
 
     add_const(
         "choice".try_into().unwrap(),
         vec!["u".try_into().unwrap()],
-        q!("inhabited u → (u → Prop) → u"),
+        "inhabited u → (u → Prop) → u".parse().unwrap(),
     )
     .unwrap();
 

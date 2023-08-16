@@ -139,7 +139,7 @@ impl FromStr for Type {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut lex = Lex::new(s);
         let env = Env::get();
-        let mut parser = Parser::new(&mut lex, &env);
+        let mut parser = Parser::new(&mut lex, &env, false);
         let ty = parser.ty()?;
         parser.eof()?;
         Ok(ty)
@@ -448,7 +448,7 @@ impl FromStr for Term {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut lex = Lex::new(s);
         let env = Env::get();
-        let mut parser = Parser::new(&mut lex, &env);
+        let mut parser = Parser::new(&mut lex, &env, false);
         let m = parser.term()?;
         parser.eof()?;
         Ok(m)
@@ -1409,7 +1409,7 @@ impl<'a> Iterator for Lex<'a> {
                 ),
                 (
                     Kind::Symbol,
-                    r"[(){}⟨⟩⟪⟫,]|\.\{|[\p{Symbol}\p{Punctuation}&&[^(){}⟨⟩⟪⟫,]]+",
+                    r"[(){}⟨⟩⟪⟫,]|\.\{|\$\{|[\p{Symbol}\p{Punctuation}&&[^(){}⟨⟩⟪⟫,]]+",
                 ),
                 (Kind::NumLit, r"0|[1-9][0-9]*"),
             ]
@@ -1551,6 +1551,7 @@ enum Nud {
     Paren,
     Bracket,
     Brace,
+    Hole,
     User(Operator),
 }
 
@@ -1586,6 +1587,7 @@ impl TokenTable {
                     "∀" => Some(Nud::Forall),
                     "∃" => Some(Nud::Exists),
                     "{" => Some(Nud::Brace),
+                    "${" => Some(Nud::Hole),
                     _ => self.nud.get(token.as_str()).map(|op| Nud::User(op.clone())),
                 }
             }
@@ -1619,14 +1621,18 @@ pub struct Parser<'a, 'b> {
     lex: &'b mut Lex<'a>,
     locals: Vec<(Name, Type)>,
     env: &'b Env,
+    allow_holes: bool,
+    holes: Vec<(Name, Type)>,
 }
 
 impl<'a, 'b> Parser<'a, 'b> {
-    fn new(lex: &'b mut Lex<'a>, env: &'b Env) -> Self {
+    fn new(lex: &'b mut Lex<'a>, env: &'b Env, allow_holes: bool) -> Self {
         Self {
             lex,
             locals: vec![],
             env,
+            allow_holes,
+            holes: vec![],
         }
     }
 
@@ -1964,6 +1970,17 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(mk_const(name, ty_args))
     }
 
+    fn term_hole(&mut self, token: Token<'a>) -> Result<Term, ParseError> {
+        if !self.allow_holes {
+            return Self::fail(token, "hole not allowed in this mode");
+        }
+        self.expect_symbol("}")?;
+        let name = Name::fresh();
+        let ty = mk_fresh_type_mvar();
+        self.holes.push((name, ty.clone()));
+        Ok(mk_local(name, ty))
+    }
+
     fn subterm(&mut self, rbp: usize) -> Result<Term, ParseError> {
         let token = self.any_token()?;
         // nud
@@ -1975,7 +1992,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             Nud::Var => self.term_var(token, None)?,
             Nud::Abs => self.term_abs(token)?,
             Nud::Paren => {
-                let m = self.term()?;
+                let m = self.subterm(0)?;
                 self.expect_symbol(")")?;
                 m
             }
@@ -2009,6 +2026,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             Nud::Forall => self.term_forall(token)?,
             Nud::Exists => self.term_exists(token)?,
             Nud::Brace => self.term_setsep(token)?,
+            Nud::Hole => self.term_hole(token)?,
             Nud::User(op) => match op.fixity {
                 Fixity::Nofix => self.term_var(token, Some(op.entity))?,
                 Fixity::Prefix => {
@@ -2052,10 +2070,47 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 }
 
+#[doc(hidden)]
+pub trait Quote: Sized + 'static {
+    fn quote<'a>(template: &str, args: impl IntoIterator<Item = &'a Self>) -> anyhow::Result<Self>;
+}
+
+impl Quote for Term {
+    fn quote<'a>(template: &str, args: impl IntoIterator<Item = &'a Term>) -> anyhow::Result<Term> {
+        let mut lex = Lex::new(template);
+        let env = Env::get();
+        let mut parser = Parser::new(&mut lex, &env, true);
+        let mut m = parser.term()?;
+        parser.eof()?;
+        let args: Vec<_> = args.into_iter().collect();
+        if args.len() != parser.holes.len() {
+            bail!("number of holes mismatch");
+        }
+        for (i, (name, ty)) in parser.holes.into_iter().enumerate() {
+            m.close_at(name, &ty, i);
+        }
+        for (i, arg) in args.into_iter().enumerate() {
+            m.open_at(arg, i);
+        }
+        Ok(m)
+    }
+}
+
+#[doc(hidden)]
+pub fn quote<'a, T: Quote>(
+    template: &str,
+    args: impl IntoIterator<Item = &'a T>,
+) -> anyhow::Result<T> {
+    Quote::quote(template, args)
+}
+
 #[macro_export]
 macro_rules! q {
     ($template:expr) => {
-        ($template).parse().unwrap()
+        $crate::quote($template, []).unwrap()
+    };
+    ($template:expr, $($args:expr),*) => {
+        $crate::quote($template, [$($args),*]).unwrap()
     };
 }
 
@@ -2381,7 +2436,7 @@ fn test_parse_print() {
 
     let roundtrip = |s: &str| -> String {
         let mut lex = Lex::new(s);
-        let mut parser = Parser::new(&mut lex, &env);
+        let mut parser = Parser::new(&mut lex, &env, false);
         let m = parser.term().unwrap();
         parser.eof().unwrap();
         Display { env: &env, m }.to_string()
