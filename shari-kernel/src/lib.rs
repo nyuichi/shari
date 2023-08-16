@@ -800,7 +800,6 @@ impl Term {
         Ok(())
     }
 
-    /// TODO: chagne return type to Result<()>
     fn infer_help<'a>(
         &'a self,
         target: &Type,
@@ -2153,6 +2152,37 @@ impl Quote for Term {
             m.open_at(arg.as_arg(), i);
         }
         Ok(m)
+    }
+}
+
+impl Quote for Type {
+    fn quote<'a>(
+        template: &str,
+        args: impl IntoIterator<Item = &'a dyn Arg<Type>>,
+    ) -> anyhow::Result<Type> {
+        let mut lex = Lex::new(template);
+        let env = Env::get();
+        let mut parser = Parser::new(&mut lex, &env, true);
+        let t = parser.ty()?;
+        parser.eof()?;
+        let args: Vec<_> = args.into_iter().collect();
+        if !args.is_empty() {
+            unimplemented!();
+        }
+        Ok(t)
+    }
+}
+
+impl Quote for Name {
+    fn quote<'a>(
+        template: &str,
+        args: impl IntoIterator<Item = &'a dyn Arg<Name>>,
+    ) -> anyhow::Result<Name> {
+        let args: Vec<_> = args.into_iter().collect();
+        if !args.is_empty() {
+            unimplemented!();
+        }
+        Ok(template.try_into()?)
     }
 }
 
