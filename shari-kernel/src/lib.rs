@@ -138,7 +138,8 @@ impl FromStr for Type {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut lex = Lex::new(s);
-        let mut parser = Parser::new(&mut lex);
+        let env = Env::get();
+        let mut parser = Parser::new(&mut lex, &env);
         let ty = parser.ty()?;
         parser.eof()?;
         Ok(ty)
@@ -416,7 +417,8 @@ impl Default for Term {
 
 impl Display for Term {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        Env::get().notations.pp.fmt_term(self, f)
+        let env = Env::get();
+        Printer::new(&env).fmt_term(self, f)
     }
 }
 
@@ -445,7 +447,8 @@ impl FromStr for Term {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut lex = Lex::new(s);
-        let mut parser = Parser::new(&mut lex);
+        let env = Env::get();
+        let mut parser = Parser::new(&mut lex, &env);
         let m = parser.term()?;
         parser.eof()?;
         Ok(m)
@@ -1149,15 +1152,14 @@ impl EqSet {
                 (Type::Mvar(name), t) | (t, Type::Mvar(name)) => {
                     self.parents.insert(name, t);
                 }
-                (t1, t2) => {
-                    bail!("type mismatch: {t1} and {t2}");
+                (_, _) => {
+                    bail!("type mismatch");
                 }
             }
         }
         Ok(Unifier(self.parents))
     }
 }
-
 struct Unifier(HashMap<Name, Type>);
 
 impl Unifier {
@@ -1501,7 +1503,7 @@ struct Operator {
     entity: Name,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 struct TokenTable {
     led: HashMap<String, Operator>,
     nud: HashMap<String, Operator>,
@@ -1616,13 +1618,15 @@ impl From<LexError> for ParseError {
 pub struct Parser<'a, 'b> {
     lex: &'b mut Lex<'a>,
     locals: Vec<(Name, Type)>,
+    env: &'b Env,
 }
 
 impl<'a, 'b> Parser<'a, 'b> {
-    fn new(lex: &'b mut Lex<'a>) -> Self {
+    fn new(lex: &'b mut Lex<'a>, env: &'b Env) -> Self {
         Self {
             lex,
             locals: vec![],
+            env,
         }
     }
 
@@ -1736,7 +1740,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         let token = self.any_token()?;
         if token.is_ident() {
             let name: Name = token.as_str().try_into().expect("logic flaw");
-            match get_kind(name) {
+            match self.env.get_kind(name) {
                 Some(_kind) => Ok(mk_type_const(name)),
                 None => Ok(mk_type_local(name)),
             }
@@ -1839,7 +1843,10 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     // TODO remove
     fn mk_const_unchecked(&self, name: &str) -> Term {
-        let (ty_params, _) = get_type(name.try_into().unwrap()).expect("unknown constant");
+        let (ty_params, _) = self
+            .env
+            .get_type(name.try_into().unwrap())
+            .expect("unknown constant");
         let mut ty_args = vec![];
         for _ in ty_params {
             ty_args.push(mk_fresh_type_mvar());
@@ -1932,7 +1939,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                 })));
             }
         }
-        let Some((tv, _)) = get_type(name) else {
+        let Some((tv, _)) = self.env.get_type(name) else {
             return Ok(Term::Local(Arc::new(TermLocal {
                 name,
                 ty: mk_fresh_type_mvar(),
@@ -1960,7 +1967,7 @@ impl<'a, 'b> Parser<'a, 'b> {
     fn subterm(&mut self, rbp: usize) -> Result<Term, ParseError> {
         let token = self.any_token()?;
         // nud
-        let nud = match Env::get().token_table().get_nud(&token) {
+        let nud = match self.env.token_table().get_nud(&token) {
             None => todo!("nud unknown: {}", token),
             Some(nud) => nud,
         };
@@ -2014,7 +2021,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             },
         };
         while let Some(token) = self.peek_opt() {
-            let led = match Env::get().token_table().get_led(&token) {
+            let led = match self.env.token_table().get_led(&token) {
                 None => break,
                 Some(led) => led,
             };
@@ -2045,18 +2052,39 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 }
 
-#[derive(Debug, Default)]
-struct PrettyPrinter {
+#[macro_export]
+macro_rules! q {
+    ($template:expr) => {
+        ($template).parse().unwrap()
+    };
+}
+
+#[derive(Debug, Default, Clone)]
+struct OpTable {
     op_table: HashMap<Name, Operator>,
 }
 
-impl PrettyPrinter {
+impl OpTable {
     fn add(&mut self, op: Operator) -> anyhow::Result<()> {
         let entity = op.entity;
         if self.op_table.insert(entity, op).is_some() {
             bail!("notation already defined");
         }
         Ok(())
+    }
+
+    fn get(&self, name: Name) -> Option<&Operator> {
+        self.op_table.get(&name)
+    }
+}
+
+struct Printer<'a> {
+    env: &'a Env,
+}
+
+impl<'a> Printer<'a> {
+    fn new(env: &'a Env) -> Self {
+        Printer { env }
     }
 
     fn fmt_term(&self, m: &Term, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -2077,8 +2105,8 @@ impl PrettyPrinter {
         if !m.binders().any(|_| true) {
             let (_, head, mut args) = m.triple();
             if let Term::Const(inner) = head {
-                let name = &inner.name;
-                if let Some(op) = self.op_table.get(name) {
+                let name = inner.name;
+                if let Some(op) = self.env.op_table().get(name) {
                     match op.fixity {
                         Fixity::Infix | Fixity::Infixl => {
                             if args.len() == 2 {
@@ -2287,13 +2315,85 @@ impl PrettyPrinter {
 
 #[test]
 fn test_parse_print() {
-    insta::assert_display_snapshot!("λ (x : α), x".parse::<Term>().unwrap(), @"λ (x : α), x");
-    insta::assert_display_snapshot!("λ (p q r : Prop), p q r".parse::<Term>().unwrap(), @"λ (p : Prop), λ (q : Prop), λ (r : Prop), p q r");
-    insta::assert_display_snapshot!("λ (φ ψ : Prop), (λ (f : Prop → Prop → Prop), f φ ψ) = (λ (f : Prop → Prop → Prop), f ⊤ ⊤)".parse::<Term>().unwrap(), @"λ (φ : Prop), λ (ψ : Prop), (λ (f : Prop → Prop → Prop), f φ ψ) = λ (f : Prop → Prop → Prop), f ⊤ ⊤");
-    insta::assert_display_snapshot!("λ (p q : Prop), p = (p ∧ q)".parse::<Term>().unwrap(), @"λ (p : Prop), λ (q : Prop), p = (p ∧ q)");
-    insta::assert_display_snapshot!("λ (a b : Prop), (¬a) = b".parse::<Term>().unwrap(), @"λ (a : Prop), λ (b : Prop), (¬a) = b");
-    insta::assert_display_snapshot!("λ (a b : Prop), ¬a = b".parse::<Term>().unwrap(), @"λ (a : Prop), λ (b : Prop), ¬a = b");
-    insta::assert_display_snapshot!("λ (x : w), eq.{u → v} x".parse::<Term>().unwrap(), @"λ (x : w), eq.{u → v} x");
+    let ops = [
+        Operator {
+            symbol: "⊤".to_owned(),
+            fixity: Fixity::Nofix,
+            prec: usize::MAX,
+            entity: "top".try_into().unwrap(),
+        },
+        Operator {
+            symbol: "∧".to_owned(),
+            fixity: Fixity::Infixr,
+            prec: 35,
+            entity: "and".try_into().unwrap(),
+        },
+        Operator {
+            symbol: "¬".to_owned(),
+            fixity: Fixity::Prefix,
+            prec: 40,
+            entity: "not".try_into().unwrap(),
+        },
+    ];
+
+    let mut env = Env::get().clone();
+    for op in ops {
+        env.add_notation(op).unwrap();
+    }
+
+    env.add_term_decl(
+        "top".try_into().unwrap(),
+        TermDecl::Const(DeclConst {
+            local_types: vec![],
+            ty: mk_prop(),
+        }),
+    )
+    .unwrap();
+
+    env.add_term_decl(
+        "not".try_into().unwrap(),
+        TermDecl::Const(DeclConst {
+            local_types: vec![],
+            ty: mk_type_arrow(mk_prop(), mk_prop()),
+        }),
+    )
+    .unwrap();
+
+    env.add_term_decl(
+        "and".try_into().unwrap(),
+        TermDecl::Const(DeclConst {
+            local_types: vec![],
+            ty: mk_type_arrow(mk_prop(), mk_type_arrow(mk_prop(), mk_prop())),
+        }),
+    )
+    .unwrap();
+
+    struct Display<'a> {
+        env: &'a Env,
+        m: Term,
+    }
+
+    impl<'a> std::fmt::Display for Display<'a> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            Printer::new(self.env).fmt_term(&self.m, f)
+        }
+    }
+
+    let roundtrip = |s: &str| -> String {
+        let mut lex = Lex::new(s);
+        let mut parser = Parser::new(&mut lex, &env);
+        let m = parser.term().unwrap();
+        parser.eof().unwrap();
+        Display { env: &env, m }.to_string()
+    };
+
+    insta::assert_snapshot!(roundtrip("λ (x : α), x"), @"λ (x : α), x");
+    insta::assert_snapshot!(roundtrip("λ (p q r : Prop), p q r"), @"λ (p : Prop), λ (q : Prop), λ (r : Prop), p q r");
+    insta::assert_snapshot!(roundtrip("λ (φ ψ : Prop), (λ (f : Prop → Prop → Prop), f φ ψ) = (λ (f : Prop → Prop → Prop), f ⊤ ⊤)"), @"λ (φ : Prop), λ (ψ : Prop), (λ (f : Prop → Prop → Prop), f φ ψ) = λ (f : Prop → Prop → Prop), f ⊤ ⊤");
+    insta::assert_snapshot!(roundtrip("λ (p q : Prop), p = (p ∧ q)"), @"λ (p : Prop), λ (q : Prop), p = (p ∧ q)");
+    insta::assert_snapshot!(roundtrip("λ (a b : Prop), (¬a) = b"), @"λ (a : Prop), λ (b : Prop), (¬a) = b");
+    insta::assert_snapshot!(roundtrip("λ (a b : Prop), ¬a = b"), @"λ (a : Prop), λ (b : Prop), ¬a = b");
+    insta::assert_snapshot!(roundtrip("λ (x : w), eq.{u → v} x"), @"λ (x : w), eq.{u → v} x");
 }
 
 pub fn mk_prop() -> Type {
@@ -2307,7 +2407,7 @@ fn mk_eq(ty: Type, m1: Term, m2: Term) -> Term {
     m
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Env {
     decls: Vec<(Name, Decl)>,
     term_decls: HashMap<Name, usize>,
@@ -2353,12 +2453,12 @@ pub struct DeclLemma {
     pub fact: Fact,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct NotationTable {
     // symbol to name
     tt: TokenTable,
     // name to symbol
-    pp: PrettyPrinter,
+    pp: OpTable,
 }
 
 #[derive(Debug, Clone)]
@@ -2488,15 +2588,20 @@ static ENV: Lazy<RwLock<Env>> = Lazy::new(|| {
     )
     .unwrap();
 
-    env.add_notation(
-        "→".to_owned(),
-        Fixity::Infixr,
-        25,
-        "imp".try_into().unwrap(),
-    )
+    env.add_notation(Operator {
+        symbol: "→".to_owned(),
+        fixity: Fixity::Infixr,
+        prec: 25,
+        entity: "imp".try_into().unwrap(),
+    })
     .unwrap();
-    env.add_notation("=".to_owned(), Fixity::Infix, 50, "eq".try_into().unwrap())
-        .unwrap();
+    env.add_notation(Operator {
+        symbol: "=".to_owned(),
+        fixity: Fixity::Infix,
+        prec: 50,
+        entity: "eq".try_into().unwrap(),
+    })
+    .unwrap();
 
     RwLock::new(env)
 });
@@ -2512,6 +2617,10 @@ impl Env {
 
     fn token_table(&self) -> &TokenTable {
         &self.notations.tt
+    }
+
+    fn op_table(&self) -> &OpTable {
+        &self.notations.pp
     }
 
     fn add_type_decl(&mut self, name: Name, decl: TypeDecl) -> anyhow::Result<()> {
@@ -2561,22 +2670,29 @@ impl Env {
         Some(self.decls[index].1.clone().try_into().unwrap())
     }
 
-    fn add_notation(
-        &mut self,
-        symbol: String,
-        fixity: Fixity,
-        prec: usize,
-        entity: Name,
-    ) -> anyhow::Result<()> {
-        let op = Operator {
-            symbol,
-            fixity,
-            prec,
-            entity,
-        };
+    fn add_notation(&mut self, op: Operator) -> anyhow::Result<()> {
         self.notations.tt.add(op.clone())?;
         self.notations.pp.add(op)?;
         Ok(())
+    }
+
+    fn get_kind(&self, name: Name) -> Option<Kind> {
+        let decl = self.get_type_decl(name)?;
+        match decl {
+            TypeDecl::Const(DeclTypeConst { kind }) => Some(kind),
+        }
+    }
+
+    fn get_type(&self, name: Name) -> Option<(Vec<Name>, Type)> {
+        let decl = self.get_term_decl(name)?;
+        match decl {
+            TermDecl::Const(DeclConst { local_types, ty }) => Some((local_types, ty)),
+            TermDecl::Def(DeclDef {
+                local_types,
+                target: _,
+                ty,
+            }) => Some((local_types, ty)),
+        }
     }
 }
 
@@ -2584,7 +2700,12 @@ pub fn add_notation(symbol: &str, fixity: Fixity, prec: usize, entity: &str) -> 
     let Ok(entity) = Name::try_from(entity) else {
         bail!("invalid name: {entity}");
     };
-    Env::get_mut().add_notation(symbol.to_owned(), fixity, prec, entity)
+    Env::get_mut().add_notation(Operator {
+        symbol: symbol.to_owned(),
+        fixity,
+        prec,
+        entity,
+    })
 }
 
 pub fn add_const(name: Name, local_types: Vec<Name>, ty: Type) -> anyhow::Result<()> {
@@ -2648,22 +2769,11 @@ pub fn add_definition(name: Name, local_types: Vec<Name>, mut target: Term) -> a
 }
 
 fn get_kind(name: Name) -> Option<Kind> {
-    let decl = Env::get().get_type_decl(name)?;
-    match decl {
-        TypeDecl::Const(DeclTypeConst { kind }) => Some(kind),
-    }
+    Env::get().get_kind(name)
 }
 
 fn get_type(name: Name) -> Option<(Vec<Name>, Type)> {
-    let decl = Env::get().get_term_decl(name)?;
-    match decl {
-        TermDecl::Const(DeclConst { local_types, ty }) => Some((local_types, ty)),
-        TermDecl::Def(DeclDef {
-            local_types,
-            target: _,
-            ty,
-        }) => Some((local_types, ty)),
-    }
+    Env::get().get_type(name)
 }
 
 fn get_def(name: Name) -> Option<DeclDef> {
@@ -2774,11 +2884,11 @@ fn test_assume_ok() {
     insta::assert_display_snapshot!(assume(p).unwrap(), @"((p : Prop)) ⊢ (p : Prop)");
 
     // infer as Prop
-    let p = "p".parse().unwrap();
+    let p = q!("p");
     insta::assert_display_snapshot!(assume(p).unwrap(), @"((p : Prop)) ⊢ (p : Prop)");
 
     // terms may contain type variables
-    let p: Term = "(λ (x : α), x) = (λ x, x)".parse().unwrap();
+    let p: Term = q!("(λ (x : α), x) = (λ x, x)");
     insta::assert_display_snapshot!(assume(p).unwrap(), @"((λ (x : α), x) = λ (x : α), x) ⊢ (λ (x : α), x) = λ (x : α), x");
 }
 
@@ -2789,11 +2899,11 @@ fn test_assume_err() {
     insta::assert_display_snapshot!(assume(p).unwrap_err(), @"type mismatch");
 
     // ill-typed
-    let p = "(λ (x : Prop), x) (λ y, y)".parse().unwrap();
+    let p = q!("(λ (x : Prop), x) (λ y, y)");
     insta::assert_display_snapshot!(assume(p).unwrap_err(), @"type mismatch");
 
     // not fully instantiated
-    let f = "(λ x, x) = (λ x, x)".parse().unwrap();
+    let f = q!("(λ x, x) = (λ x, x)");
     insta::assert_display_snapshot!(assume(f).unwrap_err(), @"uninstantiated meta type variable");
 }
 
@@ -2843,26 +2953,26 @@ pub fn imp_elim(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
 
 #[test]
 fn test_imp_ok() {
-    let p: Term = "p".parse().unwrap();
+    let p: Term = q!("p");
     let h = assume(p.clone()).unwrap();
     insta::assert_display_snapshot!(imp_intro(p, h).unwrap(), @"⊢ (p : Prop) → (p : Prop)");
 
     // weakening
-    let p: Term = "p".parse().unwrap();
+    let p: Term = q!("p");
     insta::assert_display_snapshot!(imp_intro(p, reflexivity(mk_const(*IMP, vec![])).unwrap()).unwrap(), @"⊢ (p : Prop) → imp = imp");
 
-    let h1 = assume("p → q".parse().unwrap()).unwrap();
-    let h2 = assume("p".parse().unwrap()).unwrap();
+    let h1 = assume(q!("p → q")).unwrap();
+    let h2 = assume(q!("p")).unwrap();
     insta::assert_display_snapshot!(imp_elim(h1, h2).unwrap(), @"((p : Prop) → (q : Prop)) ((p : Prop)) ⊢ (q : Prop)");
 }
 
 #[test]
 fn test_imp_err() {
-    insta::assert_display_snapshot!(imp_intro("(λ (x : Prop), x) (λ (x : Prop), x)".parse().unwrap(), assume("p".parse().unwrap()).unwrap()).unwrap_err(), @"type mismatch");
-    insta::assert_display_snapshot!(imp_intro("p q".parse().unwrap(), assume("p".parse().unwrap()).unwrap()).unwrap_err(), @"uninstantiated meta type variable");
+    insta::assert_display_snapshot!(imp_intro(q!("(λ (x : Prop), x) (λ (x : Prop), x)"), assume(q!("p")).unwrap()).unwrap_err(), @"type mismatch");
+    insta::assert_display_snapshot!(imp_intro(q!("p q"), assume(q!("p")).unwrap()).unwrap_err(), @"uninstantiated meta type variable");
 
-    let h1 = assume("p".parse().unwrap()).unwrap();
-    let h2 = assume("p".parse().unwrap()).unwrap();
+    let h1 = assume(q!("p")).unwrap();
+    let h2 = assume(q!("p")).unwrap();
     insta::assert_display_snapshot!(imp_elim(h1, h2).unwrap_err(), @"not an implication");
 }
 
@@ -2920,24 +3030,24 @@ pub fn forall_elim(mut m: Term, h: Fact) -> anyhow::Result<Fact> {
 #[test]
 fn test_forall() {
     // err
-    let p: Term = "p".parse().unwrap();
+    let p: Term = q!("p");
     let h = assume(p.clone()).unwrap();
     insta::assert_display_snapshot!(forall_intro("p".try_into().unwrap(), mk_prop(), h).unwrap_err(), @"eigenvariable condition fails");
 
-    let p: Term = "p".parse().unwrap();
+    let p: Term = q!("p");
     let h = assume(p.clone()).unwrap();
     let h = imp_intro(p, h).unwrap();
     insta::assert_display_snapshot!(forall_intro("p".try_into().unwrap(), mk_prop(), h).unwrap(), @"⊢ ∀ (p : Prop), p → p");
 
     // weakening
-    let h = reflexivity("imp".parse().unwrap()).unwrap();
+    let h = reflexivity(q!("imp")).unwrap();
     insta::assert_display_snapshot!(forall_intro("p".try_into().unwrap(), mk_prop(), h).unwrap(), @"⊢ ∀ (p : Prop), imp = imp");
 
-    let p: Term = "p".parse().unwrap();
+    let p: Term = q!("p");
     let h = assume(p.clone()).unwrap();
     let h = imp_intro(p, h).unwrap();
     let h = forall_intro("p".try_into().unwrap(), mk_prop(), h).unwrap();
-    insta::assert_display_snapshot!(forall_elim("q".parse().unwrap(), h).unwrap(), @"⊢ (q : Prop) → (q : Prop)");
+    insta::assert_display_snapshot!(forall_elim(q!("q"), h).unwrap(), @"⊢ (q : Prop) → (q : Prop)");
 }
 
 /// ```text
