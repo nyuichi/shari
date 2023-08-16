@@ -409,6 +409,12 @@ pub struct TermConst {
     pub ty_args: Vec<Type>,
 }
 
+impl From<TermLocal> for Term {
+    fn from(value: TermLocal) -> Self {
+        Term::Local(Arc::new(value))
+    }
+}
+
 impl Default for Term {
     fn default() -> Self {
         Term::Var(usize::MAX)
@@ -990,7 +996,6 @@ impl Term {
     }
 
     /// [m1] and [m2] must be type-correct and type-equal under the same environment.
-    /// TODO: optimize
     fn equiv(&self, other: &Term) -> bool {
         let mut m1 = self.clone();
         let mut m2 = other.clone();
@@ -1019,8 +1024,8 @@ impl Term {
             let h2 = m2.head();
             // optimization
             if h1 == h2 {
-                let args1 = h1.args();
-                let args2 = h2.args();
+                let args1 = m1.args();
+                let args2 = m2.args();
                 if args1.len() == args2.len() {
                     'args_eq: {
                         for (a1, a2) in std::iter::zip(args1, args2) {
@@ -1096,6 +1101,16 @@ impl Term {
             }
         }
     }
+}
+
+#[test]
+fn test_equiv_err() {
+    let m1: Term = q!(
+        "λ (e : u → u → v) (f : v → v) (a : u), e a = (λ (x : u), f (e x x)) → ∀ (y : v), y = f y"
+    );
+    let m2: Term =
+        q!("λ (e : u → u → v) (f : v → v) (a : u), (λ (x : u), e x = λ (x : u), f (e x x)) a → r");
+    assert!(!m1.equiv(&m2));
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1852,7 +1867,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         let (ty_params, _) = self
             .env
             .get_type(name.try_into().unwrap())
-            .expect("unknown constant");
+            .unwrap_or_else(|| panic!("unknown constant: {name}"));
         let mut ty_args = vec![];
         for _ in ty_params {
             ty_args.push(mk_fresh_type_mvar());
@@ -2071,12 +2086,57 @@ impl<'a, 'b> Parser<'a, 'b> {
 }
 
 #[doc(hidden)]
+pub trait Arg<T> {
+    fn as_arg(&self) -> &T;
+}
+
+impl Arg<Term> for &Term {
+    fn as_arg(&self) -> &Term {
+        self
+    }
+}
+
+impl Arg<Term> for Term {
+    fn as_arg(&self) -> &Term {
+        self
+    }
+}
+
+#[doc(hidden)]
+pub trait ToArg<T> {
+    type ToArg<'a>: Arg<T>
+    where
+        Self: 'a;
+    fn to_arg(&self) -> Self::ToArg<'_>;
+}
+
+impl ToArg<Term> for Term {
+    type ToArg<'a> = &'a Term;
+    fn to_arg(&self) -> Self::ToArg<'_> {
+        self
+    }
+}
+
+impl ToArg<Term> for TermLocal {
+    type ToArg<'a> = Term;
+    fn to_arg(&self) -> Self::ToArg<'_> {
+        Term::Local(Arc::new(self.clone()))
+    }
+}
+
+#[doc(hidden)]
 pub trait Quote: Sized + 'static {
-    fn quote<'a>(template: &str, args: impl IntoIterator<Item = &'a Self>) -> anyhow::Result<Self>;
+    fn quote<'a>(
+        template: &str,
+        args: impl IntoIterator<Item = &'a dyn Arg<Self>>,
+    ) -> anyhow::Result<Self>;
 }
 
 impl Quote for Term {
-    fn quote<'a>(template: &str, args: impl IntoIterator<Item = &'a Term>) -> anyhow::Result<Term> {
+    fn quote<'a>(
+        template: &str,
+        args: impl IntoIterator<Item = &'a dyn Arg<Term>>,
+    ) -> anyhow::Result<Term> {
         let mut lex = Lex::new(template);
         let env = Env::get();
         let mut parser = Parser::new(&mut lex, &env, true);
@@ -2090,7 +2150,7 @@ impl Quote for Term {
             m.close_at(name, &ty, i);
         }
         for (i, arg) in args.into_iter().enumerate() {
-            m.open_at(arg, i);
+            m.open_at(arg.as_arg(), i);
         }
         Ok(m)
     }
@@ -2099,7 +2159,7 @@ impl Quote for Term {
 #[doc(hidden)]
 pub fn quote<'a, T: Quote>(
     template: &str,
-    args: impl IntoIterator<Item = &'a T>,
+    args: impl IntoIterator<Item = &'a dyn Arg<T>>,
 ) -> anyhow::Result<T> {
     Quote::quote(template, args)
 }
@@ -2109,8 +2169,12 @@ macro_rules! q {
     ($template:expr) => {
         $crate::quote($template, []).unwrap()
     };
-    ($template:expr, $($args:expr),*) => {
-        $crate::quote($template, [$($args),*]).unwrap()
+    ($template:expr, $($arg:expr),*) => {
+        {
+            use $crate::ToArg;
+            use $crate::Arg;
+            $crate::quote($template, [$(&$arg.to_arg() as &dyn Arg<_>),*]).unwrap()
+        }
     };
 }
 
@@ -2204,7 +2268,6 @@ impl<'a> Printer<'a> {
                             }
                         }
                         Fixity::Prefix => {
-                            // TODO: buggy
                             if args.len() == 1 {
                                 if prec > op.prec {
                                     write!(f, "(")?;
@@ -2298,10 +2361,16 @@ impl<'a> Printer<'a> {
         }
 
         match m {
-            &Term::Var(i) => match local_names.get(local_names.len() - i - 1) {
-                Some(name) => write!(f, "{name}"),
-                None => write!(f, "{i}"),
-            },
+            &Term::Var(i) => {
+                if i >= local_names.len() {
+                    write!(f, "#Var({i})")
+                } else {
+                    match local_names.get(local_names.len() - i - 1) {
+                        Some(name) => write!(f, "{name}"),
+                        None => write!(f, "{i}"),
+                    }
+                }
+            }
             Term::Local(inner) => {
                 // TODO: take prec into account
                 // TODO: concise mode

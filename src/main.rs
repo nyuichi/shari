@@ -54,6 +54,17 @@ fn apply(
     Ok(h)
 }
 
+fn take(name: Name, ty: Type) -> TermLocal {
+    TermLocal { name, ty }
+}
+
+fn take_fresh(ty: Type) -> TermLocal {
+    TermLocal {
+        name: Name::fresh(),
+        ty,
+    }
+}
+
 /// ```text
 ///
 /// ----------------------
@@ -199,7 +210,12 @@ fn init_logic() {
     )
     .unwrap();
 
-    add_lemma("trivial".try_into().unwrap(), top_intro()).unwrap();
+    // [⊢ ⊤]
+    add_lemma("trivial".try_into().unwrap(), {
+        let h = reflexivity(q!("λ (x : Prop), x")).unwrap();
+        change(q!("top"), h).unwrap()
+    })
+    .unwrap();
 
     add_lemma("and_intro".try_into().unwrap(), {
         let hp = assume(q!("p")).unwrap();
@@ -241,7 +257,7 @@ fn init_logic() {
     })
     .unwrap();
 
-    add_lemma("bot_elim".try_into().unwrap(), {
+    add_lemma("absurd".try_into().unwrap(), {
         // ⊥ ⊢ ⊥
         let h = assume(q!("⊥")).unwrap();
         // ⊥ ⊢ ∀ p, p
@@ -267,25 +283,31 @@ fn init_logic() {
     .unwrap();
 
     add_lemma("not_is_fixpoint_free".try_into().unwrap(), {
-        let h = assume(q!("(¬p) = p")).unwrap();
+        let h = assume(q!("p = ¬p")).unwrap();
+        // [p = ¬p, p ⊢ p]
         let p_holds = assume(q!("p")).unwrap();
-        let np_holds = eq_mp(eq_symm(h.clone()).unwrap(), p_holds.clone()).unwrap();
+        // [p = ¬p, p ⊢ ¬p]
+        let not_p_holds = transport(h.clone(), p_holds.clone()).unwrap();
+        // [p = ¬p, p ⊢ ⊥]
         let bot_holds = apply(
             get_fact("contradiction".try_into().unwrap()).unwrap(),
             [q!("p")],
-            [p_holds, np_holds],
+            [p_holds, not_p_holds],
         )
         .unwrap();
-        let np_holds = change(q!("¬p"), imp_intro(q!("p"), bot_holds).unwrap()).unwrap();
-        let p_holds = eq_mp(h, np_holds.clone()).unwrap();
+        // [p = ¬p ⊢ ¬p]
+        let not_p_holds = change(q!("¬p"), imp_intro(q!("p"), bot_holds).unwrap()).unwrap();
+        // [p = ¬p ⊢ p]
+        let p_holds = eq_mp(symmetry(h).unwrap(), not_p_holds.clone()).unwrap();
+        // [p = ¬p ⊢ ⊥]
         let bot_holds = apply(
             get_fact("contradiction".try_into().unwrap()).unwrap(),
             [q!("p")],
-            [p_holds, np_holds],
+            [p_holds, not_p_holds],
         )
         .unwrap();
-        let h = imp_intro(q!("(¬p) = p"), bot_holds).unwrap();
-        let h = change(q!("(¬p) ≠ p"), h).unwrap();
+        let h = imp_intro(q!("p = ¬p"), bot_holds).unwrap();
+        let h = change(q!("p ≠ ¬p"), h).unwrap();
         forall_intro("p".try_into().unwrap(), mk_prop(), h).unwrap()
     })
     .unwrap();
@@ -316,24 +338,14 @@ fn test_top_intro() {
 fn and_intro(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     let p1 = h1.target();
     let p2 = h2.target();
-    let mut g: Term = q!("λ p q, p ∧ q");
-    g.undischarge();
-    g.open_at(p1, 1);
-    g.open_at(p2, 0);
-    let r = Name::fresh();
-    let mut p: Term = q!("λ p q r, p → q → r");
-    p.undischarge();
-    p.open_at(p1, 2);
-    p.open_at(p2, 1);
-    p.open(&Term::Local(Arc::new(TermLocal {
-        name: r,
-        ty: mk_prop(),
-    })));
+    let g: Term = q!("${} ∧ ${}", p1, p2);
+    let r = take_fresh(mk_prop());
+    let p: Term = q!("${} → ${} → ${}", p1, p2, r);
     let h = assume(p.clone()).unwrap();
     let h = imp_elim(h, h1)?;
     let h = imp_elim(h, h2)?;
     let h = imp_intro(p, h).unwrap();
-    let h = forall_intro(r, mk_prop(), h).unwrap();
+    let h = forall_intro(r.name, r.ty, h).unwrap();
     change(g, h)
 }
 
@@ -488,7 +500,7 @@ fn exists_intro(p: Term, m: Term, h: Fact) -> anyhow::Result<Fact> {
     let mut goal: Term = q!("λ p, exists p");
     goal.undischarge();
     goal.open(&p);
-    let r = Name::fresh();
+    let r: Name = Name::fresh();
     let mut c: Term = q!("λ P r, ∀ x, P x → r");
     c.undischarge();
     c.open_at(&p, 1);
@@ -505,6 +517,36 @@ fn exists_intro(p: Term, m: Term, h: Fact) -> anyhow::Result<Fact> {
     let h = imp_intro(c, h)?;
     let h = forall_intro(r, mk_prop(), h)?;
     change(goal, h)
+}
+
+/// ```text
+/// h₁ : [Φ ⊢ ∃ (x : τ), φ]  h₂ : [Ψ ⊢ ψ]
+/// ---------------------------------------------- ((y : τ) # (Ψ - {[y/x]φ}, ψ))
+/// exists_elim y h₁ h₂ : [Φ ∪ (Ψ - {[y/x]φ}) ⊢ ψ]
+/// ```
+fn exists_elim(name: Name, h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
+    let mut args = h1.target().args();
+    if args.len() != 1 {
+        bail!("not an exists");
+    }
+    // pred :≡ λ (x : τ), φ
+    let pred = args.pop().unwrap();
+    let Term::Abs(inner) = pred else {
+        bail!("exists must take an abstraction");
+    };
+    // p :≡ [y/x]φ
+    let mut p = inner.body.clone();
+    let y = TermLocal {
+        name,
+        ty: inner.binder_type.clone(),
+    };
+    p.open(&y.clone().into());
+    let q = h2.target().clone();
+    let h2 = imp_intro(p.clone(), h2)?;
+    let h2 = change(q!("${} ${} → ${}", pred, y, q), h2)?;
+    let h2 = forall_intro(y.name, y.ty, h2)?;
+    let h1 = change(q!("∀ r, (∀ x, ${} x → r) → r", pred), h1)?;
+    apply(h1, [q], [h2])
 }
 
 /// TODO: refine
@@ -651,14 +693,30 @@ fn init_function() {
     )
     .unwrap();
 
-    // add_lemma("lawvere_fixpoint".try_into().unwrap(), {
-    //     let h = assume(qq!("surjective.{u, u → v} e")).unwrap();
-    //     let h = change(qq!("∀ (y : u → v), ∃ (x : u), e x = y"), h).unwrap();
-    //     let h = apply(h, [qq!("λ x, f (e x x)")], []).unwrap();
-    //     println!("{h}");
-    //     h
-    // })
-    // .unwrap()
+    add_lemma("lawvere_fixpoint".try_into().unwrap(), {
+        let e = take("e".try_into().unwrap(), "u → u → v".parse().unwrap());
+        let f = take("f".try_into().unwrap(), "v → v".parse().unwrap());
+        let h = assume(q!("surjective ${}", e)).unwrap();
+        let h = change(q!("∀ y, ∃ x, ${} x = y", e), h).unwrap();
+        let h = apply(h, [q!("λ x, ${} (${} x x)", f, e)], []).unwrap();
+        let x = take_fresh("u".parse().unwrap());
+        let hh = assume(q!("${} ${} = (λ x, ${} (${} x x))", e, x, f, e)).unwrap();
+        let hh = congr_fun(hh, x.clone().into()).unwrap();
+        let hh = change(
+            q!("${} ${} ${} = ${} (${} ${} ${})", e, x, x, f, e, x, x),
+            hh,
+        )
+        .unwrap();
+        let hh = change(q!("(λ y, y = ${} y) (${} ${} ${})", f, e, x, x), hh).unwrap();
+        // hh: [e x = (λ x, f (e x x)) ⊢ ∃ y, y = f y]
+        let hh = exists_intro(q!("λ y, y = ${} y", f), q!("${} ${} ${}", e, x, x), hh).unwrap();
+        let h = exists_elim(x.name, h, hh).unwrap();
+        let h = forall_intro(f.name, f.ty, h).unwrap();
+        let h_exists_surj = assume(q!("∃ (e : u → u → v), surjective e")).unwrap();
+        let h = exists_elim(e.name, h_exists_surj, h).unwrap();
+        imp_intro(q!("∃ (e : u → u → v), surjective e"), h).unwrap()
+    })
+    .unwrap()
 }
 
 fn init_classic() {
@@ -728,7 +786,7 @@ fn init_classic() {
                 let h = assume(q!("⊥")).unwrap();
                 // ⊥ ⊢ p
                 apply(
-                    get_fact("bot_elim".try_into().unwrap()).unwrap(),
+                    get_fact("absurd".try_into().unwrap()).unwrap(),
                     [q!("p")],
                     [h],
                 )
