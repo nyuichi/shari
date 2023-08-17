@@ -2490,7 +2490,7 @@ fn test_parse_print() {
         },
     ];
 
-    let mut env = Env::get().clone();
+    let mut env = Env::new_kernel();
     for op in ops {
         env.add_notation(op).unwrap();
     }
@@ -2700,67 +2700,69 @@ impl TryFrom<Decl> for MetaDecl {
     }
 }
 
-static ENV: Lazy<RwLock<Env>> = Lazy::new(|| {
-    let mut env = Env::default();
-
-    env.add_type_decl(
-        "Prop".try_into().unwrap(),
-        TypeDecl::Const(DeclTypeConst { kind: Kind::base() }),
-    )
-    .unwrap();
-
-    env.add_term_decl(
-        "imp".try_into().unwrap(),
-        TermDecl::Const(DeclConst {
-            local_types: vec![],
-            ty: mk_type_arrow(mk_prop(), mk_type_arrow(mk_prop(), mk_prop())),
-        }),
-    )
-    .unwrap();
-
-    env.add_term_decl(
-        "forall".try_into().unwrap(),
-        TermDecl::Const(DeclConst {
-            local_types: vec!["u".try_into().unwrap()],
-            ty: mk_type_arrow(
-                mk_type_arrow(mk_type_local("u".try_into().unwrap()), mk_prop()),
-                mk_prop(),
-            ),
-        }),
-    )
-    .unwrap();
-
-    env.add_term_decl(
-        "eq".try_into().unwrap(),
-        TermDecl::Const(DeclConst {
-            local_types: vec!["u".try_into().unwrap()],
-            ty: mk_type_arrow(
-                mk_type_local("u".try_into().unwrap()),
-                mk_type_arrow(mk_type_local("u".try_into().unwrap()), mk_prop()),
-            ),
-        }),
-    )
-    .unwrap();
-
-    env.add_notation(Operator {
-        symbol: "→".to_owned(),
-        fixity: Fixity::Infixr,
-        prec: 25,
-        entity: "imp".try_into().unwrap(),
-    })
-    .unwrap();
-    env.add_notation(Operator {
-        symbol: "=".to_owned(),
-        fixity: Fixity::Infix,
-        prec: 50,
-        entity: "eq".try_into().unwrap(),
-    })
-    .unwrap();
-
-    RwLock::new(env)
-});
+static ENV: Lazy<RwLock<Env>> = Lazy::new(|| RwLock::new(Env::new_kernel()));
 
 impl Env {
+    fn new_kernel() -> Env {
+        let mut env = Env::default();
+
+        env.add_type_decl(
+            "Prop".try_into().unwrap(),
+            TypeDecl::Const(DeclTypeConst { kind: Kind::base() }),
+        )
+        .unwrap();
+
+        env.add_term_decl(
+            "imp".try_into().unwrap(),
+            TermDecl::Const(DeclConst {
+                local_types: vec![],
+                ty: mk_type_arrow(mk_prop(), mk_type_arrow(mk_prop(), mk_prop())),
+            }),
+        )
+        .unwrap();
+
+        env.add_term_decl(
+            "forall".try_into().unwrap(),
+            TermDecl::Const(DeclConst {
+                local_types: vec!["u".try_into().unwrap()],
+                ty: mk_type_arrow(
+                    mk_type_arrow(mk_type_local("u".try_into().unwrap()), mk_prop()),
+                    mk_prop(),
+                ),
+            }),
+        )
+        .unwrap();
+
+        env.add_term_decl(
+            "eq".try_into().unwrap(),
+            TermDecl::Const(DeclConst {
+                local_types: vec!["u".try_into().unwrap()],
+                ty: mk_type_arrow(
+                    mk_type_local("u".try_into().unwrap()),
+                    mk_type_arrow(mk_type_local("u".try_into().unwrap()), mk_prop()),
+                ),
+            }),
+        )
+        .unwrap();
+
+        env.add_notation(Operator {
+            symbol: "→".to_owned(),
+            fixity: Fixity::Infixr,
+            prec: 25,
+            entity: "imp".try_into().unwrap(),
+        })
+        .unwrap();
+        env.add_notation(Operator {
+            symbol: "=".to_owned(),
+            fixity: Fixity::Infix,
+            prec: 50,
+            entity: "eq".try_into().unwrap(),
+        })
+        .unwrap();
+
+        env
+    }
+
     fn get() -> std::sync::RwLockReadGuard<'static, Env> {
         ENV.try_read().unwrap()
     }

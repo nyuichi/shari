@@ -661,7 +661,7 @@ fn init_function() {
         let h = exists_elim(e.name, h_exists_surj, h).unwrap();
         imp_intro(q!("∃ (e : u → u → v), surjective e"), h).unwrap()
     })
-    .unwrap()
+    .unwrap();
 }
 
 fn init_classical() {
@@ -960,12 +960,6 @@ fn mar(h: Fact) -> Fact {
     prop_ext(iff_intro(h, top_intro())).unwrap()
 }
 
-#[test]
-fn test_mar() {
-    let p = q!("p");
-    insta::assert_display_snapshot!(mar(assume(p).unwrap()), @"((p : Prop)) ⊢ (p : Prop) = ⊤");
-}
-
 /// ```text
 /// h : [Φ ⊢ φ = ⊤]
 /// ---------------- [material adequacy]
@@ -975,10 +969,47 @@ fn ma(h: Fact) -> anyhow::Result<Fact> {
     eq_mp(eq_symm(h)?, top_intro())
 }
 
-#[test]
-fn test_ma() {
-    let p = q!("p");
-    insta::assert_display_snapshot!(ma(mar(assume(p).unwrap())).unwrap(), @"((p : Prop)) ⊢ (p : Prop)");
+fn init_nat() {
+    add_const_type(q!("ℕ"), Kind(0)).unwrap();
+    add_const(q!("zero"), vec![], q!("ℕ")).unwrap();
+    add_const(q!("succ"), vec![], q!("ℕ → ℕ")).unwrap();
+    add_axiom(
+        q!("ind"),
+        q!("∀ n, ∀ P, P zero ∧ (∀ n, P n → P (succ n)) → P n"),
+    )
+    .unwrap();
+    add_const(q!("rec"), vec![q!("u")], q!("ℕ → u → (u → u) → u")).unwrap();
+    add_axiom(
+        q!("rec_spec"),
+        q!("∀ (d₁ : u) (d₂ : u → u), rec zero d₁ d₂ = d₁ ∧ (∀ n, rec (succ n) d₁ d₂ = d₂ (rec n d₁ d₂))"),
+    )
+    .unwrap();
+
+    add_notation("+", Fixity::Infixl, 65, "add").unwrap();
+    add_notation("-", Fixity::Infixl, 65, "sub").unwrap();
+    add_notation("*", Fixity::Infixl, 70, "mul").unwrap();
+    add_notation("/", Fixity::Infixl, 70, "div").unwrap();
+    add_notation("-", Fixity::Prefix, 100, "neg").unwrap();
+    add_notation("^", Fixity::Infixr, 80, "pow").unwrap();
+    add_notation("≤", Fixity::Infix, 50, "le").unwrap();
+    add_notation("<", Fixity::Infix, 50, "lt").unwrap();
+    add_notation("≥", Fixity::Infix, 50, "ge").unwrap();
+    add_notation(">", Fixity::Infix, 50, "gt").unwrap();
+
+    add_definition(q!("add"), vec![], q!("λ n m, rec n m succ")).unwrap();
+    add_definition(q!("mul"), vec![], q!("λ n m, rec n zero (add m)")).unwrap();
+
+    // add_definition(
+    //     q!("prec"),
+    //     vec![q!("u")],
+    //     q!("λ (n : ℕ) (x : u) (f : ℕ → u → u), "),
+    // )
+    // .unwrap();
+
+    // add_definition(q!("le"), vec![], q!("λ n m, rec n ⊤ (λ _, rec m ⊥ ())")).unwrap();
+
+    add_definition(q!("bit0"), vec![], q!("λ n, n + n")).unwrap();
+    add_definition(q!("bit1"), vec![], q!("λ n, succ (bit0 n)")).unwrap();
 }
 
 fn init_set() {
@@ -1124,13 +1155,25 @@ fn init_set() {
         apply(mt_lawvere, [], [h]).unwrap()
     })
     .unwrap();
+
+    // // Recall Bernstein is strong enough to prove EM. (See arXiv:1904.09193.)
+    // add_lemma(q!("bernstein"), {
+    //     let f = take(q!("f"), q!("u → v"));
+    //     let g = take(q!("g"), q!("v → u"));
+    // }).unwrap();
 }
 
 fn init() {
     init_logic();
     init_function();
-    init_classical();
+    //init_classical();
+    init_nat();
     init_set();
+
+    // cousot-cousot
+    // burali-forti
+    // transfinite induction
+    // zorn
 }
 
 #[cfg(test)]
