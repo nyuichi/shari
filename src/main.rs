@@ -1,9 +1,10 @@
 use anyhow::bail;
 use shari_kernel::{
-    add_axiom, add_const, add_const_type, add_definition, add_lemma, add_notation, assume, change,
-    congr_app, eq_elim_old, forall_elim, forall_intro, get_decls, get_fact, imp_elim, imp_intro,
-    inst, mk_prop, q, reflexivity, symmetry, transitivity, transport, Decl, DeclAxiom, DeclConst,
-    DeclDef, DeclLemma, DeclTypeConst, Fact, Fixity, Kind, Name, Term, TermLocal, Type,
+    add_axiom, add_const, add_const_type, add_definition, add_lemma, add_notation, add_type,
+    assume, change, congr_app, eq_elim_old, forall_elim, forall_intro, get_decls, get_fact,
+    imp_elim, imp_intro, inst, mk_prop, q, reflexivity, symmetry, transitivity, transport, Decl,
+    DeclAxiom, DeclConst, DeclDef, DeclDesc, DeclLemma, DeclType, DeclTypeConst, Fact, Fixity,
+    Kind, Name, Term, TermLocal, Type,
 };
 use std::sync::Arc;
 
@@ -282,7 +283,7 @@ fn init_logic() {
     })
     .unwrap();
 
-    add_lemma(q!("not_is_fixpoint_free"), {
+    add_lemma(q!("not_fixpoint_free"), {
         let h = assume(q!("p = ¬p")).unwrap();
         // [p = ¬p, p ⊢ p]
         let p_holds = assume(q!("p")).unwrap();
@@ -676,7 +677,7 @@ fn init_classical() {
     // emulate the `inhabited` type class by dictionary passing
     add_const_type(q!("inhabited"), Kind(1)).unwrap();
 
-    add_const(q!("inhabited_prop"), vec![], q!("inhabited Prop")).unwrap();
+    add_const(q!("prop_inhabited"), vec![], q!("inhabited Prop")).unwrap();
 
     add_const(
         q!("choice"),
@@ -809,13 +810,13 @@ fn em() -> Fact {
         let h: Fact = or_intro1(q!("${}", p), eq_intro(q!("⊥")).unwrap()).unwrap();
         exists_intro(vv.clone(), q!("⊥"), h).unwrap()
     };
-    let u: Term = q!("choice inhabited_prop ${}", uu);
-    let v: Term = q!("choice inhabited_prop ${}", vv);
+    let u: Term = q!("choice prop_inhabited ${}", uu);
+    let v: Term = q!("choice prop_inhabited ${}", vv);
     // u_spec : ⊢ u = ⊤ ∨ p
     let u_spec = {
         let h = get_fact(q!("choice_spec")).unwrap();
         let h = inst(q!("u"), &mk_prop(), h).unwrap();
-        let h = forall_elim(q!("inhabited_prop"), h).unwrap();
+        let h = forall_elim(q!("prop_inhabited"), h).unwrap();
         let h = forall_elim(uu.clone(), h).unwrap();
         let h = mp(h, ex_uu).unwrap();
         beta_reduce(h).unwrap()
@@ -824,7 +825,7 @@ fn em() -> Fact {
     let v_spec = {
         let h = get_fact(q!("choice_spec")).unwrap();
         let h = inst(q!("u"), &mk_prop(), h).unwrap();
-        let h = forall_elim(q!("inhabited_prop"), h).unwrap();
+        let h = forall_elim(q!("prop_inhabited"), h).unwrap();
         let h = forall_elim(vv.clone(), h).unwrap();
         let h = mp(h, ex_vv).unwrap();
         beta_reduce(h).unwrap()
@@ -867,7 +868,7 @@ fn em() -> Fact {
             let h = prop_ext(iff_intro(h1, h2)).unwrap();
             fun_ext(q!("x"), mk_prop(), h).unwrap()
         };
-        let h = congr_arg(q!("choice inhabited_prop"), p_imp_uu_eq_vv).unwrap();
+        let h = congr_arg(q!("choice prop_inhabited"), p_imp_uu_eq_vv).unwrap();
         imp_intro(q!("p"), h).unwrap()
     };
     // h1: u ≠ v ⊢ p ∨ ¬p
@@ -902,10 +903,10 @@ fn em() -> Fact {
         have ⟨⊥ = ⊥ ∨ 'p⟩ := or_intro1 p ⟨⊥ = ⊥⟩,
         exists_intro V `⊥ ⟨⊥ = ⊥ ∨ 'p⟩
       },
-      let u := `(choice.{Prop} inhabited_prop 'U),
-      let v := `(choice.{Prop} inhabited_prop 'V),
-      have u_spec : `('U 'u) := choice_spec.{Prop} inhabited_prop U ⟨∃ x, 'U x⟩,
-      have v_spec : `('V 'v) := choice_spec.{Prop} inhabited_prop V ⟨∃ x, 'V x⟩,
+      let u := `(choice.{Prop} prop_inhabited 'U),
+      let v := `(choice.{Prop} prop_inhabited 'V),
+      have u_spec : `('U 'u) := choice_spec.{Prop} prop_inhabited U ⟨∃ x, 'U x⟩,
+      have v_spec : `('V 'v) := choice_spec.{Prop} prop_inhabited V ⟨∃ x, 'V x⟩,
       have u_ne_v_or_p : `(u ≠ v ∨ 'p) := {
         have hu : `('u = ⊤ ∨ 'p) := u_spec,
         have hv : `('v = ⊥ ∨ 'p) := v_spec,
@@ -937,7 +938,7 @@ fn em() -> Fact {
         have h : `('U 'x ↔ 'V 'x) := iff_intro (λ _, Vx) (λ _, Ux),
         prop_ext h
       }),
-      congr_arg `(choice.{Prop} inhabited_prop) U_eq_V
+      congr_arg `(choice.{Prop} prop_inhabited) U_eq_V
     },
     u_ne_v_or_p.case {
       h1 : `('u ≠ 'v) := {
@@ -1136,7 +1137,7 @@ fn init_set() {
             let h_contr = {
                 let h_y_eq_not_y = assume(q!("${} = ¬ ${}", y, y)).unwrap();
                 let h_y_ne_not_y = apply(
-                    get_fact(q!("not_is_fixpoint_free")).unwrap(),
+                    get_fact(q!("not_fixpoint_free")).unwrap(),
                     [q!("${}", y)],
                     [],
                 )
@@ -1163,9 +1164,87 @@ fn init_set() {
     // }).unwrap();
 }
 
+fn init_pair() {
+    add_type(q!("bool"), vec![], q!("λ (p : Prop), p = ⊤ ∨ p = ⊥")).unwrap();
+    add_type(
+        q!("embed"),
+        vec![q!("u")],
+        q!("λ (c : (u → Prop) → Prop), ∃ x, c = (λ k, k x)"),
+    )
+    .unwrap();
+
+    /*
+    -- some setup
+
+    type constant comprehension : Type → Type
+    type constant comprehension.base : Type → Type
+    constant comprehension.rep : comprehension u → u → comprehension.base u
+    constant comprehension.char : comprehension u → comprehension.base u → Prop
+    axiom rep_injective : ∀ (h : subtype u v), injective (rep h)
+    axiom char_classifying : ∀ (h : subtype u v), ∀ y, (∃ x, y = rep h x) ↔ char h y
+
+    -- then the following declaration of type comprehension
+
+    type foo u := { λ (x : bar u), φ }
+
+    -- compiles to...
+
+    constant foo_comprehension.{u} : comprehension (foo u)
+    comprehension.base (foo u) :≡ bar u
+    comprehension.char (foo_comprehension.{u}) :≡ (λ x, φ)
+
+    -- Example 1. bool
+
+    constant bool_comprehension : comprehension bool
+    comprehension.base bool :≡ Prop
+    comprehension.char bool_comprehension :≡ (λ p, p = ⊤ ∨ p = ⊥)
+
+    lemma abs_top : ∃! (b : bool), rep bool_comprehension b = ⊤ := by sorry
+    def tt : bool := by abs_top
+    lemma tt_spec : rep bool_comprehension tt = ⊤ := by sorry
+    lemma abs_bot : ∃! (b : bool), rep bool_comprehension b = ⊤ := by sorry
+    def ff : bool := by abs_bot
+    lemma ff_spec : rep bool_comprehension ff = ⊥ := by sorry
+    lemma tt_ne_ff : tt ≠ ff := by sorry
+    lemma bool_boolean : ∀ b, b = tt ∨ b = ff := sorry
+    def bool_rec.{u} : bool → u → u → u
+    lemma bool_ind : ∀ b, ∀ P, (P tt ∧ P ff) → P b := sorry
+
+    -- Example 2. embed
+
+    constant embed_comprehension.{u} : comprehension (embed u)
+    comprehension.base (embed u) :≡ (u → Prop) → Prop
+    comprehension.char (embed_comprehension.{u}) :≡ (λ (c : (u → Prop) → Prop), ∃ x, c = (λ k, k x))
+
+    lemma encode_def : ∀ x, ∃! c, rep embed_comprehension c = (λ k, k x) := sorry
+    def encode : u → embed u := by encode_def
+    lemma encode_spec : ∀ x, rep embed_comprehension (encode x) = (λ k, k x) := sorry
+    lemma decode_def : ∀ c, ∃! x, rep embed_comprehension c = (λ k, k x) := sorry
+    def decode : embed u → u := by decode_def
+    lemma decode_spec : ∀ c, rep embed_comprehension c = (λ k, k (decode c)) := sorry
+    lemma embed_bij : ∃ f : u → embed, bijective f := sorry
+
+    -- Example 3. pair (WIP)
+
+    constant pair : u → v → u × v
+    def fst (p : u × v) := choice (λ (x : u), ∃ y, p = pair x y)
+    lemma pair_fst : ∀ a b, fst (pair a b) = a
+    {
+        change fst x
+    }
+
+                     Ψ ⊢ φ[choice P]
+                     -----------------------
+    Φ ⊢ ∃ x, P x     Ψ, P(x) ⊢ φ[x]
+    ------------------------------------
+    Φ, Ψ ⊢ φ
+    */
+}
+
 fn init() {
     init_logic();
     init_function();
+    init_pair();
     //init_classical();
     init_nat();
     init_set();
@@ -1217,6 +1296,26 @@ fn main() {
             Decl::Lemma(DeclLemma { fact }) => {
                 let target = fact.target();
                 println!("lemma {name} : {target}");
+            }
+            Decl::Type(DeclType { local_types, char }) => {
+                if local_types.is_empty() {
+                    println!("type {name} := {{ {char} }}");
+                } else {
+                    let v: Vec<_> = local_types.iter().map(ToString::to_string).collect();
+                    println!("type {name} {{{}}} := {{ {char} }}", v.join(" "));
+                }
+            }
+            Decl::Desc(DeclDesc {
+                local_types,
+                ty,
+                spec,
+            }) => {
+                if local_types.is_empty() {
+                    println!("def {name} : {ty} := by {spec}");
+                } else {
+                    let v: Vec<_> = local_types.iter().map(ToString::to_string).collect();
+                    println!("def {name}.{{{}}} : {ty} := by {spec}", v.join(" "));
+                }
             }
         }
     }

@@ -2577,6 +2577,8 @@ pub enum Decl {
     TypeConst(DeclTypeConst),
     Axiom(DeclAxiom),
     Lemma(DeclLemma),
+    Type(DeclType),
+    Desc(DeclDesc),
 }
 
 #[derive(Debug, Clone)]
@@ -2588,8 +2590,8 @@ pub struct DeclConst {
 #[derive(Debug, Clone)]
 pub struct DeclDef {
     pub local_types: Vec<Name>,
-    pub target: Term,
     pub ty: Type,
+    pub target: Term,
 }
 
 #[derive(Debug, Clone)]
@@ -2607,6 +2609,20 @@ pub struct DeclLemma {
     pub fact: Fact,
 }
 
+#[derive(Debug, Clone)]
+pub struct DeclType {
+    pub local_types: Vec<Name>,
+    pub char: Term,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeclDesc {
+    pub local_types: Vec<Name>,
+    pub ty: Type,
+    // TODO: or maybe the name of a fact?
+    pub spec: Fact,
+}
+
 #[derive(Debug, Default, Clone)]
 struct NotationTable {
     // symbol to name
@@ -2619,11 +2635,13 @@ struct NotationTable {
 enum TermDecl {
     Const(DeclConst),
     Def(DeclDef),
+    Desc(DeclDesc),
 }
 
 #[derive(Debug, Clone)]
 enum TypeDecl {
     Const(DeclTypeConst),
+    Type(DeclType),
 }
 
 #[derive(Debug, Clone)]
@@ -2637,6 +2655,7 @@ impl From<TermDecl> for Decl {
         match value {
             TermDecl::Const(d) => Decl::Const(d),
             TermDecl::Def(d) => Decl::Def(d),
+            TermDecl::Desc(d) => Decl::Desc(d),
         }
     }
 }
@@ -2645,6 +2664,7 @@ impl From<TypeDecl> for Decl {
     fn from(value: TypeDecl) -> Self {
         match value {
             TypeDecl::Const(d) => Decl::TypeConst(d),
+            TypeDecl::Type(d) => Decl::Type(d),
         }
     }
 }
@@ -2668,6 +2688,8 @@ impl TryFrom<Decl> for TermDecl {
             Decl::TypeConst(_) => Err(()),
             Decl::Axiom(_) => Err(()),
             Decl::Lemma(_) => Err(()),
+            Decl::Type(_) => Err(()),
+            Decl::Desc(d) => Ok(TermDecl::Desc(d)),
         }
     }
 }
@@ -2682,6 +2704,8 @@ impl TryFrom<Decl> for TypeDecl {
             Decl::TypeConst(d) => Ok(TypeDecl::Const(d)),
             Decl::Axiom(_) => Err(()),
             Decl::Lemma(_) => Err(()),
+            Decl::Type(d) => Ok(TypeDecl::Type(d)),
+            Decl::Desc(_) => Err(()),
         }
     }
 }
@@ -2696,6 +2720,8 @@ impl TryFrom<Decl> for MetaDecl {
             Decl::TypeConst(_) => Err(()),
             Decl::Axiom(d) => Ok(MetaDecl::Axiom(d)),
             Decl::Lemma(d) => Ok(MetaDecl::Lemma(d)),
+            Decl::Type(_) => Err(()),
+            Decl::Desc(_) => Err(()),
         }
     }
 }
@@ -2836,6 +2862,10 @@ impl Env {
         let decl = self.get_type_decl(name)?;
         match decl {
             TypeDecl::Const(DeclTypeConst { kind }) => Some(kind),
+            TypeDecl::Type(DeclType {
+                local_types,
+                char: _,
+            }) => Some(Kind(local_types.len())),
         }
     }
 
@@ -2847,6 +2877,11 @@ impl Env {
                 local_types,
                 target: _,
                 ty,
+            }) => Some((local_types, ty)),
+            TermDecl::Desc(DeclDesc {
+                local_types,
+                ty,
+                spec: _,
             }) => Some((local_types, ty)),
         }
     }
@@ -2924,6 +2959,22 @@ pub fn add_definition(name: Name, local_types: Vec<Name>, mut target: Term) -> a
     )
 }
 
+pub fn add_type(name: Name, local_types: Vec<Name>, mut char: Term) -> anyhow::Result<()> {
+    for i in 0..local_types.len() {
+        for j in i + 1..local_types.len() {
+            if local_types[i] == local_types[j] {
+                bail!("duplicate type variables");
+            }
+        }
+    }
+    let mut ty = mk_type_arrow(mk_fresh_type_mvar(), mk_prop());
+    char.infer_under(&mut ty, local_types.as_slice())?;
+    if !char.is_closed() {
+        bail!("term not closed");
+    }
+    Env::get_mut().add_type_decl(name, TypeDecl::Type(DeclType { local_types, char }))
+}
+
 fn get_kind(name: Name) -> Option<Kind> {
     Env::get().get_kind(name)
 }
@@ -2937,6 +2988,7 @@ fn get_def(name: Name) -> Option<DeclDef> {
     match decl {
         TermDecl::Const(_) => None,
         TermDecl::Def(decl_def) => Some(decl_def),
+        TermDecl::Desc(_) => None,
     }
 }
 
@@ -2945,6 +2997,7 @@ fn get_def_index(name: Name) -> Option<usize> {
     match decl {
         TermDecl::Const(_) => None,
         TermDecl::Def(_) => Some(index),
+        TermDecl::Desc(_) => None,
     }
 }
 
