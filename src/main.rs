@@ -1,10 +1,10 @@
 use anyhow::bail;
 use shari_kernel::{
-    add_axiom, add_const, add_const_type, add_definition, add_lemma, add_notation, add_type,
-    assume, change, congr_app, eq_elim_old, forall_elim, forall_intro, get_decls, get_fact,
-    imp_elim, imp_intro, inst, mk_prop, q, reflexivity, symmetry, transitivity, transport, Decl,
-    DeclAxiom, DeclConst, DeclDef, DeclDesc, DeclLemma, DeclType, DeclTypeConst, Fact, Fixity,
-    Kind, Name, Term, TermLocal, Type,
+    add_axiom, add_const, add_const_type, add_definition, add_lemma, add_notation, assume, change,
+    congr_app, eq_elim_old, forall_elim, forall_intro, get_decls, imp_elim, imp_intro, inst,
+    mk_prop, q, reflexivity, symmetry, transitivity, transport, Decl, DeclAxiom, DeclConst,
+    DeclDef, DeclLemma, DeclTypeConst, Fact, Fixity, Kind, Name, Term, TermAbs, TermConst,
+    TermLocal, Type,
 };
 use std::sync::Arc;
 
@@ -67,50 +67,14 @@ fn take_fresh(ty: Type) -> TermLocal {
 }
 
 /// ```text
-///
-/// ----------------------
-/// eq_intro m : [⊢ m = m]
-/// ```
-fn eq_intro(m: Term) -> anyhow::Result<Fact> {
-    reflexivity(m)
-}
-
-/// ```text
 /// h₁ : [Φ ⊢ m₁ = m₂]  h₂ : [Ψ ⊢ C m₁]
 /// ----------------------------------- [indiscernibility of identicals]
 /// eq_elim C h₁ h₂ : [Φ ∪ Ψ ⊢ C m₂]
 /// ```
 fn eq_elim(c: Term, h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     // ⊢ C m₁ = C m₂
-    let h = congr_app(eq_intro(c)?, h1)?;
+    let h = congr_app(reflexivity(c)?, h1)?;
     transport(h, h2)
-}
-
-/// ```text
-/// h : [Φ ⊢ m₁ = m₂]
-/// -------------------------
-/// eq_symm h : [Φ ⊢ m₂ = m₁]
-/// ```
-fn eq_symm(h: Fact) -> anyhow::Result<Fact> {
-    symmetry(h)
-}
-
-/// ```text
-/// h₁ : [Φ ⊢ m₁ = m₂]  h₂ : [Ψ ⊢ m₂ = m₃]
-/// --------------------------------------
-/// eq_trans h₁ h₂ : [Φ ⊢ m₁ = m₃]
-/// ```
-fn eq_trans(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
-    transitivity(h1, h2)
-}
-
-/// ```text
-/// h₁ : [Φ ⊢ m₁ = m₂]  h₂ : [Ψ ⊢ m₁]
-/// ----------------------------------
-/// eq_mp h₁ h₂ : [Φ ∪ Ψ ⊢ m₂]
-/// ```
-fn eq_mp(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
-    transport(h1, h2)
 }
 
 /// ```text
@@ -119,7 +83,7 @@ fn eq_mp(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
 /// congr_fun h a : [Φ ⊢ f₁ a = f₂ a]
 /// ```
 fn congr_fun(h: Fact, a: Term) -> anyhow::Result<Fact> {
-    congr_app(h, eq_intro(a)?)
+    congr_app(h, reflexivity(a)?)
 }
 
 /// ```text
@@ -128,7 +92,7 @@ fn congr_fun(h: Fact, a: Term) -> anyhow::Result<Fact> {
 /// congr_arg f h : [Φ ⊢ f a₁ = f a₂]
 /// ```
 fn congr_arg(f: Term, h: Fact) -> anyhow::Result<Fact> {
-    congr_app(eq_intro(f)?, h)
+    congr_app(reflexivity(f)?, h)
 }
 
 /// ```text
@@ -199,7 +163,7 @@ fn init_logic() {
     })
     .unwrap();
 
-    add_lemma(q!("and_intro"), {
+    add_lemma(q!("and.intro"), {
         let hp = assume(q!("p")).unwrap();
         let hq = assume(q!("q")).unwrap();
         let h = and_intro(hp, hq).unwrap();
@@ -283,35 +247,27 @@ fn init_logic() {
     })
     .unwrap();
 
-    add_lemma(q!("not_fixpoint_free"), {
+    add_lemma(q!("not.fixpoint_free"), {
         let h = assume(q!("p = ¬p")).unwrap();
         // [p = ¬p, p ⊢ p]
         let p_holds = assume(q!("p")).unwrap();
         // [p = ¬p, p ⊢ ¬p]
         let not_p_holds = transport(h.clone(), p_holds.clone()).unwrap();
         // [p = ¬p, p ⊢ ⊥]
-        let bot_holds = apply(
-            get_fact(q!("contradiction")).unwrap(),
-            [q!("p")],
-            [p_holds, not_p_holds],
-        )
-        .unwrap();
+        let bot_holds = apply(q!("contradiction"), [q!("p")], [p_holds, not_p_holds]).unwrap();
         // [p = ¬p ⊢ ¬p]
         let not_p_holds = change(q!("¬p"), imp_intro(q!("p"), bot_holds).unwrap()).unwrap();
         // [p = ¬p ⊢ p]
-        let p_holds = eq_mp(symmetry(h).unwrap(), not_p_holds.clone()).unwrap();
+        let p_holds = transport(symmetry(h).unwrap(), not_p_holds.clone()).unwrap();
         // [p = ¬p ⊢ ⊥]
-        let bot_holds = apply(
-            get_fact(q!("contradiction")).unwrap(),
-            [q!("p")],
-            [p_holds, not_p_holds],
-        )
-        .unwrap();
+        let bot_holds = apply(q!("contradiction"), [q!("p")], [p_holds, not_p_holds]).unwrap();
         let h = imp_intro(q!("p = ¬p"), bot_holds).unwrap();
         let h = change(q!("p ≠ ¬p"), h).unwrap();
         forall_intro(q!("p"), mk_prop(), h).unwrap()
     })
     .unwrap();
+
+    add_lemma(q!("top_ne_bot"), top_ne_bot()).unwrap();
 }
 
 /// ```text
@@ -321,7 +277,7 @@ fn init_logic() {
 /// ```
 fn top_intro() -> Fact {
     let id = q!("λ (x : Prop), x");
-    let h = eq_intro(id).unwrap();
+    let h = reflexivity(id).unwrap();
     let top = q!("top");
     change(top, h).unwrap()
 }
@@ -462,11 +418,11 @@ fn or_elim(h1: Fact, h2: Fact, h3: Fact) -> anyhow::Result<Fact> {
     imp_elim(h1, ha)
 }
 
-/// TODO: refine
+/// TODO refine
 /// ```text
-/// h : [Φ ⊢ φ m]
-/// ---------------------------------------
-/// exists_intro φ m h : [Φ ⊢ ∃ (x : τ), φ]
+/// h : [Φ ⊢ φ]
+/// ---------------------------------------------- (φ ≡ [m/x]ψ)
+/// exists_intro (λ x, ψ) m h : [Φ ⊢ ∃ (x : τ), ψ]
 /// ```
 fn exists_intro(p: Term, m: Term, h: Fact) -> anyhow::Result<Fact> {
     let goal: Term = q!("exists ${}", p);
@@ -511,6 +467,14 @@ fn exists_elim(name: Name, h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     let h1 = change(q!("∀ r, (∀ x, ${} x → r) → r", pred), h1)?;
     apply(h1, [q], [h2])
 }
+
+// /// ```text
+// /// h₁ : [Φ ⊢ ∃ x, φ]  h₂ : [Ψ ⊢ x = y]
+// /// --------------------------------------------------------------
+// /// uexists_intro x y h₁ h₂ : [Φ ∪ (Ψ - {φ[x]} - {φ[y]}) ⊢ ∃! x, φ
+// /// ```
+// fn uexists(h: Fact) -> anyhow::Result<Fact> {
+// }
 
 /// TODO: refine
 /// ```text
@@ -581,7 +545,7 @@ fn mt(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
 fn top_ne_bot() -> Fact {
     let p: Term = q!("⊤ = ⊥");
     let h1 = assume(p.clone()).unwrap();
-    let h = eq_mp(h1, top_intro()).unwrap();
+    let h = transport(h1, top_intro()).unwrap();
     change(q!("⊤ ≠ ⊥"), not_intro(p, h).unwrap()).unwrap()
 }
 
@@ -708,7 +672,7 @@ fn init_classical() {
         let h1 = {
             let h1 = assume(q!("p = ⊥")).unwrap();
             let h2 = assume(q!("p")).unwrap();
-            let h = eq_mp(h1, h2).unwrap();
+            let h = transport(h1, h2).unwrap();
             let h = imp_intro(q!("p"), h).unwrap();
             // p = ⊥ ⊢ ¬p
             change(q!("¬p"), h).unwrap()
@@ -718,7 +682,7 @@ fn init_classical() {
                 // ⊥ ⊢ ⊥
                 let h = assume(q!("⊥")).unwrap();
                 // ⊥ ⊢ p
-                apply(get_fact(q!("absurd")).unwrap(), [q!("p")], [h]).unwrap()
+                apply(q!("absurd"), [q!("p")], [h]).unwrap()
             };
             let h2 = {
                 // ¬p ⊢ ¬p
@@ -747,7 +711,7 @@ fn init_classical() {
 fn prop_ext(h: Fact) -> anyhow::Result<Fact> {
     let p1 = lhs(h.target())?.clone();
     let p2 = rhs(h.target())?.clone();
-    let prop_ext = apply(get_fact(q!("prop_ext")).unwrap(), [p1, p2], [])?;
+    let prop_ext = apply(q!("prop_ext"), [p1, p2], [])?;
     let prop_ext_right = iff_right(prop_ext).unwrap();
     apply(prop_ext_right, [], [h])
 }
@@ -771,12 +735,7 @@ pub fn fun_ext(x: Name, t: Type, h: Fact) -> anyhow::Result<Fact> {
     let mut m2 = m2.clone();
     m1.discharge_local(x, t.clone());
     m2.discharge_local(x, t.clone());
-    let fun_ext = inst(
-        q!("v"),
-        cod_ty,
-        inst(q!("u"), &t, get_fact(q!("fun_ext")).unwrap()).unwrap(),
-    )
-    .unwrap();
+    let fun_ext = inst(q!("v"), cod_ty, inst(q!("u"), &t, q!("fun_ext")).unwrap()).unwrap();
     let fun_ext = iff_right(apply(fun_ext, [m1.clone(), m2.clone()], []).unwrap()).unwrap();
     m1.apply([Term::Local(Arc::new(TermLocal {
         name: x,
@@ -801,20 +760,20 @@ fn em() -> Fact {
     // ex_uu : ⊢ ∃ x, uu x
     let ex_uu = {
         // h : ⊢ ⊤ = ⊤ ∨ p
-        let h: Fact = or_intro1(q!("${}", p), eq_intro(q!("⊤")).unwrap()).unwrap();
+        let h: Fact = or_intro1(q!("${}", p), reflexivity(q!("⊤")).unwrap()).unwrap();
         exists_intro(uu.clone(), q!("⊤"), h).unwrap()
     };
     // ex_vv : ⊢ ∃ x, vv x
     let ex_vv = {
         // h : ⊢ ⊥ = ⊥ ∨ p
-        let h: Fact = or_intro1(q!("${}", p), eq_intro(q!("⊥")).unwrap()).unwrap();
+        let h: Fact = or_intro1(q!("${}", p), reflexivity(q!("⊥")).unwrap()).unwrap();
         exists_intro(vv.clone(), q!("⊥"), h).unwrap()
     };
     let u: Term = q!("choice prop_inhabited ${}", uu);
     let v: Term = q!("choice prop_inhabited ${}", vv);
     // u_spec : ⊢ u = ⊤ ∨ p
     let u_spec = {
-        let h = get_fact(q!("choice_spec")).unwrap();
+        let h = q!("choice_spec");
         let h = inst(q!("u"), &mk_prop(), h).unwrap();
         let h = forall_elim(q!("prop_inhabited"), h).unwrap();
         let h = forall_elim(uu.clone(), h).unwrap();
@@ -823,7 +782,7 @@ fn em() -> Fact {
     };
     // u_spec : ⊢ v = ⊥ ∨ p
     let v_spec = {
-        let h = get_fact(q!("choice_spec")).unwrap();
+        let h = q!("choice_spec");
         let h = inst(q!("u"), &mk_prop(), h).unwrap();
         let h = forall_elim(q!("prop_inhabited"), h).unwrap();
         let h = forall_elim(vv.clone(), h).unwrap();
@@ -838,11 +797,11 @@ fn em() -> Fact {
             let mut c: Term = q!("λ p, p ≠ ⊥");
             c.undischarge();
             // h : [⊢ u ≠ ⊥]
-            let h = eq_elim_old(c, eq_symm(h1).unwrap(), top_ne_bot()).unwrap();
+            let h = eq_elim_old(c, symmetry(h1).unwrap(), top_ne_bot()).unwrap();
             let h2 = assume(q!("${} = ⊥", v)).unwrap();
             let mut c: Term = q!("λ q, ${} ≠ q", u);
             c.undischarge();
-            let h = eq_elim_old(c, eq_symm(h2).unwrap(), h).unwrap();
+            let h = eq_elim_old(c, symmetry(h2).unwrap(), h).unwrap();
             or_intro1(q!("p"), h).unwrap()
         };
         // h2: p ⊢ u ≠ v ∨ p
@@ -915,8 +874,8 @@ fn em() -> Fact {
             hv.case {
               h2 : `(v = ⊥) := {
                 have h : `(⊤ ≠ ⊥) := top_ne_bot,
-                have h : `(u ≠ ⊥) := eq_elim `(λ x, x ≠ ⊥) (eq_symm h1) h,
-                have h : `(u ≠ v) := eq_elim `(λ x, 'u ≠ x) (eq_symm h2) h,
+                have h : `(u ≠ ⊥) := eq_elim `(λ x, x ≠ ⊥) (symmetry h1) h,
+                have h : `(u ≠ v) := eq_elim `(λ x, 'u ≠ x) (symmetry h2) h,
                 or_intro p h
               },
               hp : p := {
@@ -967,7 +926,7 @@ fn mar(h: Fact) -> Fact {
 /// ma h : [Φ ⊢ φ]
 /// ```
 fn ma(h: Fact) -> anyhow::Result<Fact> {
-    eq_mp(eq_symm(h)?, top_intro())
+    transport(symmetry(h)?, top_intro())
 }
 
 fn init_nat() {
@@ -1113,14 +1072,9 @@ fn init_set() {
     .unwrap();
 
     add_lemma(q!("cantor"), {
-        let lawvere = inst(
-            q!("v"),
-            &mk_prop(),
-            get_fact(q!("lawvere_fixpoint")).unwrap(),
-        )
-        .unwrap();
+        let lawvere = inst(q!("v"), &mk_prop(), q!("lawvere_fixpoint")).unwrap();
         let mt_lawvere = apply(
-            get_fact(q!("mt")).unwrap(),
+            q!("mt"),
             [
                 q!("∃ (e : u → u → Prop), surjective e"),
                 q!("∀ (f : Prop → Prop), ∃ y, y = f y"),
@@ -1136,15 +1090,10 @@ fn init_set() {
             // y = f y ⊢ ⊥
             let h_contr = {
                 let h_y_eq_not_y = assume(q!("${} = ¬ ${}", y, y)).unwrap();
-                let h_y_ne_not_y = apply(
-                    get_fact(q!("not_fixpoint_free")).unwrap(),
-                    [q!("${}", y)],
-                    [],
-                )
-                .unwrap();
+                let h_y_ne_not_y = apply(q!("not.fixpoint_free"), [q!("${}", y)], []).unwrap();
                 let h_not_y_eq_not_y = change(q!("¬(${} = ¬ ${})", y, y), h_y_ne_not_y).unwrap();
                 apply(
-                    get_fact(q!("contradiction")).unwrap(),
+                    q!("contradiction"),
                     [q!("${} = ¬ ${}", y, y)],
                     [h_y_eq_not_y, h_not_y_eq_not_y],
                 )
@@ -1164,24 +1113,14 @@ fn init_set() {
     // }).unwrap();
 }
 
-fn init_pair() {
-    add_type(q!("bool"), vec![], q!("λ (p : Prop), p = ⊤ ∨ p = ⊥")).unwrap();
-    add_type(
-        q!("embed"),
-        vec![q!("u")],
-        q!("λ (c : (u → Prop) → Prop), ∃ x, c = (λ k, k x)"),
-    )
-    .unwrap();
-
+fn init_comprehension() {
     /*
-    -- some setup
+    -- setup
 
-    type constant comprehension : Type → Type
-    type constant comprehension.base : Type → Type
-    constant comprehension.rep : comprehension u → u → comprehension.base u
-    constant comprehension.char : comprehension u → comprehension.base u → Prop
-    axiom rep_injective : ∀ (h : subtype u v), injective (rep h)
-    axiom char_classifying : ∀ (h : subtype u v), ∀ y, (∃ x, y = rep h x) ↔ char h y
+    type constant comprehension : Type → Type → Type
+    constant char.{v, u} : comprehension v u → v → Prop
+    constant rep.{v, u} : comprehension v u → u → v
+    axiom rep.spec : ∀ (h : comprehension v u), injective (rep d) ∧ (∀ y, (∃! x, y = rep h x) ↔ char h y)
 
     -- then the following declaration of type comprehension
 
@@ -1189,65 +1128,447 @@ fn init_pair() {
 
     -- compiles to...
 
-    constant foo_comprehension.{u} : comprehension (foo u)
-    comprehension.base (foo u) :≡ bar u
-    comprehension.char (foo_comprehension.{u}) :≡ (λ x, φ)
+    type constant foo : Type → Type
+    constant foo.comprehension.{u} : comprehension (bar u) (foo u)
+    axiom foo_spec : char (foo_comprehension.{u}) = (λ x, φ)
 
-    -- Example 1. bool
+    */
 
-    constant bool_comprehension : comprehension bool
-    comprehension.base bool :≡ Prop
-    comprehension.char bool_comprehension :≡ (λ p, p = ⊤ ∨ p = ⊥)
+    add_const_type(q!("comprehension"), Kind(2)).unwrap();
 
-    lemma abs_top : ∃! (b : bool), rep bool_comprehension b = ⊤ := by sorry
-    def tt : bool := by abs_top
-    lemma tt_spec : rep bool_comprehension tt = ⊤ := by sorry
-    lemma abs_bot : ∃! (b : bool), rep bool_comprehension b = ⊤ := by sorry
-    def ff : bool := by abs_bot
-    lemma ff_spec : rep bool_comprehension ff = ⊥ := by sorry
-    lemma tt_ne_ff : tt ≠ ff := by sorry
-    lemma bool_boolean : ∀ b, b = tt ∨ b = ff := sorry
-    def bool_rec.{u} : bool → u → u → u
+    add_const(
+        q!("char"),
+        vec![q!("v"), q!("u")],
+        q!("comprehension v u → v → Prop"),
+    )
+    .unwrap();
+
+    add_const(
+        q!("rep"),
+        vec![q!("v"), q!("u")],
+        q!("comprehension v u → u → v"),
+    )
+    .unwrap();
+
+    add_axiom(
+        q!("rep.spec"),
+        q!("∀ (d : comprehension v u), injective (rep d) ∧ (∀ y, (∃! x, y = rep d x) ↔ char d y)"),
+    )
+    .unwrap();
+
+    // ∀ (d : comprehension v u), injective (rep h)
+    add_lemma(q!("rep.injective"), {
+        let d = take(q!("d"), q!("comprehension v u"));
+        let h_rep_spec = apply(q!("rep.spec"), [d.clone().into()], []).unwrap();
+        let h = and_left(h_rep_spec).unwrap();
+        forall_intro(d.name, d.ty, h).unwrap()
+    })
+    .unwrap();
+
+    // ∀ (d : comprehension v u), ∀ (x : u), char d (rep d x)
+    add_lemma(q!("char_rep"), {
+        let d = take(q!("d"), q!("comprehension v u"));
+        let x = take(q!("x"), q!("u"));
+        // ∃! x₀, rep d x = rep d x₀
+        let h = {
+            let p: Term = q!("λ (x₀ : u), rep ${} ${} = rep ${} x₀", d, x, d);
+            let h = reflexivity(q!("rep ${} ${}", d, x)).unwrap();
+            let h_exists = change(q!("${} ${}", p, x), h).unwrap();
+            let y = take(q!("y"), q!("u"));
+            let h = assume(q!("${} ${}", p, y)).unwrap();
+            let h = apply(
+                change(
+                    q!("∀ x y, rep ${} x = rep ${} y → x = y", d, d),
+                    apply(q!("rep.injective"), [d.clone().into()], []).unwrap(),
+                )
+                .unwrap(),
+                [x.clone().into(), y.clone().into()],
+                [change(q!("rep ${} ${} = rep ${} ${}", d, x, d, y), h).unwrap()],
+            )
+            .unwrap();
+            let h = imp_intro(q!("${} ${}", p, y), h).unwrap();
+            let h_unique = forall_intro(y.name, y.ty, h).unwrap();
+            let h = and_intro(h_exists, h_unique).unwrap();
+            let h = change(q!("(λ x, ${} x ∧ (∀ y, ${} y → x = y)) ${}", p, p, x), h).unwrap();
+            let h = exists_intro(
+                q!("λ x, ${} x ∧ (∀ y, ${} y → x = y)", p, p),
+                q!("${}", x),
+                h,
+            )
+            .unwrap();
+            change(q!("uexists ${}", p), h).unwrap()
+        };
+        let h = apply(
+            iff_right(
+                apply(
+                    and_right(apply(q!("rep.spec"), [d.clone().into()], []).unwrap()).unwrap(),
+                    [q!("rep ${} ${}", d, x)],
+                    [],
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            [],
+            [h],
+        )
+        .unwrap();
+        forall_intro(d.name, d.ty, forall_intro(x.name, x.ty, h).unwrap()).unwrap()
+    })
+    .unwrap();
+}
+
+fn add_comprehension(name: Name, local_types: Vec<Name>, mut char: Term) -> anyhow::Result<()> {
+    add_const_type(name, Kind(local_types.len()))?;
+    let name_comprehension = format!("{name}.comprehension").as_str().try_into()?;
+    let name_spec = format!("{name}.spec").as_str().try_into()?;
+    let mut char_ty = q!("${} → Prop", Type::Mvar(Name::fresh()));
+    char.infer(&mut char_ty)?;
+    let Type::Arrow(inner) = char_ty else {
+        unreachable!();
+    };
+    let base_ty = &inner.dom;
+    let mut ty = Type::Const(name);
+    ty.apply(local_types.iter().map(|t| Type::Local(*t)));
+    add_const(
+        name_comprehension,
+        local_types.clone(),
+        q!("comprehension ${} ${}", base_ty, ty),
+    )?;
+    add_axiom(
+        name_spec,
+        q!(
+            "char ${} = ${}",
+            TermConst {
+                name: name_comprehension,
+                ty_args: local_types.into_iter().map(Type::Local).collect(),
+            },
+            char
+        ),
+    )?;
+    Ok(())
+}
+
+fn add_function_comprehension(name: Name, local_types: Vec<Name>, h: Fact) -> anyhow::Result<()> {
+    if !h.context().is_empty() {
+        bail!("context not empty");
+    }
+    let mut binders = vec![];
+    let uexists_binder;
+    let mut target = h.target();
+    loop {
+        let head = target.head();
+        let Term::Const(inner) = head else {
+            bail!("invalid form");
+        };
+        let is_uexists;
+        if inner.name == q!("forall") {
+            is_uexists = false;
+        } else if inner.name == q!("uexists") {
+            is_uexists = true;
+        } else {
+            bail!("invalid form");
+        }
+        let args = target.args();
+        // The length of args is either zero or one at this point.
+        if args.len() != 1 {
+            bail!("invalid form");
+        }
+        let arg = args[0];
+        let Term::Abs(inner) = arg else {
+            bail!("invalid form");
+        };
+        target = &inner.body;
+        if is_uexists {
+            uexists_binder = (inner.binder_name, &inner.binder_type);
+            break;
+        }
+        binders.push((inner.binder_name, &inner.binder_type));
+    }
+    let mut ty = uexists_binder.1.clone();
+    ty.discharge(binders.iter().copied().map(|(_, t)| t.clone()));
+    add_const(name, local_types.clone(), ty)?;
+    let mut a: Term = TermConst {
+        name,
+        ty_args: local_types.into_iter().map(Type::Local).collect(),
+    }
+    .into();
+    a.apply((0..binders.len()).rev().map(Term::Var));
+    let mut p = target.clone();
+    p.open(&a);
+    p.unshift();
+    for (name, ty) in binders.into_iter().rev() {
+        let mut forall = Term::Const(Arc::new(TermConst {
+            name: q!("forall"),
+            ty_args: vec![ty.clone()],
+        }));
+        forall.apply([Term::Abs(Arc::new(TermAbs {
+            binder_type: ty.clone(),
+            binder_name: name,
+            body: p,
+        }))]);
+        p = forall;
+    }
+    let name_spec = format!("{}.spec", name).as_str().try_into()?;
+    add_axiom(name_spec, p)?;
+    Ok(())
+}
+
+/// ```text
+/// h : [Φ ⊢ char m]
+/// -----------------------------
+/// abs h : [Φ ⊢ ∃! x, m = rep x]
+/// ```
+fn abs(h: Fact) -> anyhow::Result<Fact> {
+    let Term::Const(inner) = h.target().head() else {
+        bail!("head is not a constant");
+    };
+    if inner.ty_args.len() != 2 {
+        bail!("head is not char");
+    }
+    let v = &inner.ty_args[0];
+    let u = &inner.ty_args[1];
+    let args = h.target().args();
+    if args.len() != 2 {
+        bail!("invalid form");
+    }
+    let c = args[0];
+    let m = args[1];
+    // (∃! x, m = rep x) ↔ char m
+    let h_rep_spec = apply(
+        and_right(apply(
+            inst(q!("u"), u, inst(q!("v"), v, q!("rep.spec")).unwrap()).unwrap(),
+            [c.clone()],
+            [],
+        )?)?,
+        [m.clone()],
+        [],
+    )?;
+    apply(iff_left(h_rep_spec).unwrap(), [], [h])
+}
+
+#[easy_ext::ext]
+impl Fact {
+    fn inst(self, name: Name, ty: &Type) -> Fact {
+        inst(name, ty, self).unwrap()
+    }
+
+    fn elim_forall(self, m: Term) -> Fact {
+        forall_elim(m, self).unwrap()
+    }
+
+    fn elim_imp(self, h: Fact) -> Fact {
+        imp_elim(self, h).unwrap()
+    }
+
+    /// h : [Φ ⊢ self.target = φ]
+    fn transport(self, h: Fact) -> Fact {
+        transport(h, self).unwrap()
+    }
+
+    fn change(self, p: Term) -> Fact {
+        change(p, self).unwrap()
+    }
+}
+
+fn init_bool() {
+    add_comprehension(q!("bool"), vec![], q!("λ (p : Prop), p = ⊤ ∨ p = ⊥")).unwrap();
+
+    // ∃! (b : bool), rep b = ⊤
+    add_lemma(q!("bool.tt_uexists"), {
+        // char = (λ p, p = ⊤ ∨ p = ⊥)
+        let h_bool_spec = q!("bool.spec");
+        // char ⊤ = (⊤ = ⊤ ∨ ⊤ = ⊥)
+        let h_char_top_eq = change(
+            q!("char bool.comprehension ⊤ = (⊤ = ⊤ ∨ ⊤ = ⊥)"),
+            congr_fun(h_bool_spec, q!("⊤")).unwrap(),
+        )
+        .unwrap();
+        // char ⊤
+        let h_char_top = transport(
+            symmetry(h_char_top_eq).unwrap(),
+            or_intro1(q!("⊤ = ⊥"), reflexivity(q!("⊤")).unwrap()).unwrap(),
+        )
+        .unwrap();
+        abs(h_char_top).unwrap()
+    })
+    .unwrap();
+
+    add_function_comprehension(q!("tt"), vec![], q!("bool.tt_uexists")).unwrap();
+
+    // ∃! (b : bool), rep b = ⊤
+    add_lemma(q!("bool.ff_uexists"), {
+        // char = (λ p, p = ⊤ ∨ p = ⊥)
+        let h_bool_spec = q!("bool.spec");
+        // char ⊥ = (⊥ = ⊤ ∨ ⊥ = ⊥)
+        let h_char_bot_eq = change(
+            q!("char bool.comprehension ⊥ = (⊥ = ⊤ ∨ ⊥ = ⊥)"),
+            congr_fun(h_bool_spec, q!("⊥")).unwrap(),
+        )
+        .unwrap();
+        // char ⊥
+        let h_char_bot = transport(
+            symmetry(h_char_bot_eq).unwrap(),
+            or_intro2(q!("⊥ = ⊤"), reflexivity(q!("⊥")).unwrap()).unwrap(),
+        )
+        .unwrap();
+        abs(h_char_bot).unwrap()
+    })
+    .unwrap();
+
+    add_function_comprehension(q!("ff"), vec![], q!("bool.ff_uexists")).unwrap();
+
+    // tt ≠ ff
+    add_lemma(q!("tt_ne_ff"), {
+        let h = assume(q!("tt = ff")).unwrap();
+        let h = congr_arg(q!("rep bool.comprehension"), h).unwrap();
+        let h = transitivity(q!("tt.spec"), h).unwrap();
+        let h = transitivity(h, symmetry(q!("ff.spec")).unwrap()).unwrap();
+        let h_top_ne_bot = change(q!("(⊤ = ⊥) → ⊥"), q!("top_ne_bot")).unwrap();
+        let h_bot = apply(h_top_ne_bot, [], [h]).unwrap();
+        change(q!("tt ≠ ff"), not_intro(q!("tt = ff"), h_bot).unwrap()).unwrap()
+    })
+    .unwrap();
+
+    // ∀ b, b = tt ∨ b = ff
+    add_lemma(q!("bool.case"), {
+        let b = take(q!("b"), q!("bool"));
+        let rep_b: Term = q!("rep bool.comprehension ${}", b);
+        let h = congr_fun(q!("bool.spec"), rep_b.clone()).unwrap();
+        let h = change(
+            q!(
+                "char bool.comprehension ${} = (${} = ⊤ ∨ ${} = ⊥)",
+                rep_b,
+                rep_b,
+                rep_b
+            ),
+            h,
+        )
+        .unwrap();
+        let h_char_rep = apply(
+            inst(
+                q!("v"),
+                &q!("Prop"),
+                inst(q!("u"), &q!("bool"), q!("char_rep")).unwrap(),
+            )
+            .unwrap(),
+            [q!("bool.comprehension"), q!("${}", b)],
+            [],
+        )
+        .unwrap();
+        let h = transport(h, h_char_rep).unwrap();
+        // rep b = ⊤ ⊢ b = tt
+        let h_left = {
+            let h = assume(q!("rep bool.comprehension b = ⊤")).unwrap();
+            let h = transitivity(h, q!("tt.spec")).unwrap();
+            let h = apply(
+                change(
+                    q!("∀ x y, rep bool.comprehension x = rep bool.comprehension y → x = y"),
+                    apply(
+                        q!(Fact "rep.injective")
+                            .inst(q!("u"), &q!("bool"))
+                            .inst(q!("v"), &q!("Prop")),
+                        [q!("bool.comprehension")],
+                        [],
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+                [q!("${}", b), q!("tt")],
+                [h],
+            )
+            .unwrap();
+            or_intro1(q!("b = ff"), h).unwrap()
+        };
+        // rep b = ⊥ ⊢ b = ff
+        let h_right = {
+            let h = assume(q!("rep bool.comprehension b = ⊥")).unwrap();
+            let h = transitivity(h, q!("ff.spec")).unwrap();
+            let h = apply(
+                change(
+                    q!("∀ x y, rep bool.comprehension x = rep bool.comprehension y → x = y"),
+                    apply(
+                        q!(Fact "rep.injective")
+                            .inst(q!("u"), &q!("bool"))
+                            .inst(q!("v"), &q!("Prop")),
+                        [q!("bool.comprehension")],
+                        [],
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+                [q!("${}", b), q!("ff")],
+                [h],
+            )
+            .unwrap();
+            or_intro2(q!("b = tt"), h).unwrap()
+        };
+        let h = or_elim(h, h_left, h_right).unwrap();
+        forall_intro(b.name, b.ty, h).unwrap()
+    })
+    .unwrap();
+
+    /*
+    def bool.rec.{u} : bool → u → u → u
     lemma bool_ind : ∀ b, ∀ P, (P tt ∧ P ff) → P b := sorry
+    */
+}
 
-    -- Example 2. embed
+fn init_pair() {
+    add_comprehension(
+        q!("pair"),
+        vec![q!("u"), q!("v")],
+        q!("λ (e : u → v → Prop), ∃! a b, e a b"),
+    )
+    .unwrap();
 
-    constant embed_comprehension.{u} : comprehension (embed u)
-    comprehension.base (embed u) :≡ (u → Prop) → Prop
-    comprehension.char (embed_comprehension.{u}) :≡ (λ (c : (u → Prop) → Prop), ∃ x, c = (λ k, k x))
+    // add_lemma(q!("pair.pair_uexists"), {
+    //     let x = take(q!("x"), q!("u"));
+    //     let y = take(q!("y"), q!("u"));
+    //     // char = (λ e, ∃! a b, e a b)
+    //     let h_pair_spec = q!("pair.spec");
+    //     // char (λ a b, a = x ∧ b = y) = ∃! a b, a = x ∧ b = y
+    //     let h_char_1_eq = change(
+    //         q!("char bool.comprehension ⊥ = (⊥ = ⊤ ∨ ⊥ = ⊥)"),
+    //         congr_fun(h_bool_spec, q!("⊥")).unwrap(),
+    //     )
+    //     .unwrap();
+    //     // char ⊥
+    //     let h_char_bot = transport(
+    //         symmetry(h_char_bot_eq).unwrap(),
+    //         or_intro2(q!("⊥ = ⊤"), reflexivity(q!("⊥")).unwrap()).unwrap(),
+    //     )
+    //     .unwrap();
+    //     abs(h_char_bot).unwrap()
+    // })
+    // .unwrap();
 
-    lemma encode_def : ∀ x, ∃! c, rep embed_comprehension c = (λ k, k x) := sorry
-    def encode : u → embed u := by encode_def
-    lemma encode_spec : ∀ x, rep embed_comprehension (encode x) = (λ k, k x) := sorry
-    lemma decode_def : ∀ c, ∃! x, rep embed_comprehension c = (λ k, k x) := sorry
-    def decode : embed u → u := by decode_def
-    lemma decode_spec : ∀ c, rep embed_comprehension c = (λ k, k (decode c)) := sorry
-    lemma embed_bij : ∃ f : u → embed, bijective f := sorry
-
+    /*
     -- Example 3. pair (WIP)
 
-    constant pair : u → v → u × v
+    type constant pair : Type → Type → Type
+    constant pair_comprehension.{u, v} : comprehension (u → v → Prop) (pair u v)
+    axiom : char (pair_comprehension.{u, v}) = (λ G, ∃! x y, G x y)
+
+    lemma pair_uexists : ∀ x y, ∃! p, rep pair_comprehension.{u, v} p = (λ G, G x y) := sorry [prop_ext, fun_ext]
+    def pair by pair_uexists
+    lemma pair_spec : ∀ x y, rep pair_comprehension.{u, v} (pair x y) = (λ G, G x y) := sorry
+    lemma fst_uexists : ∀ p, ∃! x, ∃ y, p = pair x y := sorry [prop_ext, fun_ext]
     def fst (p : u × v) := choice (λ (x : u), ∃ y, p = pair x y)
     lemma pair_fst : ∀ a b, fst (pair a b) = a
     {
         change fst x
     }
-
-                     Ψ ⊢ φ[choice P]
-                     -----------------------
-    Φ ⊢ ∃ x, P x     Ψ, P(x) ⊢ φ[x]
-    ------------------------------------
-    Φ, Ψ ⊢ φ
     */
 }
 
 fn init() {
     init_logic();
     init_function();
-    init_pair();
+    init_comprehension();
+    init_bool();
     //init_classical();
-    init_nat();
-    init_set();
+    //    init_nat();
+    // init_set();
 
     // cousot-cousot
     // burali-forti
@@ -1296,26 +1617,6 @@ fn main() {
             Decl::Lemma(DeclLemma { fact }) => {
                 let target = fact.target();
                 println!("lemma {name} : {target}");
-            }
-            Decl::Type(DeclType { local_types, char }) => {
-                if local_types.is_empty() {
-                    println!("type {name} := {{ {char} }}");
-                } else {
-                    let v: Vec<_> = local_types.iter().map(ToString::to_string).collect();
-                    println!("type {name} {{{}}} := {{ {char} }}", v.join(" "));
-                }
-            }
-            Decl::Desc(DeclDesc {
-                local_types,
-                ty,
-                spec,
-            }) => {
-                if local_types.is_empty() {
-                    println!("def {name} : {ty} := by {spec}");
-                } else {
-                    let v: Vec<_> = local_types.iter().map(ToString::to_string).collect();
-                    println!("def {name}.{{{}}} : {ty} := by {spec}", v.join(" "));
-                }
             }
         }
     }

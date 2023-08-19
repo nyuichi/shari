@@ -57,7 +57,7 @@ impl Name {
 
     fn intern(value: &str) -> Result<Name, InvalidNameError> {
         static RE: Lazy<Regex> = Lazy::new(|| {
-            regex::Regex::new(r"[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*").unwrap()
+            regex::Regex::new(r"[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*(\.[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*)*").unwrap()
         });
         if !RE.is_match(value) {
             return Err(InvalidNameError);
@@ -121,10 +121,8 @@ pub struct TypeArrow {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct TypeApp {
-    // Never be an `App`.
-    pub head: Type,
-    // Never be empty.
-    pub args: Vec<Type>,
+    pub fun: Type,
+    pub arg: Type,
 }
 
 impl Default for Type {
@@ -153,7 +151,7 @@ impl Display for Type {
 }
 
 fn mk_type_arrow(dom: Type, mut cod: Type) -> Type {
-    cod.discharge([dom]);
+    cod.discharge_rev([dom]);
     cod
 }
 
@@ -171,9 +169,9 @@ fn mk_type_const(name: Name) -> Type {
 
 /// See [Barendregt+, 06](https://ftp.science.ru.nl/CSI/CompMath.Found/I.pdf).
 impl Type {
-    /// t.discharge([t1, t2]);
+    /// t.discharge_rev([t1, t2]);
     /// assert_eq!(t, "t2 → t1 → t");
-    fn discharge(&mut self, cs: impl IntoIterator<Item = Type>) {
+    fn discharge_rev(&mut self, cs: impl IntoIterator<Item = Type>) {
         for c in cs {
             *self = Type::Arrow(Arc::new(TypeArrow {
                 dom: c,
@@ -182,18 +180,25 @@ impl Type {
         }
     }
 
-    fn apply(&mut self, args: impl IntoIterator<Item = Type>) {
-        match self {
-            Type::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.args.extend(args);
-            }
-            Type::Const(_) | Type::Arrow(_) | Type::Local(_) | Type::Mvar(_) => {
-                *self = Type::App(Arc::new(TypeApp {
-                    head: mem::take(self),
-                    args: args.into_iter().collect(),
-                }));
-            }
+    /// t.discharge([t1, t2]);
+    /// assert_eq!(t, "t1 → t2 → t");
+    pub fn discharge(&mut self, cs: impl IntoIterator<Item = Type>) {
+        let mut iter = cs.into_iter();
+        if let Some(item) = iter.next() {
+            self.discharge(iter);
+            *self = Type::Arrow(Arc::new(TypeArrow {
+                dom: item,
+                cod: mem::take(self),
+            }));
+        }
+    }
+
+    pub fn apply(&mut self, args: impl IntoIterator<Item = Type>) {
+        for arg in args {
+            *self = Type::App(Arc::new(TypeApp {
+                fun: mem::take(self),
+                arg,
+            }));
         }
     }
 
@@ -214,10 +219,8 @@ impl Type {
             }
             Self::App(inner) => {
                 let inner = Arc::make_mut(inner);
-                inner.head.subst(name, t);
-                for arg in &mut inner.args {
-                    arg.subst(name, t);
-                }
+                inner.fun.subst(name, t);
+                inner.arg.subst(name, t);
             }
         }
     }
@@ -241,16 +244,14 @@ impl Type {
                 Ok(Kind::base())
             }
             Type::App(inner) => {
-                let head_kind = inner.head.infer_kind()?;
-                if head_kind.0 < inner.args.len() {
+                let fun_kind = inner.fun.infer_kind()?;
+                if fun_kind.0 == 0 {
                     bail!("too many type arguments");
                 }
-                for arg in &inner.args {
-                    if !arg.infer_kind()?.is_base() {
-                        bail!("not a type");
-                    }
+                if !inner.arg.infer_kind()?.is_base() {
+                    bail!("not a type");
                 }
-                Ok(Kind(head_kind.0 - inner.args.len()))
+                Ok(Kind(fun_kind.0 - 1))
             }
             Type::Local(_) => Ok(Kind::base()),
             // no higher-kinded polymorphism
@@ -285,16 +286,14 @@ impl Type {
                 Ok(Kind::base())
             }
             Type::App(inner) => {
-                let head_kind = inner.head.infer_kind_under(locals)?;
-                if head_kind.0 < inner.args.len() {
+                let fun_kind = inner.fun.infer_kind_under(locals)?;
+                if fun_kind.0 == 0 {
                     bail!("too many type arguments");
                 }
-                for arg in &inner.args {
-                    if !arg.infer_kind_under(locals)?.is_base() {
-                        bail!("not a type");
-                    }
+                if !inner.arg.infer_kind_under(locals)?.is_base() {
+                    bail!("not a type");
                 }
-                Ok(Kind(head_kind.0 - inner.args.len()))
+                Ok(Kind(fun_kind.0 - 1))
             }
             Type::Local(name) => {
                 if !locals.contains(name) {
@@ -321,7 +320,7 @@ impl Type {
         match self {
             Type::Const(_) => true,
             Type::Arrow(inner) => inner.dom.is_ground() && inner.cod.is_ground(),
-            Type::App(inner) => inner.head.is_ground() && inner.args.iter().all(Type::is_ground),
+            Type::App(inner) => inner.fun.is_ground() && inner.arg.is_ground(),
             Type::Local(_) => true,
             Type::Mvar(_) => false,
         }
@@ -346,11 +345,9 @@ impl Type {
                 if prec >= 1024 {
                     write!(f, "(")?;
                 }
-                inner.head.fmt_help(f, 1023)?;
-                for arg in &inner.args {
-                    write!(f, " ")?;
-                    arg.fmt_help(f, 1024)?;
-                }
+                inner.fun.fmt_help(f, 1023)?;
+                write!(f, " ")?;
+                inner.arg.fmt_help(f, 1024)?;
                 if prec >= 1024 {
                     write!(f, ")")?;
                 }
@@ -412,6 +409,12 @@ pub struct TermConst {
 impl From<TermLocal> for Term {
     fn from(value: TermLocal) -> Self {
         Term::Local(Arc::new(value))
+    }
+}
+
+impl From<TermConst> for Term {
+    fn from(value: TermConst) -> Self {
+        Term::Const(Arc::new(value))
     }
 }
 
@@ -563,6 +566,30 @@ impl Term {
                 let inner = Arc::make_mut(inner);
                 inner.fun.shift_at(level, shift);
                 inner.arg.shift_at(level, shift);
+            }
+            Self::Const(_) => {}
+        }
+    }
+
+    pub fn unshift(&mut self) {
+        self.unshift_at(0)
+    }
+
+    fn unshift_at(&mut self, level: usize) {
+        match self {
+            Self::Local(_) => {}
+            Self::Var(x) => {
+                if *x >= level {
+                    *x -= 1;
+                }
+            }
+            Self::Abs(inner) => {
+                Arc::make_mut(inner).body.unshift_at(level + 1);
+            }
+            Self::App(inner) => {
+                let inner = Arc::make_mut(inner);
+                inner.fun.unshift_at(level);
+                inner.arg.unshift_at(level);
             }
             Self::Const(_) => {}
         }
@@ -788,7 +815,7 @@ impl Term {
     /// - self is not locally closed,
     /// - an unknown constant is found, or
     /// - kind checking failed.
-    fn infer(&mut self, target: &mut Type) -> anyhow::Result<()> {
+    pub fn infer(&mut self, target: &mut Type) -> anyhow::Result<()> {
         target.check_kind(&Kind::base())?;
         let mut eq_set = EqSet::default();
         let mut var_stack = vec![];
@@ -954,6 +981,7 @@ impl Term {
                     };
                     let inner = Arc::make_mut(inner);
                     inner.body.open_shift(&arg);
+                    inner.body.unshift();
                     perform = true;
                     *self = mem::take(&mut inner.body);
                 }
@@ -1153,15 +1181,14 @@ impl EqSet {
                 }
                 (Type::App(inner1), Type::App(inner2)) => {
                     // Since we have no higher-kinded polymorphism, mvars will only be typed as `Type`,
-                    // so heads must be the same and args must be in the same length.
-                    if inner1.head != inner2.head || inner1.args.len() != inner2.args.len() {
-                        bail!("type mismatch");
-                    }
+                    // it is illegal to match the following two types:
+                    //  ?M₁ t =?= ?M₂ t₁ t₂
+                    // But such a case is checked and ruled out in the kind checking phase that runs before
+                    // this unificaiton phase.
                     let inner1 = Arc::try_unwrap(inner1).unwrap_or_else(|arc| (*arc).clone());
                     let inner2 = Arc::try_unwrap(inner2).unwrap_or_else(|arc| (*arc).clone());
-                    for (arg1, arg2) in std::iter::zip(inner1.args, inner2.args) {
-                        self.unify(arg1, arg2);
-                    }
+                    self.unify(inner1.fun, inner2.fun);
+                    self.unify(inner1.arg, inner2.arg);
                 }
                 (Type::Mvar(name), t) | (t, Type::Mvar(name)) => {
                     self.parents.insert(name, t);
@@ -1187,10 +1214,8 @@ impl Unifier {
             }
             Type::App(inner) => {
                 let inner = Arc::make_mut(inner);
-                self.apply_type(&mut inner.head)?;
-                for arg in &mut inner.args {
-                    self.apply_type(arg)?;
-                }
+                self.apply_type(&mut inner.fun)?;
+                self.apply_type(&mut inner.arg)?;
             }
             Type::Local(_) => {}
             Type::Mvar(name) => {
@@ -1297,7 +1322,7 @@ impl<'a> Display for SourceInfo<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TokenKind {
-    Ident,  // e.g. "foo", "α", "Prop"
+    Ident,  // e.g. "foo", "α", "Prop", "foo.bar.baz"
     Symbol, // e.g. "+", ":", "λ", ",", "_"
 }
 
@@ -1419,7 +1444,7 @@ impl<'a> Iterator for Lex<'a> {
                 (Kind::Space, r"\s+|--.*|/-"),
                 (
                     Kind::Ident,
-                    r"[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*",
+                    r"[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*(\.[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*)*",
                 ),
                 (
                     Kind::Symbol,
@@ -1562,6 +1587,7 @@ enum Nud {
     Abs,
     Forall,
     Exists,
+    Uexists,
     Paren,
     Bracket,
     Brace,
@@ -1600,6 +1626,7 @@ impl TokenTable {
                     "λ" => Some(Nud::Abs),
                     "∀" => Some(Nud::Forall),
                     "∃" => Some(Nud::Exists),
+                    "∃!" => Some(Nud::Uexists),
                     "{" => Some(Nud::Brace),
                     "${" => Some(Nud::Hole),
                     _ => self.nud.get(token.as_str()).map(|op| Nud::User(op.clone())),
@@ -1637,6 +1664,7 @@ pub struct Parser<'a, 'b> {
     env: &'b Env,
     allow_holes: bool,
     holes: Vec<(Name, Type)>,
+    type_holes: Vec<Name>,
 }
 
 impl<'a, 'b> Parser<'a, 'b> {
@@ -1647,6 +1675,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             env,
             allow_holes,
             holes: vec![],
+            type_holes: vec![],
         }
     }
 
@@ -1756,6 +1785,16 @@ impl<'a, 'b> Parser<'a, 'b> {
             .map(|token| Name::try_from(token.as_str()).expect("logic flaw"))
     }
 
+    fn type_hole(&mut self, token: Token<'a>) -> Result<Type, ParseError> {
+        if !self.allow_holes {
+            return Self::fail(token, "hole not allowed in this mode");
+        }
+        self.expect_symbol("}")?;
+        let name = Name::fresh();
+        self.type_holes.push(name);
+        Ok(mk_type_local(name))
+    }
+
     fn type_primary(&mut self) -> Result<Type, ParseError> {
         let token = self.any_token()?;
         if token.is_ident() {
@@ -1768,6 +1807,8 @@ impl<'a, 'b> Parser<'a, 'b> {
             let t = self.ty()?;
             self.expect_symbol(")")?;
             Ok(t)
+        } else if token.is_symbol() && token.as_str() == "${" {
+            self.type_hole(token)
         } else {
             Self::fail(token, "expected a primary type expression")
         }
@@ -1786,7 +1827,13 @@ impl<'a, 'b> Parser<'a, 'b> {
                 }
                 self.advance();
                 t = mk_type_arrow(t, self.subty(24)?);
-            } else if token.is_ident() || (token.is_symbol() && token.as_str() == "(") {
+            } else if token.is_ident()
+                || (token.is_symbol() && token.as_str() == "(")
+                || (token.is_symbol() && token.as_str() == "${")
+            {
+                if rbp >= 1024 {
+                    break;
+                }
                 t.apply([self.subty(1024)?]);
             } else {
                 break;
@@ -1934,6 +1981,36 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(m)
     }
 
+    fn term_uexists(&mut self, token: Token<'a>) -> Result<Term, ParseError> {
+        let params = self.parameters()?;
+        self.expect_symbol(",")?;
+        if params.is_empty() {
+            return Self::fail(token, "empty binding");
+        }
+        let mut binders = vec![];
+        for (name, ty) in params {
+            let ty = match ty {
+                Some(ty) => ty,
+                None => mk_fresh_type_mvar(),
+            };
+            binders.push((name, ty));
+        }
+        for (name, ty) in &binders {
+            self.locals.push((*name, ty.clone()));
+        }
+        let mut m = self.subterm(0)?;
+        for _ in 0..binders.len() {
+            self.locals.pop();
+        }
+        for (name, t) in binders.into_iter().rev() {
+            m.discharge_local(name, t);
+            let f = mem::take(&mut m);
+            m = self.mk_const_unchecked("uexists");
+            m.apply(vec![f]);
+        }
+        Ok(m)
+    }
+
     fn term_setsep(&mut self, _token: Token<'a>) -> Result<Term, ParseError> {
         let name = self.name()?;
         self.expect_symbol("|")?;
@@ -2039,6 +2116,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             }
             Nud::Forall => self.term_forall(token)?,
             Nud::Exists => self.term_exists(token)?,
+            Nud::Uexists => self.term_uexists(token)?,
             Nud::Brace => self.term_setsep(token)?,
             Nud::Hole => self.term_hole(token)?,
             Nud::User(op) => match op.fixity {
@@ -2101,6 +2179,18 @@ impl Arg<Term> for Term {
     }
 }
 
+impl Arg<Type> for &Type {
+    fn as_arg(&self) -> &Type {
+        self
+    }
+}
+
+impl Arg<Type> for Type {
+    fn as_arg(&self) -> &Type {
+        self
+    }
+}
+
 #[doc(hidden)]
 pub trait ToArg<T> {
     type ToArg<'a>: Arg<T>
@@ -2120,6 +2210,20 @@ impl ToArg<Term> for TermLocal {
     type ToArg<'a> = Term;
     fn to_arg(&self) -> Self::ToArg<'_> {
         Term::Local(Arc::new(self.clone()))
+    }
+}
+
+impl ToArg<Term> for TermConst {
+    type ToArg<'a> = Term;
+    fn to_arg(&self) -> Self::ToArg<'_> {
+        Term::Const(Arc::new(self.clone()))
+    }
+}
+
+impl ToArg<Type> for Type {
+    type ToArg<'a> = &'a Type;
+    fn to_arg(&self) -> Self::ToArg<'_> {
+        self
     }
 }
 
@@ -2163,11 +2267,18 @@ impl Quote for Type {
         let mut lex = Lex::new(template);
         let env = Env::get();
         let mut parser = Parser::new(&mut lex, &env, true);
-        let t = parser.ty()?;
+        let mut t = parser.ty()?;
         parser.eof()?;
         let args: Vec<_> = args.into_iter().collect();
-        if !args.is_empty() {
-            unimplemented!();
+        if args.len() != parser.type_holes.len() {
+            bail!(
+                "number of holes mismatch: {} arguments for {} holes",
+                args.len(),
+                parser.type_holes.len()
+            );
+        }
+        for (hole, arg) in std::iter::zip(parser.type_holes, args) {
+            t.subst(hole, arg.as_arg());
         }
         Ok(t)
     }
@@ -2186,6 +2297,19 @@ impl Quote for Name {
     }
 }
 
+impl Quote for Fact {
+    fn quote<'a>(
+        template: &str,
+        args: impl IntoIterator<Item = &'a dyn Arg<Fact>>,
+    ) -> anyhow::Result<Fact> {
+        let args: Vec<_> = args.into_iter().collect();
+        if !args.is_empty() {
+            unimplemented!();
+        }
+        get_fact(Name::try_from(template)?).ok_or_else(|| anyhow::anyhow!("fact not found"))
+    }
+}
+
 #[doc(hidden)]
 pub fn quote<'a, T: Quote>(
     template: &str,
@@ -2196,6 +2320,9 @@ pub fn quote<'a, T: Quote>(
 
 #[macro_export]
 macro_rules! q {
+    (Fact $template:expr) => {
+        $crate::quote::<Fact>($template, []).unwrap()
+    };
     ($template:expr) => {
         $crate::quote($template, []).unwrap()
     };
@@ -2374,6 +2501,41 @@ impl<'a> Printer<'a> {
                                     break;
                                 }
                                 write!(f, "∃ ({} : {}), ", x, inner.binder_type)?;
+                                local_names.push(x);
+                                self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
+                                local_names.pop();
+                                if !allow_lambda {
+                                    write!(f, ")")?;
+                                }
+                                return Ok(());
+                            }
+                            args.push(arg);
+                        }
+                    }
+                    "uexists" => {
+                        if args.len() == 1 {
+                            let mut arg = args.pop().unwrap();
+                            if let Term::Abs(inner) = &mut arg {
+                                if !allow_lambda {
+                                    write!(f, "(")?;
+                                }
+                                let mut x = inner.binder_name;
+                                'refresh: for refresh_index in 0.. {
+                                    if refresh_index > 0 {
+                                        x = Name::try_from(
+                                            format!("{}{refresh_index}", inner.binder_name)
+                                                .as_str(),
+                                        )
+                                        .unwrap();
+                                    }
+                                    for (i, local_name) in local_names.iter().rev().enumerate() {
+                                        if local_name == &x && inner.body.has_var(i + 1) {
+                                            continue 'refresh;
+                                        }
+                                    }
+                                    break;
+                                }
+                                write!(f, "∃! ({} : {}), ", x, inner.binder_type)?;
                                 local_names.push(x);
                                 self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
                                 local_names.pop();
@@ -2577,8 +2739,6 @@ pub enum Decl {
     TypeConst(DeclTypeConst),
     Axiom(DeclAxiom),
     Lemma(DeclLemma),
-    Type(DeclType),
-    Desc(DeclDesc),
 }
 
 #[derive(Debug, Clone)]
@@ -2635,13 +2795,11 @@ struct NotationTable {
 enum TermDecl {
     Const(DeclConst),
     Def(DeclDef),
-    Desc(DeclDesc),
 }
 
 #[derive(Debug, Clone)]
 enum TypeDecl {
     Const(DeclTypeConst),
-    Type(DeclType),
 }
 
 #[derive(Debug, Clone)]
@@ -2655,7 +2813,6 @@ impl From<TermDecl> for Decl {
         match value {
             TermDecl::Const(d) => Decl::Const(d),
             TermDecl::Def(d) => Decl::Def(d),
-            TermDecl::Desc(d) => Decl::Desc(d),
         }
     }
 }
@@ -2664,7 +2821,6 @@ impl From<TypeDecl> for Decl {
     fn from(value: TypeDecl) -> Self {
         match value {
             TypeDecl::Const(d) => Decl::TypeConst(d),
-            TypeDecl::Type(d) => Decl::Type(d),
         }
     }
 }
@@ -2688,8 +2844,6 @@ impl TryFrom<Decl> for TermDecl {
             Decl::TypeConst(_) => Err(()),
             Decl::Axiom(_) => Err(()),
             Decl::Lemma(_) => Err(()),
-            Decl::Type(_) => Err(()),
-            Decl::Desc(d) => Ok(TermDecl::Desc(d)),
         }
     }
 }
@@ -2704,8 +2858,6 @@ impl TryFrom<Decl> for TypeDecl {
             Decl::TypeConst(d) => Ok(TypeDecl::Const(d)),
             Decl::Axiom(_) => Err(()),
             Decl::Lemma(_) => Err(()),
-            Decl::Type(d) => Ok(TypeDecl::Type(d)),
-            Decl::Desc(_) => Err(()),
         }
     }
 }
@@ -2720,8 +2872,6 @@ impl TryFrom<Decl> for MetaDecl {
             Decl::TypeConst(_) => Err(()),
             Decl::Axiom(d) => Ok(MetaDecl::Axiom(d)),
             Decl::Lemma(d) => Ok(MetaDecl::Lemma(d)),
-            Decl::Type(_) => Err(()),
-            Decl::Desc(_) => Err(()),
         }
     }
 }
@@ -2862,10 +3012,6 @@ impl Env {
         let decl = self.get_type_decl(name)?;
         match decl {
             TypeDecl::Const(DeclTypeConst { kind }) => Some(kind),
-            TypeDecl::Type(DeclType {
-                local_types,
-                char: _,
-            }) => Some(Kind(local_types.len())),
         }
     }
 
@@ -2877,11 +3023,6 @@ impl Env {
                 local_types,
                 target: _,
                 ty,
-            }) => Some((local_types, ty)),
-            TermDecl::Desc(DeclDesc {
-                local_types,
-                ty,
-                spec: _,
             }) => Some((local_types, ty)),
         }
     }
@@ -2928,10 +3069,10 @@ pub fn add_axiom(name: Name, mut p: Term) -> anyhow::Result<()> {
 
 pub fn add_lemma(name: Name, fact: Fact) -> anyhow::Result<()> {
     if !fact.context().is_empty() {
-        bail!("local context is not empty");
+        bail!("local context is not empty:\n\n{fact}");
     }
     if !fact.target().is_closed() {
-        bail!("formula not closed");
+        bail!("formula not closed:\n\n{fact}");
     }
     Env::get_mut().add_meta_decl(name, MetaDecl::Lemma(DeclLemma { fact }))
 }
@@ -2959,22 +3100,6 @@ pub fn add_definition(name: Name, local_types: Vec<Name>, mut target: Term) -> a
     )
 }
 
-pub fn add_type(name: Name, local_types: Vec<Name>, mut char: Term) -> anyhow::Result<()> {
-    for i in 0..local_types.len() {
-        for j in i + 1..local_types.len() {
-            if local_types[i] == local_types[j] {
-                bail!("duplicate type variables");
-            }
-        }
-    }
-    let mut ty = mk_type_arrow(mk_fresh_type_mvar(), mk_prop());
-    char.infer_under(&mut ty, local_types.as_slice())?;
-    if !char.is_closed() {
-        bail!("term not closed");
-    }
-    Env::get_mut().add_type_decl(name, TypeDecl::Type(DeclType { local_types, char }))
-}
-
 fn get_kind(name: Name) -> Option<Kind> {
     Env::get().get_kind(name)
 }
@@ -2988,7 +3113,6 @@ fn get_def(name: Name) -> Option<DeclDef> {
     match decl {
         TermDecl::Const(_) => None,
         TermDecl::Def(decl_def) => Some(decl_def),
-        TermDecl::Desc(_) => None,
     }
 }
 
@@ -2997,7 +3121,6 @@ fn get_def_index(name: Name) -> Option<usize> {
     match decl {
         TermDecl::Const(_) => None,
         TermDecl::Def(_) => Some(index),
-        TermDecl::Desc(_) => None,
     }
 }
 
@@ -3435,7 +3558,7 @@ pub fn transport(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
         bail!("not a propositional equality");
     }
     if h2.target != p1 {
-        bail!("proposition mismatch");
+        bail!("proposition mismatch: '{}' and '{}'", h2.target, p1);
     }
     let mut context = h1.context;
     context.extend(h2.context);
