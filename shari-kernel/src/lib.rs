@@ -103,7 +103,6 @@ impl Kind {
     }
 }
 
-// TODO TypeHead
 #[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd)]
 pub enum Type {
     Const(Name),
@@ -221,6 +220,29 @@ impl Type {
                 let inner = Arc::make_mut(inner);
                 inner.fun.subst(name, t);
                 inner.arg.subst(name, t);
+            }
+        }
+    }
+
+    /// Simultaneously substitute `t₁ ⋯ tₙ` for locals with names `x₁ ⋯ xₙ`.
+    fn psubst(&mut self, subst: &[(Name, &Type)]) {
+        match self {
+            Self::Const(_) => {}
+            Self::Local(x) => {
+                if let Some((_, t)) = subst.iter().copied().find(|(y, _)| y == x) {
+                    *self = t.clone();
+                }
+            }
+            Self::Mvar(_) => {}
+            Self::Arrow(inner) => {
+                let inner = Arc::make_mut(inner);
+                inner.dom.psubst(subst);
+                inner.cod.psubst(subst);
+            }
+            Self::App(inner) => {
+                let inner = Arc::make_mut(inner);
+                inner.fun.psubst(subst);
+                inner.arg.psubst(subst);
             }
         }
     }
@@ -467,12 +489,10 @@ impl FromStr for Term {
 impl Term {
     /// self.open(x) == [x/0]self
     pub fn open(&mut self, x: &Term) {
-        assert!(self.is_body());
         self.open_at(x, 0)
     }
 
     pub fn open_at(&mut self, x: &Term, level: usize) {
-        assert!(x.is_lclosed());
         self.open_at_help(x, level)
     }
 
@@ -579,7 +599,7 @@ impl Term {
         match self {
             Self::Local(_) => {}
             Self::Var(x) => {
-                if *x >= level {
+                if *x >= level && *x >= 1 {
                     *x -= 1;
                 }
             }
@@ -773,41 +793,6 @@ impl Term {
         *self = mk_abs(name, ty, m);
     }
 
-    /// Applicative-order (leftmost-innermost) β-reduction
-    pub fn beta_reduce(&mut self) {
-        match self {
-            Self::Var(_) => {
-                panic!("term not locally closed");
-            }
-            Self::Local(_) => {}
-            Self::Const(_) => {}
-            Self::App(inner) => {
-                let TermApp { fun: m1, arg: m2 } = Arc::make_mut(inner);
-                m1.beta_reduce();
-                m2.beta_reduce();
-                if let Self::Abs(inner) = m1 {
-                    let inner = Arc::make_mut(inner);
-                    inner.body.open(m2);
-                    *self = mem::take(&mut inner.body);
-                    self.beta_reduce();
-                }
-            }
-            Self::Abs(inner) => {
-                let inner = Arc::make_mut(inner);
-                let x = Name::fresh();
-                let local = mk_local(x, mem::take(&mut inner.binder_type));
-                inner.body.open(&local);
-                inner.body.beta_reduce();
-                let Term::Local(mut local) = local else {
-                    unreachable!();
-                };
-                let TermLocal { name, ty } = mem::take(Arc::make_mut(&mut local));
-                inner.body.close(name, &ty);
-                inner.binder_type = ty;
-            }
-        }
-    }
-
     /// Unification-based type inference.
     /// Errors if
     /// - types mismatch,
@@ -994,10 +979,6 @@ impl Term {
         perform
     }
 
-    fn normalize_types(&mut self) -> bool {
-        false
-    }
-
     fn unfold_head(&mut self) {
         match self {
             Self::Var(_) | Self::Local(_) => {}
@@ -1008,9 +989,11 @@ impl Term {
                     ty: _,
                 }) = get_def(inner.name)
                 {
+                    let mut subst = vec![];
                     for (local, ty_arg) in std::iter::zip(&local_types, &inner.ty_args) {
-                        target.instantiate_local(*local, ty_arg);
+                        subst.push((*local, ty_arg));
                     }
+                    target.instantiate_locals(&subst);
                     *self = target;
                 }
             }
@@ -1026,8 +1009,6 @@ impl Term {
     fn equiv(&self, other: &Term) -> bool {
         let mut m1 = self.clone();
         let mut m2 = other.clone();
-        m1.normalize_types();
-        m2.normalize_types();
         loop {
             if m1 == m2 {
                 return true;
@@ -1089,8 +1070,6 @@ impl Term {
                         m1.unfold_head();
                     }
                 }
-                m1.normalize_types();
-                m2.normalize_types();
                 continue;
             }
             if let Term::Abs(_) = m2 {
@@ -1107,23 +1086,28 @@ impl Term {
         }
     }
 
+    // TODO: remove
     fn instantiate_local(&mut self, name: Name, t: &Type) {
+        self.instantiate_locals(&[(name, t)])
+    }
+
+    fn instantiate_locals(&mut self, subst: &[(Name, &Type)]) {
         match self {
             Term::Var(_) => {}
             Term::Abs(inner) => {
                 let inner = Arc::make_mut(inner);
-                inner.binder_type.subst(name, t);
-                inner.body.instantiate_local(name, t);
+                inner.binder_type.psubst(subst);
+                inner.body.instantiate_locals(subst);
             }
             Term::App(inner) => {
                 let inner = Arc::make_mut(inner);
-                inner.fun.instantiate_local(name, t);
-                inner.arg.instantiate_local(name, t);
+                inner.fun.instantiate_locals(subst);
+                inner.arg.instantiate_locals(subst);
             }
-            Term::Local(inner) => Arc::make_mut(inner).ty.subst(name, t),
+            Term::Local(inner) => Arc::make_mut(inner).ty.psubst(subst),
             Term::Const(inner) => {
                 for s in &mut Arc::make_mut(inner).ty_args {
-                    s.subst(name, t);
+                    s.psubst(subst);
                 }
             }
         }
@@ -3140,6 +3124,347 @@ pub fn get_decls() -> Vec<(Name, Decl)> {
     Env::get().decls.clone()
 }
 
+/// Judgmental equality for the convertibility relation.
+/// This equality is agnostic of types and well-formedness.
+/// The definitional equality `≡` is defined upon this relation.
+///
+/// ```text
+/// Γ ⊢ m₁ : τ   Γ ⊢ m₂ : τ   m₁ ↓ m₂
+/// ----------------------------------
+/// Γ ⊢ m₁ ≡ m₂ : τ
+/// ```
+#[derive(Debug, Clone)]
+pub struct Conv {
+    m1: Term,
+    m2: Term,
+}
+
+impl Display for Conv {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ↓ {}", self.m1, self.m2)
+    }
+}
+
+/// ```text
+///
+/// -----------------------
+/// reflexivity m : [m ↓ m]
+/// ```
+fn reflexivity(m: Term) -> Conv {
+    Conv {
+        m1: m.clone(),
+        m2: m,
+    }
+}
+
+/// ```text
+/// h : [m₁ ↓ m₂]
+/// --------------------------
+/// symmetry h : [m₂ ↓ m₁]
+/// ```
+fn symmetry(h: Conv) -> Conv {
+    Conv { m1: h.m2, m2: h.m1 }
+}
+
+/// ```text
+/// h₁ : [m₁ ↓ m₂]  h₂ : [m₂ ↓ m₃]
+/// ------------------------------
+/// transitivity h₁ h₂ : [m₁ ↓ m₃]
+/// ```
+fn transitivity(h1: Conv, h2: Conv) -> anyhow::Result<Conv> {
+    if !h1.m2.untyped_eq(&h2.m1) {
+        bail!("transitivity mismatch");
+    }
+    Ok(Conv {
+        m1: h1.m1,
+        m2: h2.m2,
+    })
+}
+
+/// ```text
+/// h₁ : [f₁ ↓ f₂]  h₂ : [a₁ ↓ a₂]
+/// ---------------------------------
+/// congr_app h₁ h₂ : [f₁ a₁ ↓ f₂ a₂]
+/// ```
+fn congr_app(h1: Conv, h2: Conv) -> Conv {
+    let mut m1 = h1.m1;
+    let mut m2 = h1.m2;
+    m1.apply([h2.m1]);
+    m2.apply([h2.m2]);
+    Conv { m1, m2 }
+}
+
+/// Note that this function does not check whether `τ₁ ↓ τ₂`.
+///
+/// ```text
+/// h : [m₁ ↓ m₂]
+/// -----------------------------------------------------------
+/// congr_abs x₁ τ₁ x₂ τ₂ h : [(λ (x₁ : τ₁), m₁) ↓ (λ (x₂ : τ₂), m₂)]
+/// ```
+fn congr_abs(x1: Name, t1: Type, x2: Name, t2: Type, h: Conv) -> Conv {
+    Conv {
+        m1: mk_abs(x1, t1, h.m1),
+        m2: mk_abs(x2, t2, h.m2),
+    }
+}
+
+/// This function safely works on locally open terms.
+///
+/// ```text
+///
+/// ------------------------------------------------------
+/// beta_reduce ((λ x, m₁) m₂) : [(λ x, m₁) m₂ ↓ [m₂/x]m₁]
+/// ```
+fn beta_reduce(m: Term) -> anyhow::Result<Conv> {
+    let Term::App(inner) = &m else {
+        bail!("not a beta redex");
+    };
+    let arg = &inner.arg;
+    let Term::Abs(inner) = &inner.fun else {
+        bail!("not a beta redex");
+    };
+    let mut n = inner.body.clone();
+    n.open_shift(arg);
+    n.unshift();
+    Ok(Conv { m1: m, m2: n })
+}
+
+/// ```text
+///
+/// ---------------------------------------------------------- (c.{x₁ ⋯ xₙ} := m)
+/// delta_reduce c.{t₁ ⋯ tₙ} : [c.{t₁ ⋯ tₙ} ↓ [t₁/x₁ ⋯ tₙ/xₙ]m]
+/// ```
+fn delta_reduce(name: Name, ty_args: Vec<Type>) -> anyhow::Result<Conv> {
+    let Some(def) = get_def(name) else {
+        bail!("definition not found: {name}");
+    };
+    let DeclDef {
+        local_types,
+        mut target,
+        ty: _,
+    } = def;
+    if local_types.len() != ty_args.len() {
+        bail!("number of type arguments mismatch");
+    }
+    let mut ty_args = vec![];
+    for &x in &local_types {
+        ty_args.push(mk_type_local(x));
+    }
+    let mut subst = vec![];
+    for (&x, t) in std::iter::zip(&local_types, &ty_args) {
+        subst.push((x, t));
+    }
+    target.instantiate_locals(&subst);
+    let c = mk_const(name, ty_args);
+    Ok(Conv { m1: c, m2: target })
+}
+
+impl Conv {
+    // TODO: optimize
+    fn symmetry(self) -> Conv {
+        symmetry(self)
+    }
+
+    // TODO: optimize
+    fn transitivity(self, other: Conv) -> anyhow::Result<Conv> {
+        transitivity(self, other)
+    }
+}
+
+impl Term {
+    fn untyped_eq(&self, other: &Term) -> bool {
+        match (self, other) {
+            (Term::Var(x), Term::Var(y)) => x == y,
+            (Term::Abs(inner1), Term::Abs(inner2)) => inner1.body.untyped_eq(&inner2.body),
+            (Term::App(inner1), Term::App(inner2)) => {
+                inner1.fun.untyped_eq(&inner2.fun) && inner1.arg.untyped_eq(&inner2.arg)
+            }
+            (Term::Local(inner1), Term::Local(inner2)) => inner1.name == inner2.name,
+            (Term::Const(inner1), Term::Const(inner2)) => inner1.name == inner2.name,
+            _ => false,
+        }
+    }
+
+    fn is_beta_redex(&self) -> bool {
+        let Term::App(inner) = self else {
+            return false;
+        };
+        let Term::Abs(_) = &inner.fun else {
+            return false;
+        };
+        true
+    }
+
+    // TODO: optimize
+    fn reflexivity(self) -> Conv {
+        reflexivity(self)
+    }
+
+    fn beta_reduce(&mut self) -> anyhow::Result<Conv> {
+        let h = beta_reduce(mem::take(self))?;
+        *self = h.m2.clone();
+        Ok(h)
+    }
+
+    fn delta_reduce(&mut self) -> anyhow::Result<Conv> {
+        let Term::Const(inner) = self else {
+            bail!("not a constant");
+        };
+        let inner = Arc::make_mut(inner);
+        let h = delta_reduce(inner.name, mem::take(&mut inner.ty_args))?;
+        *self = h.m2.clone();
+        Ok(h)
+    }
+
+    /// Returns `[m ↓ n]` where `self` is reduced from `m` to `n`.
+    pub fn whnf(&mut self) -> Conv {
+        match self {
+            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Abs(_) => {
+                self.clone().reflexivity()
+            }
+            Term::App(inner) => {
+                let inner = Arc::make_mut(inner);
+                let h1 = inner.fun.whnf();
+                let h2 = inner.arg.whnf();
+                let h = congr_app(h1, h2);
+                if !self.is_beta_redex() {
+                    return h;
+                }
+                let h_redex = self.beta_reduce().unwrap();
+                let h = h.transitivity(h_redex).unwrap();
+                let h_next = self.whnf();
+                h.transitivity(h_next).unwrap()
+            }
+        }
+    }
+
+    fn unfold_head2(&mut self) -> Option<Conv> {
+        match self {
+            Self::Var(_) | Self::Local(_) | Self::Abs(_) => Some(self.clone().reflexivity()),
+            Self::Const(_) => self.delta_reduce().ok(),
+            Self::App(inner) => {
+                let inner = Arc::make_mut(inner);
+                let h_fun = inner.fun.unfold_head2()?;
+                let h_arg = inner.arg.clone().reflexivity();
+                Some(congr_app(h_fun, h_arg))
+            }
+        }
+    }
+
+    /// Does not check self and other are type-correct.
+    pub fn equiv2(&self, other: &Term) -> Option<Conv> {
+        if self.untyped_eq(other) {
+            return Some(self.clone().reflexivity());
+        }
+        if let (Term::Abs(inner1), Term::Abs(inner2)) = (self, other) {
+            let h = inner1.body.equiv2(&inner2.body)?;
+            return Some(congr_abs(
+                inner1.binder_name,
+                inner1.binder_type.clone(),
+                inner2.binder_name,
+                inner2.binder_type.clone(),
+                h,
+            ));
+        }
+        let mut m1 = self.clone();
+        let mut m2 = other.clone();
+        let h1 = m1.whnf();
+        let h2 = m2.whnf().symmetry();
+        // TODO: optimize this condition check
+        if h1.m1 != h1.m2 || h2.m1 != h2.m2 {
+            if m1.untyped_eq(&m2) {
+                return Some(transitivity(h1, h2).unwrap());
+            }
+            if let (Term::Abs(inner1), Term::Abs(inner2)) = (&m1, &m2) {
+                let h = inner1.body.equiv2(&inner2.body)?;
+                let h = Some(congr_abs(
+                    inner1.binder_name,
+                    inner1.binder_type.clone(),
+                    inner2.binder_name,
+                    inner2.binder_type.clone(),
+                    h,
+                ))?;
+                return Some(h1.transitivity(h).unwrap().transitivity(h2).unwrap());
+            }
+        }
+        let head1 = m1.head();
+        let head2 = m2.head();
+        // optimization
+        if head1.untyped_eq(head2) {
+            let args1 = m1.args();
+            let args2 = m2.args();
+            if args1.len() == args2.len() {
+                'args_eq: {
+                    let mut h = head1.clone().reflexivity();
+                    for (a1, a2) in std::iter::zip(args1, args2) {
+                        let Some(h_arg) = a1.equiv2(a2) else {
+                            break 'args_eq;
+                        };
+                        h = congr_app(h, h_arg);
+                    }
+                    return Some(h1.transitivity(h).unwrap().transitivity(h2).unwrap());
+                }
+            }
+        }
+        let def1 = if let Term::Const(inner) = head1 {
+            get_def_index(inner.name)
+        } else {
+            None
+        };
+        let def2 = if let Term::Const(inner) = head2 {
+            get_def_index(inner.name)
+        } else {
+            None
+        };
+        if def1.is_some() || def2.is_some() {
+            let height1 = def1.unwrap_or(0);
+            let height2 = def2.unwrap_or(0);
+            match height1.cmp(&height2) {
+                std::cmp::Ordering::Less => {
+                    let h3 = m2.unfold_head2()?.symmetry();
+                    let h4 = m1.equiv2(&m2)?;
+                    return Some(
+                        h1.transitivity(h4)
+                            .unwrap()
+                            .transitivity(h3)
+                            .unwrap()
+                            .transitivity(h2)
+                            .unwrap(),
+                    );
+                }
+                std::cmp::Ordering::Equal => {
+                    let h3 = m1.unfold_head2()?;
+                    let h4 = m2.unfold_head2()?.symmetry();
+                    let h5 = m1.equiv2(&m2)?;
+                    return Some(
+                        h1.transitivity(h3)
+                            .unwrap()
+                            .transitivity(h5)
+                            .unwrap()
+                            .transitivity(h4)
+                            .unwrap()
+                            .transitivity(h2)
+                            .unwrap(),
+                    );
+                }
+                std::cmp::Ordering::Greater => {
+                    let h3 = m1.unfold_head2()?;
+                    let h4 = m1.equiv2(&m2)?;
+                    return Some(
+                        h1.transitivity(h3)
+                            .unwrap()
+                            .transitivity(h4)
+                            .unwrap()
+                            .transitivity(h2)
+                            .unwrap(),
+                    );
+                }
+            }
+        }
+        None
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Fact {
     context: Vec<Term>,
@@ -3291,7 +3616,7 @@ fn test_imp_ok() {
 
     // weakening
     let p: Term = q!("p");
-    insta::assert_display_snapshot!(imp_intro(p, reflexivity(mk_const(*IMP, vec![])).unwrap()).unwrap(), @"⊢ (p : Prop) → imp = imp");
+    insta::assert_display_snapshot!(imp_intro(p, eq_reflexivity(mk_const(*IMP, vec![])).unwrap()).unwrap(), @"⊢ (p : Prop) → imp = imp");
 
     let h1 = assume(q!("p → q")).unwrap();
     let h2 = assume(q!("p")).unwrap();
@@ -3372,7 +3697,7 @@ fn test_forall() {
     insta::assert_display_snapshot!(forall_intro("p".try_into().unwrap(), mk_prop(), h).unwrap(), @"⊢ ∀ (p : Prop), p → p");
 
     // weakening
-    let h = reflexivity(q!("imp")).unwrap();
+    let h = eq_reflexivity(q!("imp")).unwrap();
     insta::assert_display_snapshot!(forall_intro("p".try_into().unwrap(), mk_prop(), h).unwrap(), @"⊢ ∀ (p : Prop), imp = imp");
 
     let p: Term = q!("p");
@@ -3382,12 +3707,13 @@ fn test_forall() {
     insta::assert_display_snapshot!(forall_elim(q!("q"), h).unwrap(), @"⊢ (q : Prop) → (q : Prop)");
 }
 
+/// TODO: remove
 /// ```text
 ///
-/// -------------------------
-/// reflexivity m : [⊢ m = m]
+/// ----------------------------
+/// eq_reflexivity m : [⊢ m = m]
 /// ```
-pub fn reflexivity(mut m: Term) -> anyhow::Result<Fact> {
+pub fn eq_reflexivity(mut m: Term) -> anyhow::Result<Fact> {
     let mut ty = mk_fresh_type_mvar();
     m.infer(&mut ty)?;
     let mut target = mk_const(*EQ, vec![ty]);
@@ -3398,12 +3724,13 @@ pub fn reflexivity(mut m: Term) -> anyhow::Result<Fact> {
     })
 }
 
+/// TODO: remove
 /// ```text
 /// h : [Φ ⊢ m₁ = m₂]
 /// --------------------------
-/// symmetry h : [Φ ⊢ m₂ = m₁]
+/// eq_symmetry h : [Φ ⊢ m₂ = m₁]
 /// ```
-pub fn symmetry(h: Fact) -> anyhow::Result<Fact> {
+pub fn eq_symmetry(h: Fact) -> anyhow::Result<Fact> {
     let (ty, m1, m2) = dest_eq(h.target)?;
     let mut target = mk_const(*EQ, vec![ty]);
     target.apply([m2, m1]);
@@ -3413,12 +3740,13 @@ pub fn symmetry(h: Fact) -> anyhow::Result<Fact> {
     })
 }
 
+/// TODO: remove
 /// ```text
 /// h₁ : [Φ ⊢ m₁ = m₂]  h₂ : [Ψ ⊢ m₂ = m₃]
-/// --------------------------------------
-/// transitivity h₁ h₂ : [Φ ⊢ m₁ = m₃]
+/// ----------------------------------------
+/// eq_transitivity h₁ h₂ : [Φ ∪ Ψ⊢ m₁ = m₃]
 /// ```
-pub fn transitivity(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
+pub fn eq_transitivity(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     let (ty, m1, m2) = dest_eq(h1.target)?;
     let (_, m3, m4) = dest_eq(h2.target)?;
     if m2 != m3 {
@@ -3433,12 +3761,13 @@ pub fn transitivity(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     Ok(Fact { context, target })
 }
 
+/// TODO: remove
 /// ```text
 ///
-/// -------------------------------- (m ≡ (λ x, m₁) m₂)
+/// -------------------------------- (m ↓ (λ x, m₁) m₂)
 /// beta_reduce m : [⊢ m = [m₂/x]m₁]
 /// ```
-pub fn beta_reduce(mut m: Term) -> anyhow::Result<Fact> {
+pub fn eq_beta_reduce(mut m: Term) -> anyhow::Result<Fact> {
     let mut ty = mk_fresh_type_mvar();
     m.infer(&mut ty)?;
     let Term::App(inner) = &m else {
@@ -3478,12 +3807,13 @@ pub fn eta_expand(mut m: Term) -> anyhow::Result<Fact> {
     })
 }
 
+/// TODO: remove
 /// ```text
 ///
 /// -------------------------- (c := m)
 /// delta_reduce c : [⊢ c = m]
 /// ```
-pub fn delta_reduce(name: Name) -> anyhow::Result<Fact> {
+pub fn eq_delta_reduce(name: Name) -> anyhow::Result<Fact> {
     let Some(def) = get_def(name) else {
         bail!("definition not found: {name}");
     };
@@ -3503,12 +3833,13 @@ pub fn delta_reduce(name: Name) -> anyhow::Result<Fact> {
     })
 }
 
+/// TODO: remove
 /// ```text
 /// h₁ : [Φ ⊢ f₁ = f₂]  h₂ : [Ψ ⊢ a₁ = a₂]
 /// -----------------------------------------
 /// congr_app h₁ h₂ : [Φ ∪ Ψ ⊢ f₁ a₁ = f₂ a₂]
 /// ```
-pub fn congr_app(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
+pub fn eq_congr_app(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     let (t1, f1, f2) = dest_eq(h1.target)?;
     let (t2, a1, a2) = dest_eq(h2.target)?;
     let Type::Arrow(inner) = &t1 else {
@@ -3531,12 +3862,13 @@ pub fn congr_app(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     })
 }
 
+/// TODO: remove
 /// ```text
 /// h : [Φ ⊢ m₁ = m₂]
 /// ------------------------------------------------------- ((x : τ) # (Φ, m₁, m₂))
 /// congr_abs τ h : [Φ ⊢ (λ (x : τ), m₁) = (λ (x : τ), m₂)]
 /// ```
-pub fn congr_abs(t: Type, h: Fact) -> anyhow::Result<Fact> {
+pub fn eq_congr_abs(t: Type, h: Fact) -> anyhow::Result<Fact> {
     let (ty, mut m1, mut m2) = dest_eq(h.target)?;
     let x = Name::fresh();
     m1.discharge([(x, t.clone())]);
@@ -3547,6 +3879,7 @@ pub fn congr_abs(t: Type, h: Fact) -> anyhow::Result<Fact> {
     })
 }
 
+/// TODO: rename
 /// ```text
 /// h₁ : [Φ ⊢ φ = ψ]  h₂ : [Ψ ⊢ φ]
 /// ------------------------------
@@ -3567,6 +3900,23 @@ pub fn transport(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     Ok(Fact {
         context,
         target: p2,
+    })
+}
+
+/// ```text
+/// h1 : [φ ↓ ψ]  h2 : [Φ ⊢ φ]
+/// --------------------------
+/// convert ψ h : [Φ ⊢ ψ]
+/// ```
+pub fn convert(mut h1: Conv, h2: Fact) -> anyhow::Result<Fact> {
+    h1.m1.infer(&mut mk_prop())?;
+    h1.m2.infer(&mut mk_prop())?;
+    if &h1.m1 != h2.target() {
+        bail!("terms mismatch");
+    }
+    Ok(Fact {
+        context: h2.context,
+        target: h1.m2,
     })
 }
 
@@ -3608,23 +3958,6 @@ pub fn eq_elim_old(c: Term, h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     target.infer(&mut mk_prop()).expect("logic flaw");
     Ok(Fact {
         context: ctx,
-        target,
-    })
-}
-
-// TODO remove
-/// ```text
-/// h : [Φ ⊢ φ]
-/// -------------------- (φ ≡ ψ)
-/// change ψ h : [Φ ⊢ ψ]
-/// ```
-pub fn change(mut target: Term, h: Fact) -> anyhow::Result<Fact> {
-    target.infer(&mut mk_prop())?;
-    if !target.equiv(&h.target) {
-        bail!("terms not definitionally equal: {} and {target}", h.target);
-    }
-    Ok(Fact {
-        context: h.context,
         target,
     })
 }

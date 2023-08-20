@@ -1,10 +1,10 @@
 use anyhow::bail;
 use shari_kernel::{
-    add_axiom, add_const, add_const_type, add_definition, add_lemma, add_notation, assume, change,
-    congr_app, eq_elim_old, forall_elim, forall_intro, get_decls, imp_elim, imp_intro, inst,
-    mk_prop, q, reflexivity, symmetry, transitivity, transport, Decl, DeclAxiom, DeclConst,
-    DeclDef, DeclLemma, DeclTypeConst, Fact, Fixity, Kind, Name, Term, TermAbs, TermConst,
-    TermLocal, Type,
+    add_axiom, add_const, add_const_type, add_definition, add_lemma, add_notation, assume, convert,
+    eq_beta_reduce, eq_congr_app, eq_elim_old, eq_reflexivity, eq_symmetry, eq_transitivity,
+    forall_elim, forall_intro, get_decls, imp_elim, imp_intro, inst, mk_prop, q, transport, Decl,
+    DeclAxiom, DeclConst, DeclDef, DeclLemma, DeclTypeConst, Fact, Fixity, Kind, Name, Term,
+    TermAbs, TermConst, TermLocal, Type,
 };
 use std::sync::Arc;
 
@@ -66,6 +66,25 @@ fn take_fresh(ty: Type) -> TermLocal {
     }
 }
 
+fn whnf(h: Fact) -> Fact {
+    let mut target = h.target().clone();
+    let h_whnf = target.whnf();
+    convert(h_whnf, h).unwrap()
+}
+
+/// ```text
+/// h : [Φ ⊢ φ]
+/// -------------------- (φ ≡ ψ)
+/// change ψ h : [Φ ⊢ ψ]
+/// ```
+fn change(mut target: Term, h: Fact) -> anyhow::Result<Fact> {
+    target.infer(&mut mk_prop())?;
+    let Some(conv) = h.target().equiv2(&target) else {
+        bail!("terms not definitionally equal: {} and {target}", h.target());
+    };
+    convert(conv, h)
+}
+
 /// ```text
 /// h₁ : [Φ ⊢ m₁ = m₂]  h₂ : [Ψ ⊢ C m₁]
 /// ----------------------------------- [indiscernibility of identicals]
@@ -73,7 +92,7 @@ fn take_fresh(ty: Type) -> TermLocal {
 /// ```
 fn eq_elim(c: Term, h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     // ⊢ C m₁ = C m₂
-    let h = congr_app(reflexivity(c)?, h1)?;
+    let h = eq_congr_app(eq_reflexivity(c)?, h1)?;
     transport(h, h2)
 }
 
@@ -83,7 +102,7 @@ fn eq_elim(c: Term, h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
 /// congr_fun h a : [Φ ⊢ f₁ a = f₂ a]
 /// ```
 fn congr_fun(h: Fact, a: Term) -> anyhow::Result<Fact> {
-    congr_app(h, reflexivity(a)?)
+    eq_congr_app(h, eq_reflexivity(a)?)
 }
 
 /// ```text
@@ -92,7 +111,7 @@ fn congr_fun(h: Fact, a: Term) -> anyhow::Result<Fact> {
 /// congr_arg f h : [Φ ⊢ f a₁ = f a₂]
 /// ```
 fn congr_arg(f: Term, h: Fact) -> anyhow::Result<Fact> {
-    congr_app(reflexivity(f)?, h)
+    eq_congr_app(eq_reflexivity(f)?, h)
 }
 
 /// ```text
@@ -101,7 +120,7 @@ fn congr_arg(f: Term, h: Fact) -> anyhow::Result<Fact> {
 /// congr h₁ h₂ : [Φ ∪ Ψ ⊢ f₁ a₁ = f₂ a₂]
 /// ```
 fn congr(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
-    congr_app(h1, h2)
+    eq_congr_app(h1, h2)
 }
 
 fn init_logic() {
@@ -158,7 +177,7 @@ fn init_logic() {
 
     // [⊢ ⊤]
     add_lemma(q!("trivial"), {
-        let h = reflexivity(q!("λ (x : Prop), x")).unwrap();
+        let h = eq_reflexivity(q!("λ (x : Prop), x")).unwrap();
         change(q!("top"), h).unwrap()
     })
     .unwrap();
@@ -258,7 +277,7 @@ fn init_logic() {
         // [p = ¬p ⊢ ¬p]
         let not_p_holds = change(q!("¬p"), imp_intro(q!("p"), bot_holds).unwrap()).unwrap();
         // [p = ¬p ⊢ p]
-        let p_holds = transport(symmetry(h).unwrap(), not_p_holds.clone()).unwrap();
+        let p_holds = transport(eq_symmetry(h).unwrap(), not_p_holds.clone()).unwrap();
         // [p = ¬p ⊢ ⊥]
         let bot_holds = apply(q!("contradiction"), [q!("p")], [p_holds, not_p_holds]).unwrap();
         let h = imp_intro(q!("p = ¬p"), bot_holds).unwrap();
@@ -277,7 +296,7 @@ fn init_logic() {
 /// ```
 fn top_intro() -> Fact {
     let id = q!("λ (x : Prop), x");
-    let h = reflexivity(id).unwrap();
+    let h = eq_reflexivity(id).unwrap();
     let top = q!("top");
     change(top, h).unwrap()
 }
@@ -488,11 +507,11 @@ fn mp(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     imp_elim(h1, h2)
 }
 
-fn beta_reduce(h: Fact) -> anyhow::Result<Fact> {
-    let mut target = h.target().clone();
-    target.beta_reduce();
-    change(target, h)
-}
+// fn beta_reduce(h: Fact) -> anyhow::Result<Fact> {
+//     let mut target = h.target().clone();
+//     whnf(&mut target);
+//     change(target, h)
+// }
 
 /// ```text
 /// h : [Φ ⊢ ⊥]
@@ -760,13 +779,13 @@ fn em() -> Fact {
     // ex_uu : ⊢ ∃ x, uu x
     let ex_uu = {
         // h : ⊢ ⊤ = ⊤ ∨ p
-        let h: Fact = or_intro1(q!("${}", p), reflexivity(q!("⊤")).unwrap()).unwrap();
+        let h: Fact = or_intro1(q!("${}", p), eq_reflexivity(q!("⊤")).unwrap()).unwrap();
         exists_intro(uu.clone(), q!("⊤"), h).unwrap()
     };
     // ex_vv : ⊢ ∃ x, vv x
     let ex_vv = {
         // h : ⊢ ⊥ = ⊥ ∨ p
-        let h: Fact = or_intro1(q!("${}", p), reflexivity(q!("⊥")).unwrap()).unwrap();
+        let h: Fact = or_intro1(q!("${}", p), eq_reflexivity(q!("⊥")).unwrap()).unwrap();
         exists_intro(vv.clone(), q!("⊥"), h).unwrap()
     };
     let u: Term = q!("choice prop_inhabited ${}", uu);
@@ -778,7 +797,7 @@ fn em() -> Fact {
         let h = forall_elim(q!("prop_inhabited"), h).unwrap();
         let h = forall_elim(uu.clone(), h).unwrap();
         let h = mp(h, ex_uu).unwrap();
-        beta_reduce(h).unwrap()
+        whnf(h)
     };
     // u_spec : ⊢ v = ⊥ ∨ p
     let v_spec = {
@@ -787,7 +806,7 @@ fn em() -> Fact {
         let h = forall_elim(q!("prop_inhabited"), h).unwrap();
         let h = forall_elim(vv.clone(), h).unwrap();
         let h = mp(h, ex_vv).unwrap();
-        beta_reduce(h).unwrap()
+        whnf(h)
     };
     // u_ne_v_or_p : u ≠ v ∨ p
     let u_ne_v_or_p = {
@@ -797,11 +816,11 @@ fn em() -> Fact {
             let mut c: Term = q!("λ p, p ≠ ⊥");
             c.undischarge();
             // h : [⊢ u ≠ ⊥]
-            let h = eq_elim_old(c, symmetry(h1).unwrap(), top_ne_bot()).unwrap();
+            let h = eq_elim_old(c, eq_symmetry(h1).unwrap(), top_ne_bot()).unwrap();
             let h2 = assume(q!("${} = ⊥", v)).unwrap();
             let mut c: Term = q!("λ q, ${} ≠ q", u);
             c.undischarge();
-            let h = eq_elim_old(c, symmetry(h2).unwrap(), h).unwrap();
+            let h = eq_elim_old(c, eq_symmetry(h2).unwrap(), h).unwrap();
             or_intro1(q!("p"), h).unwrap()
         };
         // h2: p ⊢ u ≠ v ∨ p
@@ -926,7 +945,7 @@ fn mar(h: Fact) -> Fact {
 /// ma h : [Φ ⊢ φ]
 /// ```
 fn ma(h: Fact) -> anyhow::Result<Fact> {
-    transport(symmetry(h)?, top_intro())
+    transport(eq_symmetry(h)?, top_intro())
 }
 
 fn init_nat() {
@@ -1172,7 +1191,7 @@ fn init_comprehension() {
         // ∃! x₀, rep d x = rep d x₀
         let h = {
             let p: Term = q!("λ (x₀ : u), rep ${} ${} = rep ${} x₀", d, x, d);
-            let h = reflexivity(q!("rep ${} ${}", d, x)).unwrap();
+            let h = eq_reflexivity(q!("rep ${} ${}", d, x)).unwrap();
             let h_exists = change(q!("${} ${}", p, x), h).unwrap();
             let y = take(q!("y"), q!("u"));
             let h = assume(q!("${} ${}", p, y)).unwrap();
@@ -1385,8 +1404,8 @@ fn init_bool() {
         .unwrap();
         // char ⊤
         let h_char_top = transport(
-            symmetry(h_char_top_eq).unwrap(),
-            or_intro1(q!("⊤ = ⊥"), reflexivity(q!("⊤")).unwrap()).unwrap(),
+            eq_symmetry(h_char_top_eq).unwrap(),
+            or_intro1(q!("⊤ = ⊥"), eq_reflexivity(q!("⊤")).unwrap()).unwrap(),
         )
         .unwrap();
         abs(h_char_top).unwrap()
@@ -1407,8 +1426,8 @@ fn init_bool() {
         .unwrap();
         // char ⊥
         let h_char_bot = transport(
-            symmetry(h_char_bot_eq).unwrap(),
-            or_intro2(q!("⊥ = ⊤"), reflexivity(q!("⊥")).unwrap()).unwrap(),
+            eq_symmetry(h_char_bot_eq).unwrap(),
+            or_intro2(q!("⊥ = ⊤"), eq_reflexivity(q!("⊥")).unwrap()).unwrap(),
         )
         .unwrap();
         abs(h_char_bot).unwrap()
@@ -1421,8 +1440,8 @@ fn init_bool() {
     add_lemma(q!("tt_ne_ff"), {
         let h = assume(q!("tt = ff")).unwrap();
         let h = congr_arg(q!("rep bool.comprehension"), h).unwrap();
-        let h = transitivity(q!("tt.spec"), h).unwrap();
-        let h = transitivity(h, symmetry(q!("ff.spec")).unwrap()).unwrap();
+        let h = eq_transitivity(q!("tt.spec"), h).unwrap();
+        let h = eq_transitivity(h, eq_symmetry(q!("ff.spec")).unwrap()).unwrap();
         let h_top_ne_bot = change(q!("(⊤ = ⊥) → ⊥"), q!("top_ne_bot")).unwrap();
         let h_bot = apply(h_top_ne_bot, [], [h]).unwrap();
         change(q!("tt ≠ ff"), not_intro(q!("tt = ff"), h_bot).unwrap()).unwrap()
@@ -1459,7 +1478,7 @@ fn init_bool() {
         // rep b = ⊤ ⊢ b = tt
         let h_left = {
             let h = assume(q!("rep bool.comprehension b = ⊤")).unwrap();
-            let h = transitivity(h, q!("tt.spec")).unwrap();
+            let h = eq_transitivity(h, q!("tt.spec")).unwrap();
             let h = apply(
                 change(
                     q!("∀ x y, rep bool.comprehension x = rep bool.comprehension y → x = y"),
@@ -1482,7 +1501,7 @@ fn init_bool() {
         // rep b = ⊥ ⊢ b = ff
         let h_right = {
             let h = assume(q!("rep bool.comprehension b = ⊥")).unwrap();
-            let h = transitivity(h, q!("ff.spec")).unwrap();
+            let h = eq_transitivity(h, q!("ff.spec")).unwrap();
             let h = apply(
                 change(
                     q!("∀ x y, rep bool.comprehension x = rep bool.comprehension y → x = y"),
@@ -1566,7 +1585,7 @@ fn init() {
     init_function();
     init_comprehension();
     init_bool();
-    //init_classical();
+    init_classical();
     //    init_nat();
     // init_set();
 
