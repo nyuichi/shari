@@ -1,12 +1,12 @@
 use anyhow::bail;
 use shari_kernel::{
-    add_axiom, add_const, add_const_type, add_definition, add_lemma, add_notation, assume, convert,
-    eq_beta_reduce, eq_congr_app, eq_elim_old, eq_reflexivity, eq_symmetry, eq_transitivity,
-    forall_elim, forall_intro, get_decls, imp_elim, imp_intro, inst, mk_prop, q, transport, Decl,
-    DeclAxiom, DeclConst, DeclDef, DeclLemma, DeclTypeConst, Fact, Fixity, Kind, Name, Term,
-    TermAbs, TermConst, TermLocal, Type,
+    add_axiom, add_const, add_const_type, add_definition, add_lemma, add_notation, assume,
+    beta_reduce, congr_abs, congr_app, convert, delta_reduce, eq_elim, eq_intro, forall_elim,
+    forall_intro, get_decls, get_def_hint, imp_elim, imp_intro, inst, mk_fresh_type_mvar, mk_local,
+    mk_prop, q, reflexivity, symmetry, transitivity, Conv, Decl, DeclAxiom, DeclConst, DeclDef,
+    DeclLemma, DeclTypeConst, Fact, Fixity, Kind, Name, Term, TermAbs, TermConst, TermLocal, Type,
 };
-use std::sync::Arc;
+use std::{mem, sync::Arc};
 
 fn lhs(m: &Term) -> anyhow::Result<&Term> {
     if !m.binders().all(|_| false) {
@@ -68,8 +68,222 @@ fn take_fresh(ty: Type) -> TermLocal {
 
 fn whnf(h: Fact) -> Fact {
     let mut target = h.target().clone();
-    let h_whnf = target.whnf();
+    let h_whnf = target.whnf().unwrap();
     convert(h_whnf, h).unwrap()
+}
+
+#[easy_ext::ext]
+impl Conv {
+    // TODO: optimize
+    fn symmetry(self) -> Conv {
+        symmetry(self)
+    }
+
+    // TODO: optimize
+    fn transitivity(self, other: Conv) -> anyhow::Result<Conv> {
+        transitivity(self, other)
+    }
+}
+
+#[easy_ext::ext]
+impl Term {
+    fn is_beta_redex(&self) -> bool {
+        let Term::App(inner) = self else {
+            return false;
+        };
+        let Term::Abs(_) = &inner.fun else {
+            return false;
+        };
+        true
+    }
+
+    // TODO: optimize
+    fn reflexivity(self) -> anyhow::Result<Conv> {
+        reflexivity(self)
+    }
+
+    fn beta_reduce(&mut self) -> anyhow::Result<Conv> {
+        let h = beta_reduce(mem::take(self))?;
+        *self = h.right().clone();
+        Ok(h)
+    }
+
+    fn delta_reduce(&mut self) -> anyhow::Result<Conv> {
+        let Term::Const(inner) = self else {
+            bail!("not a constant");
+        };
+        let inner = Arc::make_mut(inner);
+        let h = delta_reduce(inner.name, mem::take(&mut inner.ty_args))?;
+        *self = h.right().clone();
+        Ok(h)
+    }
+
+    /// Returns `[m ≡ n]` where `self` is reduced from `m` to `n`.
+    fn whnf(&mut self) -> anyhow::Result<Conv> {
+        match self {
+            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Abs(_) => {
+                self.clone().reflexivity()
+            }
+            Term::App(inner) => {
+                let inner = Arc::make_mut(inner);
+                let h1 = inner.fun.whnf()?;
+                let h2 = inner.arg.whnf()?;
+                let h = congr_app(h1, h2)?;
+                if !self.is_beta_redex() {
+                    return Ok(h);
+                }
+                let h_redex = self.beta_reduce()?;
+                let h = h.transitivity(h_redex).unwrap();
+                let h_next = self.whnf()?;
+                Ok(h.transitivity(h_next).unwrap())
+            }
+        }
+    }
+
+    fn unfold_head(&mut self) -> anyhow::Result<Conv> {
+        match self {
+            Self::Var(_) | Self::Local(_) | Self::Abs(_) => self.clone().reflexivity(),
+            Self::Const(_) => self.delta_reduce(),
+            Self::App(inner) => {
+                let inner = Arc::make_mut(inner);
+                let h_fun = inner.fun.unfold_head()?;
+                let h_arg = inner.arg.clone().reflexivity()?;
+                congr_app(h_fun, h_arg)
+            }
+        }
+    }
+
+    fn equiv(&self, other: &Term) -> anyhow::Result<Option<Conv>> {
+        let mut m1 = self.clone();
+        let mut m2 = other.clone();
+        let mut ty = mk_fresh_type_mvar();
+        m1.infer(&mut ty)?;
+        m2.infer(&mut ty)?;
+        m1.equiv_help(&mut m2)
+    }
+
+    // self and other must be type-correct and type-equal
+    fn equiv_help(&mut self, other: &mut Term) -> anyhow::Result<Option<Conv>> {
+        if self == other {
+            return Ok(Some(self.clone().reflexivity()?));
+        }
+        if let (Term::Abs(inner1), Term::Abs(inner2)) = (&mut *self, &mut *other) {
+            let inner1 = Arc::make_mut(inner1);
+            let inner2 = Arc::make_mut(inner2);
+            let x = Name::fresh();
+            let local = mk_local(x, mem::take(&mut inner1.binder_type));
+            inner1.body.open(&local);
+            inner2.body.open(&local);
+            let Some(h) = inner1.body.equiv_help(&mut inner2.body)? else {
+                return Ok(None);
+            };
+            return Ok(Some(congr_abs(x, mem::take(&mut inner2.binder_type), h)));
+        }
+        let h1 = self.whnf()?;
+        let h2 = other.whnf()?.symmetry();
+        // TODO: optimize this condition check
+        if h1.left() != h1.right() || h2.left() != h2.right() {
+            if self == other {
+                return Ok(Some(transitivity(h1, h2).unwrap()));
+            }
+            if let (Term::Abs(inner1), Term::Abs(inner2)) = (&mut *self, &mut *other) {
+                let inner1 = Arc::make_mut(inner1);
+                let inner2 = Arc::make_mut(inner2);
+                let x = Name::fresh();
+                let local = mk_local(x, mem::take(&mut inner1.binder_type));
+                inner1.body.open(&local);
+                inner2.body.open(&local);
+                let Some(h) = inner1.body.equiv_help(&mut inner2.body)? else {
+                    return Ok(None);
+                };
+                let h = congr_abs(x, mem::take(&mut inner2.binder_type), h);
+                return Ok(Some(h1.transitivity(h).unwrap().transitivity(h2).unwrap()));
+            }
+        }
+        let head1 = self.head();
+        let head2 = other.head();
+        // optimization
+        if head1 == head2 {
+            let args1 = self.args();
+            let args2 = other.args();
+            if args1.len() == args2.len() {
+                'args_eq: {
+                    let mut h = head1.clone().reflexivity()?;
+                    for (a1, a2) in std::iter::zip(args1, args2) {
+                        let mut a1 = a1.clone();
+                        let mut a2 = a2.clone();
+                        let Some(h_arg) = a1.equiv_help(&mut a2)? else {
+                            break 'args_eq;
+                        };
+                        h = congr_app(h, h_arg)?;
+                    }
+                    return Ok(Some(h1.transitivity(h).unwrap().transitivity(h2).unwrap()));
+                }
+            }
+        }
+        let def1 = if let Term::Const(inner) = head1 {
+            get_def_hint(inner.name)
+        } else {
+            None
+        };
+        let def2 = if let Term::Const(inner) = head2 {
+            get_def_hint(inner.name)
+        } else {
+            None
+        };
+        if def1.is_some() || def2.is_some() {
+            let height1 = def1.unwrap_or(0);
+            let height2 = def2.unwrap_or(0);
+            match height1.cmp(&height2) {
+                std::cmp::Ordering::Less => {
+                    let h3 = other.unfold_head()?.symmetry();
+                    let Some(h4) = self.equiv_help(other)? else {
+                        return Ok(None);
+                    };
+                    return Ok(Some(
+                        h1.transitivity(h4)
+                            .unwrap()
+                            .transitivity(h3)
+                            .unwrap()
+                            .transitivity(h2)
+                            .unwrap(),
+                    ));
+                }
+                std::cmp::Ordering::Equal => {
+                    let h3 = self.unfold_head()?;
+                    let h4 = other.unfold_head()?.symmetry();
+                    let Some(h5) = self.equiv_help(other)? else {
+                        return Ok(None);
+                    };
+                    return Ok(Some(
+                        h1.transitivity(h3)
+                            .unwrap()
+                            .transitivity(h5)
+                            .unwrap()
+                            .transitivity(h4)
+                            .unwrap()
+                            .transitivity(h2)
+                            .unwrap(),
+                    ));
+                }
+                std::cmp::Ordering::Greater => {
+                    let h3 = self.unfold_head()?;
+                    let Some(h4) = self.equiv_help(other)? else {
+                        return Ok(None);
+                    };
+                    return Ok(Some(
+                        h1.transitivity(h3)
+                            .unwrap()
+                            .transitivity(h4)
+                            .unwrap()
+                            .transitivity(h2)
+                            .unwrap(),
+                    ));
+                }
+            }
+        }
+        Ok(None)
+    }
 }
 
 /// ```text
@@ -79,21 +293,10 @@ fn whnf(h: Fact) -> Fact {
 /// ```
 fn change(mut target: Term, h: Fact) -> anyhow::Result<Fact> {
     target.infer(&mut mk_prop())?;
-    let Some(conv) = h.target().equiv2(&target) else {
+    let Some(conv) = h.target().equiv(&target)? else {
         bail!("terms not definitionally equal: {} and {target}", h.target());
     };
     convert(conv, h)
-}
-
-/// ```text
-/// h₁ : [Φ ⊢ m₁ = m₂]  h₂ : [Ψ ⊢ C m₁]
-/// ----------------------------------- [indiscernibility of identicals]
-/// eq_elim C h₁ h₂ : [Φ ∪ Ψ ⊢ C m₂]
-/// ```
-fn eq_elim(c: Term, h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
-    // ⊢ C m₁ = C m₂
-    let h = eq_congr_app(eq_reflexivity(c)?, h1)?;
-    transport(h, h2)
 }
 
 /// ```text
@@ -102,7 +305,7 @@ fn eq_elim(c: Term, h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
 /// congr_fun h a : [Φ ⊢ f₁ a = f₂ a]
 /// ```
 fn congr_fun(h: Fact, a: Term) -> anyhow::Result<Fact> {
-    eq_congr_app(h, eq_reflexivity(a)?)
+    eq_congr_app(h, eq_intro(a)?)
 }
 
 /// ```text
@@ -111,7 +314,7 @@ fn congr_fun(h: Fact, a: Term) -> anyhow::Result<Fact> {
 /// congr_arg f h : [Φ ⊢ f a₁ = f a₂]
 /// ```
 fn congr_arg(f: Term, h: Fact) -> anyhow::Result<Fact> {
-    eq_congr_app(eq_reflexivity(f)?, h)
+    eq_congr_app(eq_intro(f)?, h)
 }
 
 /// ```text
@@ -122,6 +325,201 @@ fn congr_arg(f: Term, h: Fact) -> anyhow::Result<Fact> {
 fn congr(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     eq_congr_app(h1, h2)
 }
+
+/// ```text
+/// h : [Φ ⊢ m₁ = m₂]
+/// -------------------------
+/// eq_symm h : [Φ ⊢ m₂ = m₁]
+/// ```
+pub fn eq_symm(h: Fact) -> anyhow::Result<Fact> {
+    let m1 = lhs(h.target())?;
+    let m2 = rhs(h.target())?;
+    let c: Term = q!("λ x, x = ${}", m1);
+    let g: Term = q!("${} = ${}", m2, m1);
+    let h_refl = eq_intro(m1.clone())?;
+    let h2 = change(q!("${} ${}", c, m1), h_refl)?;
+    let h = eq_elim(c, h, h2)?;
+    change(g, h)
+}
+
+/// ```text
+/// h₁ : [Φ ⊢ m₁ = m₂]  h₂ : [Ψ ⊢ m₂ = m₃]
+/// ----------------------------------------
+/// eq_trans h₁ h₂ : [Φ ∪ Ψ⊢ m₁ = m₃]
+/// ```
+pub fn eq_trans(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
+    let m1 = lhs(h1.target())?;
+    let m2_1 = rhs(h1.target())?;
+    let m2_2 = lhs(h2.target())?;
+    let m3 = rhs(h2.target())?;
+    if m2_1 != m2_2 {
+        bail!("transitivity mismatch");
+    }
+    let c: Term = q!("λ x, x = ${}", m3);
+    let g: Term = q!("${} = ${}", m1, m3);
+    let h1 = eq_symm(h1)?;
+    let h2 = change(q!("${} ${}", c, m2_2), h2)?;
+    let h = eq_elim(c, h1, h2)?;
+    change(g, h)
+}
+
+// /// TODO: remove
+// /// ```text
+// ///
+// /// -------------------------------- (m ↓ (λ x, m₁) m₂)
+// /// beta_reduce m : [⊢ m = [m₂/x]m₁]
+// /// ```
+// pub fn eq_beta_reduce(mut m: Term) -> anyhow::Result<Fact> {
+//     let mut ty = mk_fresh_type_mvar();
+//     m.infer(&mut ty)?;
+//     let Term::App(inner) = &m else {
+//         bail!("not a beta redex");
+//     };
+//     let arg = &inner.arg;
+//     let Term::Abs(inner) = &inner.fun else {
+//         bail!("not a beta redex");
+//     };
+//     let mut n = inner.body.clone();
+//     n.open(arg);
+//     Ok(Fact {
+//         context: vec![],
+//         target: mk_eq(ty, m, n),
+//     })
+// }
+
+// /// ```text
+// ///
+// /// --------------------------------- (m : u → v)
+// /// eta_expand m : [⊢ m = (λ x, m x)]
+// /// ```
+// pub fn eta_expand(mut m: Term) -> anyhow::Result<Fact> {
+//     let mut ty = mk_fresh_type_mvar();
+//     m.infer(&mut ty)?;
+//     let Type::Arrow(inner) = &ty else {
+//         bail!("not a function");
+//     };
+//     let dom_ty = inner.dom.clone();
+//     let mut n = m.clone();
+//     let x = Name::fresh();
+//     n.apply([mk_local(x, dom_ty.clone())]);
+//     n.discharge([(x, dom_ty)]);
+//     Ok(Fact {
+//         context: vec![],
+//         target: mk_eq(ty, m, n),
+//     })
+// }
+
+// /// TODO: remove
+// /// ```text
+// ///
+// /// -------------------------- (c := m)
+// /// delta_reduce c : [⊢ c = m]
+// /// ```
+// pub fn eq_delta_reduce(name: Name) -> anyhow::Result<Fact> {
+//     let Some(def) = get_def(name) else {
+//         bail!("definition not found: {name}");
+//     };
+//     let DeclDef {
+//         local_types,
+//         target,
+//         ty,
+//     } = def;
+//     let mut ty_args = vec![];
+//     for x in local_types {
+//         ty_args.push(mk_type_local(x));
+//     }
+//     let m = mk_const(name, ty_args);
+//     Ok(Fact {
+//         context: vec![],
+//         target: mk_eq(ty, m, target),
+//     })
+// }
+
+/// ```text
+/// h₁ : [Φ ⊢ f₁ = f₂]  h₂ : [Ψ ⊢ a₁ = a₂]
+/// -----------------------------------------
+/// congr_app h₁ h₂ : [Φ ∪ Ψ ⊢ f₁ a₁ = f₂ a₂]
+/// ```
+pub fn eq_congr_app(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
+    let f1 = lhs(h1.target())?;
+    let f2 = rhs(h1.target())?;
+    let a1 = lhs(h2.target())?;
+    let a2 = rhs(h2.target())?;
+    let c1: Term = q!("λ f, ${} ${} = f ${}", f1, a1, a1);
+    let x1: Term = q!("${} ${}", c1, f1);
+    let g1 = q!("${} ${} = ${} ${}", f1, a1, f2, a1);
+    let c2: Term = q!("λ a, ${} a = ${} ${}", f2, f2, a2);
+    let x2: Term = q!("${} ${}", c2, a2);
+    let g2 = q!("${} ${} = ${} ${}", f2, a1, f2, a2);
+    // : f₁ a₁ = f₁ a₁
+    let h01 = eq_intro(q!("${} ${}", f1, a1))?;
+    // : f₂ a₂ = f₂ a₂
+    let h02 = eq_intro(q!("${} ${}", f2, a2))?;
+    // h1 : [f₁ a₁ = f₂ a₁]
+    let h1 = change(g1, eq_elim(c1, h1, change(x1, h01)?)?)?;
+    // h2 : [f₂ a₁ = f₂ a₂]
+    let h2 = change(g2, eq_elim(c2, eq_symm(h2)?, change(x2, h02)?)?)?;
+    eq_trans(h1, h2)
+}
+
+// /// TODO: remove
+// /// ```text
+// /// h : [Φ ⊢ m₁ = m₂]
+// /// ------------------------------------------------------- ((x : τ) # (Φ, m₁, m₂))
+// /// congr_abs τ h : [Φ ⊢ (λ (x : τ), m₁) = (λ (x : τ), m₂)]
+// /// ```
+// pub fn eq_congr_abs(t: Type, h: Fact) -> anyhow::Result<Fact> {
+//     let (ty, mut m1, mut m2) = dest_eq(h.target)?;
+//     let x = Name::fresh();
+//     m1.discharge([(x, t.clone())]);
+//     m2.discharge([(x, t.clone())]);
+//     Ok(Fact {
+//         context: h.context,
+//         target: mk_eq(mk_type_arrow(t, ty), m1, m2),
+//     })
+// }
+
+/// TODO: rename
+/// ```text
+/// h₁ : [Φ ⊢ φ = ψ]  h₂ : [Ψ ⊢ φ]
+/// ------------------------------
+/// eq_mp h₁ h₂ : [Φ ∪ Ψ ⊢ ψ]
+/// ```
+pub fn eq_mp(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
+    let c: Term = q!("λ (x : Prop), x");
+    let g: Term = q!("${}", rhs(h1.target())?);
+    let h2 = change(q!("${} ${}", c, h2.target()), h2).unwrap();
+    let h = eq_elim(c, h1, h2)?;
+    change(g, h)
+}
+
+// // TODO remove
+// pub fn eq_elim_old(c: Term, h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
+//     if !c.is_body() {
+//         bail!("expected context, but got {c}");
+//     }
+//     let (_, m1, m2) = dest_eq(h1.target)?;
+//     let mut cm1 = c.clone();
+//     cm1.open(&m1);
+//     cm1.infer(&mut mk_prop())?;
+//     if h2.target != cm1 {
+//         bail!("terms not literally equal: {} and {}", h2.target, cm1);
+//     }
+//     let mut ctx: Vec<_> = h1
+//         .context
+//         .into_iter()
+//         .chain(h2.context.into_iter())
+//         .collect();
+//     ctx.sort();
+//     ctx.dedup();
+//     let mut target = c;
+//     target.open(&m2);
+//     target.infer(&mut mk_prop()).expect("logic flaw");
+//     Ok(Fact {
+//         context: ctx,
+//         target,
+//     })
+// }
 
 fn init_logic() {
     add_notation("⊤", Fixity::Nofix, usize::MAX, "top").unwrap();
@@ -177,7 +575,7 @@ fn init_logic() {
 
     // [⊢ ⊤]
     add_lemma(q!("trivial"), {
-        let h = eq_reflexivity(q!("λ (x : Prop), x")).unwrap();
+        let h = eq_intro(q!("λ (x : Prop), x")).unwrap();
         change(q!("top"), h).unwrap()
     })
     .unwrap();
@@ -271,13 +669,13 @@ fn init_logic() {
         // [p = ¬p, p ⊢ p]
         let p_holds = assume(q!("p")).unwrap();
         // [p = ¬p, p ⊢ ¬p]
-        let not_p_holds = transport(h.clone(), p_holds.clone()).unwrap();
+        let not_p_holds = eq_mp(h.clone(), p_holds.clone()).unwrap();
         // [p = ¬p, p ⊢ ⊥]
         let bot_holds = apply(q!("contradiction"), [q!("p")], [p_holds, not_p_holds]).unwrap();
         // [p = ¬p ⊢ ¬p]
         let not_p_holds = change(q!("¬p"), imp_intro(q!("p"), bot_holds).unwrap()).unwrap();
         // [p = ¬p ⊢ p]
-        let p_holds = transport(eq_symmetry(h).unwrap(), not_p_holds.clone()).unwrap();
+        let p_holds = eq_mp(eq_symm(h).unwrap(), not_p_holds.clone()).unwrap();
         // [p = ¬p ⊢ ⊥]
         let bot_holds = apply(q!("contradiction"), [q!("p")], [p_holds, not_p_holds]).unwrap();
         let h = imp_intro(q!("p = ¬p"), bot_holds).unwrap();
@@ -296,7 +694,7 @@ fn init_logic() {
 /// ```
 fn top_intro() -> Fact {
     let id = q!("λ (x : Prop), x");
-    let h = eq_reflexivity(id).unwrap();
+    let h = eq_intro(id).unwrap();
     let top = q!("top");
     change(top, h).unwrap()
 }
@@ -564,7 +962,7 @@ fn mt(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
 fn top_ne_bot() -> Fact {
     let p: Term = q!("⊤ = ⊥");
     let h1 = assume(p.clone()).unwrap();
-    let h = transport(h1, top_intro()).unwrap();
+    let h = eq_mp(h1, top_intro()).unwrap();
     change(q!("⊤ ≠ ⊥"), not_intro(p, h).unwrap()).unwrap()
 }
 
@@ -691,7 +1089,7 @@ fn init_classical() {
         let h1 = {
             let h1 = assume(q!("p = ⊥")).unwrap();
             let h2 = assume(q!("p")).unwrap();
-            let h = transport(h1, h2).unwrap();
+            let h = eq_mp(h1, h2).unwrap();
             let h = imp_intro(q!("p"), h).unwrap();
             // p = ⊥ ⊢ ¬p
             change(q!("¬p"), h).unwrap()
@@ -779,13 +1177,13 @@ fn em() -> Fact {
     // ex_uu : ⊢ ∃ x, uu x
     let ex_uu = {
         // h : ⊢ ⊤ = ⊤ ∨ p
-        let h: Fact = or_intro1(q!("${}", p), eq_reflexivity(q!("⊤")).unwrap()).unwrap();
+        let h: Fact = or_intro1(q!("${}", p), eq_intro(q!("⊤")).unwrap()).unwrap();
         exists_intro(uu.clone(), q!("⊤"), h).unwrap()
     };
     // ex_vv : ⊢ ∃ x, vv x
     let ex_vv = {
         // h : ⊢ ⊥ = ⊥ ∨ p
-        let h: Fact = or_intro1(q!("${}", p), eq_reflexivity(q!("⊥")).unwrap()).unwrap();
+        let h: Fact = or_intro1(q!("${}", p), eq_intro(q!("⊥")).unwrap()).unwrap();
         exists_intro(vv.clone(), q!("⊥"), h).unwrap()
     };
     let u: Term = q!("choice prop_inhabited ${}", uu);
@@ -813,14 +1211,30 @@ fn em() -> Fact {
         // h1: (u = ⊤), (v = ⊥) ⊢ u ≠ v ∨ p
         let h1 = {
             let h1 = assume(q!("${} = ⊤", u)).unwrap();
-            let mut c: Term = q!("λ p, p ≠ ⊥");
-            c.undischarge();
+            let c: Term = q!("λ p, p ≠ ⊥");
             // h : [⊢ u ≠ ⊥]
-            let h = eq_elim_old(c, eq_symmetry(h1).unwrap(), top_ne_bot()).unwrap();
+            let h = change(
+                q!("${} ≠ ⊥", u),
+                eq_elim(
+                    c.clone(),
+                    eq_symm(h1).unwrap(),
+                    change(q!("${} ⊤", c), top_ne_bot()).unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
             let h2 = assume(q!("${} = ⊥", v)).unwrap();
-            let mut c: Term = q!("λ q, ${} ≠ q", u);
-            c.undischarge();
-            let h = eq_elim_old(c, eq_symmetry(h2).unwrap(), h).unwrap();
+            let c: Term = q!("λ q, ${} ≠ q", u);
+            let h = change(
+                q!("${} ≠ ${}", u, v),
+                eq_elim(
+                    c.clone(),
+                    eq_symm(h2).unwrap(),
+                    change(q!("${} ⊥", c), h).unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
             or_intro1(q!("p"), h).unwrap()
         };
         // h2: p ⊢ u ≠ v ∨ p
@@ -945,7 +1359,7 @@ fn mar(h: Fact) -> Fact {
 /// ma h : [Φ ⊢ φ]
 /// ```
 fn ma(h: Fact) -> anyhow::Result<Fact> {
-    transport(eq_symmetry(h)?, top_intro())
+    eq_mp(eq_symm(h)?, top_intro())
 }
 
 fn init_nat() {
@@ -1191,7 +1605,7 @@ fn init_comprehension() {
         // ∃! x₀, rep d x = rep d x₀
         let h = {
             let p: Term = q!("λ (x₀ : u), rep ${} ${} = rep ${} x₀", d, x, d);
-            let h = eq_reflexivity(q!("rep ${} ${}", d, x)).unwrap();
+            let h = eq_intro(q!("rep ${} ${}", d, x)).unwrap();
             let h_exists = change(q!("${} ${}", p, x), h).unwrap();
             let y = take(q!("y"), q!("u"));
             let h = assume(q!("${} ${}", p, y)).unwrap();
@@ -1381,7 +1795,7 @@ impl Fact {
 
     /// h : [Φ ⊢ self.target = φ]
     fn transport(self, h: Fact) -> Fact {
-        transport(h, self).unwrap()
+        eq_mp(h, self).unwrap()
     }
 
     fn change(self, p: Term) -> Fact {
@@ -1403,9 +1817,9 @@ fn init_bool() {
         )
         .unwrap();
         // char ⊤
-        let h_char_top = transport(
-            eq_symmetry(h_char_top_eq).unwrap(),
-            or_intro1(q!("⊤ = ⊥"), eq_reflexivity(q!("⊤")).unwrap()).unwrap(),
+        let h_char_top = eq_mp(
+            eq_symm(h_char_top_eq).unwrap(),
+            or_intro1(q!("⊤ = ⊥"), eq_intro(q!("⊤")).unwrap()).unwrap(),
         )
         .unwrap();
         abs(h_char_top).unwrap()
@@ -1425,9 +1839,9 @@ fn init_bool() {
         )
         .unwrap();
         // char ⊥
-        let h_char_bot = transport(
-            eq_symmetry(h_char_bot_eq).unwrap(),
-            or_intro2(q!("⊥ = ⊤"), eq_reflexivity(q!("⊥")).unwrap()).unwrap(),
+        let h_char_bot = eq_mp(
+            eq_symm(h_char_bot_eq).unwrap(),
+            or_intro2(q!("⊥ = ⊤"), eq_intro(q!("⊥")).unwrap()).unwrap(),
         )
         .unwrap();
         abs(h_char_bot).unwrap()
@@ -1440,8 +1854,8 @@ fn init_bool() {
     add_lemma(q!("tt_ne_ff"), {
         let h = assume(q!("tt = ff")).unwrap();
         let h = congr_arg(q!("rep bool.comprehension"), h).unwrap();
-        let h = eq_transitivity(q!("tt.spec"), h).unwrap();
-        let h = eq_transitivity(h, eq_symmetry(q!("ff.spec")).unwrap()).unwrap();
+        let h = eq_trans(q!("tt.spec"), h).unwrap();
+        let h = eq_trans(h, eq_symm(q!("ff.spec")).unwrap()).unwrap();
         let h_top_ne_bot = change(q!("(⊤ = ⊥) → ⊥"), q!("top_ne_bot")).unwrap();
         let h_bot = apply(h_top_ne_bot, [], [h]).unwrap();
         change(q!("tt ≠ ff"), not_intro(q!("tt = ff"), h_bot).unwrap()).unwrap()
@@ -1474,11 +1888,11 @@ fn init_bool() {
             [],
         )
         .unwrap();
-        let h = transport(h, h_char_rep).unwrap();
+        let h = eq_mp(h, h_char_rep).unwrap();
         // rep b = ⊤ ⊢ b = tt
         let h_left = {
             let h = assume(q!("rep bool.comprehension b = ⊤")).unwrap();
-            let h = eq_transitivity(h, q!("tt.spec")).unwrap();
+            let h = eq_trans(h, q!("tt.spec")).unwrap();
             let h = apply(
                 change(
                     q!("∀ x y, rep bool.comprehension x = rep bool.comprehension y → x = y"),
@@ -1501,7 +1915,7 @@ fn init_bool() {
         // rep b = ⊥ ⊢ b = ff
         let h_right = {
             let h = assume(q!("rep bool.comprehension b = ⊥")).unwrap();
-            let h = eq_transitivity(h, q!("ff.spec")).unwrap();
+            let h = eq_trans(h, q!("ff.spec")).unwrap();
             let h = apply(
                 change(
                     q!("∀ x y, rep bool.comprehension x = rep bool.comprehension y → x = y"),
