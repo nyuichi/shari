@@ -11,6 +11,8 @@ use shari_kernel::proof::{
 use shari_kernel::q;
 use shari_kernel::repr::Fixity;
 use shari_kernel::tt::{mk_local, Kind, Name, Term, TermAbs, TermConst, TermLocal, Type};
+use std::cell::OnceCell;
+use std::rc::Rc;
 use std::{mem, sync::Arc};
 
 fn lhs(m: &Term) -> anyhow::Result<&Term> {
@@ -882,18 +884,31 @@ fn exists_elim(name: Name, h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
         ty: inner.binder_type.clone(),
     };
     p.open(&y.clone().into());
+    println!("{p}");
+    if !h2.target().is_fresh(y.name, &y.ty) {
+        bail!("eigenvariable condition fails");
+    }
     let q = h2.target().clone();
     let h2 = imp_intro(p.clone(), h2)?;
+    for p in h2.context() {
+        println!("{p}");
+        if !p.is_fresh(y.name, &y.ty) {
+            bail!("eigenvariable condition fails");
+        }
+    }
     let h2 = change(q!("${} ${} → ${}", pred, y, q), h2)?;
     let h2 = forall_intro(y.name, y.ty, h2)?;
     let h1 = change(q!("∀ r, (∀ x, ${} x → r) → r", pred), h1)?;
+    println!("h1: {h1}");
+    println!("q: {q}");
+    println!("h2: {h2}");
     apply(h1, [q], [h2])
 }
 
 /// ```text
 /// h₁ : [Φ ⊢ ∃ x, φ]  h₂ : [Ψ ⊢ x₁ = x₂]
-/// ------------------------------------------------------------------ (x₁, x₂ # Ψ)
-/// uexists_intro x y h₁ h₂ : [Φ ∪ (Ψ - {[x₁/x]φ, [x₂/x]φ}) ⊢ ∃! x, φ
+/// -------------------------------------------------------------- (x₁, x₂ # Ψ)
+/// uexists_intro h₁ h₂ : [Φ ∪ (Ψ - {[x₁/x]φ, [x₂/x]φ}) ⊢ ∃! x, φ]
 /// ```
 fn uexists_intro(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     let p = arg(h1.target())?;
@@ -920,10 +935,64 @@ fn uexists_intro(h1: Fact, h2: Fact) -> anyhow::Result<Fact> {
     // ∀ y, φ[y] → x = y
     let h2 = forall_intro(x2.name, x2.ty, h2)?;
     let h_p1 = assume(q!("${}", p1))?;
+    // φ[x] ⊢ φ[x] ∧ ∀ y, φ[y] → x = y
     let h = and_intro(h_p1, h2)?;
-    let h = forall_intro(x1.name, x1.ty, h)?;
+    let mut pred = h.target().clone();
+    pred.discharge_local(x1.name, x1.ty.clone(), x1.name);
+    let h = exists_intro(pred, q!("${}", x1), h)?;
     let h = exists_elim(x1.name, h1, h)?;
     change(g, h)
+}
+
+/// ```text
+/// h : [Φ ⊢ ∃! x, φ]
+/// -------------------------------
+/// uexists_exists h : [Φ ⊢ ∃ x, φ]
+/// ```
+fn uexists_exists(h: Fact) -> anyhow::Result<Fact> {
+    let pred = arg(h.target())?.clone();
+    let Term::Abs(inner) = &pred else {
+        bail!("invalid form");
+    };
+    let ty = inner.binder_type.clone();
+    let h = change(q!("∃ x, ${} x ∧ ∀ y, (${} y) → x = y", pred, pred), h)?;
+    let x = take_fresh(ty);
+    let h_cont = assume(q!("${} ${} ∧ ∀ y, (${} y) → ${} = y", pred, x, pred, x))?;
+    let h_cont = and_left(h_cont)?;
+    let h_cont = exists_intro(q!("λ x, ${} x", pred), x.clone().into(), h_cont)?;
+    println!("h_cont: {h_cont}");
+    let h = exists_elim(x.name, h, h_cont)?;
+    change(q!("exists ${}", pred), h)
+}
+
+/// ```text
+/// h : [Φ ⊢ ∃! x, φ]
+/// ---------------------------------------------------- (x₁ x₂ # Φ φ)
+/// uexists_unique x₁ x₂ h : [Φ, φ[x₁], φ[x₂] ⊢ x₁ = x₂]
+/// ```
+fn uexists_unique(x1: Name, x2: Name, h: Fact) -> anyhow::Result<Fact> {
+    let pred = arg(h.target())?.clone();
+    let Term::Abs(inner) = &pred else {
+        bail!("invalid form");
+    };
+    let ty = inner.binder_type.clone();
+    let h = change(q!("∃ x, ${} x ∧ ∀ y, (${} y) → x = y", pred, pred), h)?;
+    let x = take_fresh(ty.clone());
+    let h_cont = assume(q!("${} ${} ∧ ∀ y, (${} y) → ${} = y", pred, x, pred, x))?;
+    let h_cont = and_right(h_cont)?;
+    let x1 = take(x1, ty.clone());
+    let h_px1 = assume(q!("${} ${}", pred, x1))?;
+    // x = x₁
+    let h1 = apply(h_cont.clone(), [q!("${}", x1)], [h_px1])?;
+    let x2 = take(x2, ty.clone());
+    let h_px2 = assume(q!("${} ${}", pred, x2))?;
+    // x = x₂
+    let h2 = apply(h_cont, [q!("${}", x2)], [h_px2])?;
+    // x₁ = x₂
+    let h_x1_eq_x2 = eq_trans(eq_symm(h1)?, h2)?;
+    let h_cont = exists_intro(q!("λ x, ${} x", pred), x.clone().into(), h_x1_eq_x2)?;
+    println!("h_cont: {h_cont}");
+    exists_elim(x.name, h, h_cont)
 }
 
 /// TODO: refine
@@ -1079,7 +1148,7 @@ fn init_function() {
     .unwrap();
 }
 
-fn init_classical() {
+fn init_ext() {
     add_axiom(q!("prop_ext"), vec![], q!("∀ φ ψ, (φ ↔ ψ) ↔ (φ = ψ)")).unwrap();
 
     add_axiom(
@@ -1088,27 +1157,6 @@ fn init_classical() {
         q!("∀ (f₁ f₂ : u → v), (∀ x, f₁ x = f₂ x) ↔ (f₁ = f₂)"),
     )
     .unwrap();
-
-    // emulate the `inhabited` type class by dictionary passing
-    add_const_type(q!("inhabited"), Kind(1)).unwrap();
-
-    add_const(q!("prop_inhabited"), vec![], q!("inhabited Prop")).unwrap();
-
-    add_const(
-        q!("choice"),
-        vec![q!("u")],
-        q!("inhabited u → (u → Prop) → u"),
-    )
-    .unwrap();
-
-    add_axiom(
-        q!("choice_spec"),
-        vec![q!("u")],
-        q!("∀ (h : inhabited u), ∀ (P : u → Prop), (∃ x, P x) → P (choice h P)"),
-    )
-    .unwrap();
-
-    add_lemma(q!("em"), vec![], em()).unwrap();
 
     add_lemma(q!("ma"), vec![], {
         let h1 = assume(q!("p = ⊤")).unwrap();
@@ -1185,8 +1233,8 @@ pub fn fun_ext(x: Name, t: Type, h: Fact) -> anyhow::Result<Fact> {
     let cod_ty = &inner.ty_args[0];
     let mut m1 = m1.clone();
     let mut m2 = m2.clone();
-    m1.discharge_local(x, t.clone());
-    m2.discharge_local(x, t.clone());
+    m1.discharge_local(x, t.clone(), x);
+    m2.discharge_local(x, t.clone(), x);
     let fun_ext =
         iff_right(apply(q!("fun_ext", &t, cod_ty), [m1.clone(), m2.clone()], []).unwrap()).unwrap();
     m1.apply([Term::Local(Arc::new(TermLocal {
@@ -1200,6 +1248,47 @@ pub fn fun_ext(x: Name, t: Type, h: Fact) -> anyhow::Result<Fact> {
     let h = change(q!("${} = ${}", m1, m2), h)?;
     let h = forall_intro(x, t, h).unwrap();
     apply(fun_ext, [], [h])
+}
+
+/// ```text
+/// h : [Φ ⊢ φ]
+/// -------------------- [reverse of material adequacy]
+/// mar h : [Φ ⊢ φ = ⊤]
+/// ```
+fn mar(h: Fact) -> Fact {
+    prop_ext(iff_intro(h, top_intro())).unwrap()
+}
+
+/// ```text
+/// h : [Φ ⊢ φ = ⊤]
+/// ---------------- [material adequacy]
+/// ma h : [Φ ⊢ φ]
+/// ```
+fn ma(h: Fact) -> anyhow::Result<Fact> {
+    eq_mp(eq_symm(h)?, top_intro())
+}
+
+fn init_classical() {
+    // emulate the `inhabited` type class by dictionary passing
+    add_const_type(q!("inhabited"), Kind(1)).unwrap();
+
+    add_const(q!("prop_inhabited"), vec![], q!("inhabited Prop")).unwrap();
+
+    add_const(
+        q!("choice"),
+        vec![q!("u")],
+        q!("inhabited u → (u → Prop) → u"),
+    )
+    .unwrap();
+
+    add_axiom(
+        q!("choice_spec"),
+        vec![q!("u")],
+        q!("∀ (h : inhabited u), ∀ (P : u → Prop), (∃ x, P x) → P (choice h P)"),
+    )
+    .unwrap();
+
+    add_lemma(q!("em"), vec![], em()).unwrap();
 }
 
 fn em() -> Fact {
@@ -1377,24 +1466,6 @@ fn em() -> Fact {
       },
     }
     */
-}
-
-/// ```text
-/// h : [Φ ⊢ φ]
-/// -------------------- [reverse of material adequacy]
-/// mar h : [Φ ⊢ φ = ⊤]
-/// ```
-fn mar(h: Fact) -> Fact {
-    prop_ext(iff_intro(h, top_intro())).unwrap()
-}
-
-/// ```text
-/// h : [Φ ⊢ φ = ⊤]
-/// ---------------- [material adequacy]
-/// ma h : [Φ ⊢ φ]
-/// ```
-fn ma(h: Fact) -> anyhow::Result<Fact> {
-    eq_mp(eq_symm(h)?, top_intro())
 }
 
 fn init_nat() {
@@ -1725,7 +1796,7 @@ fn add_function_comprehension(name: Name, local_types: Vec<Name>, h: Fact) -> an
     }
     let mut binders = vec![];
     let uexists_binder;
-    let mut target = h.target();
+    let mut target = h.target().clone();
     loop {
         let head = target.head();
         let Term::Const(inner) = head else {
@@ -1739,44 +1810,43 @@ fn add_function_comprehension(name: Name, local_types: Vec<Name>, h: Fact) -> an
         } else {
             bail!("invalid form");
         }
-        let args = target.args();
+        let mut args = target.unapply();
         // The length of args is either zero or one at this point.
         if args.len() != 1 {
             bail!("invalid form");
         }
-        let arg = args[0];
-        let Term::Abs(inner) = arg else {
+        let mut arg = args.pop().unwrap();
+        let Term::Abs(inner) = &mut arg else {
             bail!("invalid form");
         };
-        target = &inner.body;
+        let inner = mem::take(Arc::make_mut(inner));
+        target = inner.body;
         if is_uexists {
-            uexists_binder = (inner.binder_name, &inner.binder_type);
+            uexists_binder = (inner.binder_type, inner.binder_name);
             break;
         }
-        binders.push((inner.binder_name, &inner.binder_type));
+        let x = take_fresh(inner.binder_type);
+        target.open(&x.clone().into());
+        binders.push((x.name, x.ty, inner.binder_name));
     }
-    let mut ty = uexists_binder.1.clone();
-    ty.discharge(binders.iter().copied().map(|(_, t)| t.clone()));
+    let mut ty = uexists_binder.0.clone();
+    ty.discharge(binders.iter().map(|(_, t, _)| t.clone()));
     add_const(name, local_types.clone(), ty)?;
     let mut a: Term = TermConst {
         name,
         ty_args: local_types.iter().map(|name| Type::Local(*name)).collect(),
     }
     .into();
-    a.apply((0..binders.len()).rev().map(Term::Var));
+    a.apply(binders.iter().map(|(x, ty, _)| mk_local(*x, ty.clone())));
     let mut p = target.clone();
     p.open(&a);
-    p.unshift();
-    for (name, ty) in binders.into_iter().rev() {
+    for (x, ty, nickname) in binders.into_iter().rev() {
+        p.discharge_local(x, ty.clone(), nickname);
         let mut forall = Term::Const(Arc::new(TermConst {
             name: q!("forall"),
             ty_args: vec![ty.clone()],
         }));
-        forall.apply([Term::Abs(Arc::new(TermAbs {
-            binder_type: ty.clone(),
-            binder_name: name,
-            body: p,
-        }))]);
+        forall.apply([p]);
         p = forall;
     }
     let name_spec = format!("{}.spec", name).as_str().try_into()?;
@@ -1983,7 +2053,284 @@ fn init_bool() {
     */
 }
 
+#[must_use]
+struct Goal {
+    prop: Prop,
+    tx: Rc<GoalState>,
+}
+
+#[derive(Default)]
+struct GoalState {
+    // TODO: One possible future direction is to extend runners to take Vec<Fact> for unresovled goals.
+    // this way we convert tactics Goal -> Vec<Goals> into Vec<Fact> -> Fact, which are in perfect duality, which is satisfying!
+    inner: OnceCell<Box<dyn FnOnce() -> anyhow::Result<Fact>>>,
+}
+
+#[derive(Default, Clone)]
+struct Prop {
+    context: Vec<Term>,
+    target: Term,
+}
+
+impl std::fmt::Display for Prop {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for p in &self.context {
+            write!(f, "({}) ", p)?;
+        }
+        write!(f, "⊢ {}", self.target)
+    }
+}
+
+struct Handle {
+    prop: Prop,
+    rx: Rc<GoalState>,
+}
+
+impl Handle {
+    fn run(self) -> anyhow::Result<Fact> {
+        println!("proving: {}", self.prop);
+        let Some(state) = Rc::into_inner(self.rx) else {
+            bail!("unresolved goal found: {}", self.prop);
+        };
+        let Some(runner) = state.inner.into_inner() else {
+            bail!("unresolved goal found: {}", self.prop);
+        };
+        runner()
+    }
+}
+
+impl Goal {
+    fn new(mut prop: Prop) -> anyhow::Result<(Self, Handle)> {
+        for p in &mut prop.context {
+            p.check(&mut mk_prop())?;
+        }
+        prop.target.check(&mut mk_prop())?;
+        let runner = Rc::new(GoalState::default());
+        Ok((
+            Goal {
+                prop: prop.clone(),
+                tx: Rc::clone(&runner),
+            },
+            Handle { prop, rx: runner },
+        ))
+    }
+
+    fn resolve(self, runner: impl FnOnce() -> anyhow::Result<Fact> + 'static) {
+        let runner: Box<dyn FnOnce() -> anyhow::Result<Fact>> = Box::new(runner);
+        self.tx
+            .inner
+            .set(Box::new(move || {
+                let fact = runner()?;
+                if fact.target() != &self.prop.target || fact.context() != &self.prop.context {
+                    panic!(
+                        "broken tactic detected!:\ngot\t\t{}\nexpected\t{}",
+                        self.prop,
+                        Prop {
+                            context: fact.context().clone(),
+                            target: fact.target().clone()
+                        }
+                    );
+                }
+                Ok(fact)
+            }))
+            // Directly calling .unwrap() does not work because the closure type does not implement Debug
+            .ok()
+            .unwrap();
+    }
+
+    fn sorry(self) -> anyhow::Result<()> {
+        bail!("unresolved goal: {}", self.prop)
+    }
+
+    fn exact(self, h: Fact) -> anyhow::Result<()> {
+        if h.context() != &self.prop.context || h.target() != &self.prop.target {
+            bail!(
+                "proposition mismatch:\ngot:\t\t{}\nexpected:\t{}",
+                Prop {
+                    context: h.context().clone(),
+                    target: h.target().clone()
+                },
+                self.prop
+            );
+        }
+        self.resolve(move || Ok(h));
+        Ok(())
+    }
+
+    /// ```text
+    /// g : [Φ ⊢ φ → ψ]
+    /// ------------------------
+    /// g.imp_intro : [Φ, φ ⊢ ψ]
+    /// ```
+    fn imp_intro(self) -> anyhow::Result<Goal> {
+        let p = lhs(&self.prop.target)?.clone();
+        let target = rhs(&self.prop.target)?.clone();
+        let mut context = self.prop.context.clone();
+        context.push(p.clone());
+        context.sort();
+        context.dedup();
+        let (goal, handle) = Goal::new(Prop { context, target })?;
+        self.resolve(move || {
+            let h = handle.run()?;
+            imp_intro(p, h)
+        });
+        Ok(goal)
+    }
+
+    /// ```text
+    /// g : [Φ ⊢ ∀ (x : τ), φ]
+    /// ------------------------------  ((x₁ : τ) # Φ, φ)
+    /// g.imp_intro x₁ : [Φ ⊢ [x₁/x]φ]
+    /// ```
+    fn forall_intro(self, name: Name) -> anyhow::Result<Goal> {
+        // TODO: check freshness
+        let Term::Abs(inner) = arg(&self.prop.target)?.clone() else {
+            bail!("invalid form");
+        };
+        let mut target = inner.body.clone();
+        let ty = inner.binder_type.clone();
+        target.open(&mk_local(name, ty.clone()));
+        let (goal, handle) = Goal::new(Prop {
+            context: self.prop.context.clone(),
+            target,
+        })?;
+        self.resolve(move || {
+            let h = handle.run()?;
+            forall_intro(name, ty, h)
+        });
+        Ok(goal)
+    }
+
+    /// ```text
+    /// g : [Φ ⊢ ∃! (x : τ), φ]
+    /// ----------------------------------------------------------  ((x₁ : τ) (x₂ : τ) # Φ, φ)
+    /// (g.uexists_intro x₁ x₂)₁ : [Φ ⊢ ∃ (x : τ), φ]
+    /// (g.uexists_intro x₁ x₂)₂ : [Φ, [x₁/x]φ, [x₂/x]φ ⊢ x₁ = x₂]
+    /// ```
+    fn uexists_intro(self, x1: Name, x2: Name) -> anyhow::Result<(Goal, Goal)> {
+        let p = arg(&self.prop.target)?;
+        let exists_p = q!("exists ${}", p);
+        let (g1, handle1) = Goal::new(Prop {
+            context: self.prop.context.clone(),
+            target: exists_p,
+        })?;
+        let Term::Abs(inner) = p else {
+            bail!("invalid form");
+        };
+        let ty = inner.binder_type.clone();
+        for p in &self.prop.context {
+            if !p.is_fresh(x1, &ty) {
+                bail!("eigenvariable condition fails");
+            }
+            if !p.is_fresh(x1, &ty) {
+                bail!("eigenvariable condition fails");
+            }
+        }
+        if !self.prop.target.is_fresh(x1, &ty) {
+            bail!("eigenvariable condition fails");
+        }
+        if !self.prop.target.is_fresh(x2, &ty) {
+            bail!("eigenvariable condition fails");
+        }
+        let x1 = mk_local(x1, ty.clone());
+        let x2 = mk_local(x2, ty);
+        let mut p1 = inner.body.clone();
+        p1.open(&x1);
+        let mut p2 = inner.body.clone();
+        p2.open(&x2);
+        let mut context = self.prop.context.clone();
+        context.push(p1);
+        context.push(p2);
+        context.sort();
+        context.dedup();
+        let target = q!("${} = ${}", x1, x2);
+        let (g2, handle2) = Goal::new(Prop { context, target })?;
+        self.resolve(move || {
+            let h1 = handle1.run()?;
+            let h2 = handle2.run()?;
+            uexists_intro(h1, h2)
+        });
+        Ok((g1, g2))
+    }
+
+    fn exists_intro(self, witness: Term) -> anyhow::Result<Goal> {
+        let p = arg(&self.prop.target)?.clone();
+        let Term::Abs(inner) = &p else {
+            bail!("invalid form");
+        };
+        let mut target = inner.body.clone();
+        target.open(&witness);
+        let (g, handle) = Goal::new(Prop {
+            context: self.prop.context.clone(),
+            target,
+        })?;
+        self.resolve(move || {
+            let h = handle.run()?;
+            exists_intro(p, witness, h)
+        });
+        Ok(g)
+    }
+
+    /// ```text
+    /// g : [Φ ⊢ φ]
+    /// -----------------------------------
+    /// (g.eq_mp ψ)₁ : [Φ ⊢ ψ = φ]
+    /// (g.eq_mp ψ)₂ : [Φ ⊢ ψ]
+    /// ```
+    fn eq_mp(self, p: Term) -> anyhow::Result<(Goal, Goal)> {
+        let q = self.prop.target.clone();
+        let (g1, handle1) = Goal::new(Prop {
+            context: self.prop.context.clone(),
+            target: q!("${} = ${}", p, q),
+        })?;
+        let (g2, handle2) = Goal::new(Prop {
+            context: self.prop.context.clone(),
+            target: p,
+        })?;
+        self.resolve(move || {
+            let h1 = handle1.run()?;
+            let h2 = handle2.run()?;
+            eq_mp(h1, h2)
+        });
+        Ok((g1, g2))
+    }
+
+    fn change(self, p: Term) -> anyhow::Result<Goal> {
+        let (g, handle) = Goal::new(Prop {
+            context: self.prop.context.clone(),
+            target: p.clone(),
+        })?;
+        let target = self.prop.target.clone();
+        self.resolve(move || {
+            let h = handle.run()?;
+            change(target, h)
+        });
+        Ok(g)
+    }
+}
+
 fn init_pair() {
+    /*
+    -- setup
+    def pair.rep : pair u v → (u → v → Prop)
+    def pair.char (e : u → v → Prop) : Prop := ∃! a b, e a b
+
+    lemma pair.rep.injective : injective pair.rep
+    lemma pair.char_rep : ∀ p, ∃! x y, pair.rep p x y
+    def fst : pair u v → u
+    def snd : pair u v → v
+    lemma pair.rep_proj : ∀ p, pair.rep p (fst p) (snd p)
+
+    def mk_rep (x : u) (y : v) : pair.base u v := λ a b, a = x ∧ b = y
+    lemma pair_uexists : ∀ x y, ∃! p, mk_rep x y = pair.rep p
+
+    def pair.mk : u → v → pair u v
+    lemma pair.mk.spec : ∀ x y, mk_rep x y = pair.rep (pair.mk x y)
+    lemma pair.beta : ∀ x y, fst (mk x y) = x ∧ snd (mk x y) = y
+
+    lemma pair.eta : ∀ p, mk (fst p) (snd p) = p
+    */
+
     add_comprehension(
         q!("pair"),
         vec![q!("u"), q!("v")],
@@ -1991,41 +2338,301 @@ fn init_pair() {
     )
     .unwrap();
 
+    add_definition(
+        q!("pair.rep"),
+        vec![q!("u"), q!("v")],
+        q!("rep pair.comprehension.{u, v}"),
+    )
+    .unwrap();
+
+    add_definition(
+        q!("pair.char"),
+        vec![q!("u"), q!("v")],
+        q!("λ (e : u → v → Prop), ∃! a b, e a b"),
+    )
+    .unwrap();
+
+    // injective pair.rep
+    add_lemma(q!("pair.rep.injective"), vec![q!("u"), q!("v")], {
+        let h = apply(
+            instantiate(
+                &[(q!("u"), &q!("pair u v")), (q!("v"), &q!("u → v → Prop"))],
+                q!("rep.injective"),
+            )
+            .unwrap(),
+            [q!("pair.comprehension")],
+            [],
+        )
+        .unwrap();
+        change(q!("injective pair.rep.{u, v}"), h).unwrap()
+    })
+    .unwrap();
+
+    // ∀ p, ∃! x y, pair.rep p x y
+    add_lemma(q!("pair.char_rep"), vec![q!("u"), q!("v")], {
+        let p = take(q!("p"), q!("pair u v"));
+        let h = apply(
+            instantiate(
+                &[(q!("u"), &q!("pair u v")), (q!("v"), &q!("u → v → Prop"))],
+                q!("char_rep"),
+            )
+            .unwrap(),
+            [q!("pair.comprehension.{u, v}"), q!("${}", p)],
+            [],
+        )
+        .unwrap();
+        // char pair.comprehension p = ∃! x y, pair.rep p x y
+        let h_char_spec = change(
+            q!(
+                "char pair.comprehension (rep pair.comprehension ${}) = ∃! x y, pair.rep ${} x y",
+                p,
+                p
+            ),
+            congr_fun(q!("pair.spec"), q!("pair.rep ${}", p)).unwrap(),
+        )
+        .unwrap();
+        let h = eq_mp(h_char_spec, h).unwrap();
+        forall_intro(p.name, p.ty, h).unwrap()
+    })
+    .unwrap();
+
+    // fst : pair u v → u
+    add_function_comprehension(q!("fst"), vec![q!("u"), q!("v")], q!("pair.char_rep")).unwrap();
+    // snd : pair u v → v
+    add_function_comprehension(q!("snd"), vec![q!("u"), q!("v")], q!("fst.spec")).unwrap();
+
+    // ∀ p, pair.rep p (fst p) (snd p)
+    add_lemma(q!("pair.rep_proj"), vec![q!("u"), q!("v")], {
+        q!("snd.spec")
+    })
+    .unwrap();
+
+    // // ∀ (e : u → v → Prop), (∃! a b, e a b) = (∃! a b, e = (λ x y, x = a ∧ y = b))
+    // add_lemma(q!("e_desc"), vec![q!("u"), q!("v")], )
+
+    add_definition(
+        q!("pair.mk_rep"),
+        vec![q!("u"), q!("v")],
+        q!("λ (x : u) (y : v), λ a b, a = x ∧ b = y"),
+    )
+    .unwrap();
+
+    // ∀ x y, ∃! p, pair.mk_rep x y = pair.rep p
+    add_lemma(q!("mk_rep_to_rep"), vec![q!("u"), q!("v")], {
+        let x = take(q!("x"), q!("u"));
+        let y = take(q!("y"), q!("v"));
+        let h = apply(
+            instantiate(
+                &[(q!("v"), &q!("u → v → Prop")), (q!("u"), &q!("pair u v"))],
+                q!("rep.spec"),
+            )
+            .unwrap(),
+            [q!("pair.comprehension.{u, v}")],
+            [],
+        )
+        .unwrap();
+        let h = and_right(h).unwrap();
+        let witness: Term = q!("λ (a : u) (b : v), a = x ∧ b = y");
+        let h = apply(h, [witness.clone()], []).unwrap();
+        let h = iff_left(h).unwrap();
+        let h = apply(
+            h,
+            [],
+            [{
+                let (g, handle) = Goal::new(Prop {
+                    context: vec![],
+                    target: q!("char pair.comprehension.{u, v} ${}", witness),
+                })
+                .unwrap();
+                let (g1, g2) = g
+                    .eq_mp(q!("(λ (e : u → v → Prop), ∃! a b, e a b) ${}", witness))
+                    .unwrap();
+                g1.exact(eq_symm(congr_fun(q!("pair.spec"), witness.clone()).unwrap()).unwrap())
+                    .unwrap();
+                let g = g2.change(q!("∃! (a : u) (b : v), a = x ∧ b = y")).unwrap();
+                let (g_exists_a, g_unique_a) = g.uexists_intro(q!("a₁"), q!("a₂")).unwrap();
+                let g = g_exists_a.exists_intro(q!("x")).unwrap();
+                let (g_exists_b, g_unique_b) = g.uexists_intro(q!("b₁"), q!("b₂")).unwrap();
+                let g = g_exists_b.exists_intro(q!("y")).unwrap();
+                g.exact(
+                    and_intro(
+                        eq_intro(q!("${}", x)).unwrap(),
+                        eq_intro(q!("${}", y)).unwrap(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+                g_unique_b
+                    .exact({
+                        let h1 = assume(q!("${} = ${} ∧ b₁ = ${}", x, x, y)).unwrap();
+                        // b₁ = y
+                        let h1 = and_right(h1).unwrap();
+                        let h2 = assume(q!("${} = ${} ∧ b₂ = ${}", x, x, y)).unwrap();
+                        // b₂ = y
+                        let h2 = and_right(h2).unwrap();
+                        let h2 = eq_symm(h2).unwrap();
+                        eq_trans(h1, h2).unwrap()
+                    })
+                    .unwrap();
+                g_unique_a
+                    .exact({
+                        let a1 = TermLocal {
+                            name: q!("a₁"),
+                            ty: q!("u"),
+                        };
+                        let a2 = TermLocal {
+                            name: q!("a₂"),
+                            ty: q!("u"),
+                        };
+                        let h1 = assume(q!("∃! (b : v), ${} = ${} ∧ b = ${}", a1, x, y)).unwrap();
+                        let h1 = uexists_exists(h1).unwrap();
+                        let b = take_fresh(q!("v"));
+                        let h1_cont = {
+                            let h = assume(q!("${} = ${} ∧ ${} = ${}", a1, x, b, y)).unwrap();
+                            and_left(h).unwrap()
+                        };
+                        // a₁ = x
+                        let h1 = exists_elim(b.name, h1, h1_cont).unwrap();
+                        let h2 = assume(q!("∃! (b : v), ${} = ${} ∧ b = ${}", a2, x, y)).unwrap();
+                        let h2 = uexists_exists(h2).unwrap();
+                        let h2_cont = {
+                            let h = assume(q!("${} = ${} ∧ ${} = ${}", a2, x, b, y)).unwrap();
+                            and_left(h).unwrap()
+                        };
+                        // a₂ = x
+                        let h2 = exists_elim(b.name, h2, h2_cont).unwrap();
+                        eq_trans(h1, eq_symm(h2).unwrap()).unwrap()
+                    })
+                    .unwrap();
+                handle.run().unwrap()
+            }],
+        )
+        .unwrap();
+        let h = change(q!("∃! p, pair.mk_rep ${} ${} = pair.rep p", x, y), h).unwrap();
+        forall_intro(x.name, x.ty, forall_intro(y.name, y.ty, h).unwrap()).unwrap()
+    })
+    .unwrap();
+
+    // pair.mk : u → v → pair u v
+    add_function_comprehension(q!("pair.mk"), vec![q!("u"), q!("v")], q!("mk_rep_to_rep")).unwrap();
+
+    add_lemma(q!("pair.beta"), vec![q!("u"), q!("v")], {
+        let x = take(q!("x"), q!("u"));
+        let y = take(q!("y"), q!("v"));
+        let h = apply(q!("pair.mk.spec"), [q!("${}", x), q!("${}", y)], []).unwrap();
+        let h = congr_fun(
+            congr_fun(h, q!("fst (pair.mk ${} ${})", x, y)).unwrap(),
+            q!("snd (pair.mk ${} ${})", x, y),
+        )
+        .unwrap();
+        let h = eq_symm(h).unwrap();
+        // pair.mk_rep x y (fst (mk x y)) (snd (mk x y))
+        let h = eq_mp(
+            h,
+            apply(q!("pair.rep_proj"), [q!("pair.mk ${} ${}", x, y)], []).unwrap(),
+        )
+        .unwrap();
+        let h = change(
+            q!(
+                "fst (pair.mk ${} ${}) = ${} ∧ snd (pair.mk ${} ${}) = ${}",
+                x,
+                y,
+                x,
+                x,
+                y,
+                y
+            ),
+            h,
+        )
+        .unwrap();
+        forall_intro(x.name, x.ty, forall_intro(y.name, y.ty, h).unwrap()).unwrap()
+    })
+    .unwrap()
+    // // ∀ p, ∃! x y, (λ a b, a = x ∧ b = y) = rep pair.comprehension p
+    // add_lemma(q!("pair.pair_to_canon_rep"), vec![q!("u"), q!("v")], {
+    //     let (g, handle) = Goal::new(Prop {
+    //         context: vec![],
+    //         target: q!(
+    //             "∀ (p : pair u v), ∃! x y, (λ a b, a = x ∧ b = y) = rep pair.comprehension p"
+    //         ),
+    //     })
+    //     .unwrap();
+    //     let g = g.forall_intro(q!("p")).unwrap();
+    //     let (g_x_exists, g_x_unique) = g.uexists_intro(q!("x₁"), q!("x₂")).unwrap();
+
+    //     handle.run().unwrap()
+    // })
+    // .unwrap();
+
     // add_lemma(q!("pair.pair_uexists"), vec![q!("u"), q!("v")], {
+    //     let (g, handle) = Goal::new(Prop {
+    //         context: vec![],
+    //         target: q!("∀ (x : u), ∀ (y : v), ∃! (p : pair u v), (rep pair.comprehension p) x y"),
+    //     })
+    //     .unwrap();
     //     let x = take(q!("x"), q!("u"));
+    //     let g = g.forall_intro(x.name).unwrap();
     //     let y = take(q!("y"), q!("v"));
-    //     // ∃ p, ∃! x y, (rep p) x y
-    //     let h_exists = {
-    //         let p = take(q!("p"), q!("pair u v"));
-    //         let t1: Type = q!("u → v → Prop");
-    //         let t2: Type = q!("pair u v");
-    //         let h: Fact = q!("char_rep", t1, t2);
-    //         let h = apply(h, [q!("pair.comprehension.{u, v}"), q!("${}", p)], []).unwrap();
-    //         let h2: Fact = q!("pair.spec");
-    //         let h2 = congr_fun(
-    //             h2,
-    //             q!("rep.{u → v → Prop, pair u v} pair.comprehension ${}", p),
-    //         )
+    //     let g = g.forall_intro(y.name).unwrap();
+    //     let (g_exists, g_unique) = g.uexists_intro(q!("p₁"), q!("p₂")).unwrap();
+    //     // ∃! p, (λ a b, a = x ∧ b = y) = rep pair.comprehension p
+    //     let h = apply(
+    //         q!("pair.canon_rep_to_pair"),
+    //         [q!("${}", x), q!("${}", y)],
+    //         [],
+    //     )
+    //     .unwrap();
+    //     g_exists
+    //         .exact({
+    //             let p = take(q!("p"), q!("pair u v"));
+    //             let h_cont = {
+    //                 let h = assume(q!(
+    //                     "(λ a b, a = ${} ∧ b = ${}) = rep pair.comprehension ${}",
+    //                     x,
+    //                     y,
+    //                     p
+    //                 ))
+    //                 .unwrap();
+    //                 let h = congr_fun(h, q!("${}", x)).unwrap();
+    //                 let h = congr_fun(h, q!("${}", y)).unwrap();
+    //                 let h = change(
+    //                     q!(
+    //                         "(${} = ${} ∧ ${} = ${}) = rep pair.comprehension ${} ${} ${}",
+    //                         x,
+    //                         x,
+    //                         y,
+    //                         y,
+    //                         p,
+    //                         x,
+    //                         y
+    //                     ),
+    //                     h,
+    //                 )
+    //                 .unwrap();
+    //                 let ha = and_intro(
+    //                     eq_intro(q!("${}", x)).unwrap(),
+    //                     eq_intro(q!("${}", y)).unwrap(),
+    //                 )
+    //                 .unwrap();
+    //                 let h = eq_mp(h, ha).unwrap();
+    //                 exists_intro(
+    //                     q!("λ p, rep pair.comprehension p ${} ${}", x, y),
+    //                     q!("${}", p),
+    //                     h,
+    //                 )
+    //                 .unwrap()
+    //             };
+    //             println!("h: {h}");
+    //             println!("h_cont: {h_cont}");
+    //             exists_elim(p.name, uexists_exists(h.clone()).unwrap(), h_cont).unwrap()
+    //         })
     //         .unwrap();
-    //         let h = eq_mp(h2, h).unwrap();
-    //         h
-    //     };
-    //     h_exists
-    //     // // char = (λ e, ∃! a b, e a b)
-    //     // let h_pair_spec = q!("pair.spec");
-    //     // // char (λ a b, a = x ∧ b = y) = ∃! a b, a = x ∧ b = y
-    //     // let h_char_1_eq = change(
-    //     //     q!("char bool.comprehension ⊥ = (⊥ = ⊤ ∨ ⊥ = ⊥)"),
-    //     //     congr_fun(h_bool_spec, q!("⊥")).unwrap(),
-    //     // )
-    //     // .unwrap();
-    //     // // char ⊥
-    //     // let h_char_bot = transport(
-    //     //     symmetry(h_char_bot_eq).unwrap(),
-    //     //     or_intro2(q!("⊥ = ⊤"), reflexivity(q!("⊥")).unwrap()).unwrap(),
-    //     // )
-    //     // .unwrap();
-    //     // abs(h_char_bot).unwrap()
+    //     // ((λ a b, a = x ∧ b = y) = rep pair.comprehension p₁) ((λ a b, a = x ∧ b = y) = rep pair.comprehension p₂) ⊢ p₁ = p₂
+    //     let h_unique = uexists_unique(q!("p₁"), q!("p₂"), h).unwrap();
+    //     let p1 = take(q!("p₁"), q!("pair u v"));
+    //     let p2 = take(q!("p₂"), q!("pair u v"));
+    //     let h_p1 = assume(q!("rep pair.comprehension ${} x y", p1)).unwrap();
+    //     handle.run().unwrap()
     // })
     // .unwrap();
 
@@ -2051,10 +2658,11 @@ fn init_pair() {
 fn init() {
     init_logic();
     init_function();
+    //init_ext();
     init_comprehension();
     init_bool();
-    init_classical();
     init_pair();
+    //init_classical();
     //    init_nat();
     // init_set();
 

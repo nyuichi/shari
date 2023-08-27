@@ -104,8 +104,8 @@ pub fn congr_app(h1: Conv, h2: Conv) -> anyhow::Result<Conv> {
 pub fn congr_abs(x: Name, t: Type, h: Conv) -> Conv {
     let mut m1 = h.left;
     let mut m2 = h.right;
-    m1.discharge_local(x, t.clone());
-    m2.discharge_local(x, t.clone());
+    m1.discharge_local(x, t.clone(), x);
+    m2.discharge_local(x, t.clone(), x);
     let ty = mk_type_arrow(t, h.ty);
     Conv {
         left: m1,
@@ -356,7 +356,7 @@ pub fn forall_intro(x: Name, t: Type, h: Fact) -> anyhow::Result<Fact> {
         bail!("eigenvariable condition fails");
     }
     let mut m = h.target;
-    m.discharge_local(x, t.clone());
+    m.discharge_local(x, t.clone(), x);
     let mut target = mk_const(*FORALL, vec![t]);
     target.apply([m]);
     Ok(Fact {

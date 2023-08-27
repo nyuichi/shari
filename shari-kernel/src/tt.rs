@@ -647,10 +647,10 @@ impl Term {
     //     *self = m;
     // }
 
-    pub fn discharge_local(&mut self, name: Name, ty: Type) {
+    pub fn discharge_local(&mut self, name: Name, ty: Type, nickname: Name) {
         self.close(name, &ty);
         let m = mem::take(self);
-        *self = mk_abs(name, ty, m);
+        *self = mk_abs(nickname, ty, m);
     }
 
     /// Unification-based type inference.

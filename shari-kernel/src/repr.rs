@@ -661,7 +661,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.pop();
         }
         for (name, t) in binders.into_iter().rev() {
-            m.discharge_local(name, t);
+            m.discharge_local(name, t, name);
         }
         Ok(m)
     }
@@ -701,7 +701,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.pop();
         }
         for (name, t) in binders.into_iter().rev() {
-            m.discharge_local(name, t);
+            m.discharge_local(name, t, name);
             let f = mem::take(&mut m);
             m = self.mk_const_unchecked("forall");
             m.apply(vec![f]);
@@ -731,7 +731,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.pop();
         }
         for (name, t) in binders.into_iter().rev() {
-            m.discharge_local(name, t);
+            m.discharge_local(name, t, name);
             let f = mem::take(&mut m);
             m = self.mk_const_unchecked("exists");
             m.apply(vec![f]);
@@ -761,7 +761,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.pop();
         }
         for (name, t) in binders.into_iter().rev() {
-            m.discharge_local(name, t);
+            m.discharge_local(name, t, name);
             let f = mem::take(&mut m);
             m = self.mk_const_unchecked("uexists");
             m.apply(vec![f]);
@@ -776,7 +776,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.locals.push((name, t.clone()));
         let mut m = self.subterm(0)?;
         self.locals.pop();
-        m.discharge_local(name, t);
+        m.discharge_local(name, t, name);
         self.expect_symbol("}")?;
         Ok(m)
     }
