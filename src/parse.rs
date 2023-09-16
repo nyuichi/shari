@@ -1,22 +1,24 @@
-use crate::env::Env;
-use crate::tt::{
-    mk_const, mk_fresh_type_mvar, mk_local, mk_type_arrow, mk_type_const, mk_type_local, Name,
-    Term, TermLocal, Type,
+use crate::cmd::{
+    Cmd, CmdAxiom, CmdDef, CmdInfix, CmdInfixl, CmdInfixr, CmdNofix, CmdPrefix, Fixity, Operator,
+};
+use crate::kernel::proof::{
+    mk_proof_assump, mk_proof_const, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro,
+    mk_proof_imp_elim, mk_proof_imp_intro, Proof, Prop,
+};
+use crate::kernel::tt::{
+    mk_app, mk_const, mk_fresh_type_mvar, mk_local, mk_path_beta, mk_path_congr_abs,
+    mk_path_congr_app, mk_path_delta, mk_path_refl, mk_path_symm, mk_path_trans, mk_type_arrow,
+    mk_type_const, mk_type_local, Name, Path, Term, Type,
 };
 
 use anyhow::bail;
 use core::ops::Range;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::mem;
-use std::str::FromStr;
-use std::sync::Arc;
 use thiserror::Error;
-
-// We include the parser and printer in the trusted kernel
-// to take Pollack-inconsistency into account.
 
 #[derive(Debug, Clone)]
 pub struct SourceInfo<'a> {
@@ -82,6 +84,7 @@ impl<'a> Display for SourceInfo<'a> {
 enum TokenKind {
     Ident,  // e.g. "foo", "α", "Prop", "foo.bar.baz"
     Symbol, // e.g. "+", ":", "λ", ",", "_"
+    NumLit, // e.g. "0", "42"
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +100,10 @@ impl<'a> Token<'a> {
 
     fn is_symbol(&self) -> bool {
         self.kind == TokenKind::Symbol
+    }
+
+    fn is_num_lit(&self) -> bool {
+        self.kind == TokenKind::NumLit
     }
 
     fn as_str(&self) -> &str {
@@ -142,7 +149,7 @@ impl<'a> From<Lex<'a>> for LexError {
 }
 
 impl<'a> Lex<'a> {
-    pub(crate) fn new(input: &'a str) -> Self {
+    pub fn new(input: &'a str) -> Self {
         Self {
             input,
             position: 0,
@@ -255,10 +262,6 @@ impl<'a> Iterator for Lex<'a> {
                 continue;
             }
 
-            if cap.name(&format!("{:?}", Kind::NumLit)).is_some() {
-                return Some(Err(LexError::from(self.clone())));
-            }
-
             // change the position of the cursor
             let source_info = self.advance(cap.get(0).unwrap().range().count());
             let text = source_info.as_str();
@@ -273,6 +276,8 @@ impl<'a> Iterator for Lex<'a> {
                         kind = TokenKind::Ident;
                     }
                 }
+            } else if cap.name(&format!("{:?}", Kind::NumLit)).is_some() {
+                kind = TokenKind::NumLit;
             } else {
                 assert!(cap.name(&format!("{:?}", Kind::Symbol)).is_some());
                 kind = TokenKind::Symbol;
@@ -280,24 +285,6 @@ impl<'a> Iterator for Lex<'a> {
             return Some(Ok(Token { kind, source_info }));
         }
     }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum Fixity {
-    /// alias to Infixl
-    Infix,
-    Infixl,
-    Infixr,
-    Nofix,
-    Prefix,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Operator {
-    pub symbol: String,
-    pub fixity: Fixity,
-    pub prec: usize,
-    pub entity: Name,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -351,6 +338,7 @@ enum Nud {
     Brace,
     Hole,
     User(Operator),
+    NumLit,
 }
 
 impl TokenTable {
@@ -370,6 +358,7 @@ impl TokenTable {
                     }
                 }
             }
+            TokenKind::NumLit => Some(Led::App),
         }
     }
 
@@ -390,6 +379,7 @@ impl TokenTable {
                     _ => self.nud.get(token.as_str()).map(|op| Nud::User(op.clone())),
                 }
             }
+            TokenKind::NumLit => Some(Nud::NumLit),
         }
     }
 }
@@ -416,21 +406,35 @@ impl From<LexError> for ParseError {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct Context {
+    pub type_consts: HashSet<Name>,
+    // mapping name to type arity
+    pub consts: HashMap<Name, usize>,
+}
+
 pub struct Parser<'a, 'b> {
     lex: &'b mut Lex<'a>,
-    locals: Vec<(Name, Type)>,
-    env: &'b Env,
+    tt: &'b TokenTable,
+    ctx: &'b Context,
+    locals: Vec<Name>,
     allow_holes: bool,
-    pub(crate) holes: Vec<(Name, Type)>,
-    pub(crate) type_holes: Vec<Name>,
+    pub holes: Vec<Name>,
+    pub type_holes: Vec<Name>,
 }
 
 impl<'a, 'b> Parser<'a, 'b> {
-    pub(crate) fn new(lex: &'b mut Lex<'a>, env: &'b Env, allow_holes: bool) -> Self {
+    pub fn new(
+        lex: &'b mut Lex<'a>,
+        tt: &'b TokenTable,
+        ctx: &'b Context,
+        allow_holes: bool,
+    ) -> Self {
         Self {
             lex,
+            tt,
+            ctx,
             locals: vec![],
-            env,
             allow_holes,
             holes: vec![],
             type_holes: vec![],
@@ -483,7 +487,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             .expect("impossible lex error! probably due to unchecked advance");
     }
 
-    pub(crate) fn eof(&mut self) -> Result<(), ParseError> {
+    pub fn eof(&mut self) -> Result<(), ParseError> {
         if let Some(token) = self.peek_opt() {
             Self::fail(token, "expected EOF but tokens remain")?;
         }
@@ -516,6 +520,14 @@ impl<'a, 'b> Parser<'a, 'b> {
         None
     }
 
+    fn symbol(&mut self) -> Result<Token<'a>, ParseError> {
+        let token = self.any_token()?;
+        if !token.is_symbol() {
+            return Self::fail(token, "expected symbol");
+        }
+        Ok(token)
+    }
+
     fn expect_symbol(&mut self, sym: &str) -> Result<(), ParseError> {
         let token = self.any_token()?;
         if token.kind == TokenKind::Symbol && token.as_str() == sym {
@@ -532,6 +544,14 @@ impl<'a, 'b> Parser<'a, 'b> {
             }
         }
         None
+    }
+
+    fn num_lit(&mut self) -> Result<Token<'a>, ParseError> {
+        let token = self.any_token()?;
+        if !token.is_num_lit() {
+            return Self::fail(token, "expected numeral literal");
+        }
+        Ok(token)
     }
 
     fn name(&mut self) -> Result<Name, ParseError> {
@@ -557,8 +577,8 @@ impl<'a, 'b> Parser<'a, 'b> {
         let token = self.any_token()?;
         if token.is_ident() {
             let name: Name = token.as_str().try_into().expect("logic flaw");
-            match self.env.get_kind(name) {
-                Some(_kind) => Ok(mk_type_const(name)),
+            match self.ctx.type_consts.get(&name) {
+                Some(_) => Ok(mk_type_const(name)),
                 None => Ok(mk_type_local(name)),
             }
         } else if token.is_symbol() && token.as_str() == "(" {
@@ -572,7 +592,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         }
     }
 
-    pub(crate) fn ty(&mut self) -> Result<Type, ParseError> {
+    pub fn ty(&mut self) -> Result<Type, ParseError> {
         self.subty(0)
     }
 
@@ -631,7 +651,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(params)
     }
 
-    pub(crate) fn term(&mut self) -> Result<Term, ParseError> {
+    pub fn term(&mut self) -> Result<Term, ParseError> {
         self.subterm(0)
     }
 
@@ -653,27 +673,29 @@ impl<'a, 'b> Parser<'a, 'b> {
             };
             binders.push((name, ty));
         }
-        for (name, ty) in &binders {
-            self.locals.push((*name, ty.clone()));
+        for (name, _) in &binders {
+            self.locals.push(*name);
         }
         let mut m = self.subterm(0)?;
         for _ in 0..binders.len() {
             self.locals.pop();
         }
         for (name, t) in binders.into_iter().rev() {
-            m.discharge_local(name, t, name);
+            m.abs(name, t, name);
         }
         Ok(m)
     }
 
     // TODO remove
     fn mk_const_unchecked(&self, name: &str) -> Term {
-        let (ty_params, _) = self
-            .env
-            .get_type(name.try_into().unwrap())
+        let ty_arity = self
+            .ctx
+            .consts
+            .get(&name.try_into().unwrap())
+            .copied()
             .unwrap_or_else(|| panic!("unknown constant: {name}"));
         let mut ty_args = vec![];
-        for _ in ty_params {
+        for _ in 0..ty_arity {
             ty_args.push(mk_fresh_type_mvar());
         }
         mk_const(Name::try_from(name).expect("invalid name"), ty_args)
@@ -693,15 +715,15 @@ impl<'a, 'b> Parser<'a, 'b> {
             };
             binders.push((name, ty));
         }
-        for (name, ty) in &binders {
-            self.locals.push((*name, ty.clone()));
+        for (name, _) in &binders {
+            self.locals.push(*name);
         }
         let mut m = self.subterm(0)?;
         for _ in 0..binders.len() {
             self.locals.pop();
         }
         for (name, t) in binders.into_iter().rev() {
-            m.discharge_local(name, t, name);
+            m.abs(name, t, name);
             let f = mem::take(&mut m);
             m = self.mk_const_unchecked("forall");
             m.apply(vec![f]);
@@ -723,15 +745,15 @@ impl<'a, 'b> Parser<'a, 'b> {
             };
             binders.push((name, ty));
         }
-        for (name, ty) in &binders {
-            self.locals.push((*name, ty.clone()));
+        for (name, _) in &binders {
+            self.locals.push(*name);
         }
         let mut m = self.subterm(0)?;
         for _ in 0..binders.len() {
             self.locals.pop();
         }
         for (name, t) in binders.into_iter().rev() {
-            m.discharge_local(name, t, name);
+            m.abs(name, t, name);
             let f = mem::take(&mut m);
             m = self.mk_const_unchecked("exists");
             m.apply(vec![f]);
@@ -753,15 +775,15 @@ impl<'a, 'b> Parser<'a, 'b> {
             };
             binders.push((name, ty));
         }
-        for (name, ty) in &binders {
-            self.locals.push((*name, ty.clone()));
+        for (name, _) in &binders {
+            self.locals.push(*name);
         }
         let mut m = self.subterm(0)?;
         for _ in 0..binders.len() {
             self.locals.pop();
         }
         for (name, t) in binders.into_iter().rev() {
-            m.discharge_local(name, t, name);
+            m.abs(name, t, name);
             let f = mem::take(&mut m);
             m = self.mk_const_unchecked("uexists");
             m.apply(vec![f]);
@@ -773,10 +795,10 @@ impl<'a, 'b> Parser<'a, 'b> {
         let name = self.name()?;
         self.expect_symbol("|")?;
         let t = mk_fresh_type_mvar();
-        self.locals.push((name, t.clone()));
+        self.locals.push(name);
         let mut m = self.subterm(0)?;
         self.locals.pop();
-        m.discharge_local(name, t, name);
+        m.abs(name, t, name);
         self.expect_symbol("}")?;
         Ok(m)
     }
@@ -786,19 +808,13 @@ impl<'a, 'b> Parser<'a, 'b> {
             None => Name::try_from(token.as_str()).expect("logic flaw"),
             Some(s) => s,
         };
-        for (x, ty) in self.locals.iter().rev() {
+        for x in self.locals.iter().rev() {
             if x == &name {
-                return Ok(Term::Local(Arc::new(TermLocal {
-                    name: *x,
-                    ty: ty.clone(),
-                })));
+                return Ok(mk_local(name));
             }
         }
-        let Some((tv, _)) = self.env.get_type(name) else {
-            return Ok(Term::Local(Arc::new(TermLocal {
-                name,
-                ty: mk_fresh_type_mvar(),
-            })));
+        let Some(ty_arity) = self.ctx.consts.get(&name).copied() else {
+            return Ok(mk_local(name));
         };
         let mut ty_args = vec![];
         if let Some(_token) = self.expect_symbol_opt(".{") {
@@ -812,7 +828,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                 self.expect_symbol("}")?;
             }
         } else {
-            for _ in tv {
+            for _ in 0..ty_arity {
                 ty_args.push(mk_fresh_type_mvar());
             }
         }
@@ -825,15 +841,14 @@ impl<'a, 'b> Parser<'a, 'b> {
         }
         self.expect_symbol("}")?;
         let name = Name::fresh();
-        let ty = mk_fresh_type_mvar();
-        self.holes.push((name, ty.clone()));
-        Ok(mk_local(name, ty))
+        self.holes.push(name);
+        Ok(mk_local(name))
     }
 
     fn subterm(&mut self, rbp: usize) -> Result<Term, ParseError> {
         let token = self.any_token()?;
         // nud
-        let nud = match self.env.token_table().get_nud(&token) {
+        let nud = match self.tt.get_nud(&token) {
             None => todo!("nud unknown: {}", token),
             Some(nud) => nud,
         };
@@ -887,9 +902,10 @@ impl<'a, 'b> Parser<'a, 'b> {
                 }
                 Fixity::Infix | Fixity::Infixl | Fixity::Infixr => unreachable!(),
             },
+            Nud::NumLit => Self::fail(token, "numeric literal is unsupported")?,
         };
         while let Some(token) = self.peek_opt() {
-            let led = match self.env.token_table().get_led(&token) {
+            let led = match self.tt.get_led(&token) {
                 None => break,
                 Some(led) => led,
             };
@@ -918,458 +934,505 @@ impl<'a, 'b> Parser<'a, 'b> {
         }
         Ok(left)
     }
-}
 
-#[derive(Debug, Default, Clone)]
-pub struct OpTable {
-    op_table: HashMap<Name, Operator>,
-}
-
-impl OpTable {
-    pub fn add(&mut self, op: Operator) -> anyhow::Result<()> {
-        let entity = op.entity;
-        if self.op_table.insert(entity, op).is_some() {
-            bail!("notation already defined");
-        }
-        Ok(())
+    fn prop(&mut self) -> Result<Prop, ParseError> {
+        Ok(Prop {
+            target: self.term()?,
+        })
     }
 
-    fn get(&self, name: Name) -> Option<&Operator> {
-        self.op_table.get(&name)
+    // pub fn proof(&mut self) -> Result<Proof, ParseError> {
+    //     if let Some(_) = self.expect_symbol_opt("(") {
+    //         let h = self.proof()?;
+    //         self.expect_symbol(")")?;
+    //         return Ok(h);
+    //     }
+    //     let keyword = self.ident()?;
+    //     match keyword.as_str() {
+    //         "assump" => {
+    //             let prop = self.prop()?;
+    //             Ok(mk_proof_assump(prop))
+    //         }
+    //         "imp_intro" => {
+    //             let prop = self.prop()?;
+    //             self.expect_symbol(",")?;
+    //             let proof = self.proof()?;
+    //             Ok(mk_proof_imp_intro(prop, proof))
+    //         }
+    //         "imp_elim" => {
+    //             let h1 = self.proof()?;
+    //             self.expect_symbol(",")?;
+    //             let h2 = self.proof()?;
+    //             Ok(mk_proof_imp_elim(h1, h2))
+    //         }
+    //         "forall_intro" => {
+    //             let params = self.parameters()?;
+    //             self.expect_symbol(",")?;
+    //             let mut proof = self.proof()?;
+    //             for (name, ty) in params.into_iter().rev() {
+    //                 let ty = match ty {
+    //                     Some(t) => t,
+    //                     None => mk_fresh_type_mvar(),
+    //                 };
+    //                 proof = mk_proof_forall_intro(name, ty, proof);
+    //             }
+    //             Ok(proof)
+    //         }
+    //         "forall_elim" => {
+    //             let m = self.term()?;
+    //             self.expect_symbol(",")?;
+    //             let h = self.proof()?;
+    //             Ok(mk_proof_forall_elim(m, h))
+    //         }
+    //         "conv" => {
+    //             let path = self.path()?;
+    //             self.expect_symbol(",")?;
+    //             let h = self.proof()?;
+    //             Ok(mk_proof_conv(path, h))
+    //         }
+    //         _ => {
+    //             let name = Name::intern(keyword.as_str()).unwrap();
+    //             let mut ty_args = vec![];
+    //             if let Some(_token) = self.expect_symbol_opt(".{") {
+    //                 if self.expect_symbol_opt("}").is_none() {
+    //                     loop {
+    //                         ty_args.push(self.ty()?);
+    //                         if self.expect_symbol_opt(",").is_none() {
+    //                             break;
+    //                         }
+    //                     }
+    //                     self.expect_symbol("}")?;
+    //                 }
+    //             }
+    //             Ok(mk_proof_const(name, ty_args))
+    //         }
+    //     }
+    // }
+
+    // pub fn path(&mut self) -> Result<Path, ParseError> {
+    //     if let Some(_) = self.expect_symbol_opt("(") {
+    //         let h = self.path()?;
+    //         println!("{h}");
+    //         self.expect_symbol(")")?;
+    //         return Ok(h);
+    //     }
+    //     let keyword = self.ident()?;
+    //     match keyword.as_str() {
+    //         "refl" => {
+    //             let m = self.term()?;
+    //             Ok(mk_path_refl(m))
+    //         }
+    //         "symm" => {
+    //             let path = self.path()?;
+    //             Ok(mk_path_symm(path))
+    //         }
+    //         "trans" => {
+    //             let h1 = self.path()?;
+    //             self.expect_symbol(",")?;
+    //             let h2 = self.path()?;
+    //             Ok(mk_path_trans(h1, h2))
+    //         }
+    //         "congr_app" => {
+    //             let h1 = self.path()?;
+    //             self.expect_symbol(",")?;
+    //             let h2 = self.path()?;
+    //             Ok(mk_path_congr_app(h1, h2))
+    //         }
+    //         "congr_abs" => {
+    //             let x = self.name()?;
+    //             self.expect_symbol(",")?;
+    //             let t = self.ty()?;
+    //             self.expect_symbol(",")?;
+    //             let h = self.path()?;
+    //             Ok(mk_path_congr_abs(x, t, h))
+    //         }
+    //         "beta" => {
+    //             let m = self.term()?;
+    //             Ok(mk_path_beta(m))
+    //         }
+    //         "delta" => {
+    //             let name = self.name()?;
+    //             let mut ty_args = vec![];
+    //             if let Some(_token) = self.expect_symbol_opt(".{") {
+    //                 if self.expect_symbol_opt("}").is_none() {
+    //                     loop {
+    //                         ty_args.push(self.ty()?);
+    //                         if self.expect_symbol_opt(",").is_none() {
+    //                             break;
+    //                         }
+    //                     }
+    //                     self.expect_symbol("}")?;
+    //                 }
+    //             }
+    //             Ok(mk_path_delta(name, ty_args))
+    //         }
+    //         _ => Self::fail(keyword, "unknown path expression")?,
+    //     }
+    // }
+
+    pub fn cmd(&mut self) -> Result<Cmd, ParseError> {
+        let keyword = self.ident()?;
+        let cmd = match keyword.as_str() {
+            "infixr" => {
+                let infixr_cmd = self.infixr_cmd(keyword)?;
+                Cmd::Infixr(infixr_cmd)
+            }
+            "infixl" => {
+                let infixl_cmd = self.infixl_cmd(keyword)?;
+                Cmd::Infixl(infixl_cmd)
+            }
+            "infix" => {
+                let infix_cmd = self.infix_cmd(keyword)?;
+                Cmd::Infix(infix_cmd)
+            }
+            "prefix" => {
+                let prefix_cmd = self.prefix_cmd(keyword)?;
+                Cmd::Prefix(prefix_cmd)
+            }
+            "nofix" => {
+                let nofix_cmd = self.nofix_cmd(keyword)?;
+                Cmd::Nofix(nofix_cmd)
+            }
+            "def" => {
+                let def_cmd = self.def_cmd(keyword)?;
+                Cmd::Def(def_cmd)
+            }
+            "axiom" => {
+                let axiom_cmd = self.axiom_cmd(keyword)?;
+                Cmd::Axiom(axiom_cmd)
+            }
+            // "lemma" => {
+            //     let lemma_cmd = self.lemma_cmd(keyword)?;
+            //     Cmd::Lemma(lemma_cmd)
+            // }
+            _ => {
+                return Self::fail(keyword, "expected command");
+            }
+        };
+        Ok(cmd)
     }
-}
 
-struct Printer<'a> {
-    env: &'a Env,
-}
-
-impl<'a> Printer<'a> {
-    fn new(env: &'a Env) -> Self {
-        Printer { env }
+    fn infixr_cmd(&mut self, _token: Token) -> Result<CmdInfixr, ParseError> {
+        let op = self.symbol()?;
+        self.expect_symbol(":")?;
+        let prec_token = self.num_lit()?;
+        let prec = prec_token
+            .as_str()
+            .parse::<usize>()
+            .expect("numeral literal too big");
+        self.expect_symbol(":=")?;
+        let entity = self.name()?;
+        Ok(CmdInfixr {
+            op: op.as_str().to_owned(),
+            prec,
+            entity,
+        })
     }
 
-    fn fmt_term(&self, m: &Term, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let mut local_names = vec![];
-        let res = self.fmt_term_help(m, 0, true, &mut local_names, f);
-        assert!(local_names.is_empty());
-        res
+    fn infixl_cmd(&mut self, _token: Token) -> Result<CmdInfixl, ParseError> {
+        let op = self.symbol()?;
+        self.expect_symbol(":")?;
+        let prec_token = self.num_lit()?;
+        let prec = prec_token
+            .as_str()
+            .parse::<usize>()
+            .expect("numeral literal too big");
+        self.expect_symbol(":=")?;
+        let entity = self.name()?;
+        Ok(CmdInfixl {
+            op: op.as_str().to_owned(),
+            prec,
+            entity,
+        })
     }
 
-    fn fmt_term_help(
-        &self,
-        m: &Term,
-        prec: usize,
-        mut allow_lambda: bool,
-        local_names: &mut Vec<Name>,
-        f: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        if !m.binders().any(|_| true) {
-            let head = m.head();
-            let mut args = m.args();
-            if let Term::Const(inner) = head {
-                let name = inner.name;
-                if let Some(op) = self.env.op_table().get(name) {
-                    match op.fixity {
-                        Fixity::Infix | Fixity::Infixl => {
-                            if args.len() == 2 {
-                                if prec >= op.prec {
-                                    write!(f, "(")?;
-                                    allow_lambda = true;
-                                }
-                                let m2 = args.pop().unwrap();
-                                let m1 = args.pop().unwrap();
-                                self.fmt_term_help(m1, op.prec - 1, false, local_names, f)?;
-                                write!(f, " {} ", op.symbol)?;
-                                self.fmt_term_help(m2, op.prec, allow_lambda, local_names, f)?;
-                                if prec >= op.prec {
-                                    write!(f, ")")?;
-                                }
-                                return Ok(());
-                            }
-                        }
-                        Fixity::Infixr => {
-                            if args.len() == 2 {
-                                if prec >= op.prec {
-                                    write!(f, "(")?;
-                                    allow_lambda = true;
-                                }
-                                let m2 = args.pop().unwrap();
-                                let m1 = args.pop().unwrap();
-                                self.fmt_term_help(m1, op.prec, false, local_names, f)?;
-                                write!(f, " {} ", op.symbol)?;
-                                self.fmt_term_help(m2, op.prec - 1, allow_lambda, local_names, f)?;
-                                if prec >= op.prec {
-                                    write!(f, ")")?;
-                                }
-                                return Ok(());
-                            }
-                        }
-                        Fixity::Nofix => {
-                            if args.is_empty() {
-                                write!(f, "{}", op.symbol)?;
-                                return Ok(());
-                            }
-                        }
-                        Fixity::Prefix => {
-                            if args.len() == 1 {
-                                if prec > op.prec {
-                                    write!(f, "(")?;
-                                    allow_lambda = true;
-                                }
-                                write!(f, "{}", op.symbol)?;
-                                let m = args.pop().unwrap();
-                                self.fmt_term_help(m, op.prec, allow_lambda, local_names, f)?;
-                                if prec > op.prec {
-                                    write!(f, ")")?;
-                                }
-                                return Ok(());
-                            }
-                        }
-                    }
-                }
-                match name.to_string().as_str() {
-                    "forall" => {
-                        if args.len() == 1 {
-                            let mut arg = args.pop().unwrap();
-                            if let Term::Abs(inner) = &mut arg {
-                                if !allow_lambda {
-                                    write!(f, "(")?;
-                                }
-                                let mut x = inner.binder_name;
-                                'refresh: for refresh_index in 0.. {
-                                    if refresh_index > 0 {
-                                        x = Name::try_from(
-                                            format!("{}{refresh_index}", inner.binder_name)
-                                                .as_str(),
-                                        )
-                                        .unwrap();
-                                    }
-                                    for (i, local_name) in local_names.iter().rev().enumerate() {
-                                        if local_name == &x && inner.body.has_var(i + 1) {
-                                            continue 'refresh;
-                                        }
-                                    }
-                                    break;
-                                }
-                                write!(f, "∀ ({} : {}), ", x, inner.binder_type)?;
-                                local_names.push(x);
-                                self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
-                                local_names.pop();
-                                if !allow_lambda {
-                                    write!(f, ")")?;
-                                }
-                                return Ok(());
-                            }
-                            args.push(arg);
-                        }
-                    }
-                    "exists" => {
-                        if args.len() == 1 {
-                            let mut arg = args.pop().unwrap();
-                            if let Term::Abs(inner) = &mut arg {
-                                if !allow_lambda {
-                                    write!(f, "(")?;
-                                }
-                                let mut x = inner.binder_name;
-                                'refresh: for refresh_index in 0.. {
-                                    if refresh_index > 0 {
-                                        x = Name::try_from(
-                                            format!("{}{refresh_index}", inner.binder_name)
-                                                .as_str(),
-                                        )
-                                        .unwrap();
-                                    }
-                                    for (i, local_name) in local_names.iter().rev().enumerate() {
-                                        if local_name == &x && inner.body.has_var(i + 1) {
-                                            continue 'refresh;
-                                        }
-                                    }
-                                    break;
-                                }
-                                write!(f, "∃ ({} : {}), ", x, inner.binder_type)?;
-                                local_names.push(x);
-                                self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
-                                local_names.pop();
-                                if !allow_lambda {
-                                    write!(f, ")")?;
-                                }
-                                return Ok(());
-                            }
-                            args.push(arg);
-                        }
-                    }
-                    "uexists" => {
-                        if args.len() == 1 {
-                            let mut arg = args.pop().unwrap();
-                            if let Term::Abs(inner) = &mut arg {
-                                if !allow_lambda {
-                                    write!(f, "(")?;
-                                }
-                                let mut x = inner.binder_name;
-                                'refresh: for refresh_index in 0.. {
-                                    if refresh_index > 0 {
-                                        x = Name::try_from(
-                                            format!("{}{refresh_index}", inner.binder_name)
-                                                .as_str(),
-                                        )
-                                        .unwrap();
-                                    }
-                                    for (i, local_name) in local_names.iter().rev().enumerate() {
-                                        if local_name == &x && inner.body.has_var(i + 1) {
-                                            continue 'refresh;
-                                        }
-                                    }
-                                    break;
-                                }
-                                write!(f, "∃! ({} : {}), ", x, inner.binder_type)?;
-                                local_names.push(x);
-                                self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
-                                local_names.pop();
-                                if !allow_lambda {
-                                    write!(f, ")")?;
-                                }
-                                return Ok(());
-                            }
-                            args.push(arg);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
+    fn infix_cmd(&mut self, _token: Token) -> Result<CmdInfix, ParseError> {
+        let op = self.symbol()?;
+        self.expect_symbol(":")?;
+        let prec_token = self.num_lit()?;
+        let prec = prec_token
+            .as_str()
+            .parse::<usize>()
+            .expect("numeral literal too big");
+        self.expect_symbol(":=")?;
+        let entity = self.name()?;
+        Ok(CmdInfix {
+            op: op.as_str().to_owned(),
+            prec,
+            entity,
+        })
+    }
 
-        match m {
-            &Term::Var(i) => {
-                if i >= local_names.len() {
-                    write!(f, "#Var({i})")
-                } else {
-                    match local_names.get(local_names.len() - i - 1) {
-                        Some(name) => write!(f, "{name}"),
-                        None => write!(f, "{i}"),
-                    }
-                }
-            }
-            Term::Local(inner) => {
-                // TODO: take prec into account
-                // TODO: concise mode
-                write!(f, "({} : {})", inner.name, inner.ty)
-            }
-            Term::Const(inner) => {
-                write!(f, "{}", inner.name)?;
-                if !inner.ty_args.is_empty() {
-                    write!(
-                        f,
-                        ".{{{}}}",
-                        inner
-                            .ty_args
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )?;
-                }
-                Ok(())
-            }
-            Term::Abs(inner) => {
-                if !allow_lambda {
-                    write!(f, "(")?;
-                }
-                let mut x = inner.binder_name;
-                'refresh: for refresh_index in 0.. {
-                    if refresh_index > 0 {
-                        x = Name::try_from(
-                            format!("{}{refresh_index}", inner.binder_name).as_str(),
-                        )
-                        .unwrap();
-                    }
-                    for (i, local_name) in local_names.iter().rev().enumerate() {
-                        if local_name == &x && inner.body.has_var(i + 1) {
-                            continue 'refresh;
+    fn prefix_cmd(&mut self, _token: Token) -> Result<CmdPrefix, ParseError> {
+        let op = self.symbol()?;
+        self.expect_symbol(":")?;
+        let prec_token = self.num_lit()?;
+        let prec = prec_token
+            .as_str()
+            .parse::<usize>()
+            .expect("numeral literal too big");
+        self.expect_symbol(":=")?;
+        let entity = self.name()?;
+        Ok(CmdPrefix {
+            op: op.as_str().to_owned(),
+            prec,
+            entity,
+        })
+    }
+
+    fn nofix_cmd(&mut self, _token: Token) -> Result<CmdNofix, ParseError> {
+        let op = self.symbol()?;
+        self.expect_symbol(":=")?;
+        let entity = self.name()?;
+        Ok(CmdNofix {
+            op: op.as_str().to_owned(),
+            entity,
+        })
+    }
+
+    fn def_cmd(&mut self, _token: Token) -> Result<CmdDef, ParseError> {
+        let name = self.name()?;
+        let mut local_types = vec![];
+        if let Some(_token) = self.expect_symbol_opt(".{") {
+            if self.expect_symbol_opt("}").is_none() {
+                loop {
+                    let token = self.ident()?;
+                    let tv = Name::intern(token.as_str()).unwrap();
+                    for v in &local_types {
+                        if &tv == v {
+                            return Self::fail(token, "duplicate type variable")?;
                         }
                     }
-                    break;
+                    local_types.push(tv);
+                    if self.expect_symbol_opt(",").is_none() {
+                        break;
+                    }
                 }
-                write!(f, "λ ({} : {}), ", x, inner.binder_type)?;
-                local_names.push(x);
-                self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
-                local_names.pop();
-                if !allow_lambda {
-                    write!(f, ")")?;
-                }
-                Ok(())
-            }
-            Term::App(inner) => {
-                if prec >= 1024 {
-                    write!(f, "(")?;
-                    allow_lambda = true;
-                }
-                self.fmt_term_help(&inner.fun, 1023, false, local_names, f)?;
-                write!(f, " ")?;
-                self.fmt_term_help(&inner.arg, 1024, allow_lambda, local_names, f)?;
-                if prec >= 1024 {
-                    write!(f, ")")?;
-                }
-                Ok(())
+                self.expect_symbol("}")?;
             }
         }
-    }
-}
-
-#[test]
-fn test_parse_print() {
-    use crate::env::{DeclConst, TermDecl};
-    use crate::proof::mk_prop;
-
-    let ops = [
-        Operator {
-            symbol: "⊤".to_owned(),
-            fixity: Fixity::Nofix,
-            prec: usize::MAX,
-            entity: "top".try_into().unwrap(),
-        },
-        Operator {
-            symbol: "∧".to_owned(),
-            fixity: Fixity::Infixr,
-            prec: 35,
-            entity: "and".try_into().unwrap(),
-        },
-        Operator {
-            symbol: "¬".to_owned(),
-            fixity: Fixity::Prefix,
-            prec: 40,
-            entity: "not".try_into().unwrap(),
-        },
-    ];
-
-    let mut env = Env::new_kernel();
-    for op in ops {
-        env.add_notation(op).unwrap();
-    }
-
-    env.add_term_decl(
-        "top".try_into().unwrap(),
-        TermDecl::Const(DeclConst {
-            local_types: vec![],
-            ty: mk_prop(),
-        }),
-    )
-    .unwrap();
-
-    env.add_term_decl(
-        "not".try_into().unwrap(),
-        TermDecl::Const(DeclConst {
-            local_types: vec![],
-            ty: mk_type_arrow(mk_prop(), mk_prop()),
-        }),
-    )
-    .unwrap();
-
-    env.add_term_decl(
-        "and".try_into().unwrap(),
-        TermDecl::Const(DeclConst {
-            local_types: vec![],
-            ty: mk_type_arrow(mk_prop(), mk_type_arrow(mk_prop(), mk_prop())),
-        }),
-    )
-    .unwrap();
-
-    struct Display<'a> {
-        env: &'a Env,
-        m: Term,
-    }
-
-    impl<'a> std::fmt::Display for Display<'a> {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            Printer::new(self.env).fmt_term(&self.m, f)
-        }
-    }
-
-    let roundtrip = |s: &str| -> String {
-        let mut lex = Lex::new(s);
-        let mut parser = Parser::new(&mut lex, &env, false);
-        let m = parser.term().unwrap();
-        parser.eof().unwrap();
-        Display { env: &env, m }.to_string()
-    };
-
-    insta::assert_snapshot!(roundtrip("λ (x : α), x"), @"λ (x : α), x");
-    insta::assert_snapshot!(roundtrip("λ (p q r : Prop), p q r"), @"λ (p : Prop), λ (q : Prop), λ (r : Prop), p q r");
-    insta::assert_snapshot!(roundtrip("λ (φ ψ : Prop), (λ (f : Prop → Prop → Prop), f φ ψ) = (λ (f : Prop → Prop → Prop), f ⊤ ⊤)"), @"λ (φ : Prop), λ (ψ : Prop), (λ (f : Prop → Prop → Prop), f φ ψ) = λ (f : Prop → Prop → Prop), f ⊤ ⊤");
-    insta::assert_snapshot!(roundtrip("λ (p q : Prop), p = (p ∧ q)"), @"λ (p : Prop), λ (q : Prop), p = (p ∧ q)");
-    insta::assert_snapshot!(roundtrip("λ (a b : Prop), (¬a) = b"), @"λ (a : Prop), λ (b : Prop), (¬a) = b");
-    insta::assert_snapshot!(roundtrip("λ (a b : Prop), ¬a = b"), @"λ (a : Prop), λ (b : Prop), ¬a = b");
-    insta::assert_snapshot!(roundtrip("λ (x : w), eq.{u → v} x"), @"λ (x : w), eq.{u → v} x");
-}
-
-impl Type {
-    fn fmt_help(&self, f: &mut std::fmt::Formatter, prec: usize) -> std::fmt::Result {
-        match self {
-            Type::Const(name) => write!(f, "{name}"),
-            Type::Arrow(inner) => {
-                if prec >= 25 {
-                    write!(f, "(")?;
-                }
-                inner.dom.fmt_help(f, 25)?;
-                write!(f, " → ")?;
-                inner.cod.fmt_help(f, 24)?;
-                if prec >= 25 {
-                    write!(f, ")")?;
-                }
-                Ok(())
+        let mut params = vec![];
+        while let Some(token) = self.expect_symbol_opt("(") {
+            let (names, t) = self.parameter(token)?;
+            for name in names {
+                params.push((name, t.clone()));
             }
-            Type::App(inner) => {
-                if prec >= 1024 {
-                    write!(f, "(")?;
-                }
-                inner.fun.fmt_help(f, 1023)?;
-                write!(f, " ")?;
-                inner.arg.fmt_help(f, 1024)?;
-                if prec >= 1024 {
-                    write!(f, ")")?;
-                }
-                Ok(())
-            }
-            Type::Mvar(name) => write!(f, "{name}"),
-            Type::Local(name) => write!(f, "{name}"),
         }
+        self.expect_symbol(":")?;
+        let mut t = self.ty()?;
+        self.expect_symbol(":=")?;
+        let mut m = self.term()?;
+        for (var, ty) in params.into_iter().rev() {
+            m.abs(var, ty.clone(), var);
+            t = mk_type_arrow(ty, t);
+        }
+        Ok(CmdDef {
+            name,
+            local_types,
+            ty: t,
+            target: m,
+        })
     }
+
+    fn axiom_cmd(&mut self, _token: Token) -> Result<CmdAxiom, ParseError> {
+        let name = self.name()?;
+        let mut local_types = vec![];
+        if let Some(_token) = self.expect_symbol_opt(".{") {
+            if self.expect_symbol_opt("}").is_none() {
+                loop {
+                    let token = self.ident()?;
+                    let tv = Name::intern(token.as_str()).unwrap();
+                    for v in &local_types {
+                        if &tv == v {
+                            return Self::fail(token, "duplicate type variable")?;
+                        }
+                    }
+                    local_types.push(tv);
+                    if self.expect_symbol_opt(",").is_none() {
+                        break;
+                    }
+                }
+                self.expect_symbol("}")?;
+            }
+        }
+        let mut params = vec![];
+        while let Some(token) = self.expect_symbol_opt("(") {
+            let (names, t) = self.parameter(token)?;
+            for name in names {
+                params.push((name, t.clone()));
+            }
+        }
+        self.expect_symbol(":")?;
+        let mut m = self.term()?;
+        for (var, ty) in params.into_iter().rev() {
+            m.abs(var, ty.clone(), var);
+            m = mk_app(self.mk_const_unchecked("forall"), m);
+        }
+        Ok(CmdAxiom {
+            name,
+            local_types,
+            target: Prop { target: m },
+        })
+    }
+
+    // fn lemma_cmd(&mut self, _token: Token) -> Result<CmdLemma, ParseError> {
+    //     let name = self.name()?;
+    //     let mut local_types = vec![];
+    //     if let Some(_token) = self.expect_symbol_opt(".{") {
+    //         if self.expect_symbol_opt("}").is_none() {
+    //             loop {
+    //                 let token = self.ident()?;
+    //                 let tv = Name::intern(token.as_str()).unwrap();
+    //                 for v in &local_types {
+    //                     if &tv == v {
+    //                         return Self::fail(token, "duplicate type variable")?;
+    //                     }
+    //                 }
+    //                 local_types.push(tv);
+    //                 if self.expect_symbol_opt(",").is_none() {
+    //                     break;
+    //                 }
+    //             }
+    //             self.expect_symbol("}")?;
+    //         }
+    //     }
+    //     let mut params = vec![];
+    //     while let Some(token) = self.expect_symbol_opt("(") {
+    //         let (names, t) = self.parameter(token)?;
+    //         for name in names {
+    //             params.push((name, t.clone()));
+    //         }
+    //     }
+    //     self.expect_symbol(":")?;
+    //     let mut m = self.term()?;
+    //     self.expect_symbol(":=")?;
+    //     let mut proof = self.proof()?;
+    //     for (var, ty) in params.into_iter().rev() {
+    //         m.abs(var, ty.clone(), var);
+    //         m = mk_app(self.mk_const_unchecked("forall"), m);
+    //         proof = mk_proof_forall_intro(var, ty, proof);
+    //     }
+    //     let target = Prop { target: m };
+    //     Ok(CmdLemma {
+    //         name,
+    //         local_types,
+    //         target,
+    //         proof,
+    //     })
+    // }
 }
 
-impl FromStr for Type {
-    type Err = ParseError;
+// #[test]
+// fn test_parse() {
+//     use crate::env::{DeclConst, TermDecl};
+//     use crate::kernel::proof::mk_type_prop;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut lex = Lex::new(s);
-        let env = Env::get();
-        let mut parser = Parser::new(&mut lex, &env, false);
-        let ty = parser.ty()?;
-        parser.eof()?;
-        Ok(ty)
-    }
-}
+//     let ops = [
+//         Operator {
+//             symbol: "⊤".to_owned(),
+//             fixity: Fixity::Nofix,
+//             prec: usize::MAX,
+//             entity: "top".try_into().unwrap(),
+//         },
+//         Operator {
+//             symbol: "∧".to_owned(),
+//             fixity: Fixity::Infixr,
+//             prec: 35,
+//             entity: "and".try_into().unwrap(),
+//         },
+//         Operator {
+//             symbol: "¬".to_owned(),
+//             fixity: Fixity::Prefix,
+//             prec: 40,
+//             entity: "not".try_into().unwrap(),
+//         },
+//     ];
 
-impl FromStr for Term {
-    type Err = ParseError;
+//     let mut env = Env::new_kernel();
+//     for op in ops {
+//         env.add_notation(op).unwrap();
+//     }
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut lex = Lex::new(s);
-        let env = Env::get();
-        let mut parser = Parser::new(&mut lex, &env, false);
-        let m = parser.term()?;
-        parser.eof()?;
-        Ok(m)
-    }
-}
+//     env.add_term_decl(
+//         "top".try_into().unwrap(),
+//         TermDecl::Const(DeclConst {
+//             local_types: vec![],
+//             ty: mk_type_prop(),
+//         }),
+//     )
+//     .unwrap();
 
-impl Display for Type {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        self.fmt_help(f, 0)
-    }
-}
+//     env.add_term_decl(
+//         "not".try_into().unwrap(),
+//         TermDecl::Const(DeclConst {
+//             local_types: vec![],
+//             ty: mk_type_arrow(mk_type_prop(), mk_type_prop()),
+//         }),
+//     )
+//     .unwrap();
 
-impl Display for Term {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let env = Env::get();
-        Printer::new(&env).fmt_term(self, f)
-    }
-}
+//     env.add_term_decl(
+//         "and".try_into().unwrap(),
+//         TermDecl::Const(DeclConst {
+//             local_types: vec![],
+//             ty: mk_type_arrow(
+//                 mk_type_prop(),
+//                 mk_type_arrow(mk_type_prop(), mk_type_prop()),
+//             ),
+//         }),
+//     )
+//     .unwrap();
+
+//     struct Display<'a> {
+//         env: &'a Env,
+//         m: Term,
+//     }
+
+//     impl<'a> std::fmt::Display for Display<'a> {
+//         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//             Printer::new(self.env).fmt_term(&self.m, f)
+//         }
+//     }
+
+//     let roundtrip = |s: &str| -> String {
+//         let mut lex = Lex::new(s);
+//         let mut parser = Parser::new(&mut lex, &env, false);
+//         let m = parser.term().unwrap();
+//         parser.eof().unwrap();
+//         Display { env: &env, m }.to_string()
+//     };
+
+//     insta::assert_snapshot!(roundtrip("λ (x : α), x"), @"λ (x : α), x");
+//     insta::assert_snapshot!(roundtrip("λ (p q r : Prop), p q r"), @"λ (p : Prop), λ (q : Prop), λ (r : Prop), p q r");
+//     insta::assert_snapshot!(roundtrip("λ (φ ψ : Prop), (λ (f : Prop → Prop → Prop), f φ ψ) = (λ (f : Prop → Prop → Prop), f ⊤ ⊤)"), @"λ (φ : Prop), λ (ψ : Prop), (λ (f : Prop → Prop → Prop), f φ ψ) = λ (f : Prop → Prop → Prop), f ⊤ ⊤");
+//     insta::assert_snapshot!(roundtrip("λ (p q : Prop), p = (p ∧ q)"), @"λ (p : Prop), λ (q : Prop), p = (p ∧ q)");
+//     insta::assert_snapshot!(roundtrip("λ (a b : Prop), (¬a) = b"), @"λ (a : Prop), λ (b : Prop), (¬a) = b");
+//     insta::assert_snapshot!(roundtrip("λ (a b : Prop), ¬a = b"), @"λ (a : Prop), λ (b : Prop), ¬a = b");
+//     insta::assert_snapshot!(roundtrip("λ (x : w), eq.{u → v} x"), @"λ (x : w), eq.{u → v} x");
+// }
+
+// impl FromStr for Type {
+//     type Err = ParseError;
+
+//     fn from_str(s: &str) -> Result<Self, Self::Err> {
+//         let mut lex = Lex::new(s);
+//         let env = Env::get();
+//         let mut parser = Parser::new(&mut lex, &env, false);
+//         let ty = parser.ty()?;
+//         parser.eof()?;
+//         Ok(ty)
+//     }
+// }
+
+// impl FromStr for Term {
+//     type Err = ParseError;
+
+//     fn from_str(s: &str) -> Result<Self, Self::Err> {
+//         let mut lex = Lex::new(s);
+//         let env = Env::get();
+//         let mut parser = Parser::new(&mut lex, &env, false);
+//         let m = parser.term()?;
+//         parser.eof()?;
+//         Ok(m)
+//     }
+// }

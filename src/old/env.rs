@@ -1,8 +1,8 @@
-use crate::proof::axiom;
-use crate::proof::mk_prop;
-use crate::proof::Fact;
-use crate::repr::{Fixity, OpTable, Operator, TokenTable};
-use crate::tt::{mk_type_arrow, mk_type_local, Kind, Name, Term, Type};
+use crate::kernel::{
+    proof::mk_type_prop,
+    tt::{mk_type_arrow, mk_type_local, Kind, Name, Term, Type},
+};
+use crate::print::{Fixity, OpTable, Operator, TokenTable};
 
 use anyhow::bail;
 use once_cell::sync::Lazy;
@@ -180,7 +180,10 @@ impl Env {
             "imp".try_into().unwrap(),
             TermDecl::Const(DeclConst {
                 local_types: vec![],
-                ty: mk_type_arrow(mk_prop(), mk_type_arrow(mk_prop(), mk_prop())),
+                ty: mk_type_arrow(
+                    mk_type_prop(),
+                    mk_type_arrow(mk_type_prop(), mk_type_prop()),
+                ),
             }),
         )
         .unwrap();
@@ -190,8 +193,8 @@ impl Env {
             TermDecl::Const(DeclConst {
                 local_types: vec!["u".try_into().unwrap()],
                 ty: mk_type_arrow(
-                    mk_type_arrow(mk_type_local("u".try_into().unwrap()), mk_prop()),
-                    mk_prop(),
+                    mk_type_arrow(mk_type_local("u".try_into().unwrap()), mk_type_prop()),
+                    mk_type_prop(),
                 ),
             }),
         )
@@ -203,7 +206,7 @@ impl Env {
                 local_types: vec!["u".try_into().unwrap()],
                 ty: mk_type_arrow(
                     mk_type_local("u".try_into().unwrap()),
-                    mk_type_arrow(mk_type_local("u".try_into().unwrap()), mk_prop()),
+                    mk_type_arrow(mk_type_local("u".try_into().unwrap()), mk_type_prop()),
                 ),
             }),
         )

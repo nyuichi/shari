@@ -219,18 +219,6 @@ dependencies = [
  "insta",
  "once_cell",
  "regex",
- "shari-kernel",
- "thiserror",
-]
-
-[[package]]
-name = "shari-kernel"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "insta",
- "once_cell",
- "regex",
  "thiserror",
 ]
 

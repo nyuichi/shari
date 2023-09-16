@@ -2,10 +2,8 @@ use std::sync::Arc;
 
 use anyhow::bail;
 
-use crate::env::{get_prop, Env};
-use crate::proof::{instantiate, Fact};
-use crate::repr::{Lex, Parser};
-use crate::tt::{Name, Term, TermConst, TermLocal, Type};
+use crate::kernel::tt::{Name, Term, TermConst, TermLocal, Type};
+use crate::parse::{Lex, Parser};
 
 #[doc(hidden)]
 pub trait Arg<T> {
@@ -166,13 +164,13 @@ pub fn quote<'a, T: Quote>(
 #[macro_export]
 macro_rules! q {
     (Fact $template:expr) => {
-        $crate::quote::quote::<$crate::proof::Fact>($template, []).unwrap()
+        $crate::quote::quote::<$crate::kernel::proof::Fact>($template, []).unwrap()
     };
     (Fact $template:expr, $($arg:expr),*) => {
         {
             use $crate::quote::ToArg;
             use $crate::quote::Arg;
-            $crate::quote::quote::<$crate::proof::Fact>($template, [$(&$arg.to_arg() as &dyn Arg<_>),*]).unwrap()
+            $crate::quote::quote::<$crate::kernel::proof::Fact>($template, [$(&$arg.to_arg() as &dyn Arg<_>),*]).unwrap()
         }
     };
     ($template:expr) => {
