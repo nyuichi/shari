@@ -1,9 +1,10 @@
 use crate::cmd::{
-    Cmd, CmdAxiom, CmdDef, CmdInfix, CmdInfixl, CmdInfixr, CmdNofix, CmdPrefix, Fixity, Operator,
+    Cmd, CmdAxiom, CmdDef, CmdInfix, CmdInfixl, CmdInfixr, CmdNofix, CmdPrefix, Expr, Fixity,
+    Operator,
 };
 use crate::kernel::proof::{
-    mk_proof_assump, mk_proof_const, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro,
-    mk_proof_imp_elim, mk_proof_imp_intro, Proof, Prop,
+    mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro, mk_proof_imp_elim,
+    mk_proof_imp_intro, mk_proof_ref, Proof, Prop,
 };
 use crate::kernel::tt::{
     mk_app, mk_const, mk_fresh_type_mvar, mk_local, mk_path_beta, mk_path_congr_abs,
@@ -1068,6 +1069,121 @@ impl<'a, 'b> Parser<'a, 'b> {
     //         }
     //         _ => Self::fail(keyword, "unknown path expression")?,
     //     }
+    // }
+
+    // pub fn expr(&mut self) -> Result<Expr, ParseError> {
+    //     if self.expect_symbol_opt("(").is_some() {
+    //         let e = self.expr()?;
+    //         self.expect_symbol(")")?;
+    //         return Ok(e);
+    //     }
+    // }
+
+    // fn subexpr(&mut self) -> Result<Expr, ParseError> {
+    //     let token = self.any_token()?;
+    //     // nud
+    //     let mut left = if token.is_ident() {
+    //         Expr::Const(Name::intern(token.as_str()).unwrap())
+    //     } else if token.is_num_lit() {
+    //         Expr::NumLit(token.as_str().parse().unwrap())
+    //     } else if token.is_symbol() {
+    //         match token.as_str() {
+    //             "(" => {
+    //                 let e = self.subexpr(0)?;
+    //                 self.expect_symbol(")")?;
+    //                 e
+    //             }
+    //             "{" => self.expr_block(token)?,
+    //             _ => {}
+    //         }
+    //     } else {
+    //         return Self::fail!(token, "unexpected token")?;
+    //     };
+    //     let nud = match self.tt.get_nud(&token) {
+    //         None => todo!("nud unknown: {}", token),
+    //         Some(nud) => nud,
+    //     };
+    //     let mut left = match nud {
+    //         Nud::Var => self.term_var(token, None)?,
+    //         Nud::Abs => self.term_abs(token)?,
+    //         Nud::Paren => {
+    //             let m = self.subterm(0)?;
+    //             self.expect_symbol(")")?;
+    //             m
+    //         }
+    //         Nud::Bracket => {
+    //             let mut terms = vec![];
+    //             while let Some(m) = self.term_opt() {
+    //                 terms.push(m);
+    //                 if self.expect_symbol_opt(",").is_none() {
+    //                     break;
+    //                 }
+    //             }
+    //             self.expect_symbol("⟩")?;
+    //             // right associative encoding:
+    //             // ⟨⟩ ⇒ star
+    //             // ⟨m⟩ ⇒ m
+    //             // ⟨m,n,l⟩ ⇒ ⟨m, ⟨n, l⟩⟩
+    //             match terms.len() {
+    //                 0 => self.mk_const_unchecked("star"),
+    //                 1 => terms.pop().unwrap(),
+    //                 _ => {
+    //                     let mut m = terms.pop().unwrap();
+    //                     for n in terms.into_iter().rev() {
+    //                         let mut x = self.mk_const_unchecked("pair");
+    //                         x.apply(vec![n, m]);
+    //                         m = x;
+    //                     }
+    //                     m
+    //                 }
+    //             }
+    //         }
+    //         Nud::Forall => self.term_forall(token)?,
+    //         Nud::Exists => self.term_exists(token)?,
+    //         Nud::Uexists => self.term_uexists(token)?,
+    //         Nud::Brace => self.term_setsep(token)?,
+    //         Nud::Hole => self.term_hole(token)?,
+    //         Nud::User(op) => match op.fixity {
+    //             Fixity::Nofix => self.term_var(token, Some(op.entity))?,
+    //             Fixity::Prefix => {
+    //                 let mut fun = self.term_var(token, Some(op.entity))?;
+    //                 let arg = self.subterm(op.prec)?;
+    //                 fun.apply(vec![arg]);
+    //                 fun
+    //             }
+    //             Fixity::Infix | Fixity::Infixl | Fixity::Infixr => unreachable!(),
+    //         },
+    //         Nud::NumLit => Self::fail(token, "numeric literal is unsupported")?,
+    //     };
+    //     while let Some(token) = self.peek_opt() {
+    //         let led = match self.tt.get_led(&token) {
+    //             None => break,
+    //             Some(led) => led,
+    //         };
+    //         let prec = led.prec();
+    //         if rbp >= prec {
+    //             break;
+    //         }
+    //         match led {
+    //             Led::App => {
+    //                 let right = self.subterm(led.prec())?;
+    //                 left.apply(vec![right]);
+    //             }
+    //             Led::User(op) => {
+    //                 let prec = match op.fixity {
+    //                     Fixity::Infix | Fixity::Infixl => prec,
+    //                     Fixity::Infixr => prec - 1,
+    //                     Fixity::Nofix | Fixity::Prefix => unreachable!("op = {op:?}"),
+    //                 };
+    //                 self.advance();
+    //                 let mut fun = self.term_var(token, Some(op.entity))?;
+    //                 let right = self.subterm(prec)?;
+    //                 fun.apply(vec![left, right]);
+    //                 left = fun;
+    //             }
+    //         }
+    //     }
+    //     Ok(left)
     // }
 
     pub fn cmd(&mut self) -> Result<Cmd, ParseError> {

@@ -32,7 +32,7 @@ fn main() -> anyhow::Result<()> {
     state.run("def top : Prop := (λ (x : Prop), x) = (λ x, x)")?;
     state.run("def and (φ : Prop) (ψ : Prop) : Prop := ∀ ξ, (φ → ψ → ξ) → ξ")?;
 
-    // The following definitions are due to Prawitz (and also to Russell).
+    // The following definitions are due to Prawitz and Russell.
     state.run("def bot : Prop := ∀ ξ, ξ")?;
     state.run("def or (φ : Prop) (ψ : Prop) : Prop := ∀ ξ, (φ → ξ) ∧ (ψ → ξ) → ξ")?;
     state.run("def exists.{u} (P : u → Prop) : Prop := ∀ ξ, (∀ x, P x → ξ) → ξ")?;
@@ -47,6 +47,65 @@ fn main() -> anyhow::Result<()> {
     state.run("axiom prop_ext (φ ψ : Prop) : (φ ↔ ψ) → φ = ψ")?;
     state.run("axiom fun_ext.{u, v} (f₁ f₂ : u → v) : (∀ x, f₁ x = f₂ x) → f₁ = f₂")?;
     state.run("axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) → ∃! f, ∀ x, R x (f x)")?;
+
+    // state.run("meta type Proof")?;
+    // state.run("meta type Term")?;
+    // state.run("meta type Name")?;
+
+    // // Definite description (cf. [Lambek & Scott, Theorem 5.9])
+    // // h : [⋅ | ⋅ ⊢ ∃! (x : τ), φ]
+    // // ------------------------------------------------------ [definite description]
+    // // ⋅ ⊢ desc h : τ    desc.spec h : [ ⋅ | ⋅ ⊢ [desc h/x]φ]
+    // state.run("meta const desc : Proof → Term")?;
+    // state.run("meta const desc.spec : Proof → Proof")?;
+
+    // state.run("meta const assump : Term → Proof")?;
+    // state.run("meta const imp.intro : Term → Proof → Proof")?;
+    // state.run("meta const imp.elim : Proof → Proof → Proof")?;
+    // state.run("meta const forall.intro : Name → Type → Proof → Proof")?;
+    // state.run("meta const forall.intro : Term → Proof → Proof")?;
+    // state.run("meta const conv : Term → Proof → Proof")?;
+    // state.run("meta const ref : Name → List Type → Proof")?;
+
+    // state.run("meta const and.intro {φ ψ : Prop} : Proof φ → Proof ψ → Proof (φ ∧ ψ)")?;
+    // state.run("meta const and.left {φ ψ : Prop} : Proof (φ ∧ ψ) → Proof φ")?;
+    // state.run("meta const and.right {φ ψ : Prop} : Proof (φ ∧ ψ) → Proof ψ")?;
+    // state.run("meta const eq.refl.{u} {m : Term u} : Proof (m = m)")?;
+    // state.run(
+    //     "meta const eq.subst.{u, v} {m₁ m₂ : Term u} {c : Term (u → v)} : Proof (m₁ = m₂) → Proof (c m₁) → Proof (c m₂)",
+    // )?;
+
+    // state.run(
+    //     "meta def and.intro (h₁ h₂ : Proof) : Proof := {
+    //         let φ := target h₁,
+    //         let ψ := target h₂,
+    //         let goal := `{ $φ ∧ $ψ },
+    //         let h := forall_intro mk_type_prop (λ ξ, {
+    //             imp_intro `{ $φ → $ψ → $ξ } {
+    //                 imp_elim (imp_elim (assume `{ $φ → $ψ → $ξ }) h₁) h₂
+    //             }
+    //         }),
+    //         change goal h
+    //     }",
+    // )?;
+    // state.run(
+    //     "lemma and.intro : ∀ (φ ψ : Prop), φ → ψ → φ ∧ ψ := {
+    //         forall_intro mk_type_prop (λ φ, {
+    //             forall_intro mk_type_prop (λ ψ, {
+    //                 imp_intro φ {
+    //                     imp_intro ψ {
+    //                         let h := forall_intro mk_type_prop (λ ξ, {
+    //                             imp_intro `{ $φ → $ψ → $ξ } {
+    //                                 imp_elim (imp_elim (assume `{ $φ → $ψ → $ξ }) (assume φ)) (assume ψ)
+    //                             }
+    //                         }),
+    //                         change `{ $φ ∧ $ψ } h
+    //                     }
+    //                 }
+    //             })
+    //         })
+    //     }",
+    // )?;
 
     // state.run("lemma tautology (φ : Prop) : φ → φ := imp_intro φ, (assump φ)")?;
 

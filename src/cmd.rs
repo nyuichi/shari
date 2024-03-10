@@ -81,6 +81,37 @@ pub struct CmdAxiom {
     pub target: Prop,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Value {
+    Nat(usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Expr {
+    NumLit(usize),
+    Const(Box<ExprConst>),
+    App(Box<ExprApp>),
+    Let(Box<ExprLet>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExprConst {
+    name: Name,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExprApp {
+    fun: Expr,
+    arg: Expr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExprLet {
+    name: Name,
+    val: Expr,
+    body: Expr,
+}
+
 // #[derive(Clone, Debug, PartialEq, Eq)]
 // pub struct CmdLemma {
 //     pub name: Name,
@@ -95,6 +126,11 @@ pub struct CmdAxiom {
 // suffices : [Term →] Proof → Proof → Proof
 // use : [Term →] Term → Proof
 // show : Term → Proof
+
+// already : (φ : Term Prop) → Proof φ
+// assume : (φ : Term Prop) → Proof ψ → Proof (φ → ψ)
+// take : ((x : Var u) → Proof (φ x)) → Proof (∀ x, φ x)
+
 // p ::= already φ                -- assump
 //     | assume φ, p                   -- imp_intro
 //     | take (x : τ), p             -- forall_intro

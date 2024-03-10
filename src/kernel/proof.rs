@@ -61,10 +61,10 @@ pub enum Proof {
     Conv(Box<(Path, Proof)>),
     /// ```text
     ///
-    /// --------------------------------- (c.{uᵢ} :⇔ φ)
-    /// const c (tᵢ) : [Γ | Φ ⊢ [τᵢ/uᵢ]φ]
+    /// ------------------------------- (c.{uᵢ} :⇔ φ)
+    /// ref c (tᵢ) : [Γ | Φ ⊢ [τᵢ/uᵢ]φ]
     /// ```
-    Const(Box<(Name, Vec<Type>)>),
+    Ref(Box<(Name, Vec<Type>)>),
 }
 
 pub fn mk_proof_assump(p: Prop) -> Proof {
@@ -91,8 +91,8 @@ pub fn mk_proof_conv(h1: Path, h2: Proof) -> Proof {
     Proof::Conv(Box::new((h1, h2)))
 }
 
-pub fn mk_proof_const(name: Name, ty_args: Vec<Type>) -> Proof {
-    Proof::Const(Box::new((name, ty_args)))
+pub fn mk_proof_ref(name: Name, ty_args: Vec<Type>) -> Proof {
+    Proof::Ref(Box::new((name, ty_args)))
 }
 
 static PROP: Lazy<Name> = Lazy::new(|| Name::intern("Prop").unwrap());
@@ -249,7 +249,7 @@ impl Env {
                 self.check_prop(local_env, context, h2, &Prop { target: h1.left })?;
                 Ok(Prop { target: h1.right })
             }
-            Proof::Const(inner) => {
+            Proof::Ref(inner) => {
                 let (name, ty_args) = *inner;
                 let Some((tv, mut target)) = self.facts.get(&name).cloned() else {
                     bail!("axiom not found");
