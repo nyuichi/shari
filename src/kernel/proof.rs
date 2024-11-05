@@ -3,7 +3,7 @@
 use std::{collections::HashMap, mem, sync::Arc, vec};
 
 use anyhow::bail;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 use super::tt::{
     self, mk_const, mk_type_arrow, mk_type_const, mk_type_local, Kind, LocalEnv, Name, Path, Term,
@@ -95,12 +95,12 @@ pub fn mk_proof_ref(name: Name, ty_args: Vec<Type>) -> Proof {
     Proof::Ref(Box::new((name, ty_args)))
 }
 
-static PROP: Lazy<Name> = Lazy::new(|| Name::intern("Prop").unwrap());
-static IMP: Lazy<Name> = Lazy::new(|| Name::intern("imp").unwrap());
-static FORALL: Lazy<Name> = Lazy::new(|| Name::intern("forall").unwrap());
+static PROP: LazyLock<Name> = LazyLock::new(|| Name::intern("Prop").unwrap());
+static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp").unwrap());
+static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall").unwrap());
 
 pub fn mk_type_prop() -> Type {
-    static T_PROP: Lazy<Type> = Lazy::new(|| mk_type_const(*PROP));
+    static T_PROP: LazyLock<Type> = LazyLock::new(|| mk_type_const(*PROP));
     T_PROP.clone()
 }
 

@@ -1,6 +1,6 @@
 use std::ops::Range;
+use std::sync::LazyLock;
 
-use once_cell::sync::Lazy;
 use regex::Regex;
 use thiserror::Error;
 
@@ -192,7 +192,7 @@ impl<'a> Iterator for Lex<'a> {
             NumLit,
         }
 
-        static RE: Lazy<Regex> = Lazy::new(|| {
+        static RE: LazyLock<Regex> = LazyLock::new(|| {
             let s = &[
                 (Kind::Space, r"\s+|--.*|/-"),
                 (
@@ -212,8 +212,8 @@ impl<'a> Iterator for Lex<'a> {
             regex::Regex::new(&format!("^(?:{})", s)).unwrap()
         });
 
-        static RE_BLOCK_COMMENT: Lazy<Regex> =
-            Lazy::new(|| regex::Regex::new("^(?s:.*?)(?:(?P<start>/-)|(?P<end>-/))").unwrap());
+        static RE_BLOCK_COMMENT: LazyLock<Regex> =
+            LazyLock::new(|| regex::Regex::new("^(?s:.*?)(?:(?P<start>/-)|(?P<end>-/))").unwrap());
 
         loop {
             if self.input.len() == self.position {

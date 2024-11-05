@@ -1,11 +1,11 @@
 //! [Type] and [Term] may be ill-formed.
 
 use anyhow::bail;
-use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::atomic::AtomicUsize;
+use std::sync::LazyLock;
 use std::sync::{Arc, Mutex, RwLock};
 use std::{mem, vec};
 use thiserror::Error;
@@ -14,8 +14,8 @@ use thiserror::Error;
 pub struct Name(usize);
 
 static NAME_COUNTER: AtomicUsize = AtomicUsize::new(0);
-static NAME_TABLE: Lazy<RwLock<HashMap<String, Name>>> = Lazy::new(Default::default);
-static NAME_REV_TABLE: Lazy<Mutex<HashMap<Name, String>>> = Lazy::new(Default::default);
+static NAME_TABLE: LazyLock<RwLock<HashMap<String, Name>>> = LazyLock::new(Default::default);
+static NAME_REV_TABLE: LazyLock<Mutex<HashMap<Name, String>>> = LazyLock::new(Default::default);
 
 impl Display for Name {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -55,7 +55,7 @@ impl Name {
     }
 
     pub fn intern(value: &str) -> Result<Name, InvalidNameError> {
-        static RE: Lazy<Regex> = Lazy::new(|| {
+        static RE: LazyLock<Regex> = LazyLock::new(|| {
             regex::Regex::new(r"[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*(\.[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*)*").unwrap()
         });
         if !RE.is_match(value) {
