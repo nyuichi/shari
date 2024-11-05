@@ -110,7 +110,7 @@ pub struct Lex<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct LexState {
+pub struct LexState {
     position: usize,
     line: usize,
     column: usize,

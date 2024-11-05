@@ -49,19 +49,19 @@ fn main() -> anyhow::Result<()> {
     state.run("axiom fun_ext.{u, v} (f₁ f₂ : u → v) : (∀ x, f₁ x = f₂ x) ⇒ f₁ = f₂")?;
     state.run("axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) ⇒ ∃! f, ∀ x, R x (f x)")?;
 
-    state.run(
-        "meta def and.intro := λ h₁ h₂, {
-            let φ := target h₁,
-            let ψ := target h₂,
-            let ξ := `{ξ},
-            let h := assume `{ ${φ} ⇒ ${ψ} ⇒ ${ξ} },
-            let h := imp.elim h h₁,
-            let h := imp.elim h h₂,
-            let h := imp.intro `{ ${φ} ⇒ ${ψ} ⇒ ${ξ} } h,
-            let h := forall.intro mk_type_prop ξ h,
-            change `{ ${φ} ∧ ${ψ} } h
-        }",
-    )?;
+    // state.run(
+    //     "meta def and.intro := λ h₁ h₂, {
+    //         let φ := target h₁,
+    //         let ψ := target h₂,
+    //         let ξ := `{ξ},
+    //         let h := assume `{ ${φ} ⇒ ${ψ} ⇒ ${ξ} },
+    //         let h := imp.elim h h₁,
+    //         let h := imp.elim h h₂,
+    //         let h := imp.intro `{ ${φ} ⇒ ${ψ} ⇒ ${ξ} } h,
+    //         let h := forall.intro mk_type_prop ξ h,
+    //         change `{ ${φ} ∧ ${ψ} } h
+    //     }",
+    // )?;
 
     // state.run("meta type Proof")?;
     // state.run("meta type Term")?;

@@ -931,7 +931,7 @@ impl Env {
             return None;
         };
         let inner = Arc::make_mut(inner);
-        let TermApp { mut fun, mut arg } = mem::take(inner);
+        let TermApp { mut fun, arg } = mem::take(inner);
         let Term::Abs(inner) = &mut fun else {
             return None;
         };

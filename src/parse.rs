@@ -1,6 +1,5 @@
 use crate::cmd::{
-    mk_expr_fun, Cmd, CmdAxiom, CmdDef, CmdInfix, CmdInfixl, CmdInfixr, CmdMetaDef, CmdNofix,
-    CmdPrefix, Expr, Fixity, MetaExpr, Operator,
+    Cmd, CmdAxiom, CmdDef, CmdInfix, CmdInfixl, CmdInfixr, CmdNofix, CmdPrefix, Fixity, Operator,
 };
 use crate::kernel::proof::Prop;
 use crate::kernel::tt::{
@@ -573,178 +572,178 @@ impl<'a, 'b> Parser<'a, 'b> {
         })
     }
 
-    fn expr(&mut self) -> Result<Expr, ParseError> {
-        self.subexpr(0)
-    }
+    // fn expr(&mut self) -> Result<Expr, ParseError> {
+    //     self.subexpr(0)
+    // }
 
-    fn expr_opt(&mut self) -> Option<Expr> {
-        self.optional(|this| this.expr())
-    }
+    // fn expr_opt(&mut self) -> Option<Expr> {
+    //     self.optional(|this| this.expr())
+    // }
 
-    fn expr_abs(&mut self, token: Token<'a>) -> Result<Expr, ParseError> {
-        let params = self.parameters()?;
-        self.expect_symbol(",")?;
-        if params.is_empty() {
-            return Self::fail(token, "empty binding");
-        }
-        let mut e = self.subexpr(0)?;
-        for (name, t) in params.into_iter().rev() {
-            e = mk_expr_fun(name, t, e);
-        }
-        Ok(e)
-    }
+    // fn expr_abs(&mut self, token: Token<'a>) -> Result<Expr, ParseError> {
+    //     let params = self.parameters()?;
+    //     self.expect_symbol(",")?;
+    //     if params.is_empty() {
+    //         return Self::fail(token, "empty binding");
+    //     }
+    //     let mut e = self.subexpr(0)?;
+    //     for (name, t) in params.into_iter().rev() {
+    //         e = mk_expr_fun(name, t, e);
+    //     }
+    //     Ok(e)
+    // }
 
-    fn expr_var(&mut self, token: Token<'a>) -> Result<Expr, ParseError> {
-        Ok(Expr::Var(Name::intern(token.as_str()).unwrap()))
-    }
+    // fn expr_var(&mut self, token: Token<'a>) -> Result<Expr, ParseError> {
+    //     Ok(Expr::Var(Name::intern(token.as_str()).unwrap()))
+    // }
 
-    fn expr_unq(&mut self, token: Token<'a>) -> Result<MetaExpr, ParseError> {
-        let expr = self.meta_expr()?;
-        self.expect_symbol("}")?;
-        Ok(expr)
-    }
+    // fn expr_unq(&mut self, token: Token<'a>) -> Result<MetaExpr, ParseError> {
+    //     let expr = self.meta_expr()?;
+    //     self.expect_symbol("}")?;
+    //     Ok(expr)
+    // }
 
-    fn subexpr(&mut self, rbp: usize) -> Result<Term, ParseError> {
-        let token = self.any_token()?;
-        // nud
-        let nud = match self.tt.get_nud(&token) {
-            None => todo!("nud unknown: {}", token),
-            Some(nud) => nud,
-        };
-        let mut left = match nud {
-            Nud::Var => self.term_var(token, None)?,
-            Nud::Abs => self.term_abs(token)?,
-            Nud::Paren => {
-                let m = self.subexpr(0)?;
-                self.expect_symbol(")")?;
-                m
-            }
-            Nud::Bracket => {
-                let mut terms = vec![];
-                while let Some(m) = self.term_opt() {
-                    terms.push(m);
-                    if self.expect_symbol_opt(",").is_none() {
-                        break;
-                    }
-                }
-                self.expect_symbol("⟩")?;
-                // right associative encoding:
-                // ⟨⟩ ⇒ star
-                // ⟨m⟩ ⇒ m
-                // ⟨m,n,l⟩ ⇒ ⟨m, ⟨n, l⟩⟩
-                match terms.len() {
-                    0 => self.mk_const_unchecked("star"),
-                    1 => terms.pop().unwrap(),
-                    _ => {
-                        let mut m = terms.pop().unwrap();
-                        for n in terms.into_iter().rev() {
-                            let mut x = self.mk_const_unchecked("pair");
-                            x.apply(vec![n, m]);
-                            m = x;
-                        }
-                        m
-                    }
-                }
-            }
-            Nud::Forall => self.term_binder(token, "forall")?,
-            Nud::Exists => self.term_binder(token, "exists")?,
-            Nud::Uexists => self.term_binder(token, "uexists")?,
-            Nud::Hole => self.term_hole(token)?,
-            Nud::User(op) => match op.fixity {
-                Fixity::Nofix => self.term_var(token, Some(op.entity))?,
-                Fixity::Prefix => {
-                    let mut fun = self.term_var(token, Some(op.entity))?;
-                    let arg = self.subterm(op.prec)?;
-                    fun.apply(vec![arg]);
-                    fun
-                }
-                Fixity::Infix | Fixity::Infixl | Fixity::Infixr => unreachable!(),
-            },
-            Nud::NumLit => Self::fail(token, "numeric literal is unsupported")?,
-        };
-        while let Some(token) = self.peek_opt() {
-            let led = match self.tt.get_led(&token) {
-                None => break,
-                Some(led) => led,
-            };
-            let prec = led.prec();
-            if rbp >= prec {
-                break;
-            }
-            match led {
-                Led::App => {
-                    let right = self.subterm(led.prec())?;
-                    left.apply(vec![right]);
-                }
-                Led::User(op) => {
-                    let prec = match op.fixity {
-                        Fixity::Infix | Fixity::Infixl => prec,
-                        Fixity::Infixr => prec - 1,
-                        Fixity::Nofix | Fixity::Prefix => unreachable!("op = {op:?}"),
-                    };
-                    self.advance();
-                    let mut fun = self.term_var(token, Some(op.entity))?;
-                    let right = self.subterm(prec)?;
-                    fun.apply(vec![left, right]);
-                    left = fun;
-                }
-            }
-        }
-        Ok(left)
-    }
+    // fn subexpr(&mut self, rbp: usize) -> Result<Term, ParseError> {
+    //     let token = self.any_token()?;
+    //     // nud
+    //     let nud = match self.tt.get_nud(&token) {
+    //         None => todo!("nud unknown: {}", token),
+    //         Some(nud) => nud,
+    //     };
+    //     let mut left = match nud {
+    //         Nud::Var => self.term_var(token, None)?,
+    //         Nud::Abs => self.term_abs(token)?,
+    //         Nud::Paren => {
+    //             let m = self.subexpr(0)?;
+    //             self.expect_symbol(")")?;
+    //             m
+    //         }
+    //         Nud::Bracket => {
+    //             let mut terms = vec![];
+    //             while let Some(m) = self.term_opt() {
+    //                 terms.push(m);
+    //                 if self.expect_symbol_opt(",").is_none() {
+    //                     break;
+    //                 }
+    //             }
+    //             self.expect_symbol("⟩")?;
+    //             // right associative encoding:
+    //             // ⟨⟩ ⇒ star
+    //             // ⟨m⟩ ⇒ m
+    //             // ⟨m,n,l⟩ ⇒ ⟨m, ⟨n, l⟩⟩
+    //             match terms.len() {
+    //                 0 => self.mk_const_unchecked("star"),
+    //                 1 => terms.pop().unwrap(),
+    //                 _ => {
+    //                     let mut m = terms.pop().unwrap();
+    //                     for n in terms.into_iter().rev() {
+    //                         let mut x = self.mk_const_unchecked("pair");
+    //                         x.apply(vec![n, m]);
+    //                         m = x;
+    //                     }
+    //                     m
+    //                 }
+    //             }
+    //         }
+    //         Nud::Forall => self.term_binder(token, "forall")?,
+    //         Nud::Exists => self.term_binder(token, "exists")?,
+    //         Nud::Uexists => self.term_binder(token, "uexists")?,
+    //         Nud::Hole => self.term_hole(token)?,
+    //         Nud::User(op) => match op.fixity {
+    //             Fixity::Nofix => self.term_var(token, Some(op.entity))?,
+    //             Fixity::Prefix => {
+    //                 let mut fun = self.term_var(token, Some(op.entity))?;
+    //                 let arg = self.subterm(op.prec)?;
+    //                 fun.apply(vec![arg]);
+    //                 fun
+    //             }
+    //             Fixity::Infix | Fixity::Infixl | Fixity::Infixr => unreachable!(),
+    //         },
+    //         Nud::NumLit => Self::fail(token, "numeric literal is unsupported")?,
+    //     };
+    //     while let Some(token) = self.peek_opt() {
+    //         let led = match self.tt.get_led(&token) {
+    //             None => break,
+    //             Some(led) => led,
+    //         };
+    //         let prec = led.prec();
+    //         if rbp >= prec {
+    //             break;
+    //         }
+    //         match led {
+    //             Led::App => {
+    //                 let right = self.subterm(led.prec())?;
+    //                 left.apply(vec![right]);
+    //             }
+    //             Led::User(op) => {
+    //                 let prec = match op.fixity {
+    //                     Fixity::Infix | Fixity::Infixl => prec,
+    //                     Fixity::Infixr => prec - 1,
+    //                     Fixity::Nofix | Fixity::Prefix => unreachable!("op = {op:?}"),
+    //                 };
+    //                 self.advance();
+    //                 let mut fun = self.term_var(token, Some(op.entity))?;
+    //                 let right = self.subterm(prec)?;
+    //                 fun.apply(vec![left, right]);
+    //                 left = fun;
+    //             }
+    //         }
+    //     }
+    //     Ok(left)
+    // }
 
-    pub fn meta_expr(&mut self) -> Result<MetaExpr, ParseError> {
-        self.meta_subexpr(0)
-    }
+    // pub fn meta_expr(&mut self) -> Result<MetaExpr, ParseError> {
+    //     self.meta_subexpr(0)
+    // }
 
-    fn meta_subexpr(&mut self, rbp: usize) -> Result<MetaExpr, ParseError> {
-        let token = self.any_token()?;
-        let mut left = if token.is_ident() {
-            MetaExpr::Var(Name::intern(token.as_str()).unwrap())
-        } else if token.is_symbol() {
-            match token.as_str() {
-                "(" => {
-                    let e = self.meta_subexpr(0)?;
-                    self.expect_symbol(")")?;
-                    e
-                }
-                "{" => self.meta_expr_block(token)?,
-                "λ" => self.meta_expr_fun(token)?,
-                _ => {}
-            }
-        } else {
-            return Self::fail(token, "unexpected token")?;
-        };
-        while let Some(token) = self.peek_opt() {
-            let led = match self.tt.get_led(&token) {
-                None => break,
-                Some(led) => led,
-            };
-            let prec = led.prec();
-            if rbp >= prec {
-                break;
-            }
-            match led {
-                Led::App => {
-                    let right = self.subterm(led.prec())?;
-                    left.apply(vec![right]);
-                }
-                Led::User(op) => {
-                    let prec = match op.fixity {
-                        Fixity::Infix | Fixity::Infixl => prec,
-                        Fixity::Infixr => prec - 1,
-                        Fixity::Nofix | Fixity::Prefix => unreachable!("op = {op:?}"),
-                    };
-                    self.advance();
-                    let mut fun = self.term_var(token, Some(op.entity))?;
-                    let right = self.subterm(prec)?;
-                    fun.apply(vec![left, right]);
-                    left = fun;
-                }
-            }
-        }
-        Ok(left)
-    }
+    // fn meta_subexpr(&mut self, rbp: usize) -> Result<MetaExpr, ParseError> {
+    //     let token = self.any_token()?;
+    //     let mut left = if token.is_ident() {
+    //         MetaExpr::Var(Name::intern(token.as_str()).unwrap())
+    //     } else if token.is_symbol() {
+    //         match token.as_str() {
+    //             "(" => {
+    //                 let e = self.meta_subexpr(0)?;
+    //                 self.expect_symbol(")")?;
+    //                 e
+    //             }
+    //             "{" => self.meta_expr_block(token)?,
+    //             "λ" => self.meta_expr_fun(token)?,
+    //             _ => {}
+    //         }
+    //     } else {
+    //         return Self::fail(token, "unexpected token")?;
+    //     };
+    //     while let Some(token) = self.peek_opt() {
+    //         let led = match self.tt.get_led(&token) {
+    //             None => break,
+    //             Some(led) => led,
+    //         };
+    //         let prec = led.prec();
+    //         if rbp >= prec {
+    //             break;
+    //         }
+    //         match led {
+    //             Led::App => {
+    //                 let right = self.subterm(led.prec())?;
+    //                 left.apply(vec![right]);
+    //             }
+    //             Led::User(op) => {
+    //                 let prec = match op.fixity {
+    //                     Fixity::Infix | Fixity::Infixl => prec,
+    //                     Fixity::Infixr => prec - 1,
+    //                     Fixity::Nofix | Fixity::Prefix => unreachable!("op = {op:?}"),
+    //                 };
+    //                 self.advance();
+    //                 let mut fun = self.term_var(token, Some(op.entity))?;
+    //                 let right = self.subterm(prec)?;
+    //                 fun.apply(vec![left, right]);
+    //                 left = fun;
+    //             }
+    //         }
+    //     }
+    //     Ok(left)
+    // }
 
     pub fn cmd(&mut self) -> Result<Cmd, ParseError> {
         let keyword = self.ident()?;
@@ -777,19 +776,19 @@ impl<'a, 'b> Parser<'a, 'b> {
                 let axiom_cmd = self.axiom_cmd(keyword)?;
                 Cmd::Axiom(axiom_cmd)
             }
-            "meta" => {
-                let keyword = self.ident()?;
-                let cmd = match keyword.as_str() {
-                    "def" => {
-                        let meta_def_cmd = self.meta_def_cmd(keyword)?;
-                        Cmd::MetaDef(meta_def_cmd)
-                    }
-                    _ => {
-                        return Self::fail(keyword, "expected meta command");
-                    }
-                };
-                cmd
-            }
+            // "meta" => {
+            //     let keyword = self.ident()?;
+            //     let cmd = match keyword.as_str() {
+            //         "def" => {
+            //             let meta_def_cmd = self.meta_def_cmd(keyword)?;
+            //             Cmd::MetaDef(meta_def_cmd)
+            //         }
+            //         _ => {
+            //             return Self::fail(keyword, "expected meta command");
+            //         }
+            //     };
+            //     cmd
+            // }
             // "lemma" => {
             //     let lemma_cmd = self.lemma_cmd(keyword)?;
             //     Cmd::Lemma(lemma_cmd)
@@ -1010,12 +1009,12 @@ impl<'a, 'b> Parser<'a, 'b> {
     //     })
     // }
 
-    fn meta_def_cmd(&mut self, _token: Token) -> Result<CmdMetaDef, ParseError> {
-        let name = self.name()?;
-        self.expect_symbol(":=")?;
-        let meta_expr = self.meta_expr()?;
-        Ok(CmdMetaDef { name, meta_expr })
-    }
+    // fn meta_def_cmd(&mut self, _token: Token) -> Result<CmdMetaDef, ParseError> {
+    //     let name = self.name()?;
+    //     self.expect_symbol(":=")?;
+    //     let meta_expr = self.meta_expr()?;
+    //     Ok(CmdMetaDef { name, meta_expr })
+    // }
 }
 
 // #[test]

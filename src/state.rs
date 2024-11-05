@@ -44,7 +44,7 @@ impl State {
 
     fn parse_cmd(&self, input: &str) -> anyhow::Result<Cmd> {
         let mut lex = Lex::new(input);
-        let mut parser = Parser::new(&mut lex, &self.tt, &self.ctx, false);
+        let mut parser = Parser::new(&mut lex, &self.tt, &self.ctx);
         let cmd = parser.cmd()?;
         parser.eof()?;
         Ok(cmd)
