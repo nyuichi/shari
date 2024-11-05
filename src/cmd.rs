@@ -29,6 +29,7 @@ pub enum Cmd {
     Nofix(CmdNofix),
     Def(CmdDef),
     Axiom(CmdAxiom),
+    MetaDef(CmdMetaDef),
     // Lemma(CmdLemma),
 }
 
@@ -81,35 +82,68 @@ pub struct CmdAxiom {
     pub target: Prop,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CmdMetaDef {
+    pub name: Name,
+    pub meta_expr: MetaExpr,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Value {
-    Nat(usize),
+pub enum MetaValue {
+    Proof(Box<Proof>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
-    NumLit(usize),
-    Const(Box<ExprConst>),
+    Var(Name),
     App(Box<ExprApp>),
-    Let(Box<ExprLet>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExprConst {
-    name: Name,
+    Fun(Box<ExprFun>),
+    Unq(Box<MetaExpr>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExprApp {
-    fun: Expr,
-    arg: Expr,
+    fun: MetaExpr,
+    arg: MetaExpr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExprLet {
+pub struct ExprFun {
     name: Name,
-    val: Expr,
+    ty: Option<Type>,
     body: Expr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MetaExpr {
+    Var(Name),
+    App(Box<MetaExprApp>),
+    Fun(Box<MetaExprFun>),
+    Let(Box<MetaExprLet>),
+    Quote(Box<Expr>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetaExprApp {
+    fun: MetaExpr,
+    arg: MetaExpr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetaExprFun {
+    var: Name,
+    body: MetaExpr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetaExprLet {
+    name: Name,
+    val: MetaExpr,
+    body: MetaExpr,
+}
+
+pub fn mk_expr_fun(name: Name, ty: Option<Type>, body: Expr) -> Expr {
+    Expr::Fun(Box::new(ExprFun { name, ty, body }))
 }
 
 // #[derive(Clone, Debug, PartialEq, Eq)]

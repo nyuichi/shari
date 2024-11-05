@@ -1,292 +1,18 @@
 use crate::cmd::{
-    Cmd, CmdAxiom, CmdDef, CmdInfix, CmdInfixl, CmdInfixr, CmdNofix, CmdPrefix, Expr, Fixity,
-    Operator,
+    mk_expr_fun, Cmd, CmdAxiom, CmdDef, CmdInfix, CmdInfixl, CmdInfixr, CmdMetaDef, CmdNofix,
+    CmdPrefix, Expr, Fixity, MetaExpr, Operator,
 };
-use crate::kernel::proof::{
-    mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro, mk_proof_imp_elim,
-    mk_proof_imp_intro, mk_proof_ref, Proof, Prop,
-};
+use crate::kernel::proof::Prop;
 use crate::kernel::tt::{
-    mk_app, mk_const, mk_fresh_type_mvar, mk_local, mk_path_beta, mk_path_congr_abs,
-    mk_path_congr_app, mk_path_delta, mk_path_refl, mk_path_symm, mk_path_trans, mk_type_arrow,
-    mk_type_const, mk_type_local, Name, Path, Term, Type,
+    mk_app, mk_const, mk_fresh_type_mvar, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
+    Name, Term, Type,
 };
 
+use crate::lex::{Lex, LexError, SourceInfo, Token, TokenKind};
 use anyhow::bail;
-use core::ops::Range;
-use once_cell::sync::Lazy;
-use regex::Regex;
 use std::collections::{HashMap, HashSet};
-use std::fmt::Display;
 use std::mem;
 use thiserror::Error;
-
-#[derive(Debug, Clone)]
-pub struct SourceInfo<'a> {
-    line: usize,   // 1-origin
-    column: usize, // 1-origin
-    range: Range<usize>,
-    input: &'a str,
-}
-
-impl<'a> SourceInfo<'a> {
-    fn eof(input: &'a str) -> Self {
-        let range = {
-            let last = input.chars().count();
-            last..last
-        };
-        let (line, column) = {
-            let mut lines = input.lines();
-            let last_line = lines.by_ref().last().unwrap();
-            (lines.count() + 1, last_line.chars().count() + 1)
-        };
-        Self {
-            range,
-            input,
-            line,
-            column,
-        }
-    }
-
-    fn as_str(&self) -> &str {
-        self.input
-            .get(self.range.clone())
-            .expect("invalid token position")
-    }
-}
-
-impl<'a> Display for SourceInfo<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}:{}\n\n", self.line, self.column)?;
-        writeln!(
-            f,
-            "{}",
-            self.input
-                .lines()
-                .nth(self.line - 1)
-                .expect("invalid line number")
-        )?;
-        writeln!(
-            f,
-            "{}{}",
-            " ".repeat(self.column - 1),
-            "^".repeat(
-                self.input
-                    .get(self.range.clone())
-                    .unwrap_or("")
-                    .chars()
-                    .count()
-            )
-        )
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TokenKind {
-    Ident,  // e.g. "foo", "α", "Prop", "foo.bar.baz"
-    Symbol, // e.g. "+", ":", "λ", ",", "_"
-    NumLit, // e.g. "0", "42"
-}
-
-#[derive(Debug, Clone)]
-pub struct Token<'a> {
-    kind: TokenKind,
-    source_info: SourceInfo<'a>,
-}
-
-impl<'a> Token<'a> {
-    fn is_ident(&self) -> bool {
-        self.kind == TokenKind::Ident
-    }
-
-    fn is_symbol(&self) -> bool {
-        self.kind == TokenKind::Symbol
-    }
-
-    fn is_num_lit(&self) -> bool {
-        self.kind == TokenKind::NumLit
-    }
-
-    fn as_str(&self) -> &str {
-        self.source_info.as_str()
-    }
-}
-
-impl<'a> Display for Token<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:?} {}\n{}", self.kind, self.as_str(), self.source_info)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Lex<'a> {
-    input: &'a str,
-    position: usize,
-    line: usize,
-    column: usize,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct LexState {
-    position: usize,
-    line: usize,
-    column: usize,
-}
-
-#[derive(Debug, Clone, Error)]
-#[error("unrecognizable character at line {line}, column {column}")]
-pub struct LexError {
-    line: usize,
-    column: usize,
-}
-
-impl<'a> From<Lex<'a>> for LexError {
-    fn from(lex: Lex<'a>) -> Self {
-        Self {
-            line: lex.line,
-            column: lex.column,
-        }
-    }
-}
-
-impl<'a> Lex<'a> {
-    pub fn new(input: &'a str) -> Self {
-        Self {
-            input,
-            position: 0,
-            line: 1,
-            column: 1,
-        }
-    }
-
-    fn save(&self) -> LexState {
-        LexState {
-            position: self.position,
-            line: self.line,
-            column: self.column,
-        }
-    }
-
-    fn restore(&mut self, state: LexState) {
-        self.position = state.position;
-        self.line = state.line;
-        self.column = state.column;
-    }
-
-    fn advance(&mut self, bytes: usize) -> SourceInfo<'a> {
-        let source_info = SourceInfo {
-            range: self.position..self.position + bytes,
-            line: self.line,
-            column: self.column,
-            input: self.input,
-        };
-        let text = &self.input[self.position..self.position + bytes];
-        self.position += bytes;
-        for c in text.chars() {
-            if c == '\n' {
-                self.line += 1;
-                self.column = 1;
-            } else {
-                self.column += 1;
-            }
-        }
-        source_info
-    }
-}
-
-impl<'a> Iterator for Lex<'a> {
-    type Item = std::result::Result<Token<'a>, LexError>;
-    fn next(&mut self) -> Option<Self::Item> {
-        #[derive(PartialEq, Eq, Debug)]
-        enum Kind {
-            Space,
-            Ident,
-            Symbol,
-            NumLit,
-        }
-
-        static RE: Lazy<Regex> = Lazy::new(|| {
-            let s = &[
-                (Kind::Space, r"\s+|--.*|/-"),
-                (
-                    Kind::Ident,
-                    r"[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*(\.[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*)*",
-                ),
-                (
-                    Kind::Symbol,
-                    r"[(){}⟨⟩⟪⟫,]|\.\{|\$\{|[\p{Symbol}\p{Punctuation}&&[^(){}⟨⟩⟪⟫,]]+",
-                ),
-                (Kind::NumLit, r"0|[1-9][0-9]*"),
-            ]
-            .iter()
-            .map(|(kind, re)| format!("(?P<{:?}>{})", kind, re))
-            .collect::<Vec<_>>()
-            .join("|");
-            regex::Regex::new(&format!("^(?:{})", s)).unwrap()
-        });
-
-        static RE_BLOCK_COMMENT: Lazy<Regex> =
-            Lazy::new(|| regex::Regex::new("^(?s:.*?)(?:(?P<start>/-)|(?P<end>-/))").unwrap());
-
-        loop {
-            if self.input.len() == self.position {
-                return None;
-            }
-            let cap = match RE.captures(&self.input[self.position..]) {
-                None => return Some(Err(LexError::from(self.clone()))),
-                Some(cap) => cap,
-            };
-
-            // skip whitespaces
-            if let Some(m) = cap.name(&format!("{:?}", Kind::Space)) {
-                self.advance(m.range().count());
-                if m.as_str() == "/-" {
-                    let mut nest = 1;
-                    while nest != 0 {
-                        if self.input.len() == self.position {
-                            return None;
-                        }
-                        let cap = match RE_BLOCK_COMMENT.captures(&self.input[self.position..]) {
-                            None => return Some(Err(LexError::from(self.clone()))),
-                            Some(cap) => cap,
-                        };
-                        if cap.name("start").is_some() {
-                            nest += 1;
-                            self.advance(cap.get(0).unwrap().range().count());
-                        } else {
-                            assert!(cap.name("end").is_some());
-                            nest -= 1;
-                            self.advance(cap.get(0).unwrap().range().count());
-                        }
-                    }
-                }
-                continue;
-            }
-
-            // change the position of the cursor
-            let source_info = self.advance(cap.get(0).unwrap().range().count());
-            let text = source_info.as_str();
-
-            let kind;
-            if cap.name(&format!("{:?}", Kind::Ident)).is_some() {
-                match text {
-                    "λ" | "_" => {
-                        kind = TokenKind::Symbol;
-                    }
-                    _ => {
-                        kind = TokenKind::Ident;
-                    }
-                }
-            } else if cap.name(&format!("{:?}", Kind::NumLit)).is_some() {
-                kind = TokenKind::NumLit;
-            } else {
-                assert!(cap.name(&format!("{:?}", Kind::Symbol)).is_some());
-                kind = TokenKind::Symbol;
-            };
-            return Some(Ok(Token { kind, source_info }));
-        }
-    }
-}
 
 #[derive(Default, Debug, Clone)]
 pub struct TokenTable {
@@ -336,7 +62,6 @@ enum Nud {
     Uexists,
     Paren,
     Bracket,
-    Brace,
     Hole,
     User(Operator),
     NumLit,
@@ -375,7 +100,6 @@ impl TokenTable {
                     "∀" => Some(Nud::Forall),
                     "∃" => Some(Nud::Exists),
                     "∃!" => Some(Nud::Uexists),
-                    "{" => Some(Nud::Brace),
                     "${" => Some(Nud::Hole),
                     _ => self.nud.get(token.as_str()).map(|op| Nud::User(op.clone())),
                 }
@@ -387,8 +111,11 @@ impl TokenTable {
 
 #[derive(Debug, Error)]
 pub enum ParseError {
-    #[error("{lex_error}")]
-    Lex { lex_error: LexError },
+    #[error("tokenize error")]
+    Lex {
+        #[from]
+        lex_error: LexError,
+    },
     #[error("parse error: {message} at {source_info}")]
     Parse {
         message: String,
@@ -396,15 +123,6 @@ pub enum ParseError {
     },
     #[error("unexpected end of input at {source_info}")]
     Eof { source_info: String },
-}
-
-// Since LexError is not 'static we only want #[from] and don't need #[source],
-// but this is impossible because #[from] attibute always implies #[source].
-// So I am implementing it manually.
-impl From<LexError> for ParseError {
-    fn from(err: LexError) -> Self {
-        Self::Lex { lex_error: err }
-    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -419,24 +137,17 @@ pub struct Parser<'a, 'b> {
     tt: &'b TokenTable,
     ctx: &'b Context,
     locals: Vec<Name>,
-    allow_holes: bool,
     pub holes: Vec<Name>,
     pub type_holes: Vec<Name>,
 }
 
 impl<'a, 'b> Parser<'a, 'b> {
-    pub fn new(
-        lex: &'b mut Lex<'a>,
-        tt: &'b TokenTable,
-        ctx: &'b Context,
-        allow_holes: bool,
-    ) -> Self {
+    pub fn new(lex: &'b mut Lex<'a>, tt: &'b TokenTable, ctx: &'b Context) -> Self {
         Self {
             lex,
             tt,
             ctx,
             locals: vec![],
-            allow_holes,
             holes: vec![],
             type_holes: vec![],
         }
@@ -451,7 +162,7 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     fn eof_error(&self) -> ParseError {
         ParseError::Eof {
-            source_info: SourceInfo::eof(self.lex.input).to_string(),
+            source_info: SourceInfo::eof(self.lex.input()).to_string(),
         }
     }
 
@@ -565,9 +276,6 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     fn type_hole(&mut self, token: Token<'a>) -> Result<Type, ParseError> {
-        if !self.allow_holes {
-            return Self::fail(token, "hole not allowed in this mode");
-        }
         self.expect_symbol("}")?;
         let name = Name::fresh();
         self.type_holes.push(name);
@@ -687,7 +395,6 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(m)
     }
 
-    // TODO remove
     fn mk_const_unchecked(&self, name: &str) -> Term {
         let ty_arity = self
             .ctx
@@ -702,7 +409,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         mk_const(Name::try_from(name).expect("invalid name"), ty_args)
     }
 
-    fn term_forall(&mut self, token: Token<'a>) -> Result<Term, ParseError> {
+    fn term_binder(&mut self, token: Token<'a>, binder: &str) -> Result<Term, ParseError> {
         let params = self.parameters()?;
         self.expect_symbol(",")?;
         if params.is_empty() {
@@ -726,81 +433,9 @@ impl<'a, 'b> Parser<'a, 'b> {
         for (name, t) in binders.into_iter().rev() {
             m.abs(name, t, name);
             let f = mem::take(&mut m);
-            m = self.mk_const_unchecked("forall");
+            m = self.mk_const_unchecked(binder);
             m.apply(vec![f]);
         }
-        Ok(m)
-    }
-
-    fn term_exists(&mut self, token: Token<'a>) -> Result<Term, ParseError> {
-        let params = self.parameters()?;
-        self.expect_symbol(",")?;
-        if params.is_empty() {
-            return Self::fail(token, "empty binding");
-        }
-        let mut binders = vec![];
-        for (name, ty) in params {
-            let ty = match ty {
-                Some(ty) => ty,
-                None => mk_fresh_type_mvar(),
-            };
-            binders.push((name, ty));
-        }
-        for (name, _) in &binders {
-            self.locals.push(*name);
-        }
-        let mut m = self.subterm(0)?;
-        for _ in 0..binders.len() {
-            self.locals.pop();
-        }
-        for (name, t) in binders.into_iter().rev() {
-            m.abs(name, t, name);
-            let f = mem::take(&mut m);
-            m = self.mk_const_unchecked("exists");
-            m.apply(vec![f]);
-        }
-        Ok(m)
-    }
-
-    fn term_uexists(&mut self, token: Token<'a>) -> Result<Term, ParseError> {
-        let params = self.parameters()?;
-        self.expect_symbol(",")?;
-        if params.is_empty() {
-            return Self::fail(token, "empty binding");
-        }
-        let mut binders = vec![];
-        for (name, ty) in params {
-            let ty = match ty {
-                Some(ty) => ty,
-                None => mk_fresh_type_mvar(),
-            };
-            binders.push((name, ty));
-        }
-        for (name, _) in &binders {
-            self.locals.push(*name);
-        }
-        let mut m = self.subterm(0)?;
-        for _ in 0..binders.len() {
-            self.locals.pop();
-        }
-        for (name, t) in binders.into_iter().rev() {
-            m.abs(name, t, name);
-            let f = mem::take(&mut m);
-            m = self.mk_const_unchecked("uexists");
-            m.apply(vec![f]);
-        }
-        Ok(m)
-    }
-
-    fn term_setsep(&mut self, _token: Token<'a>) -> Result<Term, ParseError> {
-        let name = self.name()?;
-        self.expect_symbol("|")?;
-        let t = mk_fresh_type_mvar();
-        self.locals.push(name);
-        let mut m = self.subterm(0)?;
-        self.locals.pop();
-        m.abs(name, t, name);
-        self.expect_symbol("}")?;
         Ok(m)
     }
 
@@ -837,9 +472,6 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     fn term_hole(&mut self, token: Token<'a>) -> Result<Term, ParseError> {
-        if !self.allow_holes {
-            return Self::fail(token, "hole not allowed in this mode");
-        }
         self.expect_symbol("}")?;
         let name = Name::fresh();
         self.holes.push(name);
@@ -888,10 +520,9 @@ impl<'a, 'b> Parser<'a, 'b> {
                     }
                 }
             }
-            Nud::Forall => self.term_forall(token)?,
-            Nud::Exists => self.term_exists(token)?,
-            Nud::Uexists => self.term_uexists(token)?,
-            Nud::Brace => self.term_setsep(token)?,
+            Nud::Forall => self.term_binder(token, "forall")?,
+            Nud::Exists => self.term_binder(token, "exists")?,
+            Nud::Uexists => self.term_binder(token, "uexists")?,
             Nud::Hole => self.term_hole(token)?,
             Nud::User(op) => match op.fixity {
                 Fixity::Nofix => self.term_var(token, Some(op.entity))?,
@@ -942,249 +573,178 @@ impl<'a, 'b> Parser<'a, 'b> {
         })
     }
 
-    // pub fn proof(&mut self) -> Result<Proof, ParseError> {
-    //     if let Some(_) = self.expect_symbol_opt("(") {
-    //         let h = self.proof()?;
-    //         self.expect_symbol(")")?;
-    //         return Ok(h);
-    //     }
-    //     let keyword = self.ident()?;
-    //     match keyword.as_str() {
-    //         "assump" => {
-    //             let prop = self.prop()?;
-    //             Ok(mk_proof_assump(prop))
-    //         }
-    //         "imp_intro" => {
-    //             let prop = self.prop()?;
-    //             self.expect_symbol(",")?;
-    //             let proof = self.proof()?;
-    //             Ok(mk_proof_imp_intro(prop, proof))
-    //         }
-    //         "imp_elim" => {
-    //             let h1 = self.proof()?;
-    //             self.expect_symbol(",")?;
-    //             let h2 = self.proof()?;
-    //             Ok(mk_proof_imp_elim(h1, h2))
-    //         }
-    //         "forall_intro" => {
-    //             let params = self.parameters()?;
-    //             self.expect_symbol(",")?;
-    //             let mut proof = self.proof()?;
-    //             for (name, ty) in params.into_iter().rev() {
-    //                 let ty = match ty {
-    //                     Some(t) => t,
-    //                     None => mk_fresh_type_mvar(),
-    //                 };
-    //                 proof = mk_proof_forall_intro(name, ty, proof);
-    //             }
-    //             Ok(proof)
-    //         }
-    //         "forall_elim" => {
-    //             let m = self.term()?;
-    //             self.expect_symbol(",")?;
-    //             let h = self.proof()?;
-    //             Ok(mk_proof_forall_elim(m, h))
-    //         }
-    //         "conv" => {
-    //             let path = self.path()?;
-    //             self.expect_symbol(",")?;
-    //             let h = self.proof()?;
-    //             Ok(mk_proof_conv(path, h))
-    //         }
-    //         _ => {
-    //             let name = Name::intern(keyword.as_str()).unwrap();
-    //             let mut ty_args = vec![];
-    //             if let Some(_token) = self.expect_symbol_opt(".{") {
-    //                 if self.expect_symbol_opt("}").is_none() {
-    //                     loop {
-    //                         ty_args.push(self.ty()?);
-    //                         if self.expect_symbol_opt(",").is_none() {
-    //                             break;
-    //                         }
-    //                     }
-    //                     self.expect_symbol("}")?;
-    //                 }
-    //             }
-    //             Ok(mk_proof_const(name, ty_args))
-    //         }
-    //     }
-    // }
+    fn expr(&mut self) -> Result<Expr, ParseError> {
+        self.subexpr(0)
+    }
 
-    // pub fn path(&mut self) -> Result<Path, ParseError> {
-    //     if let Some(_) = self.expect_symbol_opt("(") {
-    //         let h = self.path()?;
-    //         println!("{h}");
-    //         self.expect_symbol(")")?;
-    //         return Ok(h);
-    //     }
-    //     let keyword = self.ident()?;
-    //     match keyword.as_str() {
-    //         "refl" => {
-    //             let m = self.term()?;
-    //             Ok(mk_path_refl(m))
-    //         }
-    //         "symm" => {
-    //             let path = self.path()?;
-    //             Ok(mk_path_symm(path))
-    //         }
-    //         "trans" => {
-    //             let h1 = self.path()?;
-    //             self.expect_symbol(",")?;
-    //             let h2 = self.path()?;
-    //             Ok(mk_path_trans(h1, h2))
-    //         }
-    //         "congr_app" => {
-    //             let h1 = self.path()?;
-    //             self.expect_symbol(",")?;
-    //             let h2 = self.path()?;
-    //             Ok(mk_path_congr_app(h1, h2))
-    //         }
-    //         "congr_abs" => {
-    //             let x = self.name()?;
-    //             self.expect_symbol(",")?;
-    //             let t = self.ty()?;
-    //             self.expect_symbol(",")?;
-    //             let h = self.path()?;
-    //             Ok(mk_path_congr_abs(x, t, h))
-    //         }
-    //         "beta" => {
-    //             let m = self.term()?;
-    //             Ok(mk_path_beta(m))
-    //         }
-    //         "delta" => {
-    //             let name = self.name()?;
-    //             let mut ty_args = vec![];
-    //             if let Some(_token) = self.expect_symbol_opt(".{") {
-    //                 if self.expect_symbol_opt("}").is_none() {
-    //                     loop {
-    //                         ty_args.push(self.ty()?);
-    //                         if self.expect_symbol_opt(",").is_none() {
-    //                             break;
-    //                         }
-    //                     }
-    //                     self.expect_symbol("}")?;
-    //                 }
-    //             }
-    //             Ok(mk_path_delta(name, ty_args))
-    //         }
-    //         _ => Self::fail(keyword, "unknown path expression")?,
-    //     }
-    // }
+    fn expr_opt(&mut self) -> Option<Expr> {
+        self.optional(|this| this.expr())
+    }
 
-    // pub fn expr(&mut self) -> Result<Expr, ParseError> {
-    //     if self.expect_symbol_opt("(").is_some() {
-    //         let e = self.expr()?;
-    //         self.expect_symbol(")")?;
-    //         return Ok(e);
-    //     }
-    // }
+    fn expr_abs(&mut self, token: Token<'a>) -> Result<Expr, ParseError> {
+        let params = self.parameters()?;
+        self.expect_symbol(",")?;
+        if params.is_empty() {
+            return Self::fail(token, "empty binding");
+        }
+        let mut e = self.subexpr(0)?;
+        for (name, t) in params.into_iter().rev() {
+            e = mk_expr_fun(name, t, e);
+        }
+        Ok(e)
+    }
 
-    // fn subexpr(&mut self) -> Result<Expr, ParseError> {
-    //     let token = self.any_token()?;
-    //     // nud
-    //     let mut left = if token.is_ident() {
-    //         Expr::Const(Name::intern(token.as_str()).unwrap())
-    //     } else if token.is_num_lit() {
-    //         Expr::NumLit(token.as_str().parse().unwrap())
-    //     } else if token.is_symbol() {
-    //         match token.as_str() {
-    //             "(" => {
-    //                 let e = self.subexpr(0)?;
-    //                 self.expect_symbol(")")?;
-    //                 e
-    //             }
-    //             "{" => self.expr_block(token)?,
-    //             _ => {}
-    //         }
-    //     } else {
-    //         return Self::fail!(token, "unexpected token")?;
-    //     };
-    //     let nud = match self.tt.get_nud(&token) {
-    //         None => todo!("nud unknown: {}", token),
-    //         Some(nud) => nud,
-    //     };
-    //     let mut left = match nud {
-    //         Nud::Var => self.term_var(token, None)?,
-    //         Nud::Abs => self.term_abs(token)?,
-    //         Nud::Paren => {
-    //             let m = self.subterm(0)?;
-    //             self.expect_symbol(")")?;
-    //             m
-    //         }
-    //         Nud::Bracket => {
-    //             let mut terms = vec![];
-    //             while let Some(m) = self.term_opt() {
-    //                 terms.push(m);
-    //                 if self.expect_symbol_opt(",").is_none() {
-    //                     break;
-    //                 }
-    //             }
-    //             self.expect_symbol("⟩")?;
-    //             // right associative encoding:
-    //             // ⟨⟩ ⇒ star
-    //             // ⟨m⟩ ⇒ m
-    //             // ⟨m,n,l⟩ ⇒ ⟨m, ⟨n, l⟩⟩
-    //             match terms.len() {
-    //                 0 => self.mk_const_unchecked("star"),
-    //                 1 => terms.pop().unwrap(),
-    //                 _ => {
-    //                     let mut m = terms.pop().unwrap();
-    //                     for n in terms.into_iter().rev() {
-    //                         let mut x = self.mk_const_unchecked("pair");
-    //                         x.apply(vec![n, m]);
-    //                         m = x;
-    //                     }
-    //                     m
-    //                 }
-    //             }
-    //         }
-    //         Nud::Forall => self.term_forall(token)?,
-    //         Nud::Exists => self.term_exists(token)?,
-    //         Nud::Uexists => self.term_uexists(token)?,
-    //         Nud::Brace => self.term_setsep(token)?,
-    //         Nud::Hole => self.term_hole(token)?,
-    //         Nud::User(op) => match op.fixity {
-    //             Fixity::Nofix => self.term_var(token, Some(op.entity))?,
-    //             Fixity::Prefix => {
-    //                 let mut fun = self.term_var(token, Some(op.entity))?;
-    //                 let arg = self.subterm(op.prec)?;
-    //                 fun.apply(vec![arg]);
-    //                 fun
-    //             }
-    //             Fixity::Infix | Fixity::Infixl | Fixity::Infixr => unreachable!(),
-    //         },
-    //         Nud::NumLit => Self::fail(token, "numeric literal is unsupported")?,
-    //     };
-    //     while let Some(token) = self.peek_opt() {
-    //         let led = match self.tt.get_led(&token) {
-    //             None => break,
-    //             Some(led) => led,
-    //         };
-    //         let prec = led.prec();
-    //         if rbp >= prec {
-    //             break;
-    //         }
-    //         match led {
-    //             Led::App => {
-    //                 let right = self.subterm(led.prec())?;
-    //                 left.apply(vec![right]);
-    //             }
-    //             Led::User(op) => {
-    //                 let prec = match op.fixity {
-    //                     Fixity::Infix | Fixity::Infixl => prec,
-    //                     Fixity::Infixr => prec - 1,
-    //                     Fixity::Nofix | Fixity::Prefix => unreachable!("op = {op:?}"),
-    //                 };
-    //                 self.advance();
-    //                 let mut fun = self.term_var(token, Some(op.entity))?;
-    //                 let right = self.subterm(prec)?;
-    //                 fun.apply(vec![left, right]);
-    //                 left = fun;
-    //             }
-    //         }
-    //     }
-    //     Ok(left)
-    // }
+    fn expr_var(&mut self, token: Token<'a>) -> Result<Expr, ParseError> {
+        Ok(Expr::Var(Name::intern(token.as_str()).unwrap()))
+    }
+
+    fn expr_unq(&mut self, token: Token<'a>) -> Result<MetaExpr, ParseError> {
+        let expr = self.meta_expr()?;
+        self.expect_symbol("}")?;
+        Ok(expr)
+    }
+
+    fn subexpr(&mut self, rbp: usize) -> Result<Term, ParseError> {
+        let token = self.any_token()?;
+        // nud
+        let nud = match self.tt.get_nud(&token) {
+            None => todo!("nud unknown: {}", token),
+            Some(nud) => nud,
+        };
+        let mut left = match nud {
+            Nud::Var => self.term_var(token, None)?,
+            Nud::Abs => self.term_abs(token)?,
+            Nud::Paren => {
+                let m = self.subexpr(0)?;
+                self.expect_symbol(")")?;
+                m
+            }
+            Nud::Bracket => {
+                let mut terms = vec![];
+                while let Some(m) = self.term_opt() {
+                    terms.push(m);
+                    if self.expect_symbol_opt(",").is_none() {
+                        break;
+                    }
+                }
+                self.expect_symbol("⟩")?;
+                // right associative encoding:
+                // ⟨⟩ ⇒ star
+                // ⟨m⟩ ⇒ m
+                // ⟨m,n,l⟩ ⇒ ⟨m, ⟨n, l⟩⟩
+                match terms.len() {
+                    0 => self.mk_const_unchecked("star"),
+                    1 => terms.pop().unwrap(),
+                    _ => {
+                        let mut m = terms.pop().unwrap();
+                        for n in terms.into_iter().rev() {
+                            let mut x = self.mk_const_unchecked("pair");
+                            x.apply(vec![n, m]);
+                            m = x;
+                        }
+                        m
+                    }
+                }
+            }
+            Nud::Forall => self.term_binder(token, "forall")?,
+            Nud::Exists => self.term_binder(token, "exists")?,
+            Nud::Uexists => self.term_binder(token, "uexists")?,
+            Nud::Hole => self.term_hole(token)?,
+            Nud::User(op) => match op.fixity {
+                Fixity::Nofix => self.term_var(token, Some(op.entity))?,
+                Fixity::Prefix => {
+                    let mut fun = self.term_var(token, Some(op.entity))?;
+                    let arg = self.subterm(op.prec)?;
+                    fun.apply(vec![arg]);
+                    fun
+                }
+                Fixity::Infix | Fixity::Infixl | Fixity::Infixr => unreachable!(),
+            },
+            Nud::NumLit => Self::fail(token, "numeric literal is unsupported")?,
+        };
+        while let Some(token) = self.peek_opt() {
+            let led = match self.tt.get_led(&token) {
+                None => break,
+                Some(led) => led,
+            };
+            let prec = led.prec();
+            if rbp >= prec {
+                break;
+            }
+            match led {
+                Led::App => {
+                    let right = self.subterm(led.prec())?;
+                    left.apply(vec![right]);
+                }
+                Led::User(op) => {
+                    let prec = match op.fixity {
+                        Fixity::Infix | Fixity::Infixl => prec,
+                        Fixity::Infixr => prec - 1,
+                        Fixity::Nofix | Fixity::Prefix => unreachable!("op = {op:?}"),
+                    };
+                    self.advance();
+                    let mut fun = self.term_var(token, Some(op.entity))?;
+                    let right = self.subterm(prec)?;
+                    fun.apply(vec![left, right]);
+                    left = fun;
+                }
+            }
+        }
+        Ok(left)
+    }
+
+    pub fn meta_expr(&mut self) -> Result<MetaExpr, ParseError> {
+        self.meta_subexpr(0)
+    }
+
+    fn meta_subexpr(&mut self, rbp: usize) -> Result<MetaExpr, ParseError> {
+        let token = self.any_token()?;
+        let mut left = if token.is_ident() {
+            MetaExpr::Var(Name::intern(token.as_str()).unwrap())
+        } else if token.is_symbol() {
+            match token.as_str() {
+                "(" => {
+                    let e = self.meta_subexpr(0)?;
+                    self.expect_symbol(")")?;
+                    e
+                }
+                "{" => self.meta_expr_block(token)?,
+                "λ" => self.meta_expr_fun(token)?,
+                _ => {}
+            }
+        } else {
+            return Self::fail(token, "unexpected token")?;
+        };
+        while let Some(token) = self.peek_opt() {
+            let led = match self.tt.get_led(&token) {
+                None => break,
+                Some(led) => led,
+            };
+            let prec = led.prec();
+            if rbp >= prec {
+                break;
+            }
+            match led {
+                Led::App => {
+                    let right = self.subterm(led.prec())?;
+                    left.apply(vec![right]);
+                }
+                Led::User(op) => {
+                    let prec = match op.fixity {
+                        Fixity::Infix | Fixity::Infixl => prec,
+                        Fixity::Infixr => prec - 1,
+                        Fixity::Nofix | Fixity::Prefix => unreachable!("op = {op:?}"),
+                    };
+                    self.advance();
+                    let mut fun = self.term_var(token, Some(op.entity))?;
+                    let right = self.subterm(prec)?;
+                    fun.apply(vec![left, right]);
+                    left = fun;
+                }
+            }
+        }
+        Ok(left)
+    }
 
     pub fn cmd(&mut self) -> Result<Cmd, ParseError> {
         let keyword = self.ident()?;
@@ -1216,6 +776,19 @@ impl<'a, 'b> Parser<'a, 'b> {
             "axiom" => {
                 let axiom_cmd = self.axiom_cmd(keyword)?;
                 Cmd::Axiom(axiom_cmd)
+            }
+            "meta" => {
+                let keyword = self.ident()?;
+                let cmd = match keyword.as_str() {
+                    "def" => {
+                        let meta_def_cmd = self.meta_def_cmd(keyword)?;
+                        Cmd::MetaDef(meta_def_cmd)
+                    }
+                    _ => {
+                        return Self::fail(keyword, "expected meta command");
+                    }
+                };
+                cmd
             }
             // "lemma" => {
             //     let lemma_cmd = self.lemma_cmd(keyword)?;
@@ -1436,6 +1009,13 @@ impl<'a, 'b> Parser<'a, 'b> {
     //         proof,
     //     })
     // }
+
+    fn meta_def_cmd(&mut self, _token: Token) -> Result<CmdMetaDef, ParseError> {
+        let name = self.name()?;
+        self.expect_symbol(":=")?;
+        let meta_expr = self.meta_expr()?;
+        Ok(CmdMetaDef { name, meta_expr })
+    }
 }
 
 // #[test]

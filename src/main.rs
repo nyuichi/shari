@@ -8,6 +8,7 @@ use crate::state::State;
 
 mod cmd;
 mod kernel;
+mod lex;
 mod parse;
 mod print;
 mod state;
@@ -15,38 +16,52 @@ mod state;
 fn main() -> anyhow::Result<()> {
     let mut state = State::new();
 
-    state.run("infixr → : 25 := imp")?;
+    state.run("infixr ⇒ : 25 := imp")?;
     state.run("infix = : 50 := eq")?;
     state.run("nofix ⊤ := top")?;
     state.run("infixr ∧ : 35 := and")?;
     state.run("nofix ⊥ := bot")?;
     state.run("infixr ∨ : 30 := or")?;
     state.run("prefix ¬ : 40 := not")?;
-    state.run("infix ↔ : 20 := iff")?;
+    state.run("infix ⇔ : 20 := iff")?;
     state.run("infix ≠ : 50 := ne")?;
 
     // Leibniz equality
-    state.run("def eq.{u} (x : u) (y : u) : Prop := ∀ P, P x → P y")?;
+    state.run("def eq.{u} (x : u) (y : u) : Prop := ∀ P, P x ⇒ P y")?;
 
     // The following definitions are attributed to [Andrews, 1986].
     state.run("def top : Prop := (λ (x : Prop), x) = (λ x, x)")?;
-    state.run("def and (φ : Prop) (ψ : Prop) : Prop := ∀ ξ, (φ → ψ → ξ) → ξ")?;
+    state.run("def and (φ : Prop) (ψ : Prop) : Prop := ∀ ξ, (φ ⇒ ψ ⇒ ξ) ⇒ ξ")?;
 
     // The following definitions are due to Prawitz and Russell.
     state.run("def bot : Prop := ∀ ξ, ξ")?;
-    state.run("def or (φ : Prop) (ψ : Prop) : Prop := ∀ ξ, (φ → ξ) ∧ (ψ → ξ) → ξ")?;
-    state.run("def exists.{u} (P : u → Prop) : Prop := ∀ ξ, (∀ x, P x → ξ) → ξ")?;
+    state.run("def or (φ : Prop) (ψ : Prop) : Prop := ∀ ξ, (φ ⇒ ξ) ∧ (ψ ⇒ ξ) ⇒ ξ")?;
+    state.run("def exists.{u} (P : u → Prop) : Prop := ∀ ξ, (∀ x, P x ⇒ ξ) ⇒ ξ")?;
 
     // Other connectives
-    state.run("def not (φ : Prop) : Prop := φ → ⊥")?;
-    state.run("def iff (φ : Prop) (ψ : Prop) : Prop := (φ → ψ) ∧ (ψ → φ)")?;
-    state.run("def uexists.{u} (P : u → Prop) : Prop := ∃ x, P x ∧ (∀ y, P y → x = y)")?;
+    state.run("def not (φ : Prop) : Prop := φ ⇒ ⊥")?;
+    state.run("def iff (φ : Prop) (ψ : Prop) : Prop := (φ ⇒ ψ) ∧ (ψ ⇒ φ)")?;
+    state.run("def uexists.{u} (P : u → Prop) : Prop := ∃ x, P x ∧ (∀ y, P y ⇒ x = y)")?;
     state.run("def ne.{u} (x : u) (y : u) : Prop := ¬x = y")?;
 
     // Axioms of topos (cf. [Introduction to CATEGORY THEORY and CATEGORICAL LOGIC, T. Streicher, '03])
-    state.run("axiom prop_ext (φ ψ : Prop) : (φ ↔ ψ) → φ = ψ")?;
-    state.run("axiom fun_ext.{u, v} (f₁ f₂ : u → v) : (∀ x, f₁ x = f₂ x) → f₁ = f₂")?;
-    state.run("axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) → ∃! f, ∀ x, R x (f x)")?;
+    state.run("axiom prop_ext (φ ψ : Prop) : (φ ⇔ ψ) ⇒ φ = ψ")?;
+    state.run("axiom fun_ext.{u, v} (f₁ f₂ : u → v) : (∀ x, f₁ x = f₂ x) ⇒ f₁ = f₂")?;
+    state.run("axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) ⇒ ∃! f, ∀ x, R x (f x)")?;
+
+    state.run(
+        "meta def and.intro := λ h₁ h₂, {
+            let φ := target h₁,
+            let ψ := target h₂,
+            let ξ := `{ξ},
+            let h := assume `{ ${φ} ⇒ ${ψ} ⇒ ${ξ} },
+            let h := imp.elim h h₁,
+            let h := imp.elim h h₂,
+            let h := imp.intro `{ ${φ} ⇒ ${ψ} ⇒ ${ξ} } h,
+            let h := forall.intro mk_type_prop ξ h,
+            change `{ ${φ} ∧ ${ψ} } h
+        }",
+    )?;
 
     // state.run("meta type Proof")?;
     // state.run("meta type Term")?;
@@ -75,19 +90,6 @@ fn main() -> anyhow::Result<()> {
     //     "meta const eq.subst.{u, v} {m₁ m₂ : Term u} {c : Term (u → v)} : Proof (m₁ = m₂) → Proof (c m₁) → Proof (c m₂)",
     // )?;
 
-    // state.run(
-    //     "meta def and.intro (h₁ h₂ : Proof) : Proof := {
-    //         let φ := target h₁,
-    //         let ψ := target h₂,
-    //         let goal := `{ $φ ∧ $ψ },
-    //         let h := forall_intro mk_type_prop (λ ξ, {
-    //             imp_intro `{ $φ → $ψ → $ξ } {
-    //                 imp_elim (imp_elim (assume `{ $φ → $ψ → $ξ }) h₁) h₂
-    //             }
-    //         }),
-    //         change goal h
-    //     }",
-    // )?;
     // state.run(
     //     "lemma and.intro : ∀ (φ ψ : Prop), φ → ψ → φ ∧ ψ := {
     //         forall_intro mk_type_prop (λ φ, {

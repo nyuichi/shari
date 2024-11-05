@@ -78,30 +78,6 @@ impl Name {
     }
 }
 
-/// s ∈ { Type, Kind }
-///
-/// ⊢ Type : Kind
-///
-/// Γ ⊢ A : s
-/// -------------------- [var]
-/// Γ, x : A ⊢ x : A
-///
-/// Γ ⊢ M : A  Γ ⊢ B : s  x ∉ Γ
-/// ---------------------------- [var]
-/// Γ, x : B ⊢ M : A
-///
-/// Γ, x : A ⊢ M : B  Γ ⊢ A → B : Type
-/// ----------------------------------- [abs] (no type-level lambdas)
-/// Γ ⊢ λ (x : A), M : A → B
-///
-/// Γ ⊢ M : A → B  Γ ⊢ N : A
-/// ------------------------- [app]
-/// Γ ⊢ M N : B
-///
-/// Γ ⊢ A : s  Γ ⊢ B : s
-/// ----------------------
-/// Γ ⊢ A → B : s
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Kind(pub usize);
 

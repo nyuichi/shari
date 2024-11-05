@@ -9,7 +9,8 @@ use crate::{
         proof::{self, mk_type_prop},
         tt::{Def, LocalEnv},
     },
-    parse::{Context, Lex, Parser, TokenTable},
+    lex::Lex,
+    parse::{Context, Parser, TokenTable},
     print::OpTable,
 };
 
