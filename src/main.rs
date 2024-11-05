@@ -29,8 +29,7 @@ fn main() -> anyhow::Result<()> {
     // Leibniz equality
     state.run("def eq.{u} (x : u) (y : u) : Prop := ∀ P, P x ⇒ P y")?;
 
-    // The following definitions are attributed to [Andrews, 1986].
-    state.run("def top : Prop := (λ (x : Prop), x) = (λ x, x)")?;
+    state.run("def top : Prop := ∀ φ, φ ⇒ φ")?;
     state.run("def and (φ : Prop) (ψ : Prop) : Prop := ∀ ξ, (φ ⇒ ψ ⇒ ξ) ⇒ ξ")?;
 
     // The following definitions are due to Prawitz and Russell.
@@ -49,7 +48,7 @@ fn main() -> anyhow::Result<()> {
     state.run("axiom fun_ext.{u, v} (f₁ f₂ : u → v) : (∀ x, f₁ x = f₂ x) ⇒ f₁ = f₂")?;
     state.run("axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) ⇒ ∃! f, ∀ x, R x (f x)")?;
 
-    //    state.run("lemma p_imp_p : ∀ φ, φ ⇒ φ := forall_intro (φ : Prop), imp_intro φ, assump φ")?;
+    state.run("lemma tautology : ∀ φ, φ ⇒ φ := forall_intro (φ : Prop), imp_intro φ, assump φ")?;
 
     // state.run(
     //     "meta def and.intro := λ h₁ h₂, {

@@ -1,5 +1,5 @@
 use crate::kernel::{
-    proof::Prop,
+    proof::{Proof, Prop},
     tt::{Name, Term, Type},
 };
 
@@ -29,8 +29,8 @@ pub enum Cmd {
     Nofix(CmdNofix),
     Def(CmdDef),
     Axiom(CmdAxiom),
+    Lemma(CmdLemma),
     // MetaDef(CmdMetaDef),
-    // Lemma(CmdLemma),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,6 +80,14 @@ pub struct CmdAxiom {
     pub name: Name,
     pub local_types: Vec<Name>,
     pub target: Prop,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CmdLemma {
+    pub name: Name,
+    pub local_types: Vec<Name>,
+    pub target: Prop,
+    pub proof: Proof,
 }
 
 // #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,14 +152,6 @@ pub struct CmdAxiom {
 
 // pub fn mk_expr_fun(name: Name, ty: Option<Type>, body: Expr) -> Expr {
 //     Expr::Fun(Box::new(ExprFun { name, ty, body }))
-// }
-
-// #[derive(Clone, Debug, PartialEq, Eq)]
-// pub struct CmdLemma {
-//     pub name: Name,
-//     pub local_types: Vec<Name>,
-//     pub target: Prop,
-//     pub expr: Expr,
 // }
 
 // already : Term → Proof

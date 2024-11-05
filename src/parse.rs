@@ -1,7 +1,10 @@
 use crate::cmd::{
-    Cmd, CmdAxiom, CmdDef, CmdInfix, CmdInfixl, CmdInfixr, CmdNofix, CmdPrefix, Fixity, Operator,
+    Cmd, CmdAxiom, CmdDef, CmdInfix, CmdInfixl, CmdInfixr, CmdLemma, CmdNofix, CmdPrefix, Fixity,
+    Operator,
 };
-use crate::kernel::proof::Prop;
+use crate::kernel::proof::{
+    mk_proof_assump, mk_proof_forall_intro, mk_proof_imp_elim, mk_proof_imp_intro, Proof, Prop,
+};
 use crate::kernel::tt::{
     mk_app, mk_const, mk_fresh_type_mvar, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
     Name, Term, Type,
@@ -562,6 +565,52 @@ impl<'a, 'b> Parser<'a, 'b> {
         })
     }
 
+    pub fn proof(&mut self) -> Result<Proof, ParseError> {
+        if let Some(_token) = self.expect_symbol_opt("(") {
+            let proof = self.proof()?;
+            self.expect_symbol(")")?;
+            return Ok(proof);
+        }
+        let token = self.ident()?;
+        match token.as_str() {
+            "assump" => {
+                return self.proof_assump();
+            }
+            "imp_intro" => {
+                return self.proof_imp_intro();
+            }
+            "forall_intro" => {
+                return self.proof_forall_intro();
+            }
+            _ => Self::fail(token, "unknown proof object"),
+        }
+    }
+
+    pub fn proof_assump(&mut self) -> Result<Proof, ParseError> {
+        let p = self.prop()?;
+        Ok(mk_proof_assump(p))
+    }
+
+    pub fn proof_imp_intro(&mut self) -> Result<Proof, ParseError> {
+        let p = self.prop()?;
+        self.expect_symbol(",")?;
+        let h = self.proof()?;
+        Ok(mk_proof_imp_intro(p, h))
+    }
+
+    pub fn proof_forall_intro(&mut self) -> Result<Proof, ParseError> {
+        self.expect_symbol("(")?;
+        let x = self.name()?;
+        self.expect_symbol(":")?;
+        let ty = self.ty()?;
+        self.expect_symbol(")")?;
+        self.expect_symbol(",")?;
+        self.locals.push(x);
+        let h = self.proof()?;
+        self.locals.pop();
+        Ok(mk_proof_forall_intro(x, ty, h))
+    }
+
     // fn expr(&mut self) -> Result<Expr, ParseError> {
     //     self.subexpr(0)
     // }
@@ -766,6 +815,10 @@ impl<'a, 'b> Parser<'a, 'b> {
                 let axiom_cmd = self.axiom_cmd(keyword)?;
                 Cmd::Axiom(axiom_cmd)
             }
+            "lemma" => {
+                let lemma_cmd = self.lemma_cmd(keyword)?;
+                Cmd::Lemma(lemma_cmd)
+            }
             // "meta" => {
             //     let keyword = self.ident()?;
             //     let cmd = match keyword.as_str() {
@@ -778,10 +831,6 @@ impl<'a, 'b> Parser<'a, 'b> {
             //         }
             //     };
             //     cmd
-            // }
-            // "lemma" => {
-            //     let lemma_cmd = self.lemma_cmd(keyword)?;
-            //     Cmd::Lemma(lemma_cmd)
             // }
             _ => {
                 return Self::fail(keyword, "expected command");
@@ -956,66 +1005,74 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.push(*x);
         }
         self.expect_symbol(":")?;
-        let mut m = self.term()?;
+        let mut p = self.prop()?;
         // Parsing finished. We can now safaly tear off.
         self.locals.truncate(params.len());
         self.type_locals.truncate(local_types.len());
         for (var, ty) in params.into_iter().rev() {
-            m.abs(var, ty.clone(), var);
-            m = mk_app(self.mk_const_unchecked("forall"), m);
+            p.target.abs(var, ty, var);
+            p.target = mk_app(self.mk_const_unchecked("forall"), p.target);
         }
         Ok(CmdAxiom {
             name,
             local_types,
-            target: Prop { target: m },
+            target: p,
         })
     }
 
-    // fn lemma_cmd(&mut self, _token: Token) -> Result<CmdLemma, ParseError> {
-    //     let name = self.name()?;
-    //     let mut local_types = vec![];
-    //     if let Some(_token) = self.expect_symbol_opt(".{") {
-    //         if self.expect_symbol_opt("}").is_none() {
-    //             loop {
-    //                 let token = self.ident()?;
-    //                 let tv = Name::intern(token.as_str()).unwrap();
-    //                 for v in &local_types {
-    //                     if &tv == v {
-    //                         return Self::fail(token, "duplicate type variable")?;
-    //                     }
-    //                 }
-    //                 local_types.push(tv);
-    //                 if self.expect_symbol_opt(",").is_none() {
-    //                     break;
-    //                 }
-    //             }
-    //             self.expect_symbol("}")?;
-    //         }
-    //     }
-    //     let mut params = vec![];
-    //     while let Some(token) = self.expect_symbol_opt("(") {
-    //         let (names, t) = self.parameter(token)?;
-    //         for name in names {
-    //             params.push((name, t.clone()));
-    //         }
-    //     }
-    //     self.expect_symbol(":")?;
-    //     let mut m = self.term()?;
-    //     self.expect_symbol(":=")?;
-    //     let mut proof = self.proof()?;
-    //     for (var, ty) in params.into_iter().rev() {
-    //         m.abs(var, ty.clone(), var);
-    //         m = mk_app(self.mk_const_unchecked("forall"), m);
-    //         proof = mk_proof_forall_intro(var, ty, proof);
-    //     }
-    //     let target = Prop { target: m };
-    //     Ok(CmdLemma {
-    //         name,
-    //         local_types,
-    //         target,
-    //         proof,
-    //     })
-    // }
+    fn lemma_cmd(&mut self, _token: Token) -> Result<CmdLemma, ParseError> {
+        let name = self.name()?;
+        let mut local_types = vec![];
+        if let Some(_token) = self.expect_symbol_opt(".{") {
+            if self.expect_symbol_opt("}").is_none() {
+                loop {
+                    let token = self.ident()?;
+                    let tv = Name::intern(token.as_str()).unwrap();
+                    for v in &local_types {
+                        if &tv == v {
+                            return Self::fail(token, "duplicate type variable")?;
+                        }
+                    }
+                    local_types.push(tv);
+                    if self.expect_symbol_opt(",").is_none() {
+                        break;
+                    }
+                }
+                self.expect_symbol("}")?;
+            }
+        }
+        for ty in &local_types {
+            self.type_locals.push(*ty);
+        }
+        let mut params = vec![];
+        while let Some(token) = self.expect_symbol_opt("(") {
+            let (names, t) = self.parameter(token)?;
+            for name in names {
+                params.push((name, t.clone()));
+            }
+        }
+        for (x, _) in &params {
+            self.locals.push(*x);
+        }
+        self.expect_symbol(":")?;
+        let mut p = self.prop()?;
+        self.expect_symbol(":=")?;
+        let mut h = self.proof()?;
+        // Parsing finished. We can now safaly tear off.
+        self.locals.truncate(params.len());
+        self.type_locals.truncate(local_types.len());
+        for (var, ty) in params.into_iter().rev() {
+            p.target.abs(var, ty.clone(), var);
+            p.target = mk_app(self.mk_const_unchecked("forall"), p.target);
+            h = mk_proof_forall_intro(var, ty, h);
+        }
+        Ok(CmdLemma {
+            name,
+            local_types,
+            target: p,
+            proof: h,
+        })
+    }
 
     // fn meta_def_cmd(&mut self, _token: Token) -> Result<CmdMetaDef, ParseError> {
     //     let name = self.name()?;

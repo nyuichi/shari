@@ -2,8 +2,8 @@ use anyhow::bail;
 
 use crate::{
     cmd::{
-        Cmd, CmdAxiom, CmdDef, CmdInfix, CmdInfixl, CmdInfixr, CmdNofix, CmdPrefix, Fixity,
-        Operator,
+        Cmd, CmdAxiom, CmdDef, CmdInfix, CmdInfixl, CmdInfixr, CmdLemma, CmdNofix, CmdPrefix,
+        Fixity, Operator,
     },
     kernel::{
         proof::{self, mk_type_prop},
@@ -183,43 +183,46 @@ impl State {
                     .facts
                     .insert(name, (local_env.local_types, target));
                 Ok(())
-            } // Cmd::Lemma(inner) => {
-              //     let CmdLemma {
-              //         name,
-              //         local_types,
-              //         mut target,
-              //         proof,
-              //     } = inner;
-              //     for i in 0..local_types.len() {
-              //         for j in i + 1..local_types.len() {
-              //             if local_types[i] == local_types[j] {
-              //                 bail!("duplicate type variables");
-              //             }
-              //         }
-              //     }
-              //     let mut local_env = LocalEnv {
-              //         local_types,
-              //         locals: vec![],
-              //     };
-              //     self.proof_env.tt_env.check_type(
-              //         &mut local_env,
-              //         &mut target.target,
-              //         &mut mk_type_prop(),
-              //     )?;
-              //     self.proof_env.check_prop(
-              //         &mut local_env,
-              //         &mut proof::Context::default(),
-              //         proof,
-              //         &target,
-              //     )?;
-              //     if self.proof_env.facts.contains_key(&name) {
-              //         bail!("already defined");
-              //     }
-              //     self.proof_env
-              //         .facts
-              //         .insert(name, (local_env.local_types, target));
-              //     Ok(())
-              // }
+            }
+            Cmd::Lemma(inner) => {
+                let CmdLemma {
+                    name,
+                    local_types,
+                    mut target,
+                    mut proof,
+                } = inner;
+                for i in 0..local_types.len() {
+                    for j in i + 1..local_types.len() {
+                        if local_types[i] == local_types[j] {
+                            bail!("duplicate type variables");
+                        }
+                    }
+                }
+                let mut local_env = LocalEnv {
+                    local_types,
+                    locals: vec![],
+                };
+                self.proof_env.tt_env.check_type(
+                    &mut local_env,
+                    &mut target.target,
+                    &mut mk_type_prop(),
+                )?;
+                if self.proof_env.infer_prop(
+                    &mut local_env,
+                    &mut proof::Context::default(),
+                    &mut proof,
+                )? != target
+                {
+                    bail!("propositions mismatch");
+                };
+                if self.proof_env.facts.contains_key(&name) {
+                    bail!("already defined");
+                }
+                self.proof_env
+                    .facts
+                    .insert(name, (local_env.local_types, target));
+                Ok(())
+            }
         }
     }
 
