@@ -49,6 +49,8 @@ fn main() -> anyhow::Result<()> {
     state.run("axiom fun_ext.{u, v} (f₁ f₂ : u → v) : (∀ x, f₁ x = f₂ x) ⇒ f₁ = f₂")?;
     state.run("axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) ⇒ ∃! f, ∀ x, R x (f x)")?;
 
+    //    state.run("lemma p_imp_p : ∀ φ, φ ⇒ φ := forall_intro (φ : Prop), imp_intro φ, assump φ")?;
+
     // state.run(
     //     "meta def and.intro := λ h₁ h₂, {
     //         let φ := target h₁,
@@ -135,7 +137,7 @@ fn main() -> anyhow::Result<()> {
      * instantiate p m
      */
 
-    let h = mk_proof_forall_intro(
+    let mut h = mk_proof_forall_intro(
         Name::intern("p").unwrap(),
         mk_type_prop(),
         mk_proof_imp_intro(
@@ -144,7 +146,7 @@ fn main() -> anyhow::Result<()> {
         ),
     );
     let p = proof_env
-        .infer_prop(&mut LocalEnv::default(), &mut Context::default(), h)
+        .infer_prop(&mut LocalEnv::default(), &mut Context::default(), &mut h)
         .unwrap();
     println!("{p}");
 

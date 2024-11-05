@@ -26,45 +26,45 @@ pub enum Proof {
     /// ```text
     ///
     /// ---------------------- (φ ∈ Φ)
-    /// assump φ : [Γ | Φ ⊢ φ]
+    /// Γ | Φ ⊢ assump φ : φ
     /// ```
     Assump(Prop),
     /// ```text
-    /// h : [Γ | Φ, φ ⊢ ψ]
-    /// -------------------------------
-    /// imp_intro φ h : [Γ | Φ ⊢ φ → ψ]
+    /// Γ | Φ, φ ⊢ h : ψ
+    /// ------------------------------
+    /// Γ | Φ ⊢ imp_intro φ, h : φ → ψ
     /// ```
-    ImpIntro(Box<(Prop, Proof)>),
+    ImpIntro(Arc<(Prop, Proof)>),
     /// ```text
-    /// h₁ : [Γ | Φ ⊢ φ → ψ]  h₂ : [Γ | Φ ⊢ φ]
-    /// --------------------------------------
-    /// imp_elim h₁ h₂ : [Γ | Φ ⊢ ψ]
+    /// Γ | Φ ⊢ h₁ : φ → ψ    Γ | Φ ⊢ h₂ : φ
+    /// -------------------------------------
+    /// Γ | Φ ⊢ imp_elim h₁, h₂ : ψ
     /// ```
-    ImpElim(Box<(Proof, Proof)>),
+    ImpElim(Arc<(Proof, Proof)>),
     /// ```text
-    /// h : [Γ, x : τ | Φ ⊢ φ]
-    /// ------------------------------------------- ((x : τ) # Φ)
-    /// forall_intro x τ h : [Γ | Φ ⊢ ∀ (x : τ), φ]
+    /// Γ, x : τ | Φ ⊢ h : φ
+    /// ---------------------------------------------- ((x : τ) # Φ)
+    /// Γ | Φ ⊢ forall_intro (x : τ), h : ∀ (x : τ), φ
     /// ```
-    ForallIntro(Box<(Name, Type, Proof)>),
+    ForallIntro(Arc<(Name, Type, Proof)>),
     /// ```text
-    /// h : [Γ | Φ ⊢ ∀ (x : τ), φ]
-    /// ----------------------------------
-    /// forall_elim m h : [Γ | Φ ⊢ [m/x]φ]
+    /// Γ | Φ ⊢ h : ∀ (x : τ), φ
+    /// ---------------------------------
+    /// Γ | Φ ⊢ forall_elim m h : [m/x]φ]
     /// ```
-    ForallElim(Box<(Term, Proof)>),
+    ForallElim(Arc<(Term, Proof)>),
     /// ```text
-    /// h₁ : [Γ ⊢ φ ≡ ψ]  h₂ : [Γ | Φ ⊢ φ]
-    /// -----------------------------------
-    /// conv h₁ h₂ : [Γ | Φ ⊢ ψ]
+    /// Γ ⊢ h₁ : φ ≡ ψ    Γ | Φ ⊢ h₂ : φ
+    /// ---------------------------------
+    /// Γ | Φ ⊢ conv h₁ h₂ : ψ
     /// ```
-    Conv(Box<(Path, Proof)>),
+    Conv(Arc<(Path, Proof)>),
     /// ```text
     ///
-    /// ------------------------------- (c.{uᵢ} :⇔ φ)
-    /// ref c (tᵢ) : [Γ | Φ ⊢ [τᵢ/uᵢ]φ]
+    /// ----------------------------- (c.{uᵢ} :⇔ φ)
+    /// Γ | Φ ⊢ ref c (tᵢ) : [τᵢ/uᵢ]φ
     /// ```
-    Ref(Box<(Name, Vec<Type>)>),
+    Ref(Arc<(Name, Vec<Type>)>),
 }
 
 pub fn mk_proof_assump(p: Prop) -> Proof {
@@ -72,27 +72,27 @@ pub fn mk_proof_assump(p: Prop) -> Proof {
 }
 
 pub fn mk_proof_imp_intro(p: Prop, h: Proof) -> Proof {
-    Proof::ImpIntro(Box::new((p, h)))
+    Proof::ImpIntro(Arc::new((p, h)))
 }
 
 pub fn mk_proof_imp_elim(h1: Proof, h2: Proof) -> Proof {
-    Proof::ImpElim(Box::new((h1, h2)))
+    Proof::ImpElim(Arc::new((h1, h2)))
 }
 
 pub fn mk_proof_forall_intro(x: Name, t: Type, h: Proof) -> Proof {
-    Proof::ForallIntro(Box::new((x, t, h)))
+    Proof::ForallIntro(Arc::new((x, t, h)))
 }
 
 pub fn mk_proof_forall_elim(m: Term, h: Proof) -> Proof {
-    Proof::ForallElim(Box::new((m, h)))
+    Proof::ForallElim(Arc::new((m, h)))
 }
 
 pub fn mk_proof_conv(h1: Path, h2: Proof) -> Proof {
-    Proof::Conv(Box::new((h1, h2)))
+    Proof::Conv(Arc::new((h1, h2)))
 }
 
 pub fn mk_proof_ref(name: Name, ty_args: Vec<Type>) -> Proof {
-    Proof::Ref(Box::new((name, ty_args)))
+    Proof::Ref(Arc::new((name, ty_args)))
 }
 
 static PROP: LazyLock<Name> = LazyLock::new(|| Name::intern("Prop").unwrap());
@@ -156,24 +156,24 @@ impl Env {
         &self,
         local_env: &mut LocalEnv,
         context: &mut Context,
-        h: Proof,
+        h: &mut Proof,
     ) -> anyhow::Result<Prop> {
         match h {
-            Proof::Assump(mut p) => {
+            Proof::Assump(p) => {
                 self.tt_env
                     .check_type(local_env, &mut p.target, &mut mk_type_prop())?;
                 for c in &context.props {
-                    if &p == c {
-                        return Ok(p);
+                    if p == c {
+                        return Ok(p.clone());
                     }
                 }
                 bail!("assumption not found");
             }
             Proof::ImpIntro(inner) => {
-                let (mut p, h) = *inner;
+                let (p, h) = Arc::make_mut(inner);
                 self.tt_env
                     .check_type(local_env, &mut p.target, &mut mk_type_prop())?;
-                context.props.push(p);
+                context.props.push(p.clone());
                 let h = self.infer_prop(local_env, context, h)?;
                 let p = context.props.pop().unwrap();
                 let mut target = mk_const(*IMP, vec![]);
@@ -181,7 +181,7 @@ impl Env {
                 Ok(Prop { target })
             }
             Proof::ImpElim(inner) => {
-                let (h1, h2) = *inner;
+                let (h1, h2) = Arc::make_mut(inner);
                 let h1 = self.infer_prop(local_env, context, h1)?;
                 let mut imp = h1.target;
                 let mut args = imp.unapply();
@@ -196,18 +196,20 @@ impl Env {
                 }
                 let target = args.pop().unwrap();
                 let p = args.pop().unwrap();
-                self.check_prop(local_env, context, h2, &Prop { target: p })?;
+                if self.infer_prop(local_env, context, h2)? != (Prop { target: p }) {
+                    bail!("propositions mismatch");
+                }
                 Ok(Prop { target })
             }
             Proof::ForallIntro(inner) => {
-                let (x, t, h) = *inner;
+                let (x, t, h) = Arc::make_mut(inner);
                 self.tt_env.check_kind(local_env, &t, &Kind::base())?;
                 for c in &context.props {
-                    if !c.target.is_fresh(x) {
+                    if !c.target.is_fresh(*x) {
                         bail!("eigenvariable condition fails");
                     }
                 }
-                local_env.locals.push((x, t));
+                local_env.locals.push((*x, t.clone()));
                 let h = self.infer_prop(local_env, context, h)?;
                 let (x, t) = local_env.locals.pop().unwrap();
                 let mut m = h.target;
@@ -217,7 +219,7 @@ impl Env {
                 Ok(Prop { target })
             }
             Proof::ForallElim(inner) => {
-                let (mut m, h) = *inner;
+                let (m, h) = Arc::make_mut(inner);
                 let h = self.infer_prop(local_env, context, h)?;
                 let mut forall = h.target;
                 let mut args = forall.unapply();
@@ -236,25 +238,27 @@ impl Env {
                     bail!("forall must take an abstraction");
                 };
                 let mut target = mem::take(&mut Arc::make_mut(&mut inner).body);
-                self.tt_env.check_type(local_env, &mut m, &mut domain_ty)?;
+                self.tt_env.check_type(local_env, m, &mut domain_ty)?;
                 target.open(&m);
                 Ok(Prop { target })
             }
             Proof::Conv(inner) => {
-                let (mut h1, h2) = *inner;
-                let h1 = self.tt_env.infer_conv(local_env, &mut h1)?;
-                self.check_prop(local_env, context, h2, &Prop { target: h1.left })?;
+                let (h1, h2) = Arc::make_mut(inner);
+                let h1 = self.tt_env.infer_conv(local_env, h1)?;
+                if self.infer_prop(local_env, context, h2)? != (Prop { target: h1.left }) {
+                    bail!("propositions mismatch");
+                };
                 Ok(Prop { target: h1.right })
             }
             Proof::Ref(inner) => {
-                let (name, ty_args) = *inner;
+                let (name, ty_args) = Arc::make_mut(inner);
                 let Some((tv, mut target)) = self.facts.get(&name).cloned() else {
                     bail!("axiom not found");
                 };
                 if ty_args.len() != tv.len() {
                     bail!("wrong number of type arguments supplied");
                 }
-                for ty_arg in &ty_args {
+                for ty_arg in &mut *ty_args {
                     self.tt_env.check_kind(local_env, ty_arg, &Kind::base())?;
                 }
                 let subst: Vec<_> = std::iter::zip(tv, ty_args.iter()).collect();
@@ -262,20 +266,6 @@ impl Env {
                 Ok(target)
             }
         }
-    }
-
-    pub fn check_prop(
-        &self,
-        local_env: &mut LocalEnv,
-        context: &mut Context,
-        h: Proof,
-        prop: &Prop,
-    ) -> anyhow::Result<()> {
-        let p = self.infer_prop(local_env, context, h)?;
-        if &p != prop {
-            bail!("propositions mismatch");
-        }
-        Ok(())
     }
 }
 
@@ -297,7 +287,7 @@ mod tests {
     }
 
     // Check if (p : Prop) | hs ⊢ h : ?
-    fn check(hs: impl IntoIterator<Item = Prop>, h: Proof) -> Prop {
+    fn check(hs: impl IntoIterator<Item = Prop>, mut h: Proof) -> Prop {
         let env = Env::new_kernel();
         let mut local_env = LocalEnv::default();
         local_env
@@ -307,7 +297,7 @@ mod tests {
         for h in hs {
             cx.props.push(h);
         }
-        env.infer_prop(&mut local_env, &mut cx, h).unwrap()
+        env.infer_prop(&mut local_env, &mut cx, &mut h).unwrap()
     }
 
     #[test]

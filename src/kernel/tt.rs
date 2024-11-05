@@ -647,8 +647,8 @@ pub enum Path {
     CongrApp(Arc<(Path, Path)>),
     /// ```text
     /// Γ, x : τ ⊢ h : m₁ ≡ m₂
-    /// -------------------------------------------------------
-    /// Γ ⊢ congr_abs x τ h : (λ (x : τ), m₁) ≡ (λ (x : τ), m₂)
+    /// ------------------------------------------------------------
+    /// Γ ⊢ congr_abs (x : τ), h : (λ (x : τ), m₁) ≡ (λ (x : τ), m₂)
     /// ```
     CongrAbs(Arc<(Name, Type, Path)>),
     /// ```text
@@ -663,6 +663,12 @@ pub enum Path {
     /// Γ ⊢ delta_reduce c.{t₁ ⋯ tₙ} : c.{t₁ ⋯ tₙ} ≡ [t₁/u₁ ⋯ tₙ/uₙ]m
     /// ```
     Delta(Arc<(Name, Vec<Type>)>),
+    /// ```text
+    ///
+    /// -------------------------
+    /// Γ ⊢ sorry m₁ m₂ : m₁ ≡ m₂
+    /// ```
+    Sorry(Arc<(Term, Term)>),
 }
 
 impl Display for Path {
@@ -672,7 +678,9 @@ impl Display for Path {
             Path::Symm(h) => write!(f, "(symm {h})"),
             Path::Trans(inner) => write!(f, "(trans {} {})", inner.0, inner.1),
             Path::CongrApp(inner) => write!(f, "(congr_app {} {})", inner.0, inner.1),
-            Path::CongrAbs(inner) => write!(f, "congr_abs {} {} {})", inner.0, inner.1, inner.2),
+            Path::CongrAbs(inner) => {
+                write!(f, "(congr_abs ({} : {}), {})", inner.0, inner.1, inner.2)
+            }
             Path::Beta(m) => write!(f, "(beta {m})"),
             Path::Delta(inner) => {
                 write!(f, "{}", inner.0)?;
@@ -685,6 +693,9 @@ impl Display for Path {
                     write!(f, "}}")?;
                 }
                 Ok(())
+            }
+            Path::Sorry(inner) => {
+                write!(f, "(sorry {} {})", inner.0, inner.1)
             }
         }
     }
@@ -919,6 +930,23 @@ impl Env {
                     right: target,
                 })
             }
+            Path::Sorry(inner) => {
+                let inner = Arc::make_mut(inner);
+                let ty1 = self.infer_type(local_env, &mut inner.0)?;
+                let ty2 = self.infer_type(local_env, &mut inner.1)?;
+                if ty1 != ty2 {
+                    bail!("types mismatch");
+                }
+                let Some(h) = self.equiv(&mut inner.0, &mut inner.1) else {
+                    bail!("terms not convertible");
+                };
+                let conv = Conv {
+                    left: mem::take(&mut inner.0),
+                    right: mem::take(&mut inner.1),
+                };
+                *path = h;
+                Ok(conv)
+            }
         }
     }
 
@@ -1111,20 +1139,6 @@ impl Env {
             }
         }
         None
-    }
-
-    pub fn prove_conv(&self, local_env: &mut LocalEnv, conv: &mut Conv) -> anyhow::Result<Path> {
-        let ty1 = self.infer_type(local_env, &mut conv.left)?;
-        let ty2 = self.infer_type(local_env, &mut conv.right)?;
-        if ty1 != ty2 {
-            bail!("types mismatch");
-        }
-        let mut m1 = conv.left.clone();
-        let mut m2 = conv.right.clone();
-        let Some(h) = self.equiv(&mut m1, &mut m2) else {
-            bail!("terms not convertible");
-        };
-        Ok(h)
     }
 }
 
