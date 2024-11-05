@@ -729,6 +729,10 @@ pub fn mk_path_delta(name: Name, ty_args: Vec<Type>) -> Path {
     Path::Delta(Arc::new((name, ty_args)))
 }
 
+pub fn mk_path_sorry(m1: Term, m2: Term) -> Path {
+    Path::Sorry(Arc::new((m1, m2)))
+}
+
 impl Path {
     fn is_refl(&self) -> bool {
         matches!(self, Path::Refl(_))
@@ -937,7 +941,7 @@ impl Env {
                 if ty1 != ty2 {
                     bail!("types mismatch");
                 }
-                let Some(h) = self.equiv(&mut inner.0, &mut inner.1) else {
+                let Some(h) = self.equiv(&inner.0, &inner.1) else {
                     bail!("terms not convertible");
                 };
                 let conv = Conv {
@@ -1039,7 +1043,7 @@ impl Env {
         Some(def.hint)
     }
 
-    fn equiv(&self, m1: &mut Term, m2: &mut Term) -> Option<Path> {
+    fn equiv_help(&self, m1: &mut Term, m2: &mut Term) -> Option<Path> {
         if m1 == m2 {
             return Some(mk_path_refl(m1.clone()));
         }
@@ -1050,7 +1054,7 @@ impl Env {
             let local = mk_local(x);
             inner1.body.open(&local);
             inner2.body.open(&local);
-            let Some(h) = self.equiv(&mut inner1.body, &mut inner2.body) else {
+            let Some(h) = self.equiv_help(&mut inner1.body, &mut inner2.body) else {
                 return None;
             };
             return Some(mk_path_congr_abs(x, inner1.binder_type.clone(), h));
@@ -1069,7 +1073,7 @@ impl Env {
                 let local = mk_local(x);
                 inner1.body.open(&local);
                 inner2.body.open(&local);
-                let Some(h) = self.equiv(&mut inner1.body, &mut inner2.body) else {
+                let Some(h) = self.equiv_help(&mut inner1.body, &mut inner2.body) else {
                     return None;
                 };
                 let h = mk_path_congr_abs(x, inner1.binder_type.clone(), h);
@@ -1088,7 +1092,7 @@ impl Env {
                     for (a1, a2) in std::iter::zip(args1, args2) {
                         let mut a1 = a1.clone();
                         let mut a2 = a2.clone();
-                        let Some(h_arg) = self.equiv(&mut a1, &mut a2) else {
+                        let Some(h_arg) = self.equiv_help(&mut a1, &mut a2) else {
                             break 'args_eq;
                         };
                         h = mk_path_congr_app(h, h_arg);
@@ -1113,7 +1117,7 @@ impl Env {
             match height1.cmp(&height2) {
                 std::cmp::Ordering::Less => {
                     let h3 = mk_path_symm(self.unfold_head(m2));
-                    let Some(h4) = self.equiv(m1, m2) else {
+                    let Some(h4) = self.equiv_help(m1, m2) else {
                         return None;
                     };
                     return Some(mk_path_trans(h1, mk_path_trans(h4, mk_path_trans(h3, h2))));
@@ -1121,7 +1125,7 @@ impl Env {
                 std::cmp::Ordering::Equal => {
                     let h3 = self.unfold_head(m1);
                     let h4 = mk_path_symm(self.unfold_head(m2));
-                    let Some(h5) = self.equiv(m1, m2) else {
+                    let Some(h5) = self.equiv_help(m1, m2) else {
                         return None;
                     };
                     return Some(mk_path_trans(
@@ -1131,7 +1135,7 @@ impl Env {
                 }
                 std::cmp::Ordering::Greater => {
                     let h3 = self.unfold_head(m1);
-                    let Some(h4) = self.equiv(m1, m2) else {
+                    let Some(h4) = self.equiv_help(m1, m2) else {
                         return None;
                     };
                     return Some(mk_path_trans(h1, mk_path_trans(h3, mk_path_trans(h4, h2))));
@@ -1139,6 +1143,12 @@ impl Env {
             }
         }
         None
+    }
+
+    fn equiv(&self, m1: &Term, m2: &Term) -> Option<Path> {
+        let mut m1 = m1.clone();
+        let mut m2 = m2.clone();
+        self.equiv_help(&mut m1, &mut m2)
     }
 }
 

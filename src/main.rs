@@ -49,6 +49,7 @@ fn main() -> anyhow::Result<()> {
     state.run("axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) ⇒ ∃! f, ∀ x, R x (f x)")?;
 
     state.run("lemma tautology : ∀ φ, φ ⇒ φ := forall_intro (φ : Prop), imp_intro φ, assump φ")?;
+    state.run("lemma top.intro : ⊤ := conv (sorry (∀ φ, φ ⇒ φ) ⊤) tautology")?;
 
     // state.run(
     //     "meta def and.intro := λ h₁ h₂, {

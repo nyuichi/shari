@@ -3,11 +3,12 @@ use crate::cmd::{
     Operator,
 };
 use crate::kernel::proof::{
-    mk_proof_assump, mk_proof_forall_intro, mk_proof_imp_elim, mk_proof_imp_intro, Proof, Prop,
+    mk_proof_assump, mk_proof_conv, mk_proof_forall_intro, mk_proof_imp_elim, mk_proof_imp_intro,
+    mk_proof_ref, Proof, Prop,
 };
 use crate::kernel::tt::{
-    mk_app, mk_const, mk_fresh_type_mvar, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
-    Name, Term, Type,
+    mk_app, mk_const, mk_fresh_type_mvar, mk_local, mk_path_sorry, mk_type_arrow, mk_type_const,
+    mk_type_local, Name, Path, Term, Type,
 };
 
 use crate::lex::{Lex, LexError, SourceInfo, Token, TokenKind};
@@ -133,6 +134,8 @@ pub struct Nasmespace {
     pub type_locals: Vec<Name>,
     // mapping name to type arity
     pub locals: Vec<Name>,
+    // mapping name to type arity
+    pub facts: HashMap<Name, usize>,
 }
 
 pub struct Parser<'a, 'b> {
@@ -565,6 +568,25 @@ impl<'a, 'b> Parser<'a, 'b> {
         })
     }
 
+    fn path(&mut self) -> Result<Path, ParseError> {
+        if let Some(_token) = self.expect_symbol_opt("(") {
+            let proof = self.path()?;
+            self.expect_symbol(")")?;
+            return Ok(proof);
+        }
+        let token = self.ident()?;
+        match token.as_str() {
+            "sorry" => self.path_sorry(),
+            _ => Self::fail(token, "unknown path object"),
+        }
+    }
+
+    fn path_sorry(&mut self) -> Result<Path, ParseError> {
+        let m1 = self.subterm(1024)?;
+        let m2 = self.subterm(1024)?;
+        Ok(mk_path_sorry(m1, m2))
+    }
+
     pub fn proof(&mut self) -> Result<Proof, ParseError> {
         if let Some(_token) = self.expect_symbol_opt("(") {
             let proof = self.proof()?;
@@ -573,32 +595,27 @@ impl<'a, 'b> Parser<'a, 'b> {
         }
         let token = self.ident()?;
         match token.as_str() {
-            "assump" => {
-                return self.proof_assump();
-            }
-            "imp_intro" => {
-                return self.proof_imp_intro();
-            }
-            "forall_intro" => {
-                return self.proof_forall_intro();
-            }
-            _ => Self::fail(token, "unknown proof object"),
+            "assump" => self.proof_assump(),
+            "imp_intro" => self.proof_imp_intro(),
+            "forall_intro" => self.proof_forall_intro(),
+            "conv" => self.proof_conv(),
+            _ => self.proof_ref(token),
         }
     }
 
-    pub fn proof_assump(&mut self) -> Result<Proof, ParseError> {
+    fn proof_assump(&mut self) -> Result<Proof, ParseError> {
         let p = self.prop()?;
         Ok(mk_proof_assump(p))
     }
 
-    pub fn proof_imp_intro(&mut self) -> Result<Proof, ParseError> {
+    fn proof_imp_intro(&mut self) -> Result<Proof, ParseError> {
         let p = self.prop()?;
         self.expect_symbol(",")?;
         let h = self.proof()?;
         Ok(mk_proof_imp_intro(p, h))
     }
 
-    pub fn proof_forall_intro(&mut self) -> Result<Proof, ParseError> {
+    fn proof_forall_intro(&mut self) -> Result<Proof, ParseError> {
         self.expect_symbol("(")?;
         let x = self.name()?;
         self.expect_symbol(":")?;
@@ -609,6 +626,36 @@ impl<'a, 'b> Parser<'a, 'b> {
         let h = self.proof()?;
         self.locals.pop();
         Ok(mk_proof_forall_intro(x, ty, h))
+    }
+
+    fn proof_conv(&mut self) -> Result<Proof, ParseError> {
+        let path = self.path()?;
+        let h = self.proof()?;
+        Ok(mk_proof_conv(path, h))
+    }
+
+    fn proof_ref(&mut self, token: Token<'a>) -> Result<Proof, ParseError> {
+        let name = Name::try_from(token.as_str()).unwrap();
+        let Some(ty_arity) = self.ns.facts.get(&name).copied() else {
+            return Self::fail(token, "unknown proposition");
+        };
+        let mut ty_args = vec![];
+        if let Some(_token) = self.expect_symbol_opt(".{") {
+            if self.expect_symbol_opt("}").is_none() {
+                loop {
+                    ty_args.push(self.ty()?);
+                    if self.expect_symbol_opt(",").is_none() {
+                        break;
+                    }
+                }
+                self.expect_symbol("}")?;
+            }
+        } else {
+            for _ in 0..ty_arity {
+                ty_args.push(mk_fresh_type_mvar());
+            }
+        }
+        Ok(mk_proof_ref(name, ty_args))
     }
 
     // fn expr(&mut self) -> Result<Expr, ParseError> {

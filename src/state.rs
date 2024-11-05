@@ -179,6 +179,7 @@ impl State {
                 if self.proof_env.facts.contains_key(&name) {
                     bail!("already defined");
                 }
+                self.ns.facts.insert(name, local_env.local_types.len());
                 self.proof_env
                     .facts
                     .insert(name, (local_env.local_types, target));
@@ -218,6 +219,7 @@ impl State {
                 if self.proof_env.facts.contains_key(&name) {
                     bail!("already defined");
                 }
+                self.ns.facts.insert(name, local_env.local_types.len());
                 self.proof_env
                     .facts
                     .insert(name, (local_env.local_types, target));

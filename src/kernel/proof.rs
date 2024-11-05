@@ -61,8 +61,8 @@ pub enum Proof {
     Conv(Arc<(Path, Proof)>),
     /// ```text
     ///
-    /// ----------------------------- (c.{uᵢ} :⇔ φ)
-    /// Γ | Φ ⊢ ref c.{tᵢ} : [τᵢ/uᵢ]φ
+    /// -------------------------- (c.{uᵢ} :⇔ φ)
+    /// Γ | Φ ⊢ c.{tᵢ} : [τᵢ/uᵢ]φ
     /// ```
     Ref(Arc<(Name, Vec<Type>)>),
 }
@@ -253,7 +253,7 @@ impl Env {
             Proof::Ref(inner) => {
                 let (name, ty_args) = Arc::make_mut(inner);
                 let Some((tv, mut target)) = self.facts.get(&name).cloned() else {
-                    bail!("axiom not found");
+                    bail!("proposition not found");
                 };
                 if ty_args.len() != tv.len() {
                     bail!("wrong number of type arguments supplied");
