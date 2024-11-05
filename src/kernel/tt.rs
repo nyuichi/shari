@@ -600,16 +600,22 @@ impl Term {
 
 /// Judgmental equality for the definitional equality.
 /// The type inhabitation problem of `Conv` shall be decidable.
+///
+/// The formation rule of Conv is as follows:
+/// ```text
+/// Γ ⊢ m₁ : τ    Γ ⊢ m₂ : τ
+/// -------------------------
+/// Γ ⊢ m₁ ≡ m₂ : τ
+/// ```
 #[derive(Debug, Clone)]
 pub struct Conv {
     pub left: Term,
     pub right: Term,
-    pub ty: Type,
 }
 
 impl std::fmt::Display for Conv {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ≡ {} : {}", self.left, self.right, self.ty)
+        write!(f, "{} ≡ {}", self.left, self.right)
     }
 }
 
@@ -617,44 +623,44 @@ impl std::fmt::Display for Conv {
 pub enum Path {
     /// ```text
     ///
-    /// ------------------------
-    /// refl m : [Γ ⊢ m ≡ m : τ]
+    /// ------------------
+    /// Γ ⊢ refl m : m ≡ m
     /// ```
     Refl(Term),
     /// ```text
-    /// h : [Γ ⊢ m₁ ≡ m₂ : τ]
-    /// --------------------------
-    /// symm h : [Γ ⊢ m₂ ≡ m₁ : τ]
+    /// Γ ⊢ h : m₁ ≡ m₂
+    /// --------------------
+    /// Γ ⊢ symm h : m₂ ≡ m₁
     /// ```
     Symm(Arc<Path>),
     /// ```text
-    /// h₁ : [Γ ⊢ m₁ ≡ m₂ : τ]  h₂ : [Γ ⊢ m₂ ≡ m₃ : τ]
-    /// ----------------------------------------------
-    /// trans h₁ h₂ : [Γ ⊢ m₁ ≡ m₃ : τ]
+    /// Γ ⊢ h₁ : m₁ ≡ m₂   Γ ⊢ h₂ : m₂ ≡ m₃
+    /// ------------------------------------
+    /// Γ ⊢ trans h₁ h₂ : m₁ ≡ m₃
     /// ```
     Trans(Arc<(Path, Path)>),
     /// ```text
-    /// h₁ : [Γ ⊢ f₁ ≡ f₂ : τ → σ]  h₂ : [Γ ⊢ a₁ ≡ a₂ : τ]
-    /// --------------------------------------------------
-    /// congr_app h₁ h₂ : [Γ ⊢ f₁ a₁ ≡ f₂ a₂ : σ]
+    /// Γ ⊢ h₁ : f₁ ≡ f₂   Γ ⊢ h₂ : a₁ ≡ a₂
+    /// ------------------------------------
+    /// Γ ⊢ congr_app h₁ h₂ : f₁ a₁ ≡ f₂ a₂
     /// ```
     CongrApp(Arc<(Path, Path)>),
     /// ```text
-    /// h : [Γ, x : τ ⊢ m₁ ≡ m₂ : σ]
-    /// -----------------------------------------------------------------
-    /// congr_abs x τ h : [Γ ⊢ (λ (x : τ), m₁) ≡ (λ (x : τ), m₂) : τ → σ]
+    /// Γ, x : τ ⊢ h : m₁ ≡ m₂
+    /// -------------------------------------------------------
+    /// Γ ⊢ congr_abs x τ h : (λ (x : τ), m₁) ≡ (λ (x : τ), m₂)
     /// ```
     CongrAbs(Arc<(Name, Type, Path)>),
     /// ```text
     ///
-    /// --------------------------------------------------------------
-    /// beta_reduce ((λ x, m₁) m₂) : [Γ ⊢ (λ x, m₁) m₂ ≡ [m₂/x]m₁ : τ]
+    /// --------------------------------------------------------
+    /// Γ ⊢ beta_reduce ((λ x, m₁) m₂) : (λ x, m₁) m₂ ≡ [m₂/x]m₁
     /// ```
     Beta(Term),
     /// ```text
     ///
-    /// -------------------------------------------------------------------------------- (c.{u₁ ⋯ uₙ} : τ :≡ m)
-    /// delta_reduce c.{t₁ ⋯ tₙ} : [Γ ⊢ c.{t₁ ⋯ tₙ} ≡ [t₁/u₁ ⋯ tₙ/uₙ]m : [t₁/u₁ ⋯ tₙ/uₙ]τ]
+    /// ------------------------------------------------------------ (c.{u₁ ⋯ uₙ} : τ :≡ m)
+    /// Γ ⊢ delta_reduce c.{t₁ ⋯ tₙ} : c.{t₁ ⋯ tₙ} ≡ [t₁/u₁ ⋯ tₙ/uₙ]m
     /// ```
     Delta(Arc<(Name, Vec<Type>)>),
 }
@@ -816,11 +822,10 @@ impl Env {
     pub fn infer_conv(&self, local_env: &mut LocalEnv, path: &mut Path) -> anyhow::Result<Conv> {
         match path {
             Path::Refl(m) => {
-                let ty = self.infer_type(local_env, m)?;
+                self.infer_type(local_env, m)?;
                 Ok(Conv {
                     left: m.clone(),
                     right: m.clone(),
-                    ty,
                 })
             }
             Path::Symm(inner) => {
@@ -829,23 +834,19 @@ impl Env {
                 Ok(Conv {
                     left: h.right,
                     right: h.left,
-                    ty: h.ty,
                 })
             }
             Path::Trans(inner) => {
                 let inner = Arc::make_mut(inner);
                 let h1 = self.infer_conv(local_env, &mut inner.0)?;
                 let h2 = self.infer_conv(local_env, &mut inner.1)?;
-                if h1.ty != h2.ty {
-                    bail!("types mismatch");
-                }
                 if h1.right != h2.left {
                     bail!("transitivity mismatch");
                 }
+                // h1.right == h2.left means the types in the both sides match.
                 Ok(Conv {
                     left: h1.left,
                     right: h2.right,
-                    ty: h1.ty,
                 })
             }
             Path::CongrApp(inner) => {
@@ -856,11 +857,10 @@ impl Env {
                 m1.apply([h2.left]);
                 let mut m2 = h1.right;
                 m2.apply([h2.right]);
-                let ty = self.infer_type(local_env, &mut m1)?;
+                self.infer_type(local_env, &mut m1)?;
                 Ok(Conv {
                     left: m1,
                     right: m2,
-                    ty,
                 })
             }
             Path::CongrAbs(inner) => {
@@ -873,15 +873,13 @@ impl Env {
                 let mut m2 = h.right;
                 m1.abs(x, t.clone(), x);
                 m2.abs(x, t.clone(), x);
-                let ty = mk_type_arrow(t, h.ty);
                 Ok(Conv {
                     left: m1,
                     right: m2,
-                    ty,
                 })
             }
             Path::Beta(m) => {
-                let ty = self.infer_type(local_env, m)?;
+                self.infer_type(local_env, m)?;
                 let m = m.clone();
                 let Term::App(mut inner) = m.clone() else {
                     bail!("not a beta redex");
@@ -893,11 +891,7 @@ impl Env {
                 };
                 let mut n = mem::take(&mut Arc::make_mut(inner).body);
                 n.open(arg);
-                Ok(Conv {
-                    left: m,
-                    right: n,
-                    ty,
-                })
+                Ok(Conv { left: m, right: n })
             }
             Path::Delta(inner) => {
                 let (name, ty_args) = Arc::make_mut(inner);
@@ -907,7 +901,7 @@ impl Env {
                 let Def {
                     local_types,
                     mut target,
-                    mut ty,
+                    ty: _,
                     hint: _,
                 } = def;
                 if local_types.len() != ty_args.len() {
@@ -919,12 +913,10 @@ impl Env {
                     subst.push((x, t));
                 }
                 target.instantiate(&subst);
-                ty.subst(&subst);
                 let c = mk_const(*name, ty_args.clone());
                 Ok(Conv {
                     left: c,
                     right: target,
-                    ty,
                 })
             }
         }
@@ -1122,8 +1114,11 @@ impl Env {
     }
 
     pub fn prove_conv(&self, local_env: &mut LocalEnv, conv: &mut Conv) -> anyhow::Result<Path> {
-        self.check_type(local_env, &mut conv.left, &mut conv.ty)?;
-        self.check_type(local_env, &mut conv.right, &mut conv.ty)?;
+        let ty1 = self.infer_type(local_env, &mut conv.left)?;
+        let ty2 = self.infer_type(local_env, &mut conv.right)?;
+        if ty1 != ty2 {
+            bail!("types mismatch");
+        }
         let mut m1 = conv.left.clone();
         let mut m2 = conv.right.clone();
         let Some(h) = self.equiv(&mut m1, &mut m2) else {

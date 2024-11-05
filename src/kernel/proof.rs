@@ -54,9 +54,9 @@ pub enum Proof {
     /// ```
     ForallElim(Box<(Term, Proof)>),
     /// ```text
-    /// h1 : [Γ ⊢ φ ≡ ψ : Prop]  h2 : [Γ | Φ ⊢ φ]
-    /// -----------------------------------------
-    /// conv ψ h : [Γ | Φ ⊢ ψ]
+    /// h₁ : [Γ ⊢ φ ≡ ψ]  h₂ : [Γ | Φ ⊢ φ]
+    /// -----------------------------------
+    /// conv h₁ h₂ : [Γ | Φ ⊢ ψ]
     /// ```
     Conv(Box<(Path, Proof)>),
     /// ```text
@@ -243,9 +243,6 @@ impl Env {
             Proof::Conv(inner) => {
                 let (mut h1, h2) = *inner;
                 let h1 = self.tt_env.infer_conv(local_env, &mut h1)?;
-                if h1.ty != mk_type_prop() {
-                    bail!("not a definitional equality between propositions");
-                }
                 self.check_prop(local_env, context, h2, &Prop { target: h1.left })?;
                 Ok(Prop { target: h1.right })
             }
