@@ -10,7 +10,7 @@ use crate::{
         tt::{Def, LocalEnv},
     },
     lex::Lex,
-    parse::{Context, Parser, TokenTable},
+    parse::{Nasmespace, Parser, TokenTable},
     print::OpTable,
 };
 
@@ -18,7 +18,7 @@ use crate::{
 pub struct State {
     proof_env: proof::Env,
     tt: TokenTable,
-    ctx: Context,
+    ns: Nasmespace,
     pp: OpTable,
 }
 
@@ -26,17 +26,17 @@ impl State {
     pub fn new() -> State {
         let proof_env = proof::Env::new_kernel();
 
-        let mut ctx = Context::default();
+        let mut ns = Nasmespace::default();
         for &x in proof_env.tt_env.type_consts.keys() {
-            ctx.type_consts.insert(x);
+            ns.type_consts.insert(x);
         }
         for (&x, (local_types, _)) in &proof_env.tt_env.consts {
-            ctx.consts.insert(x, local_types.len());
+            ns.consts.insert(x, local_types.len());
         }
 
         State {
             proof_env,
-            ctx,
+            ns,
             tt: Default::default(),
             pp: Default::default(),
         }
@@ -44,7 +44,7 @@ impl State {
 
     fn parse_cmd(&self, input: &str) -> anyhow::Result<Cmd> {
         let mut lex = Lex::new(input);
-        let mut parser = Parser::new(&mut lex, &self.tt, &self.ctx);
+        let mut parser = Parser::new(&mut lex, &self.tt, &self.ns);
         let cmd = parser.cmd()?;
         parser.eof()?;
         Ok(cmd)
@@ -138,7 +138,7 @@ impl State {
                 if self.proof_env.tt_env.consts.contains_key(&name) {
                     bail!("already defined");
                 }
-                self.ctx.consts.insert(name, local_env.local_types.len());
+                self.ns.consts.insert(name, local_env.local_types.len());
                 self.proof_env
                     .tt_env
                     .consts

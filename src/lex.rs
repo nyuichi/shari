@@ -201,7 +201,7 @@ impl<'a> Iterator for Lex<'a> {
                 ),
                 (
                     Kind::Symbol,
-                    r"[(){}⟨⟩⟪⟫,]|\.\{|\$\{|[\p{Symbol}\p{Punctuation}&&[^(){}⟨⟩⟪⟫,]]+",
+                    r"[(){}⟨⟩⟪⟫,]|\.\{|\$\{|[\p{Symbol}\p{Punctuation}&&[^(){}⟨⟩⟪⟫,.]]+",
                 ),
                 (Kind::NumLit, r"0|[1-9][0-9]*"),
             ]

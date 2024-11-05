@@ -61,7 +61,6 @@ enum Nud {
     Uexists,
     Paren,
     Bracket,
-    Hole,
     User(Operator),
     NumLit,
 }
@@ -99,7 +98,6 @@ impl TokenTable {
                     "∀" => Some(Nud::Forall),
                     "∃" => Some(Nud::Exists),
                     "∃!" => Some(Nud::Uexists),
-                    "${" => Some(Nud::Hole),
                     _ => self.nud.get(token.as_str()).map(|op| Nud::User(op.clone())),
                 }
             }
@@ -125,30 +123,31 @@ pub enum ParseError {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct Context {
+pub struct Nasmespace {
     pub type_consts: HashSet<Name>,
     // mapping name to type arity
     pub consts: HashMap<Name, usize>,
+    pub type_locals: Vec<Name>,
+    // mapping name to type arity
+    pub locals: Vec<Name>,
 }
 
 pub struct Parser<'a, 'b> {
     lex: &'b mut Lex<'a>,
     tt: &'b TokenTable,
-    ctx: &'b Context,
+    ns: &'b Nasmespace,
+    type_locals: Vec<Name>,
     locals: Vec<Name>,
-    pub holes: Vec<Name>,
-    pub type_holes: Vec<Name>,
 }
 
 impl<'a, 'b> Parser<'a, 'b> {
-    pub fn new(lex: &'b mut Lex<'a>, tt: &'b TokenTable, ctx: &'b Context) -> Self {
+    pub fn new(lex: &'b mut Lex<'a>, tt: &'b TokenTable, ns: &'b Nasmespace) -> Self {
         Self {
             lex,
             tt,
-            ctx,
+            ns,
+            type_locals: vec![],
             locals: vec![],
-            holes: vec![],
-            type_holes: vec![],
         }
     }
 
@@ -274,27 +273,21 @@ impl<'a, 'b> Parser<'a, 'b> {
             .map(|token| Name::try_from(token.as_str()).expect("logic flaw"))
     }
 
-    fn type_hole(&mut self, token: Token<'a>) -> Result<Type, ParseError> {
-        self.expect_symbol("}")?;
-        let name = Name::fresh();
-        self.type_holes.push(name);
-        Ok(mk_type_local(name))
-    }
-
     fn type_primary(&mut self) -> Result<Type, ParseError> {
         let token = self.any_token()?;
         if token.is_ident() {
             let name: Name = token.as_str().try_into().expect("logic flaw");
-            match self.ctx.type_consts.get(&name) {
-                Some(_) => Ok(mk_type_const(name)),
-                None => Ok(mk_type_local(name)),
+            if self.type_locals.iter().any(|x| x == &name) || self.ns.type_locals.contains(&name) {
+                Ok(mk_type_local(name))
+            } else if self.ns.type_consts.contains(&name) {
+                Ok(mk_type_const(name))
+            } else {
+                Self::fail(token, "unknown type variable")
             }
         } else if token.is_symbol() && token.as_str() == "(" {
             let t = self.ty()?;
             self.expect_symbol(")")?;
             Ok(t)
-        } else if token.is_symbol() && token.as_str() == "${" {
-            self.type_hole(token)
         } else {
             Self::fail(token, "expected a primary type expression")
         }
@@ -396,7 +389,7 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     fn mk_const_unchecked(&self, name: &str) -> Term {
         let ty_arity = self
-            .ctx
+            .ns
             .consts
             .get(&name.try_into().unwrap())
             .copied()
@@ -448,8 +441,13 @@ impl<'a, 'b> Parser<'a, 'b> {
                 return Ok(mk_local(name));
             }
         }
-        let Some(ty_arity) = self.ctx.consts.get(&name).copied() else {
-            return Ok(mk_local(name));
+        for x in self.ns.locals.iter() {
+            if x == &name {
+                return Ok(mk_local(name));
+            }
+        }
+        let Some(ty_arity) = self.ns.consts.get(&name).copied() else {
+            return Self::fail(token, "unknown variable");
         };
         let mut ty_args = vec![];
         if let Some(_token) = self.expect_symbol_opt(".{") {
@@ -468,13 +466,6 @@ impl<'a, 'b> Parser<'a, 'b> {
             }
         }
         Ok(mk_const(name, ty_args))
-    }
-
-    fn term_hole(&mut self, token: Token<'a>) -> Result<Term, ParseError> {
-        self.expect_symbol("}")?;
-        let name = Name::fresh();
-        self.holes.push(name);
-        Ok(mk_local(name))
     }
 
     fn subterm(&mut self, rbp: usize) -> Result<Term, ParseError> {
@@ -522,7 +513,6 @@ impl<'a, 'b> Parser<'a, 'b> {
             Nud::Forall => self.term_binder(token, "forall")?,
             Nud::Exists => self.term_binder(token, "exists")?,
             Nud::Uexists => self.term_binder(token, "uexists")?,
-            Nud::Hole => self.term_hole(token)?,
             Nud::User(op) => match op.fixity {
                 Fixity::Nofix => self.term_var(token, Some(op.entity))?,
                 Fixity::Prefix => {
@@ -899,6 +889,9 @@ impl<'a, 'b> Parser<'a, 'b> {
                 self.expect_symbol("}")?;
             }
         }
+        for ty in &local_types {
+            self.type_locals.push(*ty);
+        }
         let mut params = vec![];
         while let Some(token) = self.expect_symbol_opt("(") {
             let (names, t) = self.parameter(token)?;
@@ -906,10 +899,16 @@ impl<'a, 'b> Parser<'a, 'b> {
                 params.push((name, t.clone()));
             }
         }
+        for (x, _) in &params {
+            self.locals.push(*x);
+        }
         self.expect_symbol(":")?;
         let mut t = self.ty()?;
         self.expect_symbol(":=")?;
         let mut m = self.term()?;
+        // Parsing finished. We can now safaly tear off.
+        self.locals.truncate(params.len());
+        self.type_locals.truncate(local_types.len());
         for (var, ty) in params.into_iter().rev() {
             m.abs(var, ty.clone(), var);
             t = mk_type_arrow(ty, t);
@@ -943,6 +942,9 @@ impl<'a, 'b> Parser<'a, 'b> {
                 self.expect_symbol("}")?;
             }
         }
+        for ty in &local_types {
+            self.type_locals.push(*ty);
+        }
         let mut params = vec![];
         while let Some(token) = self.expect_symbol_opt("(") {
             let (names, t) = self.parameter(token)?;
@@ -950,8 +952,14 @@ impl<'a, 'b> Parser<'a, 'b> {
                 params.push((name, t.clone()));
             }
         }
+        for (x, _) in &params {
+            self.locals.push(*x);
+        }
         self.expect_symbol(":")?;
         let mut m = self.term()?;
+        // Parsing finished. We can now safaly tear off.
+        self.locals.truncate(params.len());
+        self.type_locals.truncate(local_types.len());
         for (var, ty) in params.into_iter().rev() {
             m.abs(var, ty.clone(), var);
             m = mk_app(self.mk_const_unchecked("forall"), m);
@@ -1017,117 +1025,63 @@ impl<'a, 'b> Parser<'a, 'b> {
     // }
 }
 
-// #[test]
-// fn test_parse() {
-//     use crate::env::{DeclConst, TermDecl};
-//     use crate::kernel::proof::mk_type_prop;
+#[test]
+fn parse_term() {
+    let mut tt = TokenTable::default();
 
-//     let ops = [
-//         Operator {
-//             symbol: "⊤".to_owned(),
-//             fixity: Fixity::Nofix,
-//             prec: usize::MAX,
-//             entity: "top".try_into().unwrap(),
-//         },
-//         Operator {
-//             symbol: "∧".to_owned(),
-//             fixity: Fixity::Infixr,
-//             prec: 35,
-//             entity: "and".try_into().unwrap(),
-//         },
-//         Operator {
-//             symbol: "¬".to_owned(),
-//             fixity: Fixity::Prefix,
-//             prec: 40,
-//             entity: "not".try_into().unwrap(),
-//         },
-//     ];
+    let ops = [
+        Operator {
+            symbol: "=".to_owned(),
+            fixity: Fixity::Infix,
+            prec: 50,
+            entity: "eq".try_into().unwrap(),
+        },
+        Operator {
+            symbol: "⊤".to_owned(),
+            fixity: Fixity::Nofix,
+            prec: usize::MAX,
+            entity: "top".try_into().unwrap(),
+        },
+        Operator {
+            symbol: "∧".to_owned(),
+            fixity: Fixity::Infixr,
+            prec: 35,
+            entity: "and".try_into().unwrap(),
+        },
+        Operator {
+            symbol: "¬".to_owned(),
+            fixity: Fixity::Prefix,
+            prec: 40,
+            entity: "not".try_into().unwrap(),
+        },
+    ];
+    for op in ops {
+        tt.add(op).unwrap();
+    }
 
-//     let mut env = Env::new_kernel();
-//     for op in ops {
-//         env.add_notation(op).unwrap();
-//     }
+    let mut ns = Nasmespace::default();
+    ns.type_consts.insert("Prop".try_into().unwrap());
+    ns.consts.insert("eq".try_into().unwrap(), 1);
+    ns.consts.insert("top".try_into().unwrap(), 0);
+    ns.consts.insert("and".try_into().unwrap(), 0);
+    ns.consts.insert("not".try_into().unwrap(), 0);
+    ns.type_locals.push("α".try_into().unwrap());
+    ns.type_locals.push("u".try_into().unwrap());
+    ns.type_locals.push("v".try_into().unwrap());
 
-//     env.add_term_decl(
-//         "top".try_into().unwrap(),
-//         TermDecl::Const(DeclConst {
-//             local_types: vec![],
-//             ty: mk_type_prop(),
-//         }),
-//     )
-//     .unwrap();
+    let parse = |input: &str| -> Term {
+        let mut lex = Lex::new(input);
+        let mut parser = Parser::new(&mut lex, &tt, &ns);
+        let m = parser.term().unwrap();
+        parser.eof().unwrap();
+        m
+    };
 
-//     env.add_term_decl(
-//         "not".try_into().unwrap(),
-//         TermDecl::Const(DeclConst {
-//             local_types: vec![],
-//             ty: mk_type_arrow(mk_type_prop(), mk_type_prop()),
-//         }),
-//     )
-//     .unwrap();
-
-//     env.add_term_decl(
-//         "and".try_into().unwrap(),
-//         TermDecl::Const(DeclConst {
-//             local_types: vec![],
-//             ty: mk_type_arrow(
-//                 mk_type_prop(),
-//                 mk_type_arrow(mk_type_prop(), mk_type_prop()),
-//             ),
-//         }),
-//     )
-//     .unwrap();
-
-//     struct Display<'a> {
-//         env: &'a Env,
-//         m: Term,
-//     }
-
-//     impl<'a> std::fmt::Display for Display<'a> {
-//         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//             Printer::new(self.env).fmt_term(&self.m, f)
-//         }
-//     }
-
-//     let roundtrip = |s: &str| -> String {
-//         let mut lex = Lex::new(s);
-//         let mut parser = Parser::new(&mut lex, &env, false);
-//         let m = parser.term().unwrap();
-//         parser.eof().unwrap();
-//         Display { env: &env, m }.to_string()
-//     };
-
-//     insta::assert_snapshot!(roundtrip("λ (x : α), x"), @"λ (x : α), x");
-//     insta::assert_snapshot!(roundtrip("λ (p q r : Prop), p q r"), @"λ (p : Prop), λ (q : Prop), λ (r : Prop), p q r");
-//     insta::assert_snapshot!(roundtrip("λ (φ ψ : Prop), (λ (f : Prop → Prop → Prop), f φ ψ) = (λ (f : Prop → Prop → Prop), f ⊤ ⊤)"), @"λ (φ : Prop), λ (ψ : Prop), (λ (f : Prop → Prop → Prop), f φ ψ) = λ (f : Prop → Prop → Prop), f ⊤ ⊤");
-//     insta::assert_snapshot!(roundtrip("λ (p q : Prop), p = (p ∧ q)"), @"λ (p : Prop), λ (q : Prop), p = (p ∧ q)");
-//     insta::assert_snapshot!(roundtrip("λ (a b : Prop), (¬a) = b"), @"λ (a : Prop), λ (b : Prop), (¬a) = b");
-//     insta::assert_snapshot!(roundtrip("λ (a b : Prop), ¬a = b"), @"λ (a : Prop), λ (b : Prop), ¬a = b");
-//     insta::assert_snapshot!(roundtrip("λ (x : w), eq.{u → v} x"), @"λ (x : w), eq.{u → v} x");
-// }
-
-// impl FromStr for Type {
-//     type Err = ParseError;
-
-//     fn from_str(s: &str) -> Result<Self, Self::Err> {
-//         let mut lex = Lex::new(s);
-//         let env = Env::get();
-//         let mut parser = Parser::new(&mut lex, &env, false);
-//         let ty = parser.ty()?;
-//         parser.eof()?;
-//         Ok(ty)
-//     }
-// }
-
-// impl FromStr for Term {
-//     type Err = ParseError;
-
-//     fn from_str(s: &str) -> Result<Self, Self::Err> {
-//         let mut lex = Lex::new(s);
-//         let env = Env::get();
-//         let mut parser = Parser::new(&mut lex, &env, false);
-//         let m = parser.term()?;
-//         parser.eof()?;
-//         Ok(m)
-//     }
-// }
+    insta::assert_snapshot!(parse("λ (x : α), x"), @"(lam (local α) (var 0))");
+    insta::assert_snapshot!(parse("λ (p q r : Prop), p q r"), @"(lam Prop (lam Prop (lam Prop (((var 2) (var 1)) (var 0)))))");
+    insta::assert_snapshot!(parse("λ (φ ψ : Prop), eq.{α} (λ (f : Prop → Prop → Prop), f φ ψ) (λ (f : Prop → Prop → Prop), f ⊤ ⊤)"), @"(lam Prop (lam Prop ((eq.{(local α)} (lam (Prop → (Prop → Prop)) (((var 0) (var 2)) (var 1)))) (lam (Prop → (Prop → Prop)) (((var 0) top) top)))))");
+    insta::assert_snapshot!(parse("λ (p q : Prop), p =.{Prop} (p ∧ q)"), @"(lam Prop (lam Prop ((eq.{Prop} (var 1)) ((and (var 1)) (var 0)))))");
+    insta::assert_snapshot!(parse("λ (a b : Prop), (¬a) =.{Prop} b"), @"(lam Prop (lam Prop ((eq.{Prop} (not (var 1))) (var 0))))");
+    insta::assert_snapshot!(parse("λ (a b : Prop), ¬a =.{Prop} b"), @"(lam Prop (lam Prop (not ((eq.{Prop} (var 1)) (var 0)))))");
+    insta::assert_snapshot!(parse("λ (x : α), eq.{u → v} x"), @"(lam (local α) (eq.{((local u) → (local v))} (var 0)))");
+}

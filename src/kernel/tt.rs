@@ -142,7 +142,7 @@ impl Display for Type {
                 write!(f, "({} {})", inner.fun, inner.arg)
             }
             Type::Local(inner) => {
-                write!(f, "{inner}")
+                write!(f, "(local {inner})")
             }
             Type::Mvar(inner) => {
                 write!(f, "?{inner}")
