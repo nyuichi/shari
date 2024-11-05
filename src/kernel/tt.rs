@@ -617,34 +617,34 @@ impl std::fmt::Display for Conv {
 pub enum Path {
     /// ```text
     ///
-    /// -------------------------------
-    /// reflexivity m : [Γ ⊢ m ≡ m : τ]
+    /// ------------------------
+    /// refl m : [Γ ⊢ m ≡ m : τ]
     /// ```
     Refl(Term),
     /// ```text
     /// h : [Γ ⊢ m₁ ≡ m₂ : τ]
-    /// ------------------------------
-    /// symmetry h : [Γ ⊢ m₂ ≡ m₁ : τ]
+    /// --------------------------
+    /// symm h : [Γ ⊢ m₂ ≡ m₁ : τ]
     /// ```
-    Symm(Box<Path>),
+    Symm(Arc<Path>),
     /// ```text
     /// h₁ : [Γ ⊢ m₁ ≡ m₂ : τ]  h₂ : [Γ ⊢ m₂ ≡ m₃ : τ]
     /// ----------------------------------------------
-    /// transitivity h₁ h₂ : [Γ ⊢ m₁ ≡ m₃ : τ]
+    /// trans h₁ h₂ : [Γ ⊢ m₁ ≡ m₃ : τ]
     /// ```
-    Trans(Box<(Path, Path)>),
+    Trans(Arc<(Path, Path)>),
     /// ```text
     /// h₁ : [Γ ⊢ f₁ ≡ f₂ : τ → σ]  h₂ : [Γ ⊢ a₁ ≡ a₂ : τ]
     /// --------------------------------------------------
     /// congr_app h₁ h₂ : [Γ ⊢ f₁ a₁ ≡ f₂ a₂ : σ]
     /// ```
-    CongrApp(Box<(Path, Path)>),
+    CongrApp(Arc<(Path, Path)>),
     /// ```text
     /// h : [Γ, x : τ ⊢ m₁ ≡ m₂ : σ]
     /// -----------------------------------------------------------------
     /// congr_abs x τ h : [Γ ⊢ (λ (x : τ), m₁) ≡ (λ (x : τ), m₂) : τ → σ]
     /// ```
-    CongrAbs(Box<(Name, Type, Path)>),
+    CongrAbs(Arc<(Name, Type, Path)>),
     /// ```text
     ///
     /// --------------------------------------------------------------
@@ -656,7 +656,7 @@ pub enum Path {
     /// -------------------------------------------------------------------------------- (c.{u₁ ⋯ uₙ} : τ :≡ m)
     /// delta_reduce c.{t₁ ⋯ tₙ} : [Γ ⊢ c.{t₁ ⋯ tₙ} ≡ [t₁/u₁ ⋯ tₙ/uₙ]m : [t₁/u₁ ⋯ tₙ/uₙ]τ]
     /// ```
-    Delta(Name, Vec<Type>),
+    Delta(Arc<(Name, Vec<Type>)>),
 }
 
 impl Display for Path {
@@ -668,10 +668,10 @@ impl Display for Path {
             Path::CongrApp(inner) => write!(f, "(congr_app {} {})", inner.0, inner.1),
             Path::CongrAbs(inner) => write!(f, "congr_abs {} {} {})", inner.0, inner.1, inner.2),
             Path::Beta(m) => write!(f, "(beta {m})"),
-            Path::Delta(x, ty_args) => {
-                write!(f, "{x}")?;
-                if !ty_args.is_empty() {
-                    let mut iter = ty_args.iter();
+            Path::Delta(inner) => {
+                write!(f, "{}", inner.0)?;
+                if !inner.1.is_empty() {
+                    let mut iter = inner.1.iter();
                     write!(f, ".{{{}", iter.next().unwrap())?;
                     for ty in iter {
                         write!(f, ", {}", ty)?;
@@ -689,19 +689,19 @@ pub fn mk_path_refl(m: Term) -> Path {
 }
 
 pub fn mk_path_symm(h: Path) -> Path {
-    Path::Symm(Box::new(h))
+    Path::Symm(Arc::new(h))
 }
 
 pub fn mk_path_trans(h1: Path, h2: Path) -> Path {
-    Path::Trans(Box::new((h1, h2)))
+    Path::Trans(Arc::new((h1, h2)))
 }
 
 pub fn mk_path_congr_app(h1: Path, h2: Path) -> Path {
-    Path::CongrApp(Box::new((h1, h2)))
+    Path::CongrApp(Arc::new((h1, h2)))
 }
 
 pub fn mk_path_congr_abs(name: Name, t: Type, h: Path) -> Path {
-    Path::CongrAbs(Box::new((name, t, h)))
+    Path::CongrAbs(Arc::new((name, t, h)))
 }
 
 pub fn mk_path_beta(m: Term) -> Path {
@@ -709,7 +709,7 @@ pub fn mk_path_beta(m: Term) -> Path {
 }
 
 pub fn mk_path_delta(name: Name, ty_args: Vec<Type>) -> Path {
-    Path::Delta(name, ty_args)
+    Path::Delta(Arc::new((name, ty_args)))
 }
 
 impl Path {
@@ -813,18 +813,19 @@ impl Env {
         Ok(())
     }
 
-    pub fn infer_conv(&self, local_env: &mut LocalEnv, proof: Path) -> anyhow::Result<Conv> {
-        match proof {
-            Path::Refl(mut m) => {
-                let ty = self.infer_type(local_env, &mut m)?;
+    pub fn infer_conv(&self, local_env: &mut LocalEnv, path: &mut Path) -> anyhow::Result<Conv> {
+        match path {
+            Path::Refl(m) => {
+                let ty = self.infer_type(local_env, m)?;
                 Ok(Conv {
                     left: m.clone(),
-                    right: m,
+                    right: m.clone(),
                     ty,
                 })
             }
             Path::Symm(inner) => {
-                let h = self.infer_conv(local_env, *inner)?;
+                let inner = Arc::make_mut(inner);
+                let h = self.infer_conv(local_env, inner)?;
                 Ok(Conv {
                     left: h.right,
                     right: h.left,
@@ -832,9 +833,9 @@ impl Env {
                 })
             }
             Path::Trans(inner) => {
-                let (h1, h2) = *inner;
-                let h1 = self.infer_conv(local_env, h1)?;
-                let h2 = self.infer_conv(local_env, h2)?;
+                let inner = Arc::make_mut(inner);
+                let h1 = self.infer_conv(local_env, &mut inner.0)?;
+                let h2 = self.infer_conv(local_env, &mut inner.1)?;
                 if h1.ty != h2.ty {
                     bail!("types mismatch");
                 }
@@ -848,9 +849,9 @@ impl Env {
                 })
             }
             Path::CongrApp(inner) => {
-                let (h1, h2) = *inner;
-                let h1 = self.infer_conv(local_env, h1)?;
-                let h2 = self.infer_conv(local_env, h2)?;
+                let inner = Arc::make_mut(inner);
+                let h1 = self.infer_conv(local_env, &mut inner.0)?;
+                let h2 = self.infer_conv(local_env, &mut inner.1)?;
                 let mut m1 = h1.left;
                 m1.apply([h2.left]);
                 let mut m2 = h1.right;
@@ -863,7 +864,8 @@ impl Env {
                 })
             }
             Path::CongrAbs(inner) => {
-                let (x, t, h) = *inner;
+                let inner = Arc::make_mut(inner);
+                let (x, t, h) = (inner.0, inner.1.clone(), &mut inner.2);
                 local_env.locals.push((x, t));
                 let h = self.infer_conv(local_env, h)?;
                 let (x, t) = local_env.locals.pop().unwrap();
@@ -878,16 +880,18 @@ impl Env {
                     ty,
                 })
             }
-            Path::Beta(mut m) => {
-                let ty = self.infer_type(local_env, &mut m)?;
-                let Term::App(inner) = &m else {
+            Path::Beta(m) => {
+                let ty = self.infer_type(local_env, m)?;
+                let m = m.clone();
+                let Term::App(mut inner) = m.clone() else {
                     bail!("not a beta redex");
                 };
+                let inner = Arc::make_mut(&mut inner);
                 let arg = &inner.arg;
-                let Term::Abs(inner) = &inner.fun else {
+                let Term::Abs(inner) = &mut inner.fun else {
                     bail!("not a beta redex");
                 };
-                let mut n = inner.body.clone();
+                let mut n = mem::take(&mut Arc::make_mut(inner).body);
                 n.open(arg);
                 Ok(Conv {
                     left: m,
@@ -895,7 +899,8 @@ impl Env {
                     ty,
                 })
             }
-            Path::Delta(name, ty_args) => {
+            Path::Delta(inner) => {
+                let (name, ty_args) = Arc::make_mut(inner);
                 let Some(def) = self.defs.get(&name).cloned() else {
                     bail!("definition not found: {name}");
                 };
@@ -909,13 +914,13 @@ impl Env {
                     bail!("number of type arguments mismatch");
                 }
                 let mut subst = vec![];
-                for (&x, t) in std::iter::zip(&local_types, &ty_args) {
+                for (&x, t) in std::iter::zip(&local_types, ty_args.iter()) {
                     self.check_kind(local_env, t, &Kind::base())?;
                     subst.push((x, t));
                 }
                 target.instantiate(&subst);
                 ty.subst(&subst);
-                let c = mk_const(name, ty_args);
+                let c = mk_const(*name, ty_args.clone());
                 Ok(Conv {
                     left: c,
                     right: target,

@@ -241,8 +241,8 @@ impl Env {
                 Ok(Prop { target })
             }
             Proof::Conv(inner) => {
-                let (h1, h2) = *inner;
-                let h1 = self.tt_env.infer_conv(local_env, h1)?;
+                let (mut h1, h2) = *inner;
+                let h1 = self.tt_env.infer_conv(local_env, &mut h1)?;
                 if h1.ty != mk_type_prop() {
                     bail!("not a definitional equality between propositions");
                 }
