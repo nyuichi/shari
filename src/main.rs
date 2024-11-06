@@ -49,8 +49,20 @@ fn main() -> anyhow::Result<()> {
     state.run("axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) ⇒ ∃! f, ∀ x, R x (f x)")?;
 
     state.run("lemma tautology : ∀ φ, φ ⇒ φ := forall_intro (φ : Prop), imp_intro φ, assump φ")?;
-    state.run("lemma top.intro : ⊤ := conv (sorry (∀ φ, φ ⇒ φ) ⊤) tautology")?;
+    state.run("lemma top.intro : ⊤ := conv (sorry (∀ φ, φ ⇒ φ) ⊤), tautology")?;
+    state.run("lemma eq.refl.{u} (m : u) : m = m := conv (sorry (∀ P, P m ⇒ P m) (m = m)), (forall_intro (P : u → Prop), (forall_elim (P m), tautology))")?;
+    state.run("lemma eq.symm.{u} (m₁ m₂ : u) : m₁ = m₂ ⇒ m₂ = m₁ := imp_intro (m₁ = m₂), imp_elim (conv (sorry ((λ m, m = m₁) m₁ ⇒ (λ m, m = m₁) m₂) (m₁ = m₁ ⇒ m₂ = m₁)), forall_elim (λ m, m = m₁), conv (sorry (m₁ = m₂) (∀ P, P m₁ ⇒ P m₂)), assump (m₁ = m₂)) (forall_elim m₁, eq.refl.{u})")?;
+    state.run("lemma eq.trans.{u} (m₁ m₂ m₃ : u) : m₁ = m₂ ⇒ m₂ = m₃ ⇒ m₁ = m₃ := imp_intro (m₁ = m₂), imp_intro (m₂ = m₃), imp_elim (conv (sorry ((λ m, m₁ = m) m₂ ⇒ (λ m, m₁ = m) m₃) (m₁ = m₂ ⇒ m₁ = m₃)), forall_elim (λ m, m₁ = m), conv (sorry (m₂ = m₃) (∀ P, P m₂ ⇒ P m₃)), assump (m₂ = m₃)) (assump (m₁ = m₂))")?;
+    state.run("lemma and.intro (φ ψ : Prop) : φ ⇒ ψ ⇒ φ ∧ ψ := imp_intro φ, imp_intro ψ, conv (sorry (∀ ξ, (φ ⇒ ψ ⇒ ξ) ⇒ ξ) (φ ∧ ψ)), forall_intro (ξ : Prop), imp_intro (φ ⇒ ψ ⇒ ξ), imp_elim (imp_elim (assump (φ ⇒ ψ ⇒ ξ)) (assump φ)) (assump ψ)")?;
 
+    state.run("lemma mp (φ ψ : Prop) : φ ⇒ (φ ⇒ ψ) ⇒ ψ := imp_intro φ, imp_intro (φ ⇒ ψ), imp_elim (assump (φ ⇒ ψ)) (assump φ)")?;
+    state.run("lemma imp.trans (φ ψ ξ : Prop) : (φ ⇒ ψ) ⇒ (ψ ⇒ ξ) ⇒ φ ⇒ ξ := imp_intro (φ ⇒ ψ), imp_intro (ψ ⇒ ξ), imp_intro φ, imp_elim (assump (ψ ⇒ ξ)) (imp_elim (assump (φ ⇒ ψ)) (assump φ))")?;
+
+    state.run("lemma mt (φ ψ : Prop) : (φ ⇒ ψ) ⇒ (¬ψ ⇒ ¬φ) := conv (sorry ((φ ⇒ ψ) ⇒ (ψ ⇒ ⊥) ⇒ φ ⇒ ⊥) ((φ ⇒ ψ) ⇒ (¬ψ ⇒ ¬φ))), forall_elim φ ψ ⊥, imp.trans")?;
+    state.run("lemma contradiction (φ : Prop) : φ ⇒ ¬φ ⇒ ⊥ := conv (sorry (φ ⇒ (φ ⇒ ⊥) ⇒ ⊥) (φ ⇒ ¬φ ⇒ ⊥)), forall_elim φ ⊥, mp")?;
+    state.run("lemma absurd (φ : Prop) : ⊥ ⇒ φ := imp_intro ⊥, forall_elim φ, conv (sorry ⊥ (∀ ξ, ξ)), assump ⊥")?;
+
+    // and.intro : Proof φ → Proof ψ → Proof (φ ∧ ψ)
     // state.run(
     //     "meta def and.intro := λ h₁ h₂, {
     //         let φ := target h₁,
@@ -110,13 +122,6 @@ fn main() -> anyhow::Result<()> {
     //         })
     //     }",
     // )?;
-
-    // state.run("lemma tautology (φ : Prop) : φ → φ := imp_intro φ, (assump φ)")?;
-
-    // println!("hoge");
-    // state.run("lemma eq.refl.{u} (m : u) : m = m := conv (symm (trans (trans (congr_app (congr_app (delta eq.{u}), refl m), refl m), (beta (λ x y, ∀ P, P x → P y) m m)), (beta (λ y, ∀ P, P m → P y) m))), (forall_intro (P : u → Prop), (forall_elim (P m), tautology))")?;
-    // state.run("lemma eq.def.{u} : eq.{u} = (λ x y, ∀ P, P x → P y) := ")?;
-    // state.run("lemma eq.refl.{u} (m : u) : m = m := conv (symm (beta (beta (congr_app (congr_app (delta eq.{u}) , refl m), refl m)))), (forall_intro (P : u → Prop), (forall_elim (P m), tautology))")?;
 
     //    state.run("lemma eta.{u, v} (f : u → v) : f = (λ x, f x) := imp_elim (forall_elim (λ x, f x), (forall_elim f, fun_ext.{u, v})), (conv )")?;
 

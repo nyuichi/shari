@@ -38,7 +38,7 @@ pub enum Proof {
     /// ```text
     /// Γ | Φ ⊢ h₁ : φ → ψ    Γ | Φ ⊢ h₂ : φ
     /// -------------------------------------
-    /// Γ | Φ ⊢ imp_elim h₁, h₂ : ψ
+    /// Γ | Φ ⊢ imp_elim h₁ h₂ : ψ
     /// ```
     ImpElim(Arc<(Proof, Proof)>),
     /// ```text
@@ -49,14 +49,14 @@ pub enum Proof {
     ForallIntro(Arc<(Name, Type, Proof)>),
     /// ```text
     /// Γ | Φ ⊢ h : ∀ (x : τ), φ
-    /// ---------------------------------
-    /// Γ | Φ ⊢ forall_elim m h : [m/x]φ]
+    /// ----------------------------------
+    /// Γ | Φ ⊢ forall_elim m, h : [m/x]φ]
     /// ```
     ForallElim(Arc<(Term, Proof)>),
     /// ```text
-    /// Γ ⊢ h₁ : φ ≡ ψ    Γ | Φ ⊢ h₂ : φ
-    /// ---------------------------------
-    /// Γ | Φ ⊢ conv h₁ h₂ : ψ
+    /// Γ ⊢ p : φ ≡ ψ    Γ | Φ ⊢ h : φ
+    /// -------------------------------
+    /// Γ | Φ ⊢ conv p, h : ψ
     /// ```
     Conv(Arc<(Path, Proof)>),
     /// ```text

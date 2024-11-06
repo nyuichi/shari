@@ -3,8 +3,8 @@ use crate::cmd::{
     Operator,
 };
 use crate::kernel::proof::{
-    mk_proof_assump, mk_proof_conv, mk_proof_forall_intro, mk_proof_imp_elim, mk_proof_imp_intro,
-    mk_proof_ref, Proof, Prop,
+    mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro, mk_proof_imp_elim,
+    mk_proof_imp_intro, mk_proof_ref, Proof, Prop,
 };
 use crate::kernel::tt::{
     mk_app, mk_const, mk_fresh_type_mvar, mk_local, mk_path_sorry, mk_type_arrow, mk_type_const,
@@ -597,7 +597,9 @@ impl<'a, 'b> Parser<'a, 'b> {
         match token.as_str() {
             "assump" => self.proof_assump(),
             "imp_intro" => self.proof_imp_intro(),
+            "imp_elim" => self.proof_imp_elim(),
             "forall_intro" => self.proof_forall_intro(),
+            "forall_elim" => self.proof_forall_elim(),
             "conv" => self.proof_conv(),
             _ => self.proof_ref(token),
         }
@@ -615,6 +617,12 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(mk_proof_imp_intro(p, h))
     }
 
+    fn proof_imp_elim(&mut self) -> Result<Proof, ParseError> {
+        let h1 = self.proof()?;
+        let h2 = self.proof()?;
+        Ok(mk_proof_imp_elim(h1, h2))
+    }
+
     fn proof_forall_intro(&mut self) -> Result<Proof, ParseError> {
         self.expect_symbol("(")?;
         let x = self.name()?;
@@ -628,8 +636,24 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(mk_proof_forall_intro(x, ty, h))
     }
 
+    fn proof_forall_elim(&mut self) -> Result<Proof, ParseError> {
+        let mut ms = vec![];
+        loop {
+            ms.push(self.subterm(1024)?);
+            if let Some(_token) = self.expect_symbol_opt(",") {
+                break;
+            }
+        }
+        let mut h = self.proof()?;
+        for m in ms {
+            h = mk_proof_forall_elim(m, h)
+        }
+        Ok(h)
+    }
+
     fn proof_conv(&mut self) -> Result<Proof, ParseError> {
         let path = self.path()?;
+        self.expect_symbol(",")?;
         let h = self.proof()?;
         Ok(mk_proof_conv(path, h))
     }
