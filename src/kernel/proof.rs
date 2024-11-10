@@ -152,6 +152,21 @@ impl Env {
         }
     }
 
+    /// prop must be certified.
+    pub fn check_prop(
+        &self,
+        local_env: &mut LocalEnv,
+        context: &mut Context,
+        h: &mut Proof,
+        prop: &Prop,
+    ) -> anyhow::Result<()> {
+        let p = self.infer_prop(local_env, context, h)?;
+        if &p != prop {
+            bail!("propositions mismatch: {p} is not equal to {prop}");
+        };
+        Ok(())
+    }
+
     pub fn infer_prop(
         &self,
         local_env: &mut LocalEnv,
@@ -196,9 +211,7 @@ impl Env {
                 }
                 let target = args.pop().unwrap();
                 let p = args.pop().unwrap();
-                if self.infer_prop(local_env, context, h2)? != (Prop { target: p }) {
-                    bail!("propositions mismatch");
-                }
+                self.check_prop(local_env, context, h2, &Prop { target: p })?;
                 Ok(Prop { target })
             }
             Proof::ForallIntro(inner) => {
@@ -245,9 +258,7 @@ impl Env {
             Proof::Conv(inner) => {
                 let (h1, h2) = Arc::make_mut(inner);
                 let h1 = self.tt_env.infer_conv(local_env, h1)?;
-                if self.infer_prop(local_env, context, h2)? != (Prop { target: h1.left }) {
-                    bail!("propositions mismatch");
-                };
+                self.check_prop(local_env, context, h2, &Prop { target: h1.left })?;
                 Ok(Prop { target: h1.right })
             }
             Proof::Ref(inner) => {

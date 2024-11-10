@@ -208,14 +208,12 @@ impl State {
                     &mut target.target,
                     &mut mk_type_prop(),
                 )?;
-                if self.proof_env.infer_prop(
+                self.proof_env.check_prop(
                     &mut local_env,
                     &mut proof::Context::default(),
                     &mut proof,
-                )? != target
-                {
-                    bail!("propositions mismatch");
-                };
+                    &target,
+                )?;
                 if self.proof_env.facts.contains_key(&name) {
                     bail!("already defined");
                 }
