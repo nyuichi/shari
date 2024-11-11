@@ -55,9 +55,20 @@ lemma eq.conv (φ ψ : Prop) : (φ = ψ) ⇒ φ ⇒ ψ := assume φ = ψ, change
 -- material adequacy
 lemma ma (φ : Prop) : (φ = ⊤) ⇒ φ := assume φ = ⊤, eq.conv[⊤, φ] (eq.symm.{Prop}[φ, ⊤] ⟪φ = ⊤⟫) top.intro
 
-lemma not.fixed_point_free.help₁ (φ : Prop) : (φ = ¬φ) ⇒ ¬φ := assume φ = ¬φ, change ¬φ, assume φ, contradiction[φ] ⟪φ⟫ (eq.conv[φ, ¬φ] ⟪φ = ¬φ⟫ ⟪φ⟫)
-lemma not.fixed_point_free.help₂ (φ : Prop) : (φ = ¬φ) ⇒ φ := assume φ = ¬φ, eq.conv[¬φ, φ] (eq.symm.{Prop}[φ, ¬φ] ⟪φ = ¬φ⟫) (not.fixed_point_free.help₁[φ] ⟪φ = ¬φ⟫)
-lemma not.fixed_point_free (φ : Prop) : φ ≠ ¬φ := change φ ≠ ¬φ, assume φ = ¬φ, contradiction[φ] (not.fixed_point_free.help₂[φ] ⟪φ = ¬φ⟫) (not.fixed_point_free.help₁[φ] ⟪φ = ¬φ⟫)
+lemma not.fixed_point_free (φ : Prop) : φ ≠ ¬φ :=
+change φ ≠ ¬φ,
+assume φ = ¬φ,
+have ¬φ := change ¬φ, assume φ, contradiction[φ] ⟪φ⟫ (eq.conv[φ, ¬φ] ⟪φ = ¬φ⟫ ⟪φ⟫),
+have φ := eq.conv[¬φ, φ] (eq.symm.{Prop}[φ, ¬φ] ⟪φ = ¬φ⟫) ⟪¬φ⟫,
+contradiction[φ] ⟪φ⟫ ⟪¬φ⟫
+
+/-
+lemma not.fixed_point_free (φ : Prop) : φ ≠ ¬φ :=
+assume φ = ¬φ,
+have ¬φ := assume φ, contradiction ⟪φ⟫ (⟪φ = ¬φ⟫.conv ⟪φ⟫),
+have φ := ⟪φ = ¬φ⟫.symm.conv ⟪¬φ⟫,
+contradiction ⟪φ⟫ ⟪¬φ⟫
+-/
 
 /-
  - functions

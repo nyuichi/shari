@@ -751,6 +751,14 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let e = self.expr()?;
                     mk_expr_change(m, e)
                 }
+                "have" => {
+                    let m = self.term()?;
+                    self.expect_symbol(":=")?;
+                    let e1 = self.expr()?;
+                    self.expect_symbol(",")?;
+                    let e2 = self.expr()?;
+                    mk_expr_app(mk_expr_assume(m, e2), e1)
+                }
                 _ => {
                     let name = Name::try_from(token.as_str()).unwrap();
                     let mut ty_args = vec![];
@@ -918,10 +926,6 @@ impl<'a, 'b> Parser<'a, 'b> {
             }
         };
         Ok(cmd)
-    }
-
-    pub fn cmd_opt(&mut self) -> Option<Cmd> {
-        self.optional(Self::cmd)
     }
 
     fn infixr_cmd(&mut self, _token: Token) -> Result<CmdInfixr, ParseError> {
