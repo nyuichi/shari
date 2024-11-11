@@ -66,9 +66,10 @@ impl<'a> std::fmt::Display for SourceInfo<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
-    Ident,  // e.g. "foo", "α", "Prop", "foo.bar.baz"
-    Symbol, // e.g. "+", ":", "λ", ",", "_"
-    NumLit, // e.g. "0", "42"
+    Ident,   // e.g. "foo", "α", "Prop", "foo.bar.baz"
+    Symbol,  // e.g. "+", ":", "λ", ",", "_"
+    NumLit,  // e.g. "0", "42"
+    Keyword, // e.g. "infixr", "def", "lemma"
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +89,10 @@ impl<'a> Token<'a> {
 
     pub fn is_num_lit(&self) -> bool {
         self.kind == TokenKind::NumLit
+    }
+
+    pub fn is_keyword(&self) -> bool {
+        self.kind == TokenKind::Keyword
     }
 
     pub fn as_str(&self) -> &str {
@@ -201,7 +206,7 @@ impl<'a> Iterator for Lex<'a> {
                 ),
                 (
                     Kind::Symbol,
-                    r"[(){}⟨⟩⟪⟫,]|\.\{|\$\{|[\p{Symbol}\p{Punctuation}&&[^(){}⟨⟩⟪⟫,.]]+",
+                    r"[(){}\[\]⟨⟩⟪⟫,]|\.\{|\$\{|[\p{Symbol}\p{Punctuation}&&[^(){}\[\]⟨⟩⟪⟫,.]]+",
                 ),
                 (Kind::NumLit, r"0|[1-9][0-9]*"),
             ]
@@ -259,6 +264,10 @@ impl<'a> Iterator for Lex<'a> {
                 match text {
                     "λ" | "_" => {
                         kind = TokenKind::Symbol;
+                    }
+                    "infixr" | "nofix" | "inflxl" | "infix" | "prefix" | "axiom" | "def"
+                    | "lemma" => {
+                        kind = TokenKind::Keyword;
                     }
                     _ => {
                         kind = TokenKind::Ident;

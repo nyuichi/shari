@@ -1,0 +1,61 @@
+infixr ⇒ : 25 := imp
+infix = : 50 := eq
+nofix ⊤ := top
+infixr ∧ : 35 := and
+nofix ⊥ := bot
+infixr ∨ : 30 := or
+prefix ¬ : 40 := not
+infix ⇔ : 20 := iff
+infix ≠ : 50 := ne
+
+-- Leibniz equality
+def eq.{u} (x : u) (y : u) : Prop := ∀ P, P x ⇒ P y
+
+def top : Prop := ∀ φ, φ ⇒ φ
+def and (φ : Prop) (ψ : Prop) : Prop := ∀ ξ, (φ ⇒ ψ ⇒ ξ) ⇒ ξ
+
+-- The following definitions are due to Prawitz and Russell.
+def bot : Prop := ∀ ξ, ξ
+def or (φ : Prop) (ψ : Prop) : Prop := ∀ ξ, (φ ⇒ ξ) ∧ (ψ ⇒ ξ) ⇒ ξ
+def exists.{u} (P : u → Prop) : Prop := ∀ ξ, (∀ x, P x ⇒ ξ) ⇒ ξ
+
+-- Other connectives
+def not (φ : Prop) : Prop := φ ⇒ ⊥
+def iff (φ : Prop) (ψ : Prop) : Prop := (φ ⇒ ψ) ∧ (ψ ⇒ φ)
+def uexists.{u} (P : u → Prop) : Prop := ∃ x, P x ∧ (∀ y, P y ⇒ x = y)
+def ne.{u} (x : u) (y : u) : Prop := ¬x = y
+
+-- Axioms of topos (cf. [Introduction to CATEGORY THEORY and CATEGORICAL LOGIC, T. Streicher, '03])
+axiom prop_ext (φ ψ : Prop) : (φ ⇔ ψ) ⇒ φ = ψ
+axiom fun_ext.{u, v} (f₁ f₂ : u → v) : (∀ x, f₁ x = f₂ x) ⇒ f₁ = f₂
+axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) ⇒ ∃! f, ∀ x, R x (f x)
+
+lemma tautology : ∀ φ, φ ⇒ φ := take (φ : Prop), assume φ, ⟪φ⟫
+lemma top.intro : ⊤ := change ⊤, tautology
+lemma eq.refl.{u} (m : u) : m = m := change m = m, take (P : u → Prop), tautology[P m]
+lemma eq.symm.{u} (m₁ m₂ : u) : m₁ = m₂ ⇒ m₂ = m₁ := assume m₁ = m₂, (change m₁ = m₁ ⇒ m₂ = m₁, (change ∀ (P : u → Prop), P m₁ ⇒ P m₂, ⟪m₁ = m₂⟫)[λ (m : u), m = m₁]) eq.refl.{u}[m₁]
+lemma eq.trans.{u} (m₁ m₂ m₃ : u) : m₁ = m₂ ⇒ m₂ = m₃ ⇒ m₁ = m₃ := assume m₁ = m₂, assume m₂ = m₃, (change m₁ = m₂ ⇒ m₁ = m₃, (change ∀ P, P m₂ ⇒ P m₃, ⟪m₂ = m₃⟫)[λ (m : u), m₁ = m]) ⟪m₁ = m₂⟫
+lemma and.intro (φ ψ : Prop) : φ ⇒ ψ ⇒ φ ∧ ψ := assume φ, assume ψ, change φ ∧ ψ, take (ξ : Prop), assume φ ⇒ ψ ⇒ ξ, ⟪φ ⇒ ψ ⇒ ξ⟫ ⟪φ⟫ ⟪ψ⟫
+
+-- modus ponens
+lemma mp (φ ψ : Prop) : φ ⇒ (φ ⇒ ψ) ⇒ ψ := assume φ, assume φ ⇒ ψ, ⟪φ ⇒ ψ⟫ ⟪φ⟫
+lemma imp.trans (φ ψ ξ : Prop) : (φ ⇒ ψ) ⇒ (ψ ⇒ ξ) ⇒ φ ⇒ ξ := assume φ ⇒ ψ, assume ψ ⇒ ξ, assume φ, ⟪ψ ⇒ ξ⟫ (⟪φ ⇒ ψ⟫ ⟪φ⟫)
+-- modus tollens
+lemma mt (φ ψ : Prop) : (φ ⇒ ψ) ⇒ ¬ψ ⇒ ¬φ := change (φ ⇒ ψ) ⇒ ¬ψ ⇒ ¬φ, imp.trans[φ, ψ, ⊥]
+lemma contradiction (φ : Prop) : φ ⇒ ¬φ ⇒ ⊥ := change φ ⇒ ¬φ ⇒ ⊥, mp[φ, ⊥]
+lemma absurd (φ : Prop) : ⊥ ⇒ φ := assume ⊥, (change ∀ ξ, ξ, ⟪⊥⟫)[φ]
+
+lemma eq.conv (φ ψ : Prop) : (φ = ψ) ⇒ φ ⇒ ψ := assume φ = ψ, change φ ⇒ ψ, (change ∀ P, P φ ⇒ P ψ, ⟪φ = ψ⟫)[λ (ξ : Prop), ξ]
+-- material adequacy
+lemma ma (φ : Prop) : (φ = ⊤) ⇒ φ := assume φ = ⊤, eq.conv[⊤, φ] (eq.symm.{Prop}[φ, ⊤] ⟪φ = ⊤⟫) top.intro
+
+lemma not.fixed_point_free.help₁ (φ : Prop) : (φ = ¬φ) ⇒ ¬φ := assume φ = ¬φ, change ¬φ, assume φ, contradiction[φ] ⟪φ⟫ (eq.conv[φ, ¬φ] ⟪φ = ¬φ⟫ ⟪φ⟫)
+lemma not.fixed_point_free.help₂ (φ : Prop) : (φ = ¬φ) ⇒ φ := assume φ = ¬φ, eq.conv[¬φ, φ] (eq.symm.{Prop}[φ, ¬φ] ⟪φ = ¬φ⟫) (not.fixed_point_free.help₁[φ] ⟪φ = ¬φ⟫)
+lemma not.fixed_point_free (φ : Prop) : φ ≠ ¬φ := change φ ≠ ¬φ, assume φ = ¬φ, contradiction[φ] (not.fixed_point_free.help₂[φ] ⟪φ = ¬φ⟫) (not.fixed_point_free.help₁[φ] ⟪φ = ¬φ⟫)
+
+/-
+ - functions
+ -/
+
+def injective.{u, v} (f : u → v) : Prop := ∀ x y, f x = f y ⇒ x = y
+def surjective.{u, v} (f : u → v) : Prop := ∀ y, ∃ x, f x = y

@@ -5,21 +5,21 @@ use crate::{
         Cmd, CmdAxiom, CmdDef, CmdInfix, CmdInfixl, CmdInfixr, CmdLemma, CmdNofix, CmdPrefix,
         Fixity, Operator,
     },
+    expr,
     kernel::{
         proof::{self, mk_type_prop},
         tt::{Def, LocalEnv},
     },
-    lex::Lex,
-    parse::{Nasmespace, Parser, TokenTable},
+    parse::{Nasmespace, TokenTable},
     print::OpTable,
 };
 
 #[derive(Debug, Clone)]
 pub struct State {
-    proof_env: proof::Env,
-    tt: TokenTable,
-    ns: Nasmespace,
-    pp: OpTable,
+    pub proof_env: proof::Env,
+    pub tt: TokenTable,
+    pub ns: Nasmespace,
+    pub pp: OpTable,
 }
 
 impl State {
@@ -42,15 +42,7 @@ impl State {
         }
     }
 
-    fn parse_cmd(&self, input: &str) -> anyhow::Result<Cmd> {
-        let mut lex = Lex::new(input);
-        let mut parser = Parser::new(&mut lex, &self.tt, &self.ns);
-        let cmd = parser.cmd()?;
-        parser.eof()?;
-        Ok(cmd)
-    }
-
-    fn run_cmd(&mut self, cmd: Cmd) -> anyhow::Result<()> {
+    pub fn run_cmd(&mut self, cmd: Cmd) -> anyhow::Result<()> {
         match cmd {
             Cmd::Infix(inner) => {
                 let CmdInfix { op, prec, entity } = inner;
@@ -190,7 +182,7 @@ impl State {
                     name,
                     local_types,
                     mut target,
-                    mut proof,
+                    expr,
                 } = inner;
                 for i in 0..local_types.len() {
                     for j in i + 1..local_types.len() {
@@ -208,10 +200,12 @@ impl State {
                     &mut target.target,
                     &mut mk_type_prop(),
                 )?;
+                let (mut h, _target) =
+                    expr::Eval::new(&self.proof_env, &mut local_env).run_expr(&expr)?;
                 self.proof_env.check_prop(
                     &mut local_env,
                     &mut proof::Context::default(),
-                    &mut proof,
+                    &mut h,
                     &target,
                 )?;
                 if self.proof_env.facts.contains_key(&name) {
@@ -224,11 +218,5 @@ impl State {
                 Ok(())
             }
         }
-    }
-
-    pub fn run(&mut self, input: &str) -> anyhow::Result<()> {
-        let cmd = self.parse_cmd(input)?;
-        self.run_cmd(cmd)?;
-        Ok(())
     }
 }

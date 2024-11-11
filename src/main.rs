@@ -1,3 +1,6 @@
+use lex::Lex;
+use parse::{ParseError, Parser};
+
 use crate::kernel::{
     proof::{
         mk_proof_assump, mk_proof_forall_intro, mk_proof_imp_intro, mk_type_prop, Context, Prop,
@@ -7,6 +10,7 @@ use crate::kernel::{
 use crate::state::State;
 
 mod cmd;
+mod expr;
 mod kernel;
 mod lex;
 mod parse;
@@ -14,62 +18,25 @@ mod print;
 mod state;
 
 fn main() -> anyhow::Result<()> {
+    let input = include_str!("main.shari");
+
     let mut state = State::new();
 
-    state.run("infixr ⇒ : 25 := imp")?;
-    state.run("infix = : 50 := eq")?;
-    state.run("nofix ⊤ := top")?;
-    state.run("infixr ∧ : 35 := and")?;
-    state.run("nofix ⊥ := bot")?;
-    state.run("infixr ∨ : 30 := or")?;
-    state.run("prefix ¬ : 40 := not")?;
-    state.run("infix ⇔ : 20 := iff")?;
-    state.run("infix ≠ : 50 := ne")?;
+    let mut lex = Lex::new(input);
 
-    // Leibniz equality
-    state.run("def eq.{u} (x : u) (y : u) : Prop := ∀ P, P x ⇒ P y")?;
-
-    state.run("def top : Prop := ∀ φ, φ ⇒ φ")?;
-    state.run("def and (φ : Prop) (ψ : Prop) : Prop := ∀ ξ, (φ ⇒ ψ ⇒ ξ) ⇒ ξ")?;
-
-    // The following definitions are due to Prawitz and Russell.
-    state.run("def bot : Prop := ∀ ξ, ξ")?;
-    state.run("def or (φ : Prop) (ψ : Prop) : Prop := ∀ ξ, (φ ⇒ ξ) ∧ (ψ ⇒ ξ) ⇒ ξ")?;
-    state.run("def exists.{u} (P : u → Prop) : Prop := ∀ ξ, (∀ x, P x ⇒ ξ) ⇒ ξ")?;
-
-    // Other connectives
-    state.run("def not (φ : Prop) : Prop := φ ⇒ ⊥")?;
-    state.run("def iff (φ : Prop) (ψ : Prop) : Prop := (φ ⇒ ψ) ∧ (ψ ⇒ φ)")?;
-    state.run("def uexists.{u} (P : u → Prop) : Prop := ∃ x, P x ∧ (∀ y, P y ⇒ x = y)")?;
-    state.run("def ne.{u} (x : u) (y : u) : Prop := ¬x = y")?;
-
-    // Axioms of topos (cf. [Introduction to CATEGORY THEORY and CATEGORICAL LOGIC, T. Streicher, '03])
-    state.run("axiom prop_ext (φ ψ : Prop) : (φ ⇔ ψ) ⇒ φ = ψ")?;
-    state.run("axiom fun_ext.{u, v} (f₁ f₂ : u → v) : (∀ x, f₁ x = f₂ x) ⇒ f₁ = f₂")?;
-    state.run("axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) ⇒ ∃! f, ∀ x, R x (f x)")?;
-
-    state.run("lemma tautology : ∀ φ, φ ⇒ φ := forall_intro (φ : Prop), imp_intro φ, assump φ")?;
-    state.run("lemma top.intro : ⊤ := conv (sorry (∀ φ, φ ⇒ φ) ⊤), tautology")?;
-    state.run("lemma eq.refl.{u} (m : u) : m = m := conv (sorry (∀ P, P m ⇒ P m) (m = m)), (forall_intro (P : u → Prop), (forall_elim (P m), tautology))")?;
-    state.run("lemma eq.symm.{u} (m₁ m₂ : u) : m₁ = m₂ ⇒ m₂ = m₁ := imp_intro (m₁ = m₂), imp_elim (conv (sorry ((λ m, m = m₁) m₁ ⇒ (λ m, m = m₁) m₂) (m₁ = m₁ ⇒ m₂ = m₁)), forall_elim (λ m, m = m₁), conv (sorry (m₁ = m₂) (∀ P, P m₁ ⇒ P m₂)), assump (m₁ = m₂)) (forall_elim m₁, eq.refl.{u})")?;
-    state.run("lemma eq.trans.{u} (m₁ m₂ m₃ : u) : m₁ = m₂ ⇒ m₂ = m₃ ⇒ m₁ = m₃ := imp_intro (m₁ = m₂), imp_intro (m₂ = m₃), imp_elim (conv (sorry ((λ m, m₁ = m) m₂ ⇒ (λ m, m₁ = m) m₃) (m₁ = m₂ ⇒ m₁ = m₃)), forall_elim (λ m, m₁ = m), conv (sorry (m₂ = m₃) (∀ P, P m₂ ⇒ P m₃)), assump (m₂ = m₃)) (assump (m₁ = m₂))")?;
-    state.run("lemma and.intro (φ ψ : Prop) : φ ⇒ ψ ⇒ φ ∧ ψ := imp_intro φ, imp_intro ψ, conv (sorry (∀ ξ, (φ ⇒ ψ ⇒ ξ) ⇒ ξ) (φ ∧ ψ)), forall_intro (ξ : Prop), imp_intro (φ ⇒ ψ ⇒ ξ), imp_elim (imp_elim (assump (φ ⇒ ψ ⇒ ξ)) (assump φ)) (assump ψ)")?;
-
-    // modus ponens
-    state.run("lemma mp (φ ψ : Prop) : φ ⇒ (φ ⇒ ψ) ⇒ ψ := imp_intro φ, imp_intro (φ ⇒ ψ), imp_elim (assump (φ ⇒ ψ)) (assump φ)")?;
-    state.run("lemma imp.trans (φ ψ ξ : Prop) : (φ ⇒ ψ) ⇒ (ψ ⇒ ξ) ⇒ φ ⇒ ξ := imp_intro (φ ⇒ ψ), imp_intro (ψ ⇒ ξ), imp_intro φ, imp_elim (assump (ψ ⇒ ξ)) (imp_elim (assump (φ ⇒ ψ)) (assump φ))")?;
-
-    // modus tollens
-    state.run("lemma mt (φ ψ : Prop) : (φ ⇒ ψ) ⇒ (¬ψ ⇒ ¬φ) := conv (sorry ((φ ⇒ ψ) ⇒ (ψ ⇒ ⊥) ⇒ φ ⇒ ⊥) ((φ ⇒ ψ) ⇒ (¬ψ ⇒ ¬φ))), forall_elim φ ψ ⊥, imp.trans")?;
-    state.run("lemma contradiction (φ : Prop) : φ ⇒ ¬φ ⇒ ⊥ := conv (sorry (φ ⇒ (φ ⇒ ⊥) ⇒ ⊥) (φ ⇒ ¬φ ⇒ ⊥)), forall_elim φ ⊥, mp")?;
-    state.run("lemma absurd (φ : Prop) : ⊥ ⇒ φ := imp_intro ⊥, forall_elim φ, conv (sorry ⊥ (∀ ξ, ξ)), assump ⊥")?;
-
-    state.run("lemma eq.conv (φ ψ : Prop) : (φ = ψ) ⇒ φ ⇒ ψ := imp_intro (φ = ψ), conv (sorry ((λ ξ, ξ) φ ⇒ (λ ξ, ξ) ψ) (φ ⇒ ψ)), forall_elim (λ ξ, ξ), conv (sorry (φ = ψ) (∀ P, P φ ⇒ P ψ)), assump (φ = ψ)")?;
-    // material adequacy
-    state.run("lemma ma (φ : Prop) : (φ = ⊤) ⇒ φ := imp_intro (φ = ⊤), imp_elim (imp_elim (forall_elim ⊤ φ, eq.conv) (imp_elim (forall_elim φ ⊤, eq.symm.{Prop}) (assump (φ = ⊤)))) top.intro")?;
-    state.run("lemma not.fixed_point_free.help₁ (φ : Prop) : (φ = ¬φ) ⇒ ¬φ := imp_intro (φ = ¬φ), conv (sorry (φ ⇒ ⊥) ¬φ), imp_intro φ, imp_elim (imp_elim (forall_elim φ, contradiction) (assump φ)) (imp_elim (imp_elim (forall_elim φ ¬φ, eq.conv) (assump (φ = ¬φ))) (assump φ))")?;
-    state.run("lemma not.fixed_point_free.help₂ (φ : Prop) : (φ = ¬φ) ⇒ φ := imp_intro (φ = ¬φ), imp_elim (imp_elim (forall_elim (¬φ) φ, eq.conv) (imp_elim (forall_elim φ ¬φ, eq.symm.{Prop}) (assump (φ = ¬φ)))) (imp_elim (forall_elim φ, not.fixed_point_free.help₁) (assump (φ = ¬φ)))")?;
-    state.run("lemma not.fixed_point_free (φ : Prop) : φ ≠ ¬φ := conv (sorry ((φ = ¬φ) ⇒ ⊥) (φ ≠ ¬φ)), imp_intro (φ = ¬φ), imp_elim (imp_elim (forall_elim φ, contradiction) (imp_elim (forall_elim φ, not.fixed_point_free.help₂) (assump (φ = ¬φ)))) (imp_elim (forall_elim φ, not.fixed_point_free.help₁) (assump (φ = ¬φ)))")?;
+    loop {
+        let cmd = match Parser::new(&mut lex, &state.tt, &state.ns).cmd() {
+            Ok(cmd) => cmd,
+            Err(ParseError::Eof { .. }) => {
+                break;
+            }
+            Err(e) => {
+                println!("parse error: {e}");
+                break;
+            }
+        };
+        state.run_cmd(cmd)?;
+    }
 
     // state.run("def has_fp.{u} (f : u → u) : Prop := ∃ x, x = f x")?;
     // // fixed-point property
@@ -81,8 +48,6 @@ fn main() -> anyhow::Result<()> {
     // state.run("constant type has_fpp : Type → Type")?;
     // state.run("axiom fpp.{u} : ∀ (d : has_fpp.{u}), ∀ (f : u → u), has_fp f")?;
 
-    state.run("def injective.{u, v} (f : u → v) : Prop := ∀ x y, f x = f y ⇒ x = y")?;
-    state.run("def surjective.{u, v} (f : u → v) : Prop := ∀ y, ∃ x, f x = y")?;
     // state.run("lemma lawvere_fixpoint.{u, v} : (∃ (e : u → u → v), surjective e) ⇒ ∀ (f : v → v), ∃ y, y = f y := ")?;
 
     // and.intro : Proof φ → Proof ψ → Proof (φ ∧ ψ)
@@ -147,14 +112,6 @@ fn main() -> anyhow::Result<()> {
     // )?;
 
     //    state.run("lemma eta.{u, v} (f : u → v) : f = (λ x, f x) := imp_elim (forall_elim (λ x, f x), (forall_elim f, fun_ext.{u, v})), (conv )")?;
-
-    // p ::= already φ                -- assump
-    //     | assume φ, p                   -- imp_intro
-    //     | take (x : τ), p             -- forall_intro
-    //     | suffices φ, p, p                      -- imp_elim
-    //     | use φ, m, p                      -- forall_elim
-    //     | show φ, p
-    //     | c.{u₁, ⋯, uₙ}
 
     let proof_env = kernel::proof::Env::new_kernel();
     let p = mk_local(Name::intern("p").unwrap());
@@ -283,25 +240,12 @@ fn main() -> anyhow::Result<()> {
 ///   let ψ := target h₂,
 ///   `{ take (ξ : Prop), assume ${φ} ⇒ ${ψ} ⇒ ξ, ⟪${φ} ⇒ ${ψ} ⇒ ξ⟫ ${h₁} ${h₂} }
 /// }
-//  state.run(
-//     "meta def and.intro := λ h₁ h₂, {
-//         let φ := target h₁,
-//         let ψ := target h₂,
-//         let ξ := `{ξ},
-//         let h := assume `{ ${φ} ⇒ ${ψ} ⇒ ${ξ} },
-//         let h := imp.elim h h₁,
-//         let h := imp.elim h h₂,
-//         let h := imp.intro `{ ${φ} ⇒ ${ψ} ⇒ ${ξ} } h,
-//         let h := forall.intro mk_type_prop ξ h,
-//         change `{ ${φ} ∧ ${ψ} } h
-//     }",
-// )?;
 ///
 /// lemma lawvere_fixpoint.{u, v} : (∃ (e : u → u → v), surjective e) ⇒ ∀ (f : v → v), ∃ y, y = f y :=
 /// assume ∃ (e : u → u → v), surjective e,
 /// take (f : v → v),
 /// obtain e, surjective e := ⟪∃ (e : u → u → v), surjective e⟫,
-/// obtain x, (λ x₁, f (e x₁ x₁)) = e x := (change ∀ (g : u → v), ∃ x, g = e x, ⟪∀ (g : u → v), ∃ x, g = e x⟫)[λ x, f (e x x)],
+/// obtain x, (λ x₁, f (e x₁ x₁)) = e x := (change ∀ (g : u → v), ∃ x, g = e x, ⟪surjective e⟫)[λ x, f (e x x)],
 /// have f (e x x) = e x x := eq.congr_fun[x] ⟪(λ x₁, f (e x₁ x₁)) = e x⟫,
 /// show ∃ y, y = f y, {
 ///   let e x x = f (e x x) := ⟪∃ y, y = f y⟫.construction (e x x),

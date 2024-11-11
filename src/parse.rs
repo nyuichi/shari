@@ -2,13 +2,17 @@ use crate::cmd::{
     Cmd, CmdAxiom, CmdDef, CmdInfix, CmdInfixl, CmdInfixr, CmdLemma, CmdNofix, CmdPrefix, Fixity,
     Operator,
 };
+use crate::expr::{
+    mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_change, mk_expr_const, mk_expr_inst,
+    mk_expr_take, Expr,
+};
 use crate::kernel::proof::{
     mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro, mk_proof_imp_elim,
     mk_proof_imp_intro, mk_proof_ref, Proof, Prop,
 };
 use crate::kernel::tt::{
-    mk_app, mk_const, mk_fresh_type_mvar, mk_local, mk_path_sorry, mk_type_arrow, mk_type_const,
-    mk_type_local, Name, Path, Term, Type,
+    mk_app, mk_const, mk_fresh_type_mvar, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
+    Name, Path, Term, Type,
 };
 
 use crate::lex::{Lex, LexError, SourceInfo, Token, TokenKind};
@@ -87,6 +91,7 @@ impl TokenTable {
                 }
             }
             TokenKind::NumLit => Some(Led::App),
+            TokenKind::Keyword => None,
         }
     }
 
@@ -106,6 +111,7 @@ impl TokenTable {
                 }
             }
             TokenKind::NumLit => Some(Nud::NumLit),
+            TokenKind::Keyword => None,
         }
     }
 }
@@ -270,6 +276,14 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(token)
     }
 
+    fn keyword(&mut self) -> Result<Token<'a>, ParseError> {
+        let token = self.any_token()?;
+        if !token.is_keyword() {
+            return Self::fail(token, "expected keyword");
+        }
+        Ok(token)
+    }
+
     fn name(&mut self) -> Result<Name, ParseError> {
         Ok(Name::try_from(self.ident()?.as_str()).expect("logic flaw"))
     }
@@ -429,9 +443,9 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.pop();
         }
         for (name, t) in binders.into_iter().rev() {
-            m.abs(name, t, name);
+            m.abs(name, t.clone(), name);
             let f = mem::take(&mut m);
-            m = self.mk_const_unchecked(binder);
+            m = mk_const(Name::try_from(binder).unwrap(), vec![t]);
             m.apply(vec![f]);
         }
         Ok(m)
@@ -569,22 +583,7 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     fn path(&mut self) -> Result<Path, ParseError> {
-        if let Some(_token) = self.expect_symbol_opt("(") {
-            let proof = self.path()?;
-            self.expect_symbol(")")?;
-            return Ok(proof);
-        }
-        let token = self.ident()?;
-        match token.as_str() {
-            "sorry" => self.path_sorry(),
-            _ => Self::fail(token, "unknown path object"),
-        }
-    }
-
-    fn path_sorry(&mut self) -> Result<Path, ParseError> {
-        let m1 = self.subterm(1024)?;
-        let m2 = self.subterm(1024)?;
-        Ok(mk_path_sorry(m1, m2))
+        todo!();
     }
 
     pub fn proof(&mut self) -> Result<Proof, ParseError> {
@@ -682,13 +681,13 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(mk_proof_ref(name, ty_args))
     }
 
-    // fn expr(&mut self) -> Result<Expr, ParseError> {
-    //     self.subexpr(0)
-    // }
+    fn expr(&mut self) -> Result<Expr, ParseError> {
+        self.subexpr(0)
+    }
 
-    // fn expr_opt(&mut self) -> Option<Expr> {
-    //     self.optional(|this| this.expr())
-    // }
+    fn expr_opt(&mut self) -> Option<Expr> {
+        self.optional(|this| this.expr())
+    }
 
     // fn expr_abs(&mut self, token: Token<'a>) -> Result<Expr, ParseError> {
     //     let params = self.parameters()?;
@@ -713,94 +712,105 @@ impl<'a, 'b> Parser<'a, 'b> {
     //     Ok(expr)
     // }
 
-    // fn subexpr(&mut self, rbp: usize) -> Result<Term, ParseError> {
-    //     let token = self.any_token()?;
-    //     // nud
-    //     let nud = match self.tt.get_nud(&token) {
-    //         None => todo!("nud unknown: {}", token),
-    //         Some(nud) => nud,
-    //     };
-    //     let mut left = match nud {
-    //         Nud::Var => self.term_var(token, None)?,
-    //         Nud::Abs => self.term_abs(token)?,
-    //         Nud::Paren => {
-    //             let m = self.subexpr(0)?;
-    //             self.expect_symbol(")")?;
-    //             m
-    //         }
-    //         Nud::Bracket => {
-    //             let mut terms = vec![];
-    //             while let Some(m) = self.term_opt() {
-    //                 terms.push(m);
-    //                 if self.expect_symbol_opt(",").is_none() {
-    //                     break;
-    //                 }
-    //             }
-    //             self.expect_symbol("⟩")?;
-    //             // right associative encoding:
-    //             // ⟨⟩ ⇒ star
-    //             // ⟨m⟩ ⇒ m
-    //             // ⟨m,n,l⟩ ⇒ ⟨m, ⟨n, l⟩⟩
-    //             match terms.len() {
-    //                 0 => self.mk_const_unchecked("star"),
-    //                 1 => terms.pop().unwrap(),
-    //                 _ => {
-    //                     let mut m = terms.pop().unwrap();
-    //                     for n in terms.into_iter().rev() {
-    //                         let mut x = self.mk_const_unchecked("pair");
-    //                         x.apply(vec![n, m]);
-    //                         m = x;
-    //                     }
-    //                     m
-    //                 }
-    //             }
-    //         }
-    //         Nud::Forall => self.term_binder(token, "forall")?,
-    //         Nud::Exists => self.term_binder(token, "exists")?,
-    //         Nud::Uexists => self.term_binder(token, "uexists")?,
-    //         Nud::Hole => self.term_hole(token)?,
-    //         Nud::User(op) => match op.fixity {
-    //             Fixity::Nofix => self.term_var(token, Some(op.entity))?,
-    //             Fixity::Prefix => {
-    //                 let mut fun = self.term_var(token, Some(op.entity))?;
-    //                 let arg = self.subterm(op.prec)?;
-    //                 fun.apply(vec![arg]);
-    //                 fun
-    //             }
-    //             Fixity::Infix | Fixity::Infixl | Fixity::Infixr => unreachable!(),
-    //         },
-    //         Nud::NumLit => Self::fail(token, "numeric literal is unsupported")?,
-    //     };
-    //     while let Some(token) = self.peek_opt() {
-    //         let led = match self.tt.get_led(&token) {
-    //             None => break,
-    //             Some(led) => led,
-    //         };
-    //         let prec = led.prec();
-    //         if rbp >= prec {
-    //             break;
-    //         }
-    //         match led {
-    //             Led::App => {
-    //                 let right = self.subterm(led.prec())?;
-    //                 left.apply(vec![right]);
-    //             }
-    //             Led::User(op) => {
-    //                 let prec = match op.fixity {
-    //                     Fixity::Infix | Fixity::Infixl => prec,
-    //                     Fixity::Infixr => prec - 1,
-    //                     Fixity::Nofix | Fixity::Prefix => unreachable!("op = {op:?}"),
-    //                 };
-    //                 self.advance();
-    //                 let mut fun = self.term_var(token, Some(op.entity))?;
-    //                 let right = self.subterm(prec)?;
-    //                 fun.apply(vec![left, right]);
-    //                 left = fun;
-    //             }
-    //         }
-    //     }
-    //     Ok(left)
-    // }
+    fn subexpr(&mut self, rbp: usize) -> Result<Expr, ParseError> {
+        // nud
+        let mut left = 'left: {
+            if let Some(_token) = self.expect_symbol_opt("(") {
+                let e = self.subexpr(0)?;
+                self.expect_symbol(")")?;
+                break 'left e;
+            }
+            if let Some(_token) = self.expect_symbol_opt("⟪") {
+                let prop = self.term()?;
+                self.expect_symbol("⟫")?;
+                break 'left mk_expr_assump(prop);
+            }
+            let token = self.ident()?;
+            match token.as_str() {
+                "assume" => {
+                    let m = self.term()?;
+                    self.expect_symbol(",")?;
+                    let e = self.expr()?;
+                    mk_expr_assume(m, e)
+                }
+                "take" => {
+                    self.expect_symbol("(")?;
+                    let name = self.name()?;
+                    self.expect_symbol(":")?;
+                    let ty = self.ty()?;
+                    self.expect_symbol(")")?;
+                    self.expect_symbol(",")?;
+                    self.locals.push(name);
+                    let e = self.expr()?;
+                    self.locals.pop();
+                    mk_expr_take(name, ty, e)
+                }
+                "change" => {
+                    let m = self.term()?;
+                    self.expect_symbol(",")?;
+                    let e = self.expr()?;
+                    mk_expr_change(m, e)
+                }
+                _ => {
+                    let name = Name::try_from(token.as_str()).unwrap();
+                    let mut ty_args = vec![];
+                    if let Some(_token) = self.expect_symbol_opt(".{") {
+                        if self.expect_symbol_opt("}").is_none() {
+                            loop {
+                                ty_args.push(self.ty()?);
+                                if self.expect_symbol_opt(",").is_none() {
+                                    break;
+                                }
+                            }
+                            self.expect_symbol("}")?;
+                        }
+                    }
+                    mk_expr_const(name, ty_args)
+                }
+            }
+        };
+        while let Some(token) = self.peek_opt() {
+            enum ExprLed {
+                App,
+                Inst,
+            }
+            let (led, prec) = {
+                if token.as_str() == "[" {
+                    (ExprLed::Inst, 1025)
+                } else if token.as_str() == "(" || token.as_str() == "⟪" || token.is_ident() {
+                    (ExprLed::App, 1024)
+                } else {
+                    break;
+                }
+            };
+            if rbp >= prec {
+                break;
+            }
+            match led {
+                ExprLed::App => {
+                    let right = self.subexpr(1024)?;
+                    left = mk_expr_app(left, right);
+                }
+                ExprLed::Inst => {
+                    self.advance();
+                    let mut args = vec![];
+                    while let Some(m) = self.term_opt() {
+                        args.push(m);
+                        if self.expect_symbol_opt(",").is_none() {
+                            break;
+                        }
+                    }
+                    self.expect_symbol("]")?;
+                    let mut e = left;
+                    for arg in args {
+                        e = mk_expr_inst(e, arg);
+                    }
+                    left = e;
+                }
+            }
+        }
+        Ok(left)
+    }
 
     // pub fn meta_expr(&mut self) -> Result<MetaExpr, ParseError> {
     //     self.meta_subexpr(0)
@@ -856,7 +866,7 @@ impl<'a, 'b> Parser<'a, 'b> {
     // }
 
     pub fn cmd(&mut self) -> Result<Cmd, ParseError> {
-        let keyword = self.ident()?;
+        let keyword = self.keyword()?;
         let cmd = match keyword.as_str() {
             "infixr" => {
                 let infixr_cmd = self.infixr_cmd(keyword)?;
@@ -908,6 +918,10 @@ impl<'a, 'b> Parser<'a, 'b> {
             }
         };
         Ok(cmd)
+    }
+
+    pub fn cmd_opt(&mut self) -> Option<Cmd> {
+        self.optional(Self::cmd)
     }
 
     fn infixr_cmd(&mut self, _token: Token) -> Result<CmdInfixr, ParseError> {
@@ -1081,8 +1095,11 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.locals.truncate(params.len());
         self.type_locals.truncate(local_types.len());
         for (var, ty) in params.into_iter().rev() {
-            p.target.abs(var, ty, var);
-            p.target = mk_app(self.mk_const_unchecked("forall"), p.target);
+            p.target.abs(var, ty.clone(), var);
+            p.target = mk_app(
+                mk_const(Name::try_from("forall").unwrap(), vec![ty]),
+                p.target,
+            );
         }
         Ok(CmdAxiom {
             name,
@@ -1128,20 +1145,23 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.expect_symbol(":")?;
         let mut p = self.prop()?;
         self.expect_symbol(":=")?;
-        let mut h = self.proof()?;
+        let mut e = self.expr()?;
         // Parsing finished. We can now safaly tear off.
         self.locals.truncate(params.len());
         self.type_locals.truncate(local_types.len());
         for (var, ty) in params.into_iter().rev() {
             p.target.abs(var, ty.clone(), var);
-            p.target = mk_app(self.mk_const_unchecked("forall"), p.target);
-            h = mk_proof_forall_intro(var, ty, h);
+            p.target = mk_app(
+                mk_const(Name::try_from("forall").unwrap(), vec![ty.clone()]),
+                p.target,
+            );
+            e = mk_expr_take(var, ty, e);
         }
         Ok(CmdLemma {
             name,
             local_types,
             target: p,
-            proof: h,
+            expr: e,
         })
     }
 

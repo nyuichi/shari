@@ -1,13 +1,13 @@
 //! Prove by type synthesis.
 
-use std::{collections::HashMap, mem, sync::Arc, vec};
+use std::{collections::HashMap, sync::Arc, vec};
 
 use anyhow::bail;
 use std::sync::LazyLock;
 
 use super::tt::{
-    self, mk_const, mk_type_arrow, mk_type_const, mk_type_local, Kind, LocalEnv, Name, Path, Term,
-    Type,
+    self, mk_abs, mk_const, mk_type_arrow, mk_type_const, mk_type_local, Kind, LocalEnv, Name,
+    Path, Term, TermAbs, Type,
 };
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -67,6 +67,37 @@ pub enum Proof {
     Ref(Arc<(Name, Vec<Type>)>),
 }
 
+impl std::fmt::Display for Proof {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Proof::Assump(prop) => write!(f, "(assump {prop})"),
+            Proof::ImpIntro(inner) => write!(f, "(imp_intro {}, {})", inner.0, inner.1),
+            Proof::ImpElim(inner) => write!(f, "(imp_elim {} {})", inner.0, inner.1),
+            Proof::ForallIntro(inner) => {
+                write!(f, "(forall_intro ({} : {}), {})", inner.0, inner.1, inner.2)
+            }
+            Proof::ForallElim(inner) => write!(f, "(forall_elim {}, {})", inner.0, inner.1),
+            Proof::Conv(inner) => write!(f, "(conv {}, {})", inner.0, inner.1),
+            Proof::Ref(inner) => {
+                write!(f, "{}", inner.0)?;
+                if !inner.1.is_empty() {
+                    write!(f, ".{{")?;
+                    let mut first = true;
+                    for t in &inner.1 {
+                        write!(f, "{t}")?;
+                        if !first {
+                            write!(f, ", ")?;
+                        }
+                        first = false;
+                    }
+                    write!(f, "}}")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 pub fn mk_proof_assump(p: Prop) -> Proof {
     Proof::Assump(p)
 }
@@ -102,6 +133,93 @@ static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall").unwrap()
 pub fn mk_type_prop() -> Type {
     static T_PROP: LazyLock<Type> = LazyLock::new(|| mk_type_const(*PROP));
     T_PROP.clone()
+}
+
+#[derive(Debug, Clone)]
+pub struct Imp {
+    pub lhs: Term,
+    pub rhs: Term,
+}
+
+impl TryFrom<Term> for Imp {
+    type Error = ();
+
+    fn try_from(mut value: Term) -> Result<Self, Self::Error> {
+        let mut args = value.unapply();
+        let Term::Const(head) = value else {
+            return Err(());
+        };
+        if head.name != *IMP {
+            return Err(());
+        }
+        if args.len() != 2 {
+            return Err(());
+        }
+        let rhs = args.pop().unwrap();
+        let lhs = args.pop().unwrap();
+        Ok(Self { lhs, rhs })
+    }
+}
+
+impl From<Imp> for Term {
+    fn from(value: Imp) -> Self {
+        let mut m = mk_const(*IMP, vec![]);
+        m.apply([value.lhs, value.rhs]);
+        m
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Forall {
+    pub name: Name,
+    pub ty: Type,
+    // locally open
+    pub body: Term,
+}
+
+impl TryFrom<Term> for Forall {
+    type Error = ();
+
+    fn try_from(mut value: Term) -> Result<Self, Self::Error> {
+        let mut args = value.unapply();
+        let Term::Const(mut head) = value else {
+            return Err(());
+        };
+        if head.name != *FORALL {
+            return Err(());
+        }
+        let domain_ty = Arc::make_mut(&mut head).ty_args.pop().unwrap();
+        if args.len() != 1 {
+            return Err(());
+        }
+        let arg = args.pop().unwrap();
+        let Term::Abs(abs) = arg else {
+            return Err(());
+        };
+        let TermAbs {
+            binder_type,
+            binder_name,
+            body,
+        } = Arc::unwrap_or_clone(abs);
+        if binder_type != domain_ty {
+            return Err(());
+        }
+        Ok(Forall {
+            name: binder_name,
+            ty: binder_type,
+            body,
+        })
+    }
+}
+
+impl From<Forall> for Term {
+    fn from(value: Forall) -> Self {
+        let Forall { name, ty, body } = value;
+        let abs = mk_abs(name, ty.clone(), body);
+        let mut m = mk_const(*FORALL, vec![ty]);
+        m.apply([abs]);
+        m
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -191,32 +309,26 @@ impl Env {
                 context.props.push(p.clone());
                 let h = self.infer_prop(local_env, context, h)?;
                 let p = context.props.pop().unwrap();
-                let mut target = mk_const(*IMP, vec![]);
-                target.apply([p.target, h.target]);
-                Ok(Prop { target })
+                Ok(Prop {
+                    target: Imp {
+                        lhs: p.target,
+                        rhs: h.target,
+                    }
+                    .into(),
+                })
             }
             Proof::ImpElim(inner) => {
                 let (h1, h2) = Arc::make_mut(inner);
                 let h1 = self.infer_prop(local_env, context, h1)?;
-                let mut imp = h1.target;
-                let mut args = imp.unapply();
-                let Term::Const(inner) = imp else {
-                    bail!("not an implication");
+                let Ok(Imp { lhs, rhs }) = h1.target.clone().try_into() else {
+                    bail!("not an implication: {}", h1.target);
                 };
-                if inner.name != *IMP {
-                    bail!("not an implication");
-                }
-                if args.len() != 2 {
-                    bail!("not an implication");
-                }
-                let target = args.pop().unwrap();
-                let p = args.pop().unwrap();
-                self.check_prop(local_env, context, h2, &Prop { target: p })?;
-                Ok(Prop { target })
+                self.check_prop(local_env, context, h2, &Prop { target: lhs })?;
+                Ok(Prop { target: rhs })
             }
             Proof::ForallIntro(inner) => {
                 let (x, t, h) = Arc::make_mut(inner);
-                self.tt_env.check_kind(local_env, &t, &Kind::base())?;
+                self.tt_env.check_kind(local_env, t, &Kind::base())?;
                 for c in &context.props {
                     if !c.target.is_fresh(*x) {
                         bail!("eigenvariable condition fails");
@@ -225,33 +337,30 @@ impl Env {
                 local_env.locals.push((*x, t.clone()));
                 let h = self.infer_prop(local_env, context, h)?;
                 let (x, t) = local_env.locals.pop().unwrap();
-                let mut m = h.target;
-                m.abs(x, t.clone(), x);
-                let mut target = mk_const(*FORALL, vec![t]);
-                target.apply([m]);
-                Ok(Prop { target })
+                let mut body = h.target;
+                body.close(x);
+                Ok(Prop {
+                    target: Forall {
+                        name: x,
+                        ty: t,
+                        body,
+                    }
+                    .into(),
+                })
             }
             Proof::ForallElim(inner) => {
                 let (m, h) = Arc::make_mut(inner);
                 let h = self.infer_prop(local_env, context, h)?;
-                let mut forall = h.target;
-                let mut args = forall.unapply();
-                let Term::Const(mut inner) = forall else {
-                    bail!("not a forall");
+                let Ok(Forall {
+                    name: _,
+                    mut ty,
+                    body,
+                }) = h.target.clone().try_into()
+                else {
+                    bail!("not a forall: {}", h.target);
                 };
-                if inner.name != *FORALL {
-                    bail!("not a forall");
-                }
-                let mut domain_ty = Arc::make_mut(&mut inner).ty_args.pop().unwrap();
-                if args.len() != 1 {
-                    bail!("not a forall");
-                }
-                let arg = args.pop().unwrap();
-                let Term::Abs(mut inner) = arg else {
-                    bail!("forall must take an abstraction");
-                };
-                let mut target = mem::take(&mut Arc::make_mut(&mut inner).body);
-                self.tt_env.check_type(local_env, m, &mut domain_ty)?;
+                self.tt_env.check_type(local_env, m, &mut ty)?;
+                let mut target = body;
                 target.open(&m);
                 Ok(Prop { target })
             }
