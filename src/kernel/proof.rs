@@ -535,4 +535,28 @@ mod tests {
     //     let h = forall_intro(*P, mk_type_prop(), h).unwrap();
     //     insta::assert_snapshot!(forall_elim(mk_local(*Q, mk_fresh_type_mvar()), h).unwrap(), @"⊢ ((imp (local q Prop)) (local q Prop))");
     // }
+
+    #[test]
+    fn test_infer_prop() {
+        let proof_env = crate::kernel::proof::Env::new_kernel();
+        let p = mk_local(Name::intern("p").unwrap());
+
+        /*
+         * take p, assume p, already p
+         * apply p q
+         * instantiate p m
+         */
+
+        let mut h = mk_proof_forall_intro(
+            Name::intern("p").unwrap(),
+            mk_type_prop(),
+            mk_proof_imp_intro(
+                Prop { target: p.clone() },
+                mk_proof_assump(Prop { target: p }),
+            ),
+        );
+        proof_env
+            .infer_prop(&mut LocalEnv::default(), &mut Context::default(), &mut h)
+            .unwrap();
+    }
 }

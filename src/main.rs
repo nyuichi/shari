@@ -113,28 +113,6 @@ fn main() -> anyhow::Result<()> {
 
     //    state.run("lemma eta.{u, v} (f : u → v) : f = (λ x, f x) := imp_elim (forall_elim (λ x, f x), (forall_elim f, fun_ext.{u, v})), (conv )")?;
 
-    let proof_env = kernel::proof::Env::new_kernel();
-    let p = mk_local(Name::intern("p").unwrap());
-
-    /*
-     * take p, assume p, already p
-     * apply p q
-     * instantiate p m
-     */
-
-    let mut h = mk_proof_forall_intro(
-        Name::intern("p").unwrap(),
-        mk_type_prop(),
-        mk_proof_imp_intro(
-            Prop { target: p.clone() },
-            mk_proof_assump(Prop { target: p }),
-        ),
-    );
-    let p = proof_env
-        .infer_prop(&mut LocalEnv::default(), &mut Context::default(), &mut h)
-        .unwrap();
-    println!("{p}");
-
     Ok(())
 }
 
