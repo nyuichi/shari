@@ -30,6 +30,12 @@ axiom prop_ext (φ ψ : Prop) : (φ ⇔ ψ) ⇒ φ = ψ
 axiom fun_ext.{u, v} (f₁ f₂ : u → v) : (∀ x, f₁ x = f₂ x) ⇒ f₁ = f₂
 axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) ⇒ ∃! f, ∀ x, R x (f x)
 
+/-
+ - TODO:
+ - * stronger type inference. (propagate constraints among exprs)
+ - * automatic insertion of change.
+ - * automatic insertion of forall_elim using higher-order unification
+ -/
 lemma tautology : ∀ φ, φ ⇒ φ := take (φ : Prop), assume φ, ⟪φ⟫
 lemma top.intro : ⊤ := change ⊤, tautology
 lemma eq.refl.{u} (m : u) : m = m := change m = m, take (P : u → Prop), tautology[P m]

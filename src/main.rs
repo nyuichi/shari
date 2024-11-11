@@ -1,26 +1,17 @@
 use lex::Lex;
 use parse::{ParseError, Parser};
 
-use crate::kernel::{
-    proof::{
-        mk_proof_assump, mk_proof_forall_intro, mk_proof_imp_intro, mk_type_prop, Context, Prop,
-    },
-    tt::{mk_local, LocalEnv, Name},
-};
-use crate::state::State;
-
 mod cmd;
 mod expr;
 mod kernel;
 mod lex;
 mod parse;
 mod print;
-mod state;
 
 fn main() -> anyhow::Result<()> {
     let input = include_str!("main.shari");
 
-    let mut state = State::new();
+    let mut state = cmd::Eval::new();
 
     let mut lex = Lex::new(input);
 
