@@ -540,34 +540,33 @@ impl Term {
         args
     }
 
-    // // λ x₁ ⋯ xₙ, m ↦ [xₙ, ⋯ , x₁]
-    // fn undischarge(&mut self) -> Vec<(Name, Type)> {
-    //     let mut xs = vec![];
-    //     let mut m = &mut *self;
-    //     while let Term::Abs(inner) = m {
-    //         let TermAbs {
-    //             binder_type,
-    //             binder_name,
-    //             body: n,
-    //         } = Arc::make_mut(inner);
-    //         xs.push((mem::take(binder_name), mem::take(binder_type)));
-    //         m = n;
-    //     }
-    //     *self = mem::take(m);
-    //     xs.reverse();
-    //     xs
-    // }
+    // λ x₁ ⋯ xₙ, m ↦ [x₁, ⋯ , xₙ]
+    pub fn undischarge(&mut self) -> Vec<(Name, Type)> {
+        let mut xs = vec![];
+        let mut m = &mut *self;
+        while let Term::Abs(inner) = m {
+            let TermAbs {
+                binder_type,
+                binder_name,
+                body: n,
+            } = Arc::make_mut(inner);
+            xs.push((mem::take(binder_name), mem::take(binder_type)));
+            m = n;
+        }
+        *self = mem::take(m);
+        xs
+    }
 
-    // // assert_eq!(self, "m");
-    // // self.discharge([x1, x2]);
-    // // assert_eq!(self, "λ x2 x1, m");
-    // fn discharge(&mut self, xs: impl IntoIterator<Item = (Name, Type)>) {
-    //     let mut m = mem::take(self);
-    //     for (name, ty) in xs {
-    //         m = mk_abs(name, ty, m);
-    //     }
-    //     *self = m;
-    // }
+    // assert_eq!(self, "m");
+    // self.discharge([x1, x2]);
+    // assert_eq!(self, "λ x1 x2, m");
+    pub fn discharge(&mut self, xs: Vec<(Name, Type)>) {
+        let mut m = mem::take(self);
+        for (name, ty) in xs.into_iter().rev() {
+            m = mk_abs(name, ty, m);
+        }
+        *self = m;
+    }
 
     pub fn abs(&mut self, name: Name, ty: Type, nickname: Name) {
         self.close(name);
