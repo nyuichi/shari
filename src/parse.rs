@@ -4,7 +4,7 @@ use crate::cmd::{
 };
 use crate::expr::{
     mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_change, mk_expr_const, mk_expr_inst,
-    mk_expr_take, Expr,
+    mk_expr_obtain, mk_expr_take, Expr,
 };
 use crate::kernel::proof::{
     mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro, mk_proof_imp_elim,
@@ -759,23 +759,24 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let e2 = self.expr()?;
                     mk_expr_app(mk_expr_assume(m, e2), e1)
                 }
-                // "obtain" => {
-                //     self.expect_symbol("(")?;
-                //     let name = self.name()?;
-                //     self.expect_symbol(":")?;
-                //     let ty = self.ty()?;
-                //     self.expect_symbol(")")?;
-                //     self.expect_symbol(",")?;
-                //     self.locals.push(name);
-                //     let p = self.term()?;
-                //     self.locals.pop();
-                //     self.expect_symbol(":=")?;
-                //     let e1 = self.expr()?;
-                //     self.expect_symbol(",")?;
-                //     self.locals.push(name);
-                //     let e2 = self.expr()?;
-                //     self.locals.pop();
-                // }
+                "obtain" => {
+                    self.expect_symbol("(")?;
+                    let name = self.name()?;
+                    self.expect_symbol(":")?;
+                    let ty = self.ty()?;
+                    self.expect_symbol(")")?;
+                    self.expect_symbol(",")?;
+                    self.locals.push(name);
+                    let p = self.term()?;
+                    self.locals.pop();
+                    self.expect_symbol(":=")?;
+                    let e1 = self.expr()?;
+                    self.expect_symbol(",")?;
+                    self.locals.push(name);
+                    let e2 = self.expr()?;
+                    self.locals.pop();
+                    mk_expr_obtain(name, ty, p, e1, e2)
+                }
                 _ => {
                     let name = Name::try_from(token.as_str()).unwrap();
                     let mut ty_args = vec![];

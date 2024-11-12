@@ -84,10 +84,10 @@ impl std::fmt::Display for Proof {
                     write!(f, ".{{")?;
                     let mut first = true;
                     for t in &inner.1 {
-                        write!(f, "{t}")?;
                         if !first {
                             write!(f, ", ")?;
                         }
+                        write!(f, "{t}")?;
                         first = false;
                     }
                     write!(f, "}}")?;

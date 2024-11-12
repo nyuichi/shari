@@ -143,6 +143,31 @@ lemma eq.ap.{u, v} (m₁ m₂ : u) (f : u → v) : m₁ = m₂ ⇒ f m₁ = f m�
 assume m₁ = m₂,
 eq.transport.{u}[m₁, m₂, λ x, f m₁ = f x] ⟪m₁ = m₂⟫ (eq.refl.{v}[f m₁])
 
+lemma eq.congr_fun.{u, v} (f₁ f₂ : u → v) (x : u) : f₁ = f₂ ⇒ f₁ x = f₂ x :=
+assume f₁ = f₂,
+eq.transport.{u → v}[f₁, f₂, (λ (f : u → v), f₁ x = f x)] ⟪f₁ = f₂⟫ eq.refl.{v}[f₁ x]
+
+lemma uexists.intro.{u} (P : u → Prop) : exists P ⇒ (∀ x₁ x₂, P x₁ ⇒ P x₂ ⇒ x₁ = x₂) ⇒ uexists P :=
+assume exists P,
+assume ∀ x₁ x₂, P x₁ ⇒ P x₂ ⇒ x₁ = x₂,
+obtain (x : u), P x := ⟪exists P⟫,
+exists.intro.{u}[(λ x, P x ∧ ∀ y, P y ⇒ x = y), x] (and.intro[P x, ∀ y, P y ⇒ x = y] ⟪P x⟫ (take (y : u), assume P y, ⟪∀ x₁ x₂, P x₁ ⇒ P x₂ ⇒ x₁ = x₂⟫[x, y] ⟪P x⟫ ⟪P y⟫))
+
+lemma uexists.exists.{u} (P : u → Prop) : uexists P ⇒ exists P :=
+assume uexists P,
+obtain (x : u), P x ∧ ∀ (y : u), P y ⇒ x = y := ⟪uexists P⟫,
+exists.intro.{u}[P, x] (and.left[P x, ∀ y, P y ⇒ x = y] ⟪P x ∧ ∀ y, P y ⇒ x = y⟫)
+
+lemma uexists.unique.{u} (P : u → Prop) (x₁ x₂ : u) : uexists P ⇒ P x₁ ⇒ P x₂ ⇒ x₁ = x₂ :=
+assume uexists P,
+assume P x₁,
+assume P x₂,
+obtain (x : u), P x ∧ ∀ y, P y ⇒ x = y := ⟪uexists P⟫,
+have ∀ y, P y ⇒ x = y := and.right[P x, ∀ y, P y ⇒ x = y] ⟪P x ∧ ∀ y, P y ⇒ x = y⟫,
+have x = x₁ := ⟪∀ y, P y ⇒ x = y⟫[x₁] ⟪P x₁⟫,
+have x = x₂ := ⟪∀ y, P y ⇒ x = y⟫[x₂] ⟪P x₂⟫,
+eq.trans.{u}[x₁, x, x₂] (eq.symm.{u}[x, x₁] ⟪x = x₁⟫) ⟪x = x₂⟫
+
 /-
  - Extensionality
  -/
@@ -159,4 +184,18 @@ fun_ext.{u, v}[f, λ x, f x] (take (x : u), eq.refl.{v}[f x])
  -/
 
 def injective.{u, v} (f : u → v) : Prop := ∀ x y, f x = f y ⇒ x = y
-def surjective.{u, v} (f : u → v) : Prop := ∀ y, ∃ x, f x = y
+def surjective.{u, v} (f : u → v) : Prop := ∀ y, ∃ x, y = f x
+
+lemma lawvere_fixpoint.{u, v} : (∃ (e : u → u → v), surjective e) ⇒ ∀ (f : v → v), ∃ y, y = f y :=
+assume ∃ (e : u → u → v), surjective e,
+take (f : v → v),
+obtain (e : u → u → v), surjective e := ⟪∃ (e : u → u → v), surjective e⟫,
+obtain (x : u), (λ x, f (e x x)) = e x := (change ∀ g, ∃ x, g = e x, ⟪surjective e⟫)[λ x, f (e x x)],
+have f (e x x) = e x x := eq.congr_fun.{u, v}[(λ x, f (e x x)), e x, x] ⟪(λ x, f (e x x)) = e x⟫,
+exists.intro.{v}[(λ y, y = f y), e x x] (eq.symm.{v}[f (e x x), e x x] ⟪f (e x x) = e x x⟫)
+
+lemma cantor.{u} : ¬(∃ (e : u → u → Prop), surjective e) :=
+mt[(∃ (e : u → u → Prop), surjective e), ∀ (f : Prop → Prop), ∃ y, y = f y] lawvere_fixpoint.{u, Prop} (
+    assume ∀ (f : Prop → Prop), ∃ y, y = f y,
+    obtain (y : Prop), y = ¬y := ⟪∀ (f : Prop → Prop), ∃ y, y = f y⟫[not],
+    contradiction[y = ¬y] ⟪y = ¬y⟫ (not.fixed_point_free[y]))

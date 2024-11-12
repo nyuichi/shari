@@ -8,7 +8,7 @@ use crate::kernel::{
         mk_proof_imp_elim, mk_proof_imp_intro, mk_proof_ref, mk_type_prop, Forall, Imp, Proof,
         Prop,
     },
-    tt::{self, Name, Term, Type},
+    tt::{self, mk_abs, mk_const, mk_local, mk_var, Name, Term, Type},
 };
 
 /// p ::= ⟪φ⟫
@@ -18,6 +18,7 @@ use crate::kernel::{
 ///     | p[m]
 ///     | change φ, p
 ///     | c.{u₁, ⋯, uₙ}
+///     | obtain (x : τ), p := e, e
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Assump(Arc<ExprAssump>),
@@ -27,6 +28,7 @@ pub enum Expr {
     Inst(Arc<ExprInst>),
     Change(Arc<ExprChange>),
     Const(Arc<ExprConst>),
+    Obtain(Arc<ExprObtain>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +73,15 @@ pub struct ExprConst {
     pub ty_args: Vec<Type>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExprObtain {
+    pub name: Name,
+    pub ty: Type,
+    pub prop: Term,
+    pub expr: Expr,
+    pub body: Expr,
+}
+
 pub fn mk_expr_assump(m: Term) -> Expr {
     Expr::Assump(Arc::new(ExprAssump { target: m }))
 }
@@ -100,6 +111,16 @@ pub fn mk_expr_change(h: Term, e: Expr) -> Expr {
 
 pub fn mk_expr_const(name: Name, ty_args: Vec<Type>) -> Expr {
     Expr::Const(Arc::new(ExprConst { name, ty_args }))
+}
+
+pub fn mk_expr_obtain(name: Name, ty: Type, prop: Term, expr: Expr, body: Expr) -> Expr {
+    Expr::Obtain(Arc::new(ExprObtain {
+        name,
+        ty,
+        prop,
+        expr,
+        body,
+    }))
 }
 
 #[derive(Debug)]
@@ -215,6 +236,63 @@ impl<'a> Eval<'a> {
                 let subst: Vec<_> = std::iter::zip(tv, inner.ty_args.iter()).collect();
                 target.target.instantiate(&subst);
                 Ok((h, target.target))
+            }
+            Expr::Obtain(inner) => {
+                let (h1, p1) = self.run_expr(&inner.expr)?;
+
+                let expr2 = mk_expr_take(
+                    inner.name,
+                    inner.ty.clone(),
+                    mk_expr_assume(inner.prop.clone(), inner.body.clone()),
+                );
+                let (h2, p2) = self.run_expr(&expr2)?;
+
+                let Forall {
+                    name: _,
+                    ty: _,
+                    body,
+                } = p2.clone().try_into().unwrap();
+                let Imp {
+                    lhs: prop,
+                    rhs: target,
+                } = body.try_into().unwrap();
+
+                if !target.is_lclosed() {
+                    bail!("eigenvariable condition failed");
+                }
+
+                let pred = mk_abs(inner.name, inner.ty.clone(), prop.clone());
+
+                let mut exists_p =
+                    mk_const(Name::intern("exists").unwrap(), vec![inner.ty.clone()]);
+                exists_p.apply([pred.clone()]);
+                let Some(path1) = self.proof_env.tt_env.equiv(&p1, &exists_p) else {
+                    bail!("terms not convertible: {} ≢ {}", p1, exists_p);
+                };
+
+                let mut p_x = pred.clone();
+                p_x.apply([mk_var(0)]);
+                let q: Term = Forall {
+                    name: inner.name,
+                    ty: inner.ty.clone(),
+                    body: Imp {
+                        lhs: p_x,
+                        rhs: target.clone(),
+                    }
+                    .into(),
+                }
+                .into();
+                let Some(path2) = self.proof_env.tt_env.equiv(&p2, &q) else {
+                    bail!("terms not convertible: {} ≢ {}", p2, q);
+                };
+
+                let exists_elim =
+                    mk_proof_ref(Name::intern("exists.elim").unwrap(), vec![inner.ty.clone()]);
+                let h = mk_proof_forall_elim(pred.clone(), exists_elim);
+                let h = mk_proof_forall_elim(target.clone(), h);
+                let h = mk_proof_imp_elim(h, mk_proof_conv(path1, h1));
+                let h = mk_proof_imp_elim(h, mk_proof_conv(path2, h2));
+                Ok((h, target))
             }
         }
     }

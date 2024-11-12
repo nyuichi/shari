@@ -419,7 +419,7 @@ impl Term {
         }
     }
 
-    fn is_lclosed(&self) -> bool {
+    pub fn is_lclosed(&self) -> bool {
         self.is_lclosed_at(0)
     }
 
@@ -1251,8 +1251,8 @@ impl EqSet {
                 (Type::Mvar(name), t) | (t, Type::Mvar(name)) => {
                     self.parents.insert(name, t);
                 }
-                (_, _) => {
-                    bail!("type mismatch");
+                (t1, t2) => {
+                    bail!("type mismatch: {t1} =/= {t2}");
                 }
             }
         }
