@@ -759,6 +759,23 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let e2 = self.expr()?;
                     mk_expr_app(mk_expr_assume(m, e2), e1)
                 }
+                // "obtain" => {
+                //     self.expect_symbol("(")?;
+                //     let name = self.name()?;
+                //     self.expect_symbol(":")?;
+                //     let ty = self.ty()?;
+                //     self.expect_symbol(")")?;
+                //     self.expect_symbol(",")?;
+                //     self.locals.push(name);
+                //     let p = self.term()?;
+                //     self.locals.pop();
+                //     self.expect_symbol(":=")?;
+                //     let e1 = self.expr()?;
+                //     self.expect_symbol(",")?;
+                //     self.locals.push(name);
+                //     let e2 = self.expr()?;
+                //     self.locals.pop();
+                // }
                 _ => {
                     let name = Name::try_from(token.as_str()).unwrap();
                     let mut ty_args = vec![];

@@ -211,7 +211,7 @@ impl<'a> Eval<'a> {
             Expr::Const(inner) => {
                 let h = mk_proof_ref(inner.name, inner.ty_args.clone());
                 let Some((tv, mut target)) = self.proof_env.facts.get(&inner.name).cloned() else {
-                    bail!("proposition not found");
+                    bail!("proposition not found: {}", inner.name);
                 };
                 let subst: Vec<_> = std::iter::zip(tv, inner.ty_args.iter()).collect();
                 target.target.instantiate(&subst);
