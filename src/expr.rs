@@ -8,7 +8,7 @@ use crate::kernel::{
         mk_proof_imp_elim, mk_proof_imp_intro, mk_proof_ref, mk_type_prop, Forall, Imp, Proof,
         Prop,
     },
-    tt::{self, mk_abs, mk_const, mk_local, mk_var, Name, Term, Type},
+    tt::{self, mk_abs, mk_const, mk_var, Name, Term, Type},
 };
 
 /// p ::= ⟪φ⟫
@@ -19,6 +19,34 @@ use crate::kernel::{
 ///     | change φ, p
 ///     | c.{u₁, ⋯, uₙ}
 ///     | obtain (x : τ), p := e, e
+///
+///
+/// --------------- (φ ∈ Φ)
+/// Γ | Φ ⊢ ⟪φ⟫ : φ
+///
+/// Γ | Φ, φ ⊢ h : ψ
+/// ----------------------------
+/// Γ | Φ ⊢ assume φ, h : φ ⇒ ψ
+///
+/// Γ | Φ ⊢ h₁ : φ ⇒ ψ    Γ | Φ ⊢ h₂ : φ
+/// -------------------------------------
+/// Γ | Φ ⊢ h₁ h₂ : ψ
+///
+/// Γ, x : u | Φ ⊢ h : φ
+/// --------------------------------------- (x # Φ)
+/// Γ | Φ ⊢ take (x : u), h : ∀ (x : u), φ
+///
+/// Γ | Φ ⊢ h : ∀ (x : u), φ
+/// ------------------------- (Γ ⊢ m : u)
+/// Γ | Φ ⊢ h[m] : [m/x]φ
+///
+/// Γ | Φ ⊢ h : φ
+/// ----------------------- (φ ≡ ψ)
+/// Γ | Φ ⊢ change ψ, h : ψ
+///
+/// --------------------------
+/// Γ | Φ ⊢  c.{u₁, ⋯, uₙ} : φ
+///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Assump(Arc<ExprAssump>),
@@ -234,7 +262,7 @@ impl<'a> Eval<'a> {
                     bail!("proposition not found: {}", inner.name);
                 };
                 let subst: Vec<_> = std::iter::zip(tv, inner.ty_args.iter()).collect();
-                target.target.instantiate(&subst);
+                target.target.inst_type_mvar(&subst);
                 Ok((h, target.target))
             }
             Expr::Obtain(inner) => {

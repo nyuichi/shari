@@ -206,6 +206,7 @@ impl Eval {
                 let mut local_env = LocalEnv {
                     local_types,
                     locals: vec![],
+                    mvars: vec![],
                 };
                 self.proof_env
                     .tt_env
@@ -245,6 +246,7 @@ impl Eval {
                 let mut local_env = LocalEnv {
                     local_types,
                     locals: vec![],
+                    mvars: vec![],
                 };
                 self.proof_env.tt_env.check_type(
                     &mut local_env,
@@ -277,6 +279,7 @@ impl Eval {
                 let mut local_env = LocalEnv {
                     local_types,
                     locals: vec![],
+                    mvars: vec![],
                 };
                 self.proof_env.tt_env.check_type(
                     &mut local_env,

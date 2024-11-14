@@ -49,11 +49,6 @@ impl Name {
         Name(id)
     }
 
-    /// Panics if the name `value` has not been internalized before.
-    pub fn get_unchecked(value: &str) -> Name {
-        *NAME_TABLE.read().unwrap().get(value).unwrap()
-    }
-
     pub fn intern(value: &str) -> Result<Name, InvalidNameError> {
         static RE: LazyLock<Regex> = LazyLock::new(|| {
             regex::Regex::new(r"[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*(\.[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*)*").unwrap()
@@ -246,6 +241,7 @@ pub enum Term {
     App(Arc<TermApp>),
     Local(Name),
     Const(Arc<TermConst>),
+    Mvar(Name),
 }
 
 #[derive(Clone, Debug, Eq, Default, Ord, PartialOrd)]
@@ -318,6 +314,9 @@ impl Display for Term {
                 }
                 Ok(())
             }
+            Term::Mvar(name) => {
+                write!(f, "(mvar {})", name)
+            }
         }
     }
 }
@@ -369,6 +368,7 @@ impl Term {
                 inner.arg.open_at(x, level);
             }
             Self::Const(_) => {}
+            Self::Mvar(_) => {}
         }
     }
 
@@ -395,6 +395,7 @@ impl Term {
                 inner.arg.close_at(name, level);
             }
             Self::Const(_) => {}
+            Self::Mvar(_) => {}
         }
     }
 
@@ -406,6 +407,7 @@ impl Term {
             Self::Abs(inner) => inner.body.is_fresh(name),
             Self::App(inner) => inner.fun.is_fresh(name) && inner.arg.is_fresh(name),
             Self::Const(_) => true,
+            Self::Mvar(_) => true,
         }
     }
 
@@ -416,6 +418,7 @@ impl Term {
             Self::Abs(inner) => inner.body.is_closed(),
             Self::App(inner) => inner.fun.is_closed() && inner.arg.is_closed(),
             Self::Const(_) => true,
+            Self::Mvar(_) => true,
         }
     }
 
@@ -430,6 +433,7 @@ impl Term {
             Self::Abs(inner) => inner.body.is_lclosed_at(level + 1),
             Self::App(inner) => inner.fun.is_lclosed_at(level) && inner.arg.is_lclosed_at(level),
             Self::Const(_) => true,
+            Self::Mvar(_) => true,
         }
     }
 
@@ -444,6 +448,7 @@ impl Term {
             Term::App(inner) => inner.fun.has_var(i) || inner.arg.has_var(i),
             Term::Local(_) => false,
             Term::Const(_) => false,
+            Term::Mvar(_) => false,
         }
     }
 
@@ -574,18 +579,18 @@ impl Term {
         *self = mk_abs(nickname, ty, m);
     }
 
-    pub fn instantiate(&mut self, subst: &[(Name, &Type)]) {
+    pub fn inst_type_mvar(&mut self, subst: &[(Name, &Type)]) {
         match self {
             Term::Var(_) => {}
             Term::Abs(inner) => {
                 let inner = Arc::make_mut(inner);
                 inner.binder_type.subst(subst);
-                inner.body.instantiate(subst);
+                inner.body.inst_type_mvar(subst);
             }
             Term::App(inner) => {
                 let inner = Arc::make_mut(inner);
-                inner.fun.instantiate(subst);
-                inner.arg.instantiate(subst);
+                inner.fun.inst_type_mvar(subst);
+                inner.arg.inst_type_mvar(subst);
             }
             Term::Local(_) => {}
             Term::Const(inner) => {
@@ -593,6 +598,7 @@ impl Term {
                     s.subst(subst);
                 }
             }
+            Term::Mvar(_) => {}
         }
     }
 
@@ -605,6 +611,7 @@ impl Term {
             }
             (Term::Local(name1), Term::Local(name2)) => name1 == name2,
             (Term::Const(inner1), Term::Const(inner2)) => inner1.name == inner2.name,
+            (Term::Mvar(name1), Term::Mvar(name2)) => name1 == name2,
             _ => false,
         }
     }
@@ -758,6 +765,7 @@ pub struct Def {
 pub struct LocalEnv {
     pub local_types: Vec<Name>,
     pub locals: Vec<(Name, Type)>,
+    pub mvars: Vec<(Name, Type)>,
 }
 
 impl Env {
@@ -926,7 +934,7 @@ impl Env {
                     self.check_kind(local_env, t, &Kind::base())?;
                     subst.push((x, t));
                 }
-                target.instantiate(&subst);
+                target.inst_type_mvar(&subst);
                 let c = mk_const(*name, ty_args.clone());
                 Ok(Conv {
                     left: c,
@@ -959,7 +967,7 @@ impl Env {
 
     fn whnf(&self, m: &mut Term) -> Path {
         match m {
-            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Abs(_) => {
+            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Mvar(_) | Term::Abs(_) => {
                 mk_path_refl(m.clone())
             }
             Term::App(inner) => {
@@ -996,7 +1004,7 @@ impl Env {
             return None;
         }
         let subst: Vec<_> = std::iter::zip(local_types.iter().copied(), ty_args.iter()).collect();
-        target.instantiate(&subst);
+        target.inst_type_mvar(&subst);
         let path = mk_path_delta(*name, mem::take(ty_args));
         *m = target;
         Some(path)
@@ -1004,7 +1012,7 @@ impl Env {
 
     fn unfold_head(&self, m: &mut Term) -> Path {
         match m {
-            Term::Var(_) | Term::Local(_) | Term::Abs(_) => mk_path_refl(m.clone()),
+            Term::Var(_) | Term::Local(_) | Term::Abs(_) | Term::Mvar(_) => mk_path_refl(m.clone()),
             Term::Const(_) => match self.delta_reduce(m) {
                 Some(path) => path,
                 None => mk_path_refl(m.clone()),
@@ -1150,6 +1158,15 @@ impl<'a> Infer<'a> {
                 }
                 bail!("unknown local variable");
             }
+            Term::Mvar(name) => {
+                for (local, ty) in &self.local_env.mvars {
+                    if local == name {
+                        self.eq_set.unify(ty.clone(), target.clone());
+                        return Ok(());
+                    }
+                }
+                bail!("unknown local variable");
+            }
             Term::Var(_) => {
                 bail!("term not locally closed");
             }
@@ -1223,7 +1240,7 @@ impl EqSet {
         ty
     }
 
-    fn solve(mut self) -> anyhow::Result<Unifier> {
+    fn solve(mut self) -> anyhow::Result<TypeUnifier> {
         while let Some((t1, t2)) = self.equations.pop() {
             let t1 = self.find(t1);
             let t2 = self.find(t2);
@@ -1256,13 +1273,13 @@ impl EqSet {
                 }
             }
         }
-        Ok(Unifier(self.parents))
+        Ok(TypeUnifier(self.parents))
     }
 }
 
-struct Unifier(HashMap<Name, Type>);
+struct TypeUnifier(HashMap<Name, Type>);
 
-impl Unifier {
+impl TypeUnifier {
     fn apply_type(&self, t: &mut Type) -> anyhow::Result<()> {
         match t {
             Type::Const(_) => {}
@@ -1301,7 +1318,7 @@ impl Unifier {
                 self.apply_term(&mut inner.fun)?;
                 self.apply_term(&mut inner.arg)?;
             }
-            Term::Local(_) => {}
+            Term::Local(_) | Term::Mvar(_) => {}
             Term::Const(inner) => {
                 let inner = Arc::make_mut(inner);
                 for ty_arg in &mut inner.ty_args {

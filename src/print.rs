@@ -238,6 +238,9 @@ impl<'a> Printer<'a> {
             Term::Local(name) => {
                 write!(f, "{name}")
             }
+            Term::Mvar(name) => {
+                write!(f, "?{name}")
+            }
             Term::Const(inner) => {
                 write!(f, "{}", inner.name)?;
                 if !inner.ty_args.is_empty() {
