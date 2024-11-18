@@ -26,7 +26,16 @@ fn main() -> anyhow::Result<()> {
                 break;
             }
         };
-        state.run_cmd(cmd)?;
+        state.run_cmd(cmd.clone())?;
+        match cmd {
+            cmd::Cmd::Def(cmd_def) => {
+                println!("defined {}", cmd_def.name);
+            }
+            cmd::Cmd::Lemma(cmd_lemma) => {
+                println!("proved {}", cmd_lemma.name);
+            }
+            _ => {}
+        }
     }
 
     // state.run("def has_fp.{u} (f : u → u) : Prop := ∃ x, x = f x")?;

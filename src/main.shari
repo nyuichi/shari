@@ -172,7 +172,7 @@ lemma not.elim (φ : Prop) : ¬φ → φ → ⊥ :=
 assume ¬φ,
 ⟪¬φ⟫
 
-lemma top_ne_bot (φ : Prop) : ⊤ ≠ ⊥ :=
+lemma top_ne_bot : ⊤ ≠ ⊥ :=
 assume ⊤ = ⊥,
 eq.conv[⊤, ⊥] ⟪⊤ = ⊥⟫ top.intro
 
@@ -183,6 +183,10 @@ eq.transport.{u}[m₁, m₂, λ x, f m₁ = f x] ⟪m₁ = m₂⟫ (eq.refl.{v}[
 lemma eq.congr_fun.{u, v} (f₁ f₂ : u → v) (x : u) : f₁ = f₂ → f₁ x = f₂ x :=
 assume f₁ = f₂,
 eq.transport.{u → v}[f₁, f₂, (λ (f : u → v), f₁ x = f x)] ⟪f₁ = f₂⟫ eq.refl.{v}[f₁ x]
+
+lemma eq.congr_arg.{u, v} (f : u → v) (x₁ x₂ : u) : x₁ = x₂ → f x₁ = f x₂ :=
+assume x₁ = x₂,
+eq.transport.{u}[x₁, x₂, (λ x, f x₁ = f x)] ⟪x₁ = x₂⟫ eq.refl.{v}[f x₁]
 
 def unique.{u} (P : u → Prop) : Prop := ∀ (x₁ x₂ : u), P x₁ → P x₂ → x₁ = x₂
 
@@ -291,14 +295,105 @@ iff.right[char d y, ∃! x, y = rep d x] rep.iff_char.{v, u}[d, y]
 lemma char.rep.{v, u} (d : comprehension v u) (x : u) : char d (rep d x) :=
 rep.char.{v, u}[d, rep d x] (uexists.intro.{u}[λ z, rep d x = rep d z] (exists.intro.{u}[(λ z, rep d x = rep d z), x] eq.refl.{v}[rep d x]) rep.unique.{v, u}[d, rep d x])
 
+lemma comprehension.ind.{v, u} (d : comprehension v u) (P : u → Prop) : (∀ (y : v) (x : u), y = rep d x → P x) → ∀ x, P x :=
+assume ∀ (y : v) (x : u), y = rep d x → P x,
+take (x : u),
+⟪∀ (y : v) (x : u), y = rep d x → P x⟫[rep d x, x] eq.refl.{v}[rep d x]
+
 /-
  - bool
  -/
 
--- type def bool := { x : Prop | x = ⊤ ∨ x = ⊥ }
+-- The type of decidable propositions.
+-- type def bool := { φ : Prop | φ = ⊤ ∨ φ = ⊥ }
 type const bool : Type
 const bool.comprehension : comprehension Prop bool
-axiom bool.spec : char bool.comprehension = (λ (x : Prop), x = ⊤ ∨ x = ⊥)
+def bool.char : Prop → Prop := λ φ, φ = ⊤ ∨ φ = ⊥
+axiom bool.spec : bool.char = char bool.comprehension
+lemma bool.char.unfold (φ : Prop) : bool.char φ → char bool.comprehension φ := assume bool.char φ, eq.conv[bool.char φ, char bool.comprehension φ] (eq.congr_fun.{Prop, Prop}[bool.char, char bool.comprehension, φ] bool.spec) ⟪bool.char φ⟫
+lemma bool.char.fold (φ : Prop) : char bool.comprehension φ → bool.char φ := assume char bool.comprehension φ, eq.conv[char bool.comprehension φ, bool.char φ] (eq.congr_fun.{Prop, Prop}[char bool.comprehension, bool.char, φ] (eq.symm.{Prop → Prop}[bool.char, char bool.comprehension] bool.spec)) ⟪char bool.comprehension φ⟫
+def bool.rep : bool → Prop := rep bool.comprehension
+lemma bool.char.abs (φ : Prop) : bool.char φ → ∃! b, φ = bool.rep b := assume bool.char φ, char.abs.{Prop, bool}[bool.comprehension, φ] (bool.char.unfold[φ] ⟪bool.char φ⟫)
+lemma bool.rep.char (φ : Prop) : (∃! b, φ = bool.rep b) → bool.char φ := assume ∃! b, φ = bool.rep b, bool.char.fold[φ] (rep.char.{Prop, bool}[bool.comprehension, φ] ⟪∃! b, φ = bool.rep b⟫)
+lemma bool.char.rep (b : bool) : bool.char (bool.rep b) := bool.char.fold[bool.rep b] char.rep.{Prop, bool}[bool.comprehension, b]
+lemma bool.comprehension.ind (P : bool → Prop) : (∀ (φ : Prop) (b : bool), φ = bool.rep b → P b) → ∀ b, P b := comprehension.ind.{Prop, bool}[bool.comprehension, P]
+lemma bool.rep.injective : injective bool.rep := rep.injective.{Prop, bool}[bool.comprehension]
+
+lemma bool.tt_uexists : ∃! (tt : bool), ⊤ = bool.rep tt :=
+bool.char.abs[⊤] (or.left[⊤ = ⊤, ⊤ = ⊥] eq.refl.{Prop}[⊤])
+
+lemma bool.ff_uexists : ∃! (ff : bool), ⊥ = bool.rep ff :=
+bool.char.abs[⊥] (or.right[⊥ = ⊤, ⊥ = ⊥] eq.refl.{Prop}[⊥])
+
+
+-- def (tt : bool), ⊤ = bool.rep tt := bool.tt.uexists
+-- def (ff : bool), ⊥ = bool.rep ff := bool.ff.uexists
+const tt : bool
+axiom tt.spec : ⊤ = bool.rep tt
+const ff : bool
+axiom ff.spec : ⊥ = bool.rep ff
+
+lemma bool.ind (P : bool → Prop) : P tt → P ff → ∀ b, P b :=
+assume P tt,
+assume P ff,
+bool.comprehension.ind[P] (
+  take (φ : Prop),
+  take (b : bool),
+  assume φ = bool.rep b,
+  have φ = ⊤ ∨ φ = ⊥ := eq.transport.{Prop}[bool.rep b, φ, bool.char] (eq.symm.{Prop}[φ, bool.rep b] ⟪φ = bool.rep b⟫) bool.char.rep[b],
+  or.elim[φ = ⊤, φ = ⊥, P b] ⟪φ = ⊤ ∨ φ = ⊥⟫
+    (assume φ = ⊤,
+      have bool.rep tt = bool.rep b := eq.trans.{Prop}[bool.rep tt, ⊤, bool.rep b] (eq.symm.{Prop}[⊤, bool.rep tt] tt.spec) (eq.trans.{Prop}[⊤, φ, bool.rep b] (eq.symm.{Prop}[φ, ⊤] ⟪φ = ⊤⟫) ⟪φ = bool.rep b⟫),
+      have tt = b := (change ∀ x y, bool.rep x = bool.rep y → x = y, bool.rep.injective)[tt, b] ⟪bool.rep tt = bool.rep b⟫,
+      eq.transport.{bool}[tt, b, P] ⟪tt = b⟫ ⟪P tt⟫)
+    (assume φ = ⊥,
+      have bool.rep ff = bool.rep b := eq.trans.{Prop}[bool.rep ff, ⊥, bool.rep b] (eq.symm.{Prop}[⊥, bool.rep ff] ff.spec) (eq.trans.{Prop}[⊥, φ, bool.rep b] (eq.symm.{Prop}[φ, ⊥] ⟪φ = ⊥⟫) ⟪φ = bool.rep b⟫),
+      have ff = b := (change ∀ x y, bool.rep x = bool.rep y → x = y, bool.rep.injective)[ff, b] ⟪bool.rep ff = bool.rep b⟫,
+      eq.transport.{bool}[ff, b, P] ⟪ff = b⟫ ⟪P ff⟫))
+
+lemma bool.case : ∀ b, b = tt ∨ b = ff :=
+bool.ind[λ b, b = tt ∨ b = ff] (or.left[tt = tt, tt = ff] eq.refl.{bool}[tt]) (or.right[ff = tt, ff = ff] eq.refl.{bool}[ff])
+
+lemma bool.tt_ne_ff : tt ≠ ff :=
+assume tt = ff,
+(change (⊤ = ⊥) → ⊥, top_ne_bot) (eq.trans.{Prop}[⊤, bool.rep tt, ⊥] tt.spec (eq.trans.{Prop}[bool.rep tt, bool.rep ff, ⊥] (eq.congr_arg.{bool, Prop}[bool.rep, tt, ff] ⟪tt = ff⟫) (eq.symm.{Prop}[⊥, bool.rep ff] ff.spec)))
+
+lemma bool.rec_exists.{u} (on_tt : u) (on_ff : u) (b : bool) : ∃ (rec : u), (b = tt → rec = on_tt) ∧ (b = ff → rec = on_ff) :=
+or.elim[b = tt, b = ff, ∃ rec, (b = tt → rec = on_tt) ∧ (b = ff → rec = on_ff)] bool.case[b]
+  (assume b = tt,
+    exists.intro.{u}[(λ rec, (b = tt → rec = on_tt) ∧ (b = ff → rec = on_ff)), on_tt]
+      (and.intro[b = tt → on_tt = on_tt, b = ff → on_tt = on_ff]
+        (assume b = tt, eq.refl.{u}[on_tt])
+        (assume b = ff, absurd[on_tt = on_ff] ((change tt = ff → ⊥, bool.tt_ne_ff) (eq.trans.{bool}[tt, b, ff] (eq.symm.{bool}[b, tt] ⟪b = tt⟫) ⟪b = ff⟫)))))
+  (assume b = ff,
+    exists.intro.{u}[(λ rec, (b = tt → rec = on_tt) ∧ (b = ff → rec = on_ff)), on_ff]
+      (and.intro[b = tt → on_ff = on_tt, b = ff → on_ff = on_ff]
+        (assume b = tt, absurd[on_ff = on_tt] ((change tt = ff → ⊥, bool.tt_ne_ff) (eq.trans.{bool}[tt, b, ff] (eq.symm.{bool}[b, tt] ⟪b = tt⟫) ⟪b = ff⟫)))
+        (assume b = ff, eq.refl.{u}[on_ff])))
+
+lemma bool.rec_unique.{u} (on_tt : u) (on_ff : u) (b : bool) : unique λ (rec : u), (b = tt → rec = on_tt) ∧ (b = ff → rec = on_ff) :=
+take (r₁ : u),
+take (r₂ : u),
+assume (b = tt → r₁ = on_tt) ∧ (b = ff → r₁ = on_ff),
+assume (b = tt → r₂ = on_tt) ∧ (b = ff → r₂ = on_ff),
+or.elim[b = tt, b = ff, r₁ = r₂] bool.case[b]
+  (assume b = tt,
+    have r₁ = on_tt := and.left[b = tt → r₁ = on_tt, b = ff → r₁ = on_ff] ⟪(b = tt → r₁ = on_tt) ∧ (b = ff → r₁ = on_ff)⟫ ⟪b = tt⟫,
+    have r₂ = on_tt := and.left[b = tt → r₂ = on_tt, b = ff → r₂ = on_ff] ⟪(b = tt → r₂ = on_tt) ∧ (b = ff → r₂ = on_ff)⟫ ⟪b = tt⟫,
+    eq.trans.{u}[r₁, on_tt, r₂] ⟪r₁ = on_tt⟫ (eq.symm.{u}[r₂, on_tt] ⟪r₂ = on_tt⟫))
+  (assume b = ff,
+    have r₁ = on_ff := and.right[b = tt → r₁ = on_tt, b = ff → r₁ = on_ff] ⟪(b = tt → r₁ = on_tt) ∧ (b = ff → r₁ = on_ff)⟫ ⟪b = ff⟫,
+    have r₂ = on_ff := and.right[b = tt → r₂ = on_tt, b = ff → r₂ = on_ff] ⟪(b = tt → r₂ = on_tt) ∧ (b = ff → r₂ = on_ff)⟫ ⟪b = ff⟫,
+    eq.trans.{u}[r₁, on_ff, r₂] ⟪r₁ = on_ff⟫ (eq.symm.{u}[r₂, on_ff] ⟪r₂ = on_ff⟫))
+
+lemma bool.rec_uexists.{u} (on_tt : u) (on_ff : u) (b : bool) : ∃! (rec : u), (b = tt → rec = on_tt) ∧ (b = ff → rec = on_ff) :=
+uexists.intro.{u}[λ (rec : u), (b = tt → rec = on_tt) ∧ (b = ff → rec = on_ff)] bool.rec_exists.{u}[on_tt, on_ff, b] bool.rec_unique.{u}[on_tt, on_ff, b]
+
+-- def (rec.{u} (on_tt : u) (on_ff : u) (b : bool) : u), (b = tt → rec on_tt on_ff b = on_tt) ∧ (b = ff → rec on_tt on_ff b = on_ff) := bool.rec_uexists.{u}
+const bool.rec.{u} : u → u → bool → u
+axiom bool.rec.spec.{u} (on_tt : u) (on_ff : u) (b : bool) : (b = tt → bool.rec.{u} on_tt on_ff b = on_tt) ∧ (b = ff → bool.rec.{u} on_tt on_ff b = on_ff)
+
+def bool.cond.{u} (b : bool) (then : u) (else : u) : u := bool.rec.{u} then else b
 
 ------------------------------------------------------------
 
