@@ -4,7 +4,7 @@ use crate::{
     expr::{self, mk_expr_change, Expr},
     kernel::{
         proof::{self, mk_type_prop, Prop},
-        tt::{Def, LocalEnv, Name, Term, Type},
+        tt::{Def, Kind, LocalEnv, Name, Term, Type},
     },
     parse::{Nasmespace, TokenTable},
     print::OpTable,
@@ -37,6 +37,8 @@ pub enum Cmd {
     Def(CmdDef),
     Axiom(CmdAxiom),
     Lemma(CmdLemma),
+    Const(CmdConst),
+    TypeConst(CmdTypeConst),
     // MetaDef(CmdMetaDef),
 }
 
@@ -95,6 +97,19 @@ pub struct CmdLemma {
     pub local_types: Vec<Name>,
     pub target: Prop,
     pub expr: Expr,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CmdConst {
+    pub name: Name,
+    pub local_types: Vec<Name>,
+    pub ty: Type,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CmdTypeConst {
+    pub name: Name,
+    pub kind: Kind,
 }
 
 #[derive(Debug, Clone)]
@@ -302,6 +317,46 @@ impl Eval {
                 self.proof_env
                     .facts
                     .insert(name, (local_env.local_types, target));
+                Ok(())
+            }
+            Cmd::Const(inner) => {
+                let CmdConst {
+                    name,
+                    local_types,
+                    ty,
+                } = inner;
+                for i in 0..local_types.len() {
+                    for j in i + 1..local_types.len() {
+                        if local_types[i] == local_types[j] {
+                            bail!("duplicate type variables");
+                        }
+                    }
+                }
+                let local_env = LocalEnv {
+                    local_types,
+                    locals: vec![],
+                    mvars: vec![],
+                };
+                self.proof_env
+                    .tt_env
+                    .check_kind(&local_env, &ty, &Kind::base())?;
+                if self.proof_env.tt_env.consts.contains_key(&name) {
+                    bail!("already defined");
+                }
+                self.ns.consts.insert(name, local_env.local_types.len());
+                self.proof_env
+                    .tt_env
+                    .consts
+                    .insert(name, (local_env.local_types.clone(), ty.clone()));
+                Ok(())
+            }
+            Cmd::TypeConst(inner) => {
+                let CmdTypeConst { name, kind } = inner;
+                if self.proof_env.tt_env.type_consts.contains_key(&name) {
+                    bail!("already defined");
+                }
+                self.ns.type_consts.insert(name);
+                self.proof_env.tt_env.type_consts.insert(name, kind);
                 Ok(())
             }
         }

@@ -1,6 +1,6 @@
 use crate::cmd::{
-    Cmd, CmdAxiom, CmdDef, CmdInfix, CmdInfixl, CmdInfixr, CmdLemma, CmdNofix, CmdPrefix, Fixity,
-    Operator,
+    Cmd, CmdAxiom, CmdConst, CmdDef, CmdInfix, CmdInfixl, CmdInfixr, CmdLemma, CmdNofix, CmdPrefix,
+    CmdTypeConst, Fixity, Operator,
 };
 use crate::expr::{
     mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_change, mk_expr_const, mk_expr_inst,
@@ -12,7 +12,7 @@ use crate::kernel::proof::{
 };
 use crate::kernel::tt::{
     mk_app, mk_const, mk_fresh_type_mvar, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
-    Name, Path, Term, Type,
+    Kind, Name, Path, Term, Type,
 };
 
 use crate::lex::{Lex, LexError, SourceInfo, Token, TokenKind};
@@ -242,6 +242,14 @@ impl<'a, 'b> Parser<'a, 'b> {
         None
     }
 
+    fn expect_ident(&mut self, name: &str) -> Result<(), ParseError> {
+        let token = self.any_token()?;
+        if token.kind == TokenKind::Ident && token.as_str() == name {
+            return Ok(());
+        }
+        Self::fail(token, format!("expected identifier '{}'", name))
+    }
+
     fn symbol(&mut self) -> Result<Token<'a>, ParseError> {
         let token = self.any_token()?;
         if !token.is_symbol() {
@@ -284,6 +292,14 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(token)
     }
 
+    fn expect_keyword(&mut self, kw: &str) -> Result<(), ParseError> {
+        let token = self.any_token()?;
+        if token.kind == TokenKind::Keyword && token.as_str() == kw {
+            return Ok(());
+        }
+        Self::fail(token, format!("expected keyword '{}'", kw))
+    }
+
     fn name(&mut self) -> Result<Name, ParseError> {
         Ok(Name::try_from(self.ident()?.as_str()).expect("logic flaw"))
     }
@@ -291,6 +307,16 @@ impl<'a, 'b> Parser<'a, 'b> {
     fn name_opt(&mut self) -> Option<Name> {
         self.ident_opt()
             .map(|token| Name::try_from(token.as_str()).expect("logic flaw"))
+    }
+
+    fn kind(&mut self) -> Result<Kind, ParseError> {
+        let mut kind = 0;
+        self.expect_ident("Type")?;
+        while self.expect_symbol_opt("→").is_some() {
+            self.expect_ident("Type")?;
+            kind += 1;
+        }
+        Ok(Kind(kind))
     }
 
     fn type_primary(&mut self) -> Result<Type, ParseError> {
@@ -926,6 +952,14 @@ impl<'a, 'b> Parser<'a, 'b> {
                 let lemma_cmd = self.lemma_cmd(keyword)?;
                 Cmd::Lemma(lemma_cmd)
             }
+            "const" => {
+                let const_cmd = self.const_cmd(keyword)?;
+                Cmd::Const(const_cmd)
+            }
+            "type" => {
+                let type_const_cmd = self.type_const_cmd(keyword)?;
+                Cmd::TypeConst(type_const_cmd)
+            }
             // "meta" => {
             //     let keyword = self.ident()?;
             //     let cmd = match keyword.as_str() {
@@ -1185,6 +1219,49 @@ impl<'a, 'b> Parser<'a, 'b> {
             target: p,
             expr: e,
         })
+    }
+
+    fn const_cmd(&mut self, _token: Token) -> Result<CmdConst, ParseError> {
+        let name = self.name()?;
+        let mut local_types = vec![];
+        if let Some(_token) = self.expect_symbol_opt(".{") {
+            if self.expect_symbol_opt("}").is_none() {
+                loop {
+                    let token = self.ident()?;
+                    let tv = Name::intern(token.as_str()).unwrap();
+                    for v in &local_types {
+                        if &tv == v {
+                            return Self::fail(token, "duplicate type variable")?;
+                        }
+                    }
+                    local_types.push(tv);
+                    if self.expect_symbol_opt(",").is_none() {
+                        break;
+                    }
+                }
+                self.expect_symbol("}")?;
+            }
+        }
+        for ty in &local_types {
+            self.type_locals.push(*ty);
+        }
+        self.expect_symbol(":")?;
+        let t = self.ty()?;
+        // Parsing finished. We can now safaly tear off.
+        self.type_locals.truncate(local_types.len());
+        Ok(CmdConst {
+            name,
+            local_types,
+            ty: t,
+        })
+    }
+
+    fn type_const_cmd(&mut self, _token: Token) -> Result<CmdTypeConst, ParseError> {
+        self.expect_keyword("const")?;
+        let name = self.name()?;
+        self.expect_symbol(":")?;
+        let kind = self.kind()?;
+        Ok(CmdTypeConst { name, kind })
     }
 
     // fn meta_def_cmd(&mut self, _token: Token) -> Result<CmdMetaDef, ParseError> {

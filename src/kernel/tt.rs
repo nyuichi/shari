@@ -304,10 +304,10 @@ impl Display for Term {
                     write!(f, ".{{")?;
                     let mut first = true;
                     for t in &inner.ty_args {
-                        write!(f, "{t}")?;
                         if !first {
                             write!(f, ", ")?;
                         }
+                        write!(f, "{t}")?;
                         first = false;
                     }
                     write!(f, "}}")?;
