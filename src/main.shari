@@ -188,6 +188,7 @@ lemma eq.congr_arg.{u, v} (f : u → v) (x₁ x₂ : u) : x₁ = x₂ → f x₁
 assume x₁ = x₂,
 eq.transport.{u}[x₁, x₂, (λ x, f x₁ = f x)] ⟪x₁ = x₂⟫ eq.refl.{v}[f x₁]
 
+-- subsingleton
 def unique.{u} (P : u → Prop) : Prop := ∀ (x₁ x₂ : u), P x₁ → P x₂ → x₁ = x₂
 
 lemma uexists.intro.{u} (P : u → Prop) : exists P → unique P → uexists P :=
@@ -225,6 +226,35 @@ and.left[φ → ψ, ψ → φ] ⟪φ ↔ ψ⟫
 lemma iff.left (φ ψ : Prop) : (φ ↔ ψ) → ψ → φ :=
 assume φ ↔ ψ,
 and.right[φ → ψ, ψ → φ] ⟪φ ↔ ψ⟫
+
+lemma exists.map.{u} (P Q : u → Prop) : (∀ x, P x → Q x) → (∃ x, P x) → ∃ x, Q x :=
+assume ∀ x, P x → Q x,
+assume ∃ x, P x,
+obtain (t : u), P t := ⟪∃ x, P x⟫,
+exists.intro.{u}[Q, t] (⟪∀ x, P x → Q x⟫[t] ⟪P t⟫)
+
+lemma unique.map.{u} (P Q : u → Prop) : (∀ x, P x → Q x) → unique.{u} Q → unique.{u} P :=
+assume ∀ x, P x → Q x,
+assume unique.{u} Q,
+take (x₁ : u),
+take (x₂ : u),
+assume P x₁,
+assume P x₂,
+(change ∀ x₁ x₂, Q x₁ → Q x₂ → x₁ = x₂, ⟪unique.{u} Q⟫)[x₁, x₂] (⟪∀ x, P x → Q x⟫[x₁] ⟪P x₁⟫) (⟪∀ x, P x → Q x⟫[x₂] ⟪P x₂⟫)
+
+lemma uexists.congr.{u} (P Q : u → Prop) : (∀ x, P x ↔ Q x) → ((∃! x, P x) ↔ ∃! x, Q x) :=
+assume ∀ x, P x ↔ Q x,
+have ∀ x, P x → Q x := take (x : u), iff.right[P x, Q x] ⟪∀ x, P x ↔ Q x⟫[x],
+have ∀ x, Q x → P x := take (x : u), iff.left[P x, Q x] ⟪∀ x, P x ↔ Q x⟫[x],
+iff.intro[(∃! x, P x), (∃! y, Q y)]
+  (assume ∃! x, P x,
+    uexists.intro.{u}[Q]
+      (exists.map.{u}[P, Q] ⟪∀ x, P x → Q x⟫ (uexists.exists.{u}[P] ⟪∃! x, P x⟫))
+      (unique.map.{u}[Q, P] ⟪∀ x, Q x → P x⟫ (uexists.unique.{u}[P] ⟪∃! x, P x⟫)))
+  (assume ∃! x, Q x,
+    uexists.intro.{u}[P]
+      (exists.map.{u}[Q, P] ⟪∀ x, Q x → P x⟫ (uexists.exists.{u}[Q] ⟪∃! x, Q x⟫))
+      (unique.map.{u}[P, Q] ⟪∀ x, P x → Q x⟫ (uexists.unique.{u}[Q] ⟪∃! x, Q x⟫)))
 
 /-
  - Extensionality
@@ -313,10 +343,10 @@ axiom bool.spec : bool.char = char bool.comprehension
 lemma bool.char.unfold (φ : Prop) : bool.char φ → char bool.comprehension φ := assume bool.char φ, eq.conv[bool.char φ, char bool.comprehension φ] (eq.congr_fun.{Prop, Prop}[bool.char, char bool.comprehension, φ] bool.spec) ⟪bool.char φ⟫
 lemma bool.char.fold (φ : Prop) : char bool.comprehension φ → bool.char φ := assume char bool.comprehension φ, eq.conv[char bool.comprehension φ, bool.char φ] (eq.congr_fun.{Prop, Prop}[char bool.comprehension, bool.char, φ] (eq.symm.{Prop → Prop}[bool.char, char bool.comprehension] bool.spec)) ⟪char bool.comprehension φ⟫
 def bool.rep : bool → Prop := rep bool.comprehension
-lemma bool.char.abs (φ : Prop) : bool.char φ → ∃! b, φ = bool.rep b := assume bool.char φ, char.abs.{Prop, bool}[bool.comprehension, φ] (bool.char.unfold[φ] ⟪bool.char φ⟫)
-lemma bool.rep.char (φ : Prop) : (∃! b, φ = bool.rep b) → bool.char φ := assume ∃! b, φ = bool.rep b, bool.char.fold[φ] (rep.char.{Prop, bool}[bool.comprehension, φ] ⟪∃! b, φ = bool.rep b⟫)
-lemma bool.char.rep (b : bool) : bool.char (bool.rep b) := bool.char.fold[bool.rep b] char.rep.{Prop, bool}[bool.comprehension, b]
-lemma bool.comprehension.ind (P : bool → Prop) : (∀ (φ : Prop) (b : bool), φ = bool.rep b → P b) → ∀ b, P b := comprehension.ind.{Prop, bool}[bool.comprehension, P]
+lemma bool.char.abs (φ : Prop) : bool.char φ → ∃! x, φ = bool.rep x := assume bool.char φ, char.abs.{Prop, bool}[bool.comprehension, φ] (bool.char.unfold[φ] ⟪bool.char φ⟫)
+lemma bool.rep.char (φ : Prop) : (∃! x, φ = bool.rep x) → bool.char φ := assume ∃! x, φ = bool.rep x, bool.char.fold[φ] (rep.char.{Prop, bool}[bool.comprehension, φ] ⟪∃! x, φ = bool.rep x⟫)
+lemma bool.char.rep (x : bool) : bool.char (bool.rep x) := bool.char.fold[bool.rep x] char.rep.{Prop, bool}[bool.comprehension, x]
+lemma bool.comprehension.ind (P : bool → Prop) : (∀ (φ : Prop) (x : bool), φ = bool.rep x → P x) → ∀ x, P x := comprehension.ind.{Prop, bool}[bool.comprehension, P]
 lemma bool.rep.injective : injective bool.rep := rep.injective.{Prop, bool}[bool.comprehension]
 
 lemma bool.tt_uexists : ∃! (tt : bool), ⊤ = bool.rep tt :=
@@ -395,30 +425,123 @@ axiom bool.rec.spec.{u} (on_tt : u) (on_ff : u) (b : bool) : (b = tt → bool.re
 
 def bool.cond.{u} (b : bool) (then : u) (else : u) : u := bool.rec.{u} then else b
 
+/-
+ - unit
+ -/
+
+-- type def unit := { φ : Prop | ⊤ = φ }
+-- We do not use { φ | φ } in the definition because prop_ext is necessary for unit to have only one element.
+type const unit : Type
+const unit.comprehension : comprehension Prop unit
+def unit.char : Prop → Prop := λ φ, ⊤ = φ
+axiom unit.spec : unit.char = char unit.comprehension
+lemma unit.char.unfold (φ : Prop) : unit.char φ → char unit.comprehension φ := assume unit.char φ, eq.conv[unit.char φ, char unit.comprehension φ] (eq.congr_fun.{Prop, Prop}[unit.char, char unit.comprehension, φ] unit.spec) ⟪unit.char φ⟫
+lemma unit.char.fold (φ : Prop) : char unit.comprehension φ → unit.char φ := assume char unit.comprehension φ, eq.conv[char unit.comprehension φ, unit.char φ] (eq.congr_fun.{Prop, Prop}[char unit.comprehension, unit.char, φ] (eq.symm.{Prop → Prop}[unit.char, char unit.comprehension] unit.spec)) ⟪char unit.comprehension φ⟫
+def unit.rep : unit → Prop := rep unit.comprehension
+lemma unit.char.abs (φ : Prop) : unit.char φ → ∃! x, φ = unit.rep x := assume unit.char φ, char.abs.{Prop, unit}[unit.comprehension, φ] (unit.char.unfold[φ] ⟪unit.char φ⟫)
+lemma unit.rep.char (φ : Prop) : (∃! x, φ = unit.rep x) → unit.char φ := assume ∃! x, φ = unit.rep x, unit.char.fold[φ] (rep.char.{Prop, unit}[unit.comprehension, φ] ⟪∃! x, φ = unit.rep x⟫)
+lemma unit.char.rep (x : unit) : unit.char (unit.rep x) := unit.char.fold[unit.rep x] char.rep.{Prop, unit}[unit.comprehension, x]
+lemma unit.comprehension.ind (P : unit → Prop) : (∀ (φ : Prop) (x : unit), φ = unit.rep x → P x) → ∀ x, P x := comprehension.ind.{Prop, unit}[unit.comprehension, P]
+lemma unit.rep.injective : injective unit.rep := rep.injective.{Prop, unit}[unit.comprehension]
+
+lemma unit.star_uexists : ∃! (star : unit), ⊤ = unit.rep star :=
+unit.char.abs[⊤] eq.refl.{Prop}[⊤]
+
+-- def (star : unit), ⊤ = unit.rep star := unit.star_uexists
+const star : unit
+axiom star.spec : ⊤ = unit.rep star
+
+lemma unit.unique (x y : unit) : x = y :=
+have unit.rep x = unit.rep y := eq.trans.{Prop}[unit.rep x, ⊤, unit.rep y] (eq.symm.{Prop}[⊤, unit.rep x] unit.char.rep[x]) unit.char.rep[y],
+(change ∀ x y, unit.rep x = unit.rep y → x = y, unit.rep.injective)[x, y] ⟪unit.rep x = unit.rep y⟫
+
+lemma unit.eta_expand (x : unit) : x = star :=
+unit.unique[x, star]
+
+lemma unit.eta_reduce (x : unit) : star = x :=
+unit.unique[star, x]
+
+lemma unit.ind (P : unit → Prop) : P star → ∀ (x : unit), P x :=
+assume P star,
+take (x : unit),
+eq.transport.{unit}[star, x, P] unit.eta_reduce[x] ⟪P star⟫
+
+/-
+ - support
+ -/
+
+-- a.k.a. the bracket type, or the propositional truncation
+-- type support u := { x : unit | ∃ (a : u), ⊤ }
+type const support : Type → Type
+const support.comprehension.{u} : comprehension unit (support u)
+def support.char.{u} : unit → Prop := λ x, ∃ (a : u), ⊤
+axiom support.spec.{u} : support.char.{u} = char support.comprehension.{u}
+lemma support.char.unfold.{u} (x : unit) : support.char.{u} x → char support.comprehension.{u} x := assume support.char.{u} x, eq.conv[support.char.{u} x, char support.comprehension.{u} x] (eq.congr_fun.{unit, Prop}[support.char.{u}, char support.comprehension.{u}, x] support.spec.{u}) ⟪support.char.{u} x⟫
+lemma support.char.fold.{u} (x : unit) : char support.comprehension.{u} x → support.char.{u} x := assume char support.comprehension.{u} x, eq.conv[char support.comprehension.{u} x, support.char.{u} x] (eq.congr_fun.{unit, Prop}[char support.comprehension.{u}, support.char.{u}, x] (eq.symm.{unit → Prop}[support.char.{u}, char support.comprehension.{u}] support.spec.{u})) ⟪char support.comprehension.{u} x⟫
+def support.rep.{u} : support u → unit := rep support.comprehension.{u}
+lemma support.char.abs.{u} (x : unit) : support.char.{u} x → ∃! h, x = support.rep.{u} h := assume support.char.{u} x, char.abs.{unit, support u}[support.comprehension.{u}, x] (support.char.unfold.{u}[x] ⟪support.char.{u} x⟫)
+lemma support.rep.char.{u} (x : unit) : (∃! h, x = support.rep.{u} h) → support.char.{u} x := assume ∃! h, x = support.rep.{u} h, support.char.fold.{u}[x] (rep.char.{unit, support u}[support.comprehension.{u}, x] ⟪∃! h, x = support.rep.{u} h⟫)
+lemma support.char.rep.{u} (h : support u) : support.char.{u} (support.rep.{u} h) := support.char.fold.{u}[support.rep.{u} h] char.rep.{unit, support u}[support.comprehension.{u}, h]
+lemma support.comprehension.ind.{u} (P : support u → Prop) : (∀ (x : unit) (h : support u), x = support.rep.{u} h → P h) → ∀ h, P h := comprehension.ind.{unit, support u}[support.comprehension.{u}, P]
+lemma support.rep.injective.{u} : injective support.rep.{u} := rep.injective.{unit, support u}[support.comprehension.{u}]
+
+lemma support.char.unfold_.{u} : support.char.{u} star → char support.comprehension.{u} star := assume support.char.{u} star, eq.conv[support.char.{u} star, char support.comprehension.{u} star] (eq.congr_fun.{unit, Prop}[support.char.{u}, char support.comprehension.{u}, star] support.spec.{u}) ⟪support.char.{u} star⟫
+lemma support.char.fold_.{u} : char support.comprehension.{u} star → support.char.{u} star := assume char support.comprehension.{u} star, eq.conv[char support.comprehension.{u} star, support.char.{u} star] (eq.congr_fun.{unit, Prop}[char support.comprehension.{u}, support.char.{u}, star] (eq.symm.{unit → Prop}[support.char.{u}, char support.comprehension.{u}] support.spec.{u})) ⟪char support.comprehension.{u} star⟫
+lemma support.char.help.{u} : (∃! (h : support u), ⊤) ↔ (∃! (h : support u), star = support.rep.{u} h) :=
+(uexists.congr.{support u}[(λ (h : support u), ⊤), (λ h, star = support.rep.{u} h)]
+  (take (h : support u),
+    iff.intro[⊤, star = support.rep.{u} h]
+      (assume ⊤,
+        unit.eta_reduce[support.rep.{u} h])
+      (assume star = support.rep.{u} h,
+        top.intro)))
+lemma support.char.abs_.{u} : support.char.{u} star → ∃! (h : support u), ⊤ :=
+assume support.char.{u} star,
+iff.left[(∃! (h : support u), ⊤), (∃! (h : support u), star = support.rep.{u} h)]
+  support.char.help.{u}
+  (support.char.abs.{u}[star] ⟪support.char.{u} star⟫)
+lemma support.rep.char_.{u} : (∃! (h : support u), ⊤) → support.char.{u} star :=
+assume ∃! (h : support u), ⊤,
+have ∃! (h : support u), star = support.rep.{u} h :=
+  iff.right[(∃! (h : support u), ⊤), (∃! (h : support u), star = support.rep.{u} h)] support.char.help.{u} ⟪∃! (h : support u), ⊤⟫,
+support.rep.char.{u}[star] ⟪∃! (h : support u), star = support.rep.{u} h⟫
+lemma support.char.rep_.{u} (h : support u) : support.char.{u} star := support.char.rep.{u}[h]
+
+lemma support.mk_uexists.{u} (x : u) : ∃! (mk : support u), ⊤ :=
+have ∃ (x : u), ⊤ :=
+  exists.intro.{u}[λ (x : u), ⊤, x] top.intro,
+support.char.abs_.{u} ⟪∃ (x : u), ⊤⟫
+
+-- def (support.mk.{u} (x : u) : support u), ⊤ := support.mk_uexists.{u}[x]
+const support.mk.{u} : u → support u
+
+lemma support.unique.{u} (h₁ h₂ : support u) : h₁ = h₂ :=
+(change ∀ h₁ h₂, support.rep.{u} h₁ = support.rep.{u} h₂ → h₁ = h₂, support.rep.injective.{u})[h₁, h₂] unit.unique[support.rep.{u} h₁, support.rep.{u} h₂]
+
+lemma support.exists_imp_uexists.{u} (P : support u → Prop) : (∃ h, P h) → ∃! h, P h :=
+assume ∃ h, P h,
+uexists.intro.{support u}[P]
+  ⟪∃ h, P h⟫
+  (take (h₁ : support u), take (h₂ : support u), assume P h₁, assume P h₂, support.unique.{u}[h₁, h₂])
+
+lemma support.join_uexists.{u} (h : support (support u)) : ∃! (h : support u), ⊤ :=
+support.exists_imp_uexists.{u}[λ (h : support u), ⊤] support.char.rep_.{support u}[h]
+
+-- def (support.join.{u} (h : support (support u)) : support u), ⊤ := support.join_uexists.{u}[h]
+const support.join.{u} : support (support u) → support u
+
+-- internal global choice operator
+-- 
+-- Introducing this constant restricts the class of models to toposes whose supports split.
+-- Note we do not have an object-level function assigning for each type u the choice function,
+-- which would imply axiom of choice.
+-- In (dependent) type theory, this operator corresponds via the propositions-as-types paradigm
+-- to the law of double negation.
+const choice.{u} : support u → u
+
 ------------------------------------------------------------
 
 /-
-
-/- extension by definition: syntax
-def (emptyset.{u} : set u), ∀ (x : u), ¬(x ∈ emptyset) := ..
-def (minus (x : u) (y : u) : u), x + (inv y) = minus x y := ..
--/
-
-/-
-
-choice : nonempty u → u
-
-// this is totally constructive
-choice : inhabited u → u
-
-// this does not imply ac (internal nor external).
-epsilon : inhabited u → (u → Prop) → u
-
-// this also does not imply ac
-epsilon : nonempty u → (u → Prop) → u
-
-choice : support u → u
-
 
 inductive inhabited (u : Type) :=
 | mk :: u → inhabited u
@@ -431,12 +554,6 @@ axiom inhabited.rec.spec.{u, v} (x : u) (f : u → v) : inhabited.rec.{u, v} (in
 instance Prop.inhabited : inhabited Prop := inhabited.mk.{Prop} ⊤
 
 def Prop.inhabited : inhabited Prop := inhabited.mk.{Prop} ⊤
--/
-
-/-
-const epsilon.{u} [inhabited u] : (u → Prop) → u
-axiom epsilon.spec.{u} [inhabited u] : ∀ (P : u → Prop), (∃ x, P x) → P (epsilon P)
--/
 
 const epsilon.{u} : inhabited u → (u → Prop) → u
 axiom epsilon.spec.{u} (h : inhabited u) (P : u → Prop) : (∃ x, P x) → P (epsilon.{u} h P)
@@ -453,67 +570,20 @@ assume ∀ x, ∃ y, R x y,
 exists.intro.{u → v}[(λ (f : u → v), ∀ x, R x (f x)), (λ (x : u), epsilon.{v} (λ y, R x y))]
 -/
 
-type const comprehension : Type → Type → Type
-const char.{v, u} : comprehension v u → v → Prop
-const rep.{v, u} : comprehension v u → u → v
-axiom rep.spec.{v, u} : ∀ (d : comprehension v u), injective (rep.{v, u} d) ∧ (∀ y, (∃! x, y = rep.{v, u} d x) ↔ char.{v, u} d y)
+type def proof := { φ : Prop | φ }
+def proof.target : proof → Prop := proof.rep
 
-type const support : Type → Type
-const support.comprehension.{u} : comprehension unit (support u)
-axiom support.spec.{u} : char support.comprehension.{u} = (λ (y : unit), ∃ (x : u), y = unit.star)
+-- hypothetical lemma (using type dependency)
+type def proof (φ : Prop) := { h : unit | φ }
+lemma to_proof (φ : Prop) : φ → ∃! (h : proof φ), ⊤
+lemma from_proof (φ : Prop) (h : proof φ) : φ
 
-const support.mk.{u} : u → support u
-
-// internal global choice operator (split support)
-const choice.{u} : support u → u
-
-axiom foo : ∃ x, P x
-
-#check foo : ∥∃ x, P x∥
-
-type def foo_choice := { h : support u | P (choice h) }
-
-lemma bar (h : support u) : rep (P ())
-
-// h : support u
-// P : u → Prop
-// ε(P) : support u → Prop
-// ε(P)(h) ≡ P(choice h)
-// 
-// ∀ h, ε(P)(h) → P(ε(choice h))
-//
-// type exists_p := { h : support u | P (choice h) }
-//
-// const choice_P : exists_P
-//
-//                                  ?
-// { h : support u | P (choice h) } → { x : u | P x }
-//                |                        |
-//                |                        | rep
-//                v                        v
-//               |u|   ------------------> u
-//                            choice
-//
-// We want: { h : support u | P (choice h) } ~ { y : unit | ∃ (x : { x : u | P x }), ⊤ }
-//
-// def g (w : { y : unit | ∃ (x : { x : u | P x }), ⊤ }) : { h : support u | P (choice h) } := obtain from ...
-// def (w : { y : unit | ∃ (x : { x : u | P x }), ⊤ }) = g (x : { h : support u | P (choice h) }) :↔ ⊤
-// def f (w : { h : support u | P (choice h) }) : { y : unit | ∃ (x : { x : u | P x }), ⊤ } := choice (rep w)
-//
-// structure iso.{u, v} :=
-// ()
-//
-// def w = f x :↔ φ w x
-//
-// const choice P : { h : support u | P (choice h) } → u := λ h, choice (rep h)
-//
 // axiom foo : φ
 //
 // check foo : support { x : unit | φ }
 //
-// 
-/-
-/-
+// def epsilon (P : u → Prop) : support { x : u | P x } → { x : u | P x } := choice.{{ x : u | P x }}
+
 class comprehension u :=
   (type base : Type)
   (char : base → Prop)
@@ -522,26 +592,6 @@ namespace comprehension {
   const rep.{u} [comprehension u] : u → base u
   axiom rep.spec.{u} [comprehension u] : injective rep ∧ (∀ y, (∃! x, y = rep x) ↔ char y)
 }
--/
-
--- setup
--- e.g. `comprehension Prop bool`
-type const comprehension : Type → Type → Type
-const char.{v, u} : comprehension v u → v → Prop
-const rep.{v, u} : comprehension v u → u → v
-axiom rep.spec.{v, u} : ∀ (d : comprehension v u), injective (rep d) ∧ (∀ y, (∃! x, y = rep d x) ↔ char d y)
-
-/-
-type def foo u := { x : bar u | φ }
-
--- compiles to...
-
-type const foo : Type → Type
-const foo.comprehension.{u} : comprehension (bar u) (foo u)
-axiom foo.spec.{u} : char foo.comprehension.{u} = (λ x, φ)
--/
-
-∃ φ, φ ∨ ψ
 
 ac : (∀ (X : { X : Prop → Prop | X = U ∨ X = V }), ∃ y, X y) → ∃ (f : { X : Prop → Prop | X = U ∨ X = V } → Prop), ∀ (X : { X : Prop → Prop | X = U ∨ X = V }), X (f X)
 
@@ -579,6 +629,4 @@ cases := ⟪φ ∨ u ≠ v⟫,
     or.left ⟪φ⟫
   have u ≠ v,
     or.right (mt ⟪φ → u = v⟫ ⟪u ≠ v⟫),
--/
-
 -/
