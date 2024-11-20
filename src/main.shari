@@ -96,7 +96,7 @@ lemma absurd (φ : Prop) : ⊥ → φ := assume ⊥, (change ∀ ξ, ξ, ⟪⊥�
 
 lemma eq.conv (φ ψ : Prop) : (φ = ψ) → φ → ψ := assume φ = ψ, (eq.transport.{Prop}[φ, ψ, λ (ξ : Prop), ξ] ⟪φ = ψ⟫)
 -- material adequacy
-lemma ma (φ : Prop) : (φ = ⊤) → φ := assume φ = ⊤, eq.conv[⊤, φ] (eq.symm.{Prop}[φ, ⊤] ⟪φ = ⊤⟫) top.intro
+lemma ma (φ : Prop) : (⊤ = φ) → φ := assume ⊤ = φ, eq.conv[⊤, φ] ⟪⊤ = φ⟫ top.intro
 
 lemma not.fixed_point_free (φ : Prop) : φ ≠ ¬φ :=
 assume φ = ¬φ,

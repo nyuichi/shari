@@ -345,6 +345,32 @@ pub fn mk_var(i: usize) -> Term {
     Term::Var(i)
 }
 
+#[derive(Debug, Clone)]
+pub struct Ctor {
+    pub head: Arc<TermConst>,
+    pub args: Vec<Term>,
+}
+
+impl TryFrom<Term> for Ctor {
+    type Error = ();
+
+    fn try_from(value: Term) -> Result<Self, Self::Error> {
+        match value {
+            Term::Const(value) => Ok(Ctor {
+                head: value,
+                args: vec![],
+            }),
+            Term::App(value) => {
+                let value = Arc::unwrap_or_clone(value);
+                let mut ctor: Ctor = value.fun.try_into()?;
+                ctor.args.push(value.arg);
+                Ok(ctor)
+            }
+            Term::Var(_) | Term::Abs(_) | Term::Local(_) | Term::Mvar(_) => Err(()),
+        }
+    }
+}
+
 impl Term {
     /// self.open(x) == [x/0]self
     pub fn open(&mut self, x: &Term) {
@@ -452,25 +478,6 @@ impl Term {
         }
     }
 
-    pub fn binders(&self) -> impl Iterator<Item = &Type> {
-        struct I<'a> {
-            m: &'a Term,
-        }
-        impl<'a> Iterator for I<'a> {
-            type Item = &'a Type;
-
-            fn next(&mut self) -> Option<Self::Item> {
-                if let Term::Abs(inner) = self.m {
-                    self.m = &inner.body;
-                    Some(&inner.binder_type)
-                } else {
-                    None
-                }
-            }
-        }
-        I { m: self }
-    }
-
     /// may return locally open terms
     fn matrix(&self) -> &Term {
         let mut m = self;
@@ -481,7 +488,7 @@ impl Term {
     }
 
     /// may return locally open terms
-    pub fn head(&self) -> &Term {
+    fn head(&self) -> &Term {
         let mut m = self.matrix();
         while let Self::App(inner) = m {
             m = &inner.fun;
@@ -490,7 +497,7 @@ impl Term {
     }
 
     /// may return locally open terms
-    pub fn args(&self) -> Vec<&Term> {
+    fn args(&self) -> Vec<&Term> {
         let mut m = self.matrix();
         let mut args = vec![];
         while let Self::App(inner) = m {
@@ -511,16 +518,6 @@ impl Term {
         *self = m;
     }
 
-    /// m.apply([l₁ ⋯ lₙ])
-    /// assert(self = m lₙ ⋯ l₁)
-    pub fn apply_rev(&mut self, mut args: Vec<Term>) {
-        let mut m = mem::take(self);
-        while let Some(arg) = args.pop() {
-            m = mk_app(m, arg);
-        }
-        *self = m;
-    }
-
     /// m = n l*
     /// m.unapply() // => l*
     /// assert(m = n)
@@ -533,7 +530,7 @@ impl Term {
     /// m = n l₁ ⋯ lₙ
     /// m.unapply() // => [lₙ ⋯ l₁]
     /// assert(m = n)
-    pub fn unapply_rev(&mut self) -> Vec<Term> {
+    fn unapply_rev(&mut self) -> Vec<Term> {
         let mut args = vec![];
         let mut m = &mut *self;
         while let Self::App(inner) = m {
@@ -546,7 +543,7 @@ impl Term {
     }
 
     // λ x₁ ⋯ xₙ, m ↦ [x₁, ⋯ , xₙ]
-    pub fn undischarge(&mut self) -> Vec<(Name, Type)> {
+    fn undischarge(&mut self) -> Vec<(Name, Type)> {
         let mut xs = vec![];
         let mut m = &mut *self;
         while let Term::Abs(inner) = m {
@@ -565,7 +562,7 @@ impl Term {
     // assert_eq!(self, "m");
     // self.discharge([x1, x2]);
     // assert_eq!(self, "λ x1 x2, m");
-    pub fn discharge(&mut self, xs: Vec<(Name, Type)>) {
+    fn discharge(&mut self, xs: Vec<(Name, Type)>) {
         let mut m = mem::take(self);
         for (name, ty) in xs.into_iter().rev() {
             m = mk_abs(name, ty, m);
@@ -573,6 +570,7 @@ impl Term {
         *self = m;
     }
 
+    // self must be locally closed.
     pub fn abs(&mut self, name: Name, ty: Type, nickname: Name) {
         self.close(name);
         let m = mem::take(self);
@@ -991,9 +989,7 @@ impl Env {
             return None;
         };
         let TermConst { name, ty_args } = Arc::make_mut(inner);
-        let Some(def) = self.defs.get(name).cloned() else {
-            return None;
-        };
+        let def = self.defs.get(name).cloned()?;
         let Def {
             local_types,
             ty: _,

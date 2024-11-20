@@ -1,6 +1,6 @@
 use crate::{
     cmd::{Fixity, Operator},
-    kernel::tt::{Name, Term, Type},
+    kernel::tt::{Ctor, Name, Term, Type},
 };
 
 use anyhow::bail;
@@ -49,180 +49,173 @@ impl<'a> Printer<'a> {
         local_names: &mut Vec<Name>,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-        if !m.binders().any(|_| true) {
-            let head = m.head();
-            let mut args = m.args();
-            if let Term::Const(inner) = head {
-                let name = inner.name;
-                if let Some(op) = self.op_table.get(name) {
-                    match op.fixity {
-                        Fixity::Infix | Fixity::Infixl => {
-                            if args.len() == 2 {
-                                if prec >= op.prec {
-                                    write!(f, "(")?;
-                                    allow_lambda = true;
-                                }
-                                let m2 = args.pop().unwrap();
-                                let m1 = args.pop().unwrap();
-                                self.fmt_term_help(m1, op.prec - 1, false, local_names, f)?;
-                                write!(f, " {} ", op.symbol)?;
-                                self.fmt_term_help(m2, op.prec, allow_lambda, local_names, f)?;
-                                if prec >= op.prec {
-                                    write!(f, ")")?;
-                                }
-                                return Ok(());
+        if let Ok(Ctor { head, mut args }) = m.clone().try_into() {
+            let name = head.name;
+            if let Some(op) = self.op_table.get(name) {
+                match op.fixity {
+                    Fixity::Infix | Fixity::Infixl => {
+                        if args.len() == 2 {
+                            if prec >= op.prec {
+                                write!(f, "(")?;
+                                allow_lambda = true;
                             }
-                        }
-                        Fixity::Infixr => {
-                            if args.len() == 2 {
-                                if prec >= op.prec {
-                                    write!(f, "(")?;
-                                    allow_lambda = true;
-                                }
-                                let m2 = args.pop().unwrap();
-                                let m1 = args.pop().unwrap();
-                                self.fmt_term_help(m1, op.prec, false, local_names, f)?;
-                                write!(f, " {} ", op.symbol)?;
-                                self.fmt_term_help(m2, op.prec - 1, allow_lambda, local_names, f)?;
-                                if prec >= op.prec {
-                                    write!(f, ")")?;
-                                }
-                                return Ok(());
+                            let m2 = args.pop().unwrap();
+                            let m1 = args.pop().unwrap();
+                            self.fmt_term_help(&m1, op.prec - 1, false, local_names, f)?;
+                            write!(f, " {} ", op.symbol)?;
+                            self.fmt_term_help(&m2, op.prec, allow_lambda, local_names, f)?;
+                            if prec >= op.prec {
+                                write!(f, ")")?;
                             }
-                        }
-                        Fixity::Nofix => {
-                            if args.is_empty() {
-                                write!(f, "{}", op.symbol)?;
-                                return Ok(());
-                            }
-                        }
-                        Fixity::Prefix => {
-                            if args.len() == 1 {
-                                if prec > op.prec {
-                                    write!(f, "(")?;
-                                    allow_lambda = true;
-                                }
-                                write!(f, "{}", op.symbol)?;
-                                let m = args.pop().unwrap();
-                                self.fmt_term_help(m, op.prec, allow_lambda, local_names, f)?;
-                                if prec > op.prec {
-                                    write!(f, ")")?;
-                                }
-                                return Ok(());
-                            }
+                            return Ok(());
                         }
                     }
-                }
-                match name.to_string().as_str() {
-                    "forall" => {
+                    Fixity::Infixr => {
+                        if args.len() == 2 {
+                            if prec >= op.prec {
+                                write!(f, "(")?;
+                                allow_lambda = true;
+                            }
+                            let m2 = args.pop().unwrap();
+                            let m1 = args.pop().unwrap();
+                            self.fmt_term_help(&m1, op.prec, false, local_names, f)?;
+                            write!(f, " {} ", op.symbol)?;
+                            self.fmt_term_help(&m2, op.prec - 1, allow_lambda, local_names, f)?;
+                            if prec >= op.prec {
+                                write!(f, ")")?;
+                            }
+                            return Ok(());
+                        }
+                    }
+                    Fixity::Nofix => {
+                        if args.is_empty() {
+                            write!(f, "{}", op.symbol)?;
+                            return Ok(());
+                        }
+                    }
+                    Fixity::Prefix => {
                         if args.len() == 1 {
-                            let mut arg = args.pop().unwrap();
-                            if let Term::Abs(inner) = &mut arg {
-                                if !allow_lambda {
-                                    write!(f, "(")?;
-                                }
-                                let mut x = inner.binder_name;
-                                'refresh: for refresh_index in 0.. {
-                                    if refresh_index > 0 {
-                                        x = Name::try_from(
-                                            format!("{}{refresh_index}", inner.binder_name)
-                                                .as_str(),
-                                        )
-                                        .unwrap();
-                                    }
-                                    for (i, local_name) in local_names.iter().rev().enumerate() {
-                                        if local_name == &x && inner.body.has_var(i + 1) {
-                                            continue 'refresh;
-                                        }
-                                    }
-                                    break;
-                                }
-                                write!(f, "∀ ({} : {}), ", x, inner.binder_type)?;
-                                local_names.push(x);
-                                self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
-                                local_names.pop();
-                                if !allow_lambda {
-                                    write!(f, ")")?;
-                                }
-                                return Ok(());
+                            if prec > op.prec {
+                                write!(f, "(")?;
+                                allow_lambda = true;
                             }
-                            args.push(arg);
+                            write!(f, "{}", op.symbol)?;
+                            let m = args.pop().unwrap();
+                            self.fmt_term_help(&m, op.prec, allow_lambda, local_names, f)?;
+                            if prec > op.prec {
+                                write!(f, ")")?;
+                            }
+                            return Ok(());
                         }
                     }
-                    "exists" => {
-                        if args.len() == 1 {
-                            let mut arg = args.pop().unwrap();
-                            if let Term::Abs(inner) = &mut arg {
-                                if !allow_lambda {
-                                    write!(f, "(")?;
-                                }
-                                let mut x = inner.binder_name;
-                                'refresh: for refresh_index in 0.. {
-                                    if refresh_index > 0 {
-                                        x = Name::try_from(
-                                            format!("{}{refresh_index}", inner.binder_name)
-                                                .as_str(),
-                                        )
-                                        .unwrap();
-                                    }
-                                    for (i, local_name) in local_names.iter().rev().enumerate() {
-                                        if local_name == &x && inner.body.has_var(i + 1) {
-                                            continue 'refresh;
-                                        }
-                                    }
-                                    break;
-                                }
-                                write!(f, "∃ ({} : {}), ", x, inner.binder_type)?;
-                                local_names.push(x);
-                                self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
-                                local_names.pop();
-                                if !allow_lambda {
-                                    write!(f, ")")?;
-                                }
-                                return Ok(());
-                            }
-                            args.push(arg);
-                        }
-                    }
-                    "uexists" => {
-                        if args.len() == 1 {
-                            let mut arg = args.pop().unwrap();
-                            if let Term::Abs(inner) = &mut arg {
-                                if !allow_lambda {
-                                    write!(f, "(")?;
-                                }
-                                let mut x = inner.binder_name;
-                                'refresh: for refresh_index in 0.. {
-                                    if refresh_index > 0 {
-                                        x = Name::try_from(
-                                            format!("{}{refresh_index}", inner.binder_name)
-                                                .as_str(),
-                                        )
-                                        .unwrap();
-                                    }
-                                    for (i, local_name) in local_names.iter().rev().enumerate() {
-                                        if local_name == &x && inner.body.has_var(i + 1) {
-                                            continue 'refresh;
-                                        }
-                                    }
-                                    break;
-                                }
-                                write!(f, "∃! ({} : {}), ", x, inner.binder_type)?;
-                                local_names.push(x);
-                                self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
-                                local_names.pop();
-                                if !allow_lambda {
-                                    write!(f, ")")?;
-                                }
-                                return Ok(());
-                            }
-                            args.push(arg);
-                        }
-                    }
-                    _ => {}
                 }
             }
-        }
+            match name.to_string().as_str() {
+                "forall" => {
+                    if args.len() == 1 {
+                        let mut arg = args.pop().unwrap();
+                        if let Term::Abs(inner) = &mut arg {
+                            if !allow_lambda {
+                                write!(f, "(")?;
+                            }
+                            let mut x = inner.binder_name;
+                            'refresh: for refresh_index in 0.. {
+                                if refresh_index > 0 {
+                                    x = Name::try_from(
+                                        format!("{}{refresh_index}", inner.binder_name).as_str(),
+                                    )
+                                    .unwrap();
+                                }
+                                for (i, local_name) in local_names.iter().rev().enumerate() {
+                                    if local_name == &x && inner.body.has_var(i + 1) {
+                                        continue 'refresh;
+                                    }
+                                }
+                                break;
+                            }
+                            write!(f, "∀ ({} : {}), ", x, inner.binder_type)?;
+                            local_names.push(x);
+                            self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
+                            local_names.pop();
+                            if !allow_lambda {
+                                write!(f, ")")?;
+                            }
+                            return Ok(());
+                        }
+                        args.push(arg);
+                    }
+                }
+                "exists" => {
+                    if args.len() == 1 {
+                        let mut arg = args.pop().unwrap();
+                        if let Term::Abs(inner) = &mut arg {
+                            if !allow_lambda {
+                                write!(f, "(")?;
+                            }
+                            let mut x = inner.binder_name;
+                            'refresh: for refresh_index in 0.. {
+                                if refresh_index > 0 {
+                                    x = Name::try_from(
+                                        format!("{}{refresh_index}", inner.binder_name).as_str(),
+                                    )
+                                    .unwrap();
+                                }
+                                for (i, local_name) in local_names.iter().rev().enumerate() {
+                                    if local_name == &x && inner.body.has_var(i + 1) {
+                                        continue 'refresh;
+                                    }
+                                }
+                                break;
+                            }
+                            write!(f, "∃ ({} : {}), ", x, inner.binder_type)?;
+                            local_names.push(x);
+                            self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
+                            local_names.pop();
+                            if !allow_lambda {
+                                write!(f, ")")?;
+                            }
+                            return Ok(());
+                        }
+                        args.push(arg);
+                    }
+                }
+                "uexists" => {
+                    if args.len() == 1 {
+                        let mut arg = args.pop().unwrap();
+                        if let Term::Abs(inner) = &mut arg {
+                            if !allow_lambda {
+                                write!(f, "(")?;
+                            }
+                            let mut x = inner.binder_name;
+                            'refresh: for refresh_index in 0.. {
+                                if refresh_index > 0 {
+                                    x = Name::try_from(
+                                        format!("{}{refresh_index}", inner.binder_name).as_str(),
+                                    )
+                                    .unwrap();
+                                }
+                                for (i, local_name) in local_names.iter().rev().enumerate() {
+                                    if local_name == &x && inner.body.has_var(i + 1) {
+                                        continue 'refresh;
+                                    }
+                                }
+                                break;
+                            }
+                            write!(f, "∃! ({} : {}), ", x, inner.binder_type)?;
+                            local_names.push(x);
+                            self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
+                            local_names.pop();
+                            if !allow_lambda {
+                                write!(f, ")")?;
+                            }
+                            return Ok(());
+                        }
+                        args.push(arg);
+                    }
+                }
+                _ => {}
+            }
+        };
 
         match m {
             &Term::Var(i) => {
