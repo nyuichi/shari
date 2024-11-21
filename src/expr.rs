@@ -8,7 +8,10 @@ use crate::kernel::{
         mk_proof_imp_elim, mk_proof_imp_intro, mk_proof_ref, mk_type_prop, Forall, Imp, Proof,
         Prop,
     },
-    tt::{self, mk_abs, mk_const, mk_var, Name, Term, Type},
+    tt::{
+        self, mk_abs, mk_const, mk_fresh_mvar, mk_fresh_type_mvar, mk_local, mk_var, LocalEnv,
+        Name, Term, Type,
+    },
 };
 
 /// p ::= ⟪φ⟫
@@ -26,26 +29,26 @@ use crate::kernel::{
 ///
 /// Γ | Φ, φ ⊢ h : ψ
 /// ----------------------------
-/// Γ | Φ ⊢ assume φ, h : φ ⇒ ψ
+/// Γ | Φ ⊢ assume φ, h : φ → ψ
 ///
-/// Γ | Φ ⊢ h₁ : φ ⇒ ψ    Γ | Φ ⊢ h₂ : φ
-/// -------------------------------------
-/// Γ | Φ ⊢ h₁ h₂ : ψ
+/// Γ | Φ ⊢ h₁ : φ    Γ | Φ ⊢ h₂ : ψ    φ ≈ ψ → ξ
+/// ----------------------------------------------
+/// Γ | Φ ⊢ h₁ h₂ : ξ
 ///
 /// Γ, x : u | Φ ⊢ h : φ
 /// --------------------------------------- (x # Φ)
 /// Γ | Φ ⊢ take (x : u), h : ∀ (x : u), φ
 ///
-/// Γ | Φ ⊢ h : ∀ (x : u), φ
-/// ------------------------- (Γ ⊢ m : u)
-/// Γ | Φ ⊢ h[m] : [m/x]φ
+/// Γ | Φ ⊢ h : φ    φ ≈ ∀ (x : u), ψ
+/// ---------------------------------- (Γ ⊢ m : u)
+/// Γ | Φ ⊢ h[m] : [m/x]ψ
 ///
 /// Γ | Φ ⊢ h : φ
 /// ----------------------- (φ ≡ ψ)
 /// Γ | Φ ⊢ change ψ, h : ψ
 ///
-/// --------------------------
-/// Γ | Φ ⊢  c.{u₁, ⋯, uₙ} : φ
+/// -------------------------
+/// Γ | Φ ⊢ c.{u₁, ⋯, uₙ} : φ
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
@@ -195,16 +198,26 @@ impl<'a> Eval<'a> {
             }
             Expr::App(inner) => {
                 let (h1, p1) = self.run_expr(&inner.expr1)?;
+                let (h2, p2) = self.run_expr(&inner.expr2)?;
 
-                // destruct φ ⇒ ψ as ψ
-                let Ok(Imp { lhs, rhs }) = p1.clone().try_into() else {
-                    bail!("not an implication: {}", p1);
+                let mut rhs = mk_fresh_mvar();
+                rhs.apply(
+                    self.local_env
+                        .locals
+                        .iter()
+                        .map(|(name, _)| mk_local(*name)),
+                );
+                let mut pat: Term = Imp { lhs: p2, rhs }.into();
+                unify(&mut p1.clone(), &mut pat, &self.proof_env.tt_env);
+                pat.normalize();
+                self.proof_env.tt_env.infer_type(self.local_env, &mut pat)?;
+
+                let Some(path) = self.proof_env.tt_env.equiv(&p1, &pat) else {
+                    bail!("terms not convertible: {} ≢ {}", p1, pat);
                 };
+                let h = mk_proof_imp_elim(mk_proof_conv(path, h1), h2);
 
-                // automatic insertion of change
-                let (h2, _) = self.run_expr(&mk_expr_change(lhs, inner.expr2.clone()))?;
-                let h = mk_proof_imp_elim(h1, h2);
-
+                let Imp { lhs: _lhs, rhs } = pat.try_into().unwrap();
                 Ok((h, rhs))
             }
             Expr::Take(inner) => {
@@ -228,20 +241,38 @@ impl<'a> Eval<'a> {
             }
             Expr::Inst(inner) => {
                 let (h, p) = self.run_expr(&inner.expr)?;
+
                 let mut arg = inner.arg.clone();
-                self.proof_env.tt_env.infer_type(self.local_env, &mut arg)?;
-                let h = mk_proof_forall_elim(arg.clone(), h);
+                let ty = self.proof_env.tt_env.infer_type(self.local_env, &mut arg)?;
 
-                // destruct ∀ (x : τ), φ as [0/x]φ
-                let Ok(Forall {
-                    name: _,
-                    ty: _,
+                let mut body = mk_fresh_mvar();
+                body.apply([mk_var(0)]);
+                body.apply(
+                    self.local_env
+                        .locals
+                        .iter()
+                        .map(|(name, _)| mk_local(*name)),
+                );
+                let mut pat: Term = Forall {
+                    name: Name::fresh(),
+                    ty: ty.clone(),
                     body,
-                }) = p.clone().try_into()
-                else {
-                    bail!("not a forall: {}", p);
-                };
+                }
+                .into();
+                unify(&mut p.clone(), &mut pat, &self.proof_env.tt_env);
+                pat.normalize();
+                self.proof_env.tt_env.infer_type(self.local_env, &mut pat)?;
 
+                let Some(path) = self.proof_env.tt_env.equiv(&p, &pat) else {
+                    bail!("terms not convertible: {} ≢ {}", p, pat);
+                };
+                let h = mk_proof_forall_elim(arg.clone(), mk_proof_conv(path, h));
+
+                let Forall {
+                    name: _name,
+                    ty: _ty,
+                    body,
+                } = pat.try_into().unwrap();
                 let mut target = body;
                 target.open(&arg);
 
@@ -326,199 +357,402 @@ impl<'a> Eval<'a> {
     }
 }
 
-// /// A convenient representation of head normal form.
-// /// Recall that every (normal) term has form `λv*. m n*`.
-// #[derive(Clone)]
-// struct Triple {
-//     /// Outermost-first
-//     binder: Vec<(Name, Type)>,
-//     /// may be locally open.
-//     head: Term,
-//     /// may be locally open.
-//     /// Huch calls these parts "arguments" [Huch, 2020](https://www21.in.tum.de/teaching/sar/SS20/5.pdf).
-//     /// See also Notation 2.29 in The Clausal Theory of Types [Wolfram, 2009].
-//     args: Vec<Term>,
-// }
+/// A convenient representation of head normal form.
+/// Recall that every (normal) term has form `λv*. m n*`.
+#[derive(Debug, Clone)]
+struct Triple {
+    /// Outermost-first
+    /// The second element is the display name of the binder.
+    binder: Vec<(Name, Name, Type)>,
+    /// must be locally closed.
+    head: Term,
+    /// must be locally closed.
+    /// Huch calls these parts "arguments" [Huch, 2020](https://www21.in.tum.de/teaching/sar/SS20/5.pdf).
+    /// See also Notation 2.29 in The Clausal Theory of Types [Wolfram, 2009].
+    args: Vec<Term>,
+}
 
-// impl From<Term> for Triple {
-//     /// m must be canonical
-//     fn from(mut m: Term) -> Self {
-//         let binder = m.undischarge();
-//         let args = m.unapply();
-//         let head = m;
-//         Self { binder, head, args }
-//     }
-// }
+impl From<Term> for Triple {
+    /// m must be canonical
+    fn from(mut m: Term) -> Self {
+        let binder = m.unabs();
+        let args = m.unapply();
+        let head = m;
+        Self { binder, head, args }
+    }
+}
 
-// impl From<Triple> for Term {
-//     fn from(m: Triple) -> Self {
-//         let Triple { binder, head, args } = m;
-//         let mut m = head;
-//         m.apply(args);
-//         m.discharge(binder);
-//         m
-//     }
-// }
+impl From<Triple> for Term {
+    fn from(m: Triple) -> Self {
+        let Triple { binder, head, args } = m;
+        let mut m = head;
+        m.apply(args);
+        m.abs(binder);
+        m
+    }
+}
 
-// impl Triple {
-//     /// See [Vukmirović+, 2020].
-//     pub fn is_flex(&self, free_list: &[Name]) -> bool {
-//         match self.head {
-//             Term::Local(local) => free_list.contains(&local),
-//             Term::Var(_) | Term::Const(_) => false,
-//             Term::Abs(_) | Term::App(_) => unreachable!(),
-//         }
-//     }
+impl Triple {
+    /// See [Vukmirović+, 2020].
+    pub fn is_flex(&self) -> bool {
+        match self.head {
+            Term::Mvar(_) => true,
+            Term::Local(_) | Term::Const(_) => false,
+            Term::Var(_) | Term::Abs(_) | Term::App(_) => unreachable!(),
+        }
+    }
 
-//     /// See [Vukmirović+, 2020].
-//     pub fn is_rigid(&self, free_list: &[Name]) -> bool {
-//         !self.is_flex(free_list)
-//     }
+    /// See [Vukmirović+, 2020].
+    pub fn is_rigid(&self) -> bool {
+        !self.is_flex()
+    }
 
-//     /// Suppose `f ≡ λx*. X t*` and `r ≡ λy*. x u*`.
-//     /// Imitation: X ↦ λz*. x (Y z*)* (when x = c)
-//     /// Projection: X ↦ λz*. zᵢ (Y z*)* (when τ(zᵢ) is compatible with τ(x))
-//     fn r#match(&self, other: &Triple) -> Vec<(Name, Term)> {
-//         assert!(self.is_flex());
-//         assert!(self.is_rigid());
-//         let (t, mid) = if let Term::Mvar(t, mid) = &self.head {
-//             (t, *mid)
-//         } else {
-//             panic!("self is not flex")
-//         };
-//         let binder: Vec<_> = t
-//             .components()
-//             .into_iter()
-//             .map(|t| (Name::fresh(), t.clone()))
-//             .collect();
-//         let mut heads = vec![];
-//         // projection
-//         for (x, u) in &binder {
-//             if t.target() == u.target() {
-//                 heads.push(Term::Fvar((*u).clone(), x.to_owned()));
-//             }
-//         }
-//         // imitation
-//         match other.head {
-//             Term::Fvar(_, _) | Term::Const(_, _) => {
-//                 heads.push(other.head.clone());
-//             }
-//             _ => {}
-//         };
-//         let mut subst = vec![];
-//         for mut head in heads {
-//             head.curry(
-//                 head.r#type()
-//                     .components()
-//                     .into_iter()
-//                     .map(|t| {
-//                         let mut t = t.clone();
-//                         t.curry(binder.iter().map(|(_, t)| (*t).clone()).collect());
-//                         let mut m = Term::Mvar(t, MvarId::fresh());
-//                         m.curry(
-//                             binder
-//                                 .iter()
-//                                 .map(|(x, t)| Term::Fvar(t.clone(), x.to_owned()))
-//                                 .collect(),
-//                         );
-//                         m
-//                     })
-//                     .collect(),
-//             );
-//             head.r#abstract(binder.clone());
-//             subst.push((mid, head));
-//         }
-//         subst
-//     }
-// }
+    /// Suppose `f ≡ λx*. X t*` and `r ≡ λy*. @ u*`.
+    /// Imitation: X ↦ λz*. @ (Y z*)* (when @ = c)
+    /// Projection: X ↦ λz*. zᵢ (Y z*)*
+    ///
+    /// Currently this method is type-agnostic.
+    fn r#match(&self, other: &Triple) -> Vec<(Name, Term)> {
+        assert!(self.is_flex());
+        assert!(other.is_rigid());
+        let mut subst = vec![];
+        let Term::Mvar(mid) = self.head else {
+            unreachable!()
+        };
+        match self.binder.len().cmp(&other.binder.len()) {
+            std::cmp::Ordering::Greater => {
+                return vec![];
+            }
+            std::cmp::Ordering::Equal => {
+                // f ≡ λ x[1] .. x[n], X t[1] .. t[p]
+                // r ≡ λ x[1] .. x[n], @ u[1] .. u[q]
+                for k in 0..=self.args.len().min(other.args.len()) {
+                    // Yield solutions in the form of:
+                    //
+                    // X ↦ λ z[1] .. z[p-k], ? (Y[1] z[1] .. z[p-k]) .. (Y[q-k] z[1] .. z[p-k])
+                    //
+                    // which means:
+                    //
+                    // f ≡ λ x[1] .. x[n], ?? (Y[1] t[1] .. t[p-k]) .. (Y[q-k] t[1] .. t[p-k]) t[p-k+1] .. t[p].
 
-// /// In Huet's original paper a disagreement set is just a finite set of pairs of terms.
-// /// For performance improvement, we classify pairs into rigid/rigid, flex/rigid, and flex/flex
-// /// at the preprocessing phase.
-// #[derive(Default)]
-// struct DisagreementSet {
-//     // rigid-rigid
-//     rr: Vec<(Triple, Triple)>,
-//     // flex-rigid
-//     fr: Vec<(Triple, Triple)>,
-//     // flex-flex
-//     ff: Vec<(Triple, Triple)>,
-// }
+                    // TODO: check if types are equal for t[-k]..t[-1] and u[-k]..u[-1]
+                    // TODO: report types of Y[1]..Y[q-k]
 
-// impl DisagreementSet {
-//     fn add(&mut self, m1: Triple, m2: Triple, free_list: &[Name]) {
-//         match (m1.is_rigid(free_list), m2.is_rigid(free_list)) {
-//             (true, true) => self.rr.push((m1, m2)),
-//             (true, false) => self.fr.push((m2, m1)),
-//             (false, true) => self.fr.push((m1, m2)),
-//             (false, false) => self.ff.push((m1, m2)),
-//         }
-//     }
+                    // z[1] .. z[p-k]
+                    let new_binders = (0..self.args.len() - k)
+                        .map(|_| {
+                            let name = Name::fresh();
+                            // TODO: determine the types of new binders from t[1]..t[p].
+                            (name, name, mk_fresh_type_mvar())
+                        })
+                        .collect::<Vec<_>>();
 
-//     /// decompose rigid-rigid pairs by chopping into smaller ones
-//     fn simplify(&mut self, free_list: &[Name]) -> bool {
-//         while let Some((h1, h2)) = self.rr.pop() {
-//             assert_eq!(h1.binder.len(), h2.binder.len());
-//             for ((_, t1), (_, t2)) in h1.binder.iter().zip(h2.binder.iter()) {
-//                 assert_eq!(t1, t2);
-//             }
-//             if h1.head != h2.head {
-//                 return false;
-//             }
-//             assert_eq!(h1.args.len(), h2.args.len());
-//             for (mut a1, mut a2) in h1.args.into_iter().zip(h2.args.into_iter()) {
-//                 a1.discharge(h1.binder.clone());
-//                 a2.discharge(h2.binder.clone());
-//                 self.add(Triple::from(a1), Triple::from(a2), free_list);
-//             }
-//         }
-//         true
-//     }
+                    // (Y[1] z[1] .. z[p-k]) .. (Y[q-k] z[1] .. z[p-k])
+                    let new_args = (0..other.args.len() - k)
+                        .map(|_| {
+                            let mut arg = mk_fresh_mvar();
+                            for i in 0..self.args.len() - k {
+                                arg.apply([mk_local(new_binders[i].0)]);
+                            }
+                            arg
+                        })
+                        .collect::<Vec<_>>();
 
-//     fn solve(self, free_list: &[Name]) -> Vec<(Name, Term)> {
-//         let mut queue = VecDeque::new();
-//         queue.push_back((self, vec![]));
-//         while let Some((mut set, subst)) = queue.pop_front() {
-//             if !set.simplify(free_list) {
-//                 continue;
-//             }
-//             if set.fr.is_empty() {
-//                 return subst;
-//             }
-//             let (h1, h2) = &set.fr[0];
-//             for (name, m) in h1.r#match(h2) {
-//                 let mut new_set = DisagreementSet::default();
-//                 for (m1, m2) in set.fr.iter().chain(set.ff.iter()) {
-//                     let mut m1 = Term::from(m1.clone());
-//                     m1.subst(name, &m);
-//                     m1.normalize();
-//                     let mut m2 = Term::from(m2.clone());
-//                     m2.subst(name, &m);
-//                     m2.normalize();
-//                     new_set.add(Triple::from(m1), Triple::from(m2), free_list);
-//                 }
-//                 let mut new_subst = subst.clone();
-//                 new_subst.push((name, m));
-//                 queue.push_back((new_set, new_subst));
-//             }
-//         }
-//         todo!("no solution found");
-//     }
-// }
+                    // projection
+                    for (x, _, _) in &new_binders {
+                        // TODO: yeild a candidate only if the target type is correct
+                        let mut cand = mk_local(*x);
+                        cand.apply(new_args.clone());
+                        cand.abs(new_binders.clone());
+                        subst.push((mid, cand));
+                    }
 
-// impl Term {
-//     /// `self` and `other` must be type-correct and type-equal under the same environment.
-//     pub fn unify(&mut self, other: &mut Term, free_list: &[Name]) {
-//         let mut set = DisagreementSet::default();
-//         self.normalize();
-//         let h1 = Triple::from(self.clone());
-//         other.normalize();
-//         let h2 = Triple::from(std::mem::take(other));
-//         set.add(h1, h2, free_list);
-//         let subst = set.solve(free_list);
-//         for (name, m) in subst {
-//             self.subst(name, &m);
-//         }
-//         *other = self.clone();
-//     }
-// }
+                    // imitation
+                    match other.head {
+                        Term::Const(_) => {
+                            let mut cand = other.head.clone();
+                            cand.apply(new_args.clone());
+                            cand.abs(new_binders.clone());
+                            subst.push((mid, cand));
+                        }
+                        Term::Local(_) => {}
+                        _ => unreachable!(),
+                    };
+                }
+            }
+            std::cmp::Ordering::Less => {
+                // f ≡ λ x[1] .. x[n],                X t[1] .. t[p]
+                // r ≡ λ x[1] .. x[n] x[n+1] .. x[m], @ u[1] .. u[q]
+                //
+                // Yield solutions in the form of:
+                //
+                // X ↦ λ z[1] .. z[p] x[n+1] .. x[m], ? (Y[1] z[1] .. z[p] x[n+1] .. x[m]) .. (Y[q] z[1] .. z[p] x[n+1] .. x[m])
+
+                // z[1] .. z[p] x[n+1] .. x[m]
+                let new_binders = (0..self.args.len())
+                    .map(|_| {
+                        let name = Name::fresh();
+                        // TODO: determine the types of new binders from t[1]..t[p].
+                        (name, name, mk_fresh_type_mvar())
+                    })
+                    .chain(
+                        other.binder[self.binder.len()..other.binder.len()]
+                            .iter()
+                            .cloned(),
+                    )
+                    .collect::<Vec<_>>();
+
+                // (Y[1] z[1] .. z[p] x[n+1] .. x[m]) .. (Y[q] z[1] .. z[p] x[n+1] .. x[m])
+                let new_args = (0..other.args.len())
+                    .map(|_| {
+                        let mut arg = mk_fresh_mvar();
+                        for &(name, _, _) in &new_binders {
+                            arg.apply([mk_local(name)]);
+                        }
+                        arg
+                    })
+                    .collect::<Vec<_>>();
+
+                // projection
+                for (x, _, _) in new_binders.iter().take(self.args.len()) {
+                    // TODO: yeild a candidate only if the target type is correct
+                    let mut cand = mk_local(*x);
+                    cand.apply(new_args.clone());
+                    cand.abs(new_binders.clone());
+                    subst.push((mid, cand));
+                }
+
+                // imitation
+                match other.head {
+                    Term::Const(_) => {
+                        let mut cand = other.head.clone();
+                        cand.apply(new_args.clone());
+                        cand.abs(new_binders.clone());
+                        subst.push((mid, cand));
+                    }
+                    Term::Local(name) => {
+                        // @ ∈ { x[n+1], .., x[m] }
+                        if other
+                            .binder
+                            .iter()
+                            .skip(self.args.len())
+                            .any(|(x, _, _)| x == &name)
+                        {
+                            let mut cand = other.head.clone();
+                            cand.apply(new_args.clone());
+                            cand.abs(new_binders.clone());
+                            subst.push((mid, cand));
+                        }
+                    }
+                    _ => unreachable!(),
+                };
+            }
+        }
+        subst
+    }
+}
+
+/// In Huet's original paper a disagreement set is just a finite set of pairs of terms.
+/// For performance improvement, we classify pairs into rigid/rigid, flex/rigid, and flex/flex
+/// at the preprocessing phase.
+struct DisagreementSet<'a> {
+    // rigid-rigid
+    rr: Vec<(Triple, Triple)>,
+    // flex-rigid
+    fr: Vec<(Triple, Triple)>,
+    // flex-flex
+    ff: Vec<(Triple, Triple)>,
+    tt_env: &'a tt::Env,
+}
+
+impl<'a> DisagreementSet<'a> {
+    fn new(tt_env: &'a tt::Env) -> Self {
+        Self {
+            rr: vec![],
+            fr: vec![],
+            ff: vec![],
+            tt_env,
+        }
+    }
+
+    fn add(&mut self, mut m1: Term, mut m2: Term) {
+        m1.hnf();
+        m2.hnf();
+        let m1 = Triple::from(m1);
+        let m2 = Triple::from(m2);
+        match (m1.is_rigid(), m2.is_rigid()) {
+            (true, true) => self.rr.push((m1, m2)),
+            (true, false) => self.fr.push((m2, m1)),
+            (false, true) => self.fr.push((m1, m2)),
+            (false, false) => self.ff.push((m1, m2)),
+        }
+    }
+
+    /// decompose rigid-rigid pairs by chopping into smaller ones
+    fn simplify(&mut self) -> bool {
+        while let Some((mut h1, mut h2)) = self.rr.pop() {
+            match (&h1.head, &h2.head) {
+                (Term::Local(name1), Term::Local(name2)) => {
+                    let mut name2 = *name2;
+                    for (i, (x, _, _)) in h2.binder.iter().enumerate() {
+                        if i == h1.binder.len() {
+                            break;
+                        }
+                        if x == &name2 {
+                            name2 = h1.binder[i].0;
+                            break;
+                        }
+                    }
+                    if name1 != &name2 {
+                        return false;
+                    }
+                }
+                (Term::Local(_), Term::Const(_)) => {
+                    if h1.binder.len() < h2.binder.len() {
+                        return false;
+                    }
+                    // TODO: check if name occurs in h2.args
+                    if self.tt_env.delta_reduce(&mut h2.head).is_none() {
+                        return false;
+                    }
+                    self.add(Term::from(h1), Term::from(h2));
+                    continue;
+                }
+                (Term::Const(_), Term::Local(_)) => {
+                    if h1.binder.len() > h2.binder.len() {
+                        return false;
+                    }
+                    // TODO: check if name occurs in h1.args
+                    if self.tt_env.delta_reduce(&mut h1.head).is_none() {
+                        return false;
+                    }
+                    self.add(Term::from(h1), Term::from(h2));
+                    continue;
+                }
+                (Term::Const(head1), Term::Const(head2)) => {
+                    if head1.name != head2.name {
+                        let def1 = self.tt_env.def_hint(head1.name);
+                        let def2 = self.tt_env.def_hint(head2.name);
+                        match (def1, def2) {
+                            (None, None) => {
+                                return false;
+                            }
+                            (Some(_), None) => {
+                                self.tt_env.delta_reduce(&mut h1.head).unwrap();
+                                self.add(Term::from(h1), Term::from(h2));
+                                continue;
+                            }
+                            (None, Some(_)) => {
+                                self.tt_env.delta_reduce(&mut h2.head).unwrap();
+                                self.add(Term::from(h1), Term::from(h2));
+                                continue;
+                            }
+                            (Some(hint1), Some(hint2)) => match hint1.cmp(&hint2) {
+                                std::cmp::Ordering::Greater => {
+                                    self.tt_env.delta_reduce(&mut h1.head).unwrap();
+                                    self.add(Term::from(h1), Term::from(h2));
+                                    continue;
+                                }
+                                std::cmp::Ordering::Less => {
+                                    self.tt_env.delta_reduce(&mut h2.head).unwrap();
+                                    self.add(Term::from(h1), Term::from(h2));
+                                    continue;
+                                }
+                                std::cmp::Ordering::Equal => {
+                                    self.tt_env.delta_reduce(&mut h1.head).unwrap();
+                                    self.tt_env.delta_reduce(&mut h2.head).unwrap();
+                                    self.add(Term::from(h1), Term::from(h2));
+                                    continue;
+                                }
+                            },
+                        }
+                    } else {
+                        if h1.binder.len() != h2.binder.len() {
+                            return false;
+                        }
+                        if h1.args.len() != h2.args.len() {
+                            return false;
+                        }
+                        let mut arg_match = true;
+                        for (a1, a2) in h1.args.iter().zip(h2.args.iter()) {
+                            if self.tt_env.equiv(a1, a2).is_none() {
+                                arg_match = false;
+                                break;
+                            }
+                        }
+                        if arg_match {
+                            continue;
+                        }
+                        if self.tt_env.delta_reduce(&mut h1.head).is_some() {
+                            self.tt_env.delta_reduce(&mut h2.head).unwrap();
+                            self.add(Term::from(h1), Term::from(h2));
+                            continue;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            // if heads are equal and neither of them can be delta-reduced.
+
+            if h1.binder.len() != h2.binder.len() {
+                return false;
+            }
+            if h1.args.len() != h2.args.len() {
+                return false;
+            }
+            for (mut a1, mut a2) in h1.args.into_iter().zip(h2.args.into_iter()) {
+                a1.abs(h1.binder.clone());
+                a2.abs(h2.binder.clone());
+                self.add(a1, a2);
+            }
+        }
+        true
+    }
+
+    fn solve(self) -> Option<Vec<(Name, Term)>> {
+        let tt_env = self.tt_env;
+        let mut queue = VecDeque::new();
+        queue.push_back((self, vec![]));
+        while let Some((mut set, subst)) = queue.pop_front() {
+            if !set.simplify() {
+                continue;
+            }
+            if set.fr.is_empty() {
+                return Some(subst);
+            }
+            let (h1, h2) = &set.fr[0];
+            for (name, m) in h1.r#match(h2) {
+                let mut new_set = DisagreementSet::<'a>::new(tt_env);
+                for (m1, m2) in set.fr.iter().chain(set.ff.iter()) {
+                    let mut m1 = Term::from(m1.clone());
+                    m1.inst_mvar(&[(name, &m)]);
+                    let mut m2 = Term::from(m2.clone());
+                    m2.inst_mvar(&[(name, &m)]);
+                    new_set.add(m1, m2);
+                }
+                let mut new_subst = subst.clone();
+                new_subst.push((name, m));
+                queue.push_back((new_set, new_subst));
+            }
+        }
+        None
+    }
+}
+
+fn unify(x: &mut Term, y: &mut Term, tt_env: &tt::Env) -> Vec<(Name, Term)> {
+    let mut set = DisagreementSet::new(tt_env);
+    set.add(x.clone(), y.clone());
+    let Some(subst) = set.solve() else {
+        panic!("unification failed:\n{x}\n{y}");
+    };
+    for (name, m) in &subst {
+        x.inst_mvar(&[(*name, m)]);
+        y.inst_mvar(&[(*name, m)]);
+    }
+    x.normalize();
+    y.normalize();
+    if !x.is_ground() || !y.is_ground() {
+        panic!("flex-flex remains\n{x}\n{y}");
+    }
+    subst
+}

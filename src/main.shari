@@ -40,6 +40,13 @@ axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) → ∃! f, ∀
 lemma tautology : ∀ φ, φ → φ := take (φ : Prop), assume φ, ⟪φ⟫
 lemma top.intro : ⊤ := tautology
 
+-- currently our unifier can not handle the following case
+/-
+def f : Prop → Prop := λ x, ⊤
+lemma f_taut (x : Prop) : ∀ (p : Prop), f p := take (p : Prop), top.intro
+lemma f_taut2 : f ⊥ := f_taut[⊥]
+-/
+
 lemma eq.refl.{u} (m : u) : m = m := take (P : u → Prop), tautology[P m]
 
 lemma eq.transport.{u} (m₁ m₂ : u) (P : u → Prop) : m₁ = m₂ → P m₁ → P m₂ :=
