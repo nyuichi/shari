@@ -330,7 +330,7 @@ impl Env {
                 let (x, t, h) = Arc::make_mut(inner);
                 self.tt_env.check_kind(local_env, t, &Kind::base())?;
                 for c in &context.props {
-                    if !c.target.is_fresh(*x) {
+                    if !c.target.is_fresh(&[*x]) {
                         bail!("eigenvariable condition fails");
                     }
                 }

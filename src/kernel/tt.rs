@@ -429,13 +429,27 @@ impl Term {
         }
     }
 
-    /// x # self <==> x ∉ FV(self)
-    pub fn is_fresh(&self, name: Name) -> bool {
+    /// {x₁, ⋯, xₙ} # self <==> ∀ i, xᵢ ∉ FV(self)
+    pub fn is_fresh(&self, free_list: &[Name]) -> bool {
         match self {
-            Self::Local(x) => x != &name,
+            Self::Local(x) => !free_list.contains(x),
             Self::Var(_) => true,
-            Self::Abs(inner) => inner.body.is_fresh(name),
-            Self::App(inner) => inner.fun.is_fresh(name) && inner.arg.is_fresh(name),
+            Self::Abs(inner) => inner.body.is_fresh(free_list),
+            Self::App(inner) => inner.fun.is_fresh(free_list) && inner.arg.is_fresh(free_list),
+            Self::Const(_) => true,
+            Self::Mvar(_) => true,
+        }
+    }
+
+    /// FV(self) ⊆ {x₁, ⋯, xₙ}
+    pub fn is_closed_in(&self, free_list: &[Name]) -> bool {
+        match self {
+            Self::Local(x) => free_list.contains(x),
+            Self::Var(_) => true,
+            Self::Abs(inner) => inner.body.is_closed_in(free_list),
+            Self::App(inner) => {
+                inner.fun.is_closed_in(free_list) && inner.arg.is_closed_in(free_list)
+            }
             Self::Const(_) => true,
             Self::Mvar(_) => true,
         }
@@ -482,27 +496,22 @@ impl Term {
         }
     }
 
-    /// may return locally open terms
-    fn matrix(&self) -> &Term {
-        let mut m = self;
-        while let Term::Abs(inner) = m {
-            m = &inner.body;
+    pub fn head(&self) -> &Term {
+        if self.is_abs() {
+            return self;
         }
-        m
-    }
-
-    /// may return locally open terms
-    fn head(&self) -> &Term {
-        let mut m = self.matrix();
+        let mut m = self;
         while let Self::App(inner) = m {
             m = &inner.fun;
         }
         m
     }
 
-    /// may return locally open terms
-    fn args(&self) -> Vec<&Term> {
-        let mut m = self.matrix();
+    pub fn args(&self) -> Vec<&Term> {
+        if self.is_abs() {
+            return vec![];
+        }
+        let mut m = self;
         let mut args = vec![];
         while let Self::App(inner) = m {
             m = &inner.fun;
@@ -510,6 +519,59 @@ impl Term {
         }
         args.reverse();
         args
+    }
+
+    pub fn is_abs(&self) -> bool {
+        match self {
+            Term::Abs(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_mvar(&self) -> bool {
+        match self {
+            Term::Mvar(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_const(&self) -> bool {
+        match self {
+            Term::Const(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Checks if self ≡ (?M l₁ ⋯ lₙ) where l₁ ⋯ lₙ are pairwise distinct locals.
+    pub fn is_pattern(&self) -> Option<Vec<Name>> {
+        let mut arg_locals = vec![];
+        if !self.head().is_mvar() {
+            return None;
+        }
+        for arg in self.args() {
+            let Term::Local(arg) = arg else {
+                return None;
+            };
+            for a in &arg_locals {
+                if a == arg {
+                    return None;
+                }
+            }
+            arg_locals.push(*arg);
+        }
+        Some(arg_locals)
+    }
+
+    pub fn is_quasi_pattern(&self) -> bool {
+        if !self.head().is_mvar() {
+            return false;
+        }
+        for arg in self.args() {
+            let Term::Local(_) = arg else {
+                return false;
+            };
+        }
+        true
     }
 
     /// m.apply([l₁ ⋯ lₙ])
@@ -542,37 +604,89 @@ impl Term {
     // Fresh names are generated on the fly.
     pub fn unabs(&mut self) -> Vec<(Name, Name, Type)> {
         let mut xs = vec![];
-        let mut m = &mut *self;
-        while let Term::Abs(inner) = m {
+        while let Term::Abs(inner) = self {
             let TermAbs {
                 binder_type,
                 binder_name,
-                body: n,
+                body,
             } = Arc::make_mut(inner);
-            let fresh_name = Name::fresh();
-            xs.push((fresh_name, *binder_name, mem::take(binder_type)));
-            n.open(&mk_local(fresh_name));
-            m = n;
+            xs.push((Name::fresh(), *binder_name, mem::take(binder_type)));
+            *self = mem::take(body);
         }
-        *self = mem::take(m);
+        self.unabs_help(&xs, 0);
         assert!(self.is_lclosed());
         xs
     }
 
+    fn unabs_help(&mut self, xs: &[(Name, Name, Type)], level: usize) {
+        match self {
+            Self::Local(_) => {}
+            Self::Var(i) => {
+                if *i < level {
+                    return;
+                }
+                if *i - level < xs.len() {
+                    *self = mk_local(xs[xs.len() - 1 - (*i - level)].0);
+                }
+            }
+            Self::Abs(inner) => {
+                Arc::make_mut(inner).body.unabs_help(xs, level + 1);
+            }
+            Self::App(inner) => {
+                let inner = Arc::make_mut(inner);
+                inner.fun.unabs_help(xs, level);
+                inner.arg.unabs_help(xs, level);
+            }
+            Self::Const(_) => {}
+            Self::Mvar(_) => {}
+        }
+    }
+
     // assert_eq!(self, "m");
-    // self.abs([x1, x2]);
+    // self.abs(&[x1, x2]);
     // assert_eq!(self, "λ x1 x2, m");
-    pub fn abs<I>(&mut self, xs: I)
-    where
-        I: IntoIterator<Item = (Name, Name, Type)>,
-        <I as IntoIterator>::IntoIter: DoubleEndedIterator,
-    {
+    //
+    // If allow_free is true, this function always succeeds and returns true.
+    // If allow_free is false and self contains extra free variables, abs returns false and the state of self is restored.
+    pub fn abs(&mut self, xs: &[(Name, Name, Type)], allow_free: bool) -> bool {
+        if !self.abs_help(xs, 0, allow_free) {
+            self.unabs_help(xs, 0);
+            return false;
+        }
         let mut m = mem::take(self);
-        for (name, binder_name, ty) in xs.into_iter().rev() {
-            m.close(name);
-            m = mk_abs(binder_name, ty, m);
+        for (_, binder_name, ty) in xs.iter().rev() {
+            m = mk_abs(*binder_name, ty.clone(), m);
         }
         *self = m;
+        true
+    }
+
+    fn abs_help(&mut self, xs: &[(Name, Name, Type)], level: usize, allow_free: bool) -> bool {
+        match self {
+            Self::Local(x) => {
+                for (i, (y, _, _)) in xs.iter().rev().enumerate() {
+                    if x == y {
+                        *self = Self::Var(level + i);
+                        return true;
+                    }
+                }
+                if !allow_free {
+                    return false;
+                }
+                true
+            }
+            Self::Var(_) => true,
+            Self::Abs(inner) => Arc::make_mut(inner)
+                .body
+                .abs_help(xs, level + 1, allow_free),
+            Self::App(inner) => {
+                let inner = Arc::make_mut(inner);
+                inner.fun.abs_help(xs, level, allow_free)
+                    && inner.arg.abs_help(xs, level, allow_free)
+            }
+            Self::Const(_) => true,
+            Self::Mvar(_) => true,
+        }
     }
 
     pub fn inst_mvar(&mut self, subst: &[(Name, &Term)]) {
@@ -632,7 +746,7 @@ impl Term {
         }
     }
 
-    fn untyped_eq(&self, other: &Term) -> bool {
+    pub fn untyped_eq(&self, other: &Term) -> bool {
         match (self, other) {
             (Term::Var(index1), Term::Var(index2)) => index1 == index2,
             (Term::Abs(inner1), Term::Abs(inner2)) => inner1.body.untyped_eq(&inner2.body),
@@ -666,23 +780,22 @@ impl Term {
         Some(path)
     }
 
-    fn whnf(&mut self) -> Path {
+    pub fn whnf(&mut self) -> Option<Path> {
         match self {
-            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Mvar(_) | Term::Abs(_) => {
-                mk_path_refl(self.clone())
-            }
+            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Mvar(_) | Term::Abs(_) => None,
             Term::App(inner) => {
                 let inner = Arc::make_mut(inner);
-                let p1 = inner.fun.whnf();
-                let p2 = mk_path_refl(inner.arg.clone());
-                let h = mk_path_congr_app(p1, p2);
-                let Term::Abs(_) = &mut inner.fun else {
-                    return h;
-                };
-                let h_redex = self.beta_reduce().unwrap();
-                let h = mk_path_trans(h, h_redex);
-                let h_next = self.whnf();
-                mk_path_trans(h, h_next)
+                let p;
+                if let Some(p_fun) = inner.fun.whnf() {
+                    let p_arg = mk_path_refl(inner.arg.clone());
+                    p = mk_path_congr_app(p_fun, p_arg);
+                } else {
+                    p = self.beta_reduce()?;
+                }
+                match self.whnf() {
+                    Some(p_next) => return Some(mk_path_trans(p, p_next)),
+                    None => return Some(p),
+                }
             }
         }
     }
@@ -698,7 +811,7 @@ impl Term {
                 for (name, _, ty) in binders.iter().rev() {
                     p = mk_path_congr_abs(*name, ty.clone(), p);
                 }
-                self.abs(binders);
+                self.abs(&binders, true);
                 p
             }
             Term::App(inner) => {
@@ -728,7 +841,7 @@ impl Term {
                 for (name, _, ty) in binders.iter().rev() {
                     p = mk_path_congr_abs(*name, ty.clone(), p);
                 }
-                self.abs(binders);
+                self.abs(&binders, true);
                 p
             }
             Term::App(inner) => {
@@ -871,7 +984,7 @@ pub fn mk_path_delta(name: Name, ty_args: Vec<Type>) -> Path {
 }
 
 impl Path {
-    fn is_refl(&self) -> bool {
+    pub fn is_refl(&self) -> bool {
         matches!(self, Path::Refl(_))
     }
 }
@@ -1024,8 +1137,8 @@ impl Env {
                 let (x, t) = local_env.locals.pop().unwrap();
                 let mut m1 = h.left;
                 let mut m2 = h.right;
-                m1.abs([(x, x, t.clone())]);
-                m2.abs([(x, x, t.clone())]);
+                m1.abs(&[(x, x, t.clone())], true);
+                m2.abs(&[(x, x, t.clone())], true);
                 Ok(Conv {
                     left: m1,
                     right: m2,
@@ -1101,7 +1214,7 @@ impl Env {
         Some(path)
     }
 
-    fn unfold_head(&self, m: &mut Term) -> Option<Path> {
+    pub fn unfold_head(&self, m: &mut Term) -> Option<Path> {
         match m {
             Term::Var(_) | Term::Local(_) | Term::Abs(_) | Term::Mvar(_) => None,
             Term::Const(_) => self.delta_reduce(m),
@@ -1133,8 +1246,11 @@ impl Env {
             let h = self.equiv_help(&mut inner1.body, &mut inner2.body)?;
             return Some(mk_path_congr_abs(x, inner1.binder_type.clone(), h));
         }
-        let h1 = m1.whnf();
-        let h2 = mk_path_symm(m2.whnf());
+        let h1 = m1.whnf().unwrap_or_else(|| mk_path_refl(m1.clone()));
+        let h2 = match m2.whnf() {
+            Some(h) => mk_path_symm(h),
+            None => mk_path_refl(m2.clone()),
+        };
         // TODO: optimize this condition check
         if !h1.is_refl() || !h2.is_refl() {
             if m1.untyped_eq(m2) {

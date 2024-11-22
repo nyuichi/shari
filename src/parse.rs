@@ -428,7 +428,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.pop();
         }
         for (name, t) in binders.into_iter().rev() {
-            m.abs([(name, name, t)]);
+            m.abs(&[(name, name, t)], true);
         }
         Ok(m)
     }
@@ -469,7 +469,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.pop();
         }
         for (name, t) in binders.into_iter().rev() {
-            m.abs([(name, name, t.clone())]);
+            m.abs(&[(name, name, t.clone())], true);
             let f = mem::take(&mut m);
             m = mk_const(Name::try_from(binder).unwrap(), vec![t]);
             m.apply(vec![f]);
@@ -1100,7 +1100,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.locals.truncate(params.len());
         self.type_locals.truncate(local_types.len());
         for (var, ty) in params.into_iter().rev() {
-            m.abs([(var, var, ty.clone())]);
+            m.abs(&[(var, var, ty.clone())], true);
             t = mk_type_arrow(ty, t);
         }
         Ok(CmdDef {
@@ -1151,7 +1151,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.locals.truncate(params.len());
         self.type_locals.truncate(local_types.len());
         for (var, ty) in params.into_iter().rev() {
-            p.target.abs([(var, var, ty.clone())]);
+            p.target.abs(&[(var, var, ty.clone())], true);
             p.target = mk_app(
                 mk_const(Name::try_from("forall").unwrap(), vec![ty]),
                 p.target,
@@ -1206,7 +1206,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.locals.truncate(params.len());
         self.type_locals.truncate(local_types.len());
         for (var, ty) in params.into_iter().rev() {
-            p.target.abs([(var, var, ty.clone())]);
+            p.target.abs(&[(var, var, ty.clone())], true);
             p.target = mk_app(
                 mk_const(Name::try_from("forall").unwrap(), vec![ty.clone()]),
                 p.target,
