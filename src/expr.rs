@@ -24,7 +24,6 @@ use crate::kernel::{
 ///     | p p
 ///     | take (x : τ), p
 ///     | p[m]
-///     | change φ, p
 ///     | c.{u₁, ⋯, uₙ}
 ///     | obtain (x : τ), p := e, e
 ///
@@ -48,10 +47,6 @@ use crate::kernel::{
 /// ---------------------------------- (Γ ⊢ m : u)
 /// Γ | Φ ⊢ h[m] : [m/x]ψ
 ///
-/// Γ | Φ ⊢ h : φ
-/// ----------------------- (φ ≡ ψ)
-/// Γ | Φ ⊢ change ψ, h : ψ
-///
 /// -------------------------
 /// Γ | Φ ⊢ c.{u₁, ⋯, uₙ} : φ
 ///
@@ -62,7 +57,6 @@ pub enum Expr {
     App(Arc<ExprApp>),
     Take(Arc<ExprTake>),
     Inst(Arc<ExprInst>),
-    Change(Arc<ExprChange>),
     Const(Arc<ExprConst>),
     Obtain(Arc<ExprObtain>),
 }
@@ -95,12 +89,6 @@ pub struct ExprTake {
 pub struct ExprInst {
     pub expr: Expr,
     pub arg: Term,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExprChange {
-    pub target: Term,
-    pub expr: Expr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,10 +127,6 @@ pub fn mk_expr_take(name: Name, ty: Type, e: Expr) -> Expr {
 
 pub fn mk_expr_inst(e: Expr, m: Term) -> Expr {
     Expr::Inst(Arc::new(ExprInst { expr: e, arg: m }))
-}
-
-pub fn mk_expr_change(h: Term, e: Expr) -> Expr {
-    Expr::Change(Arc::new(ExprChange { target: h, expr: e }))
 }
 
 pub fn mk_expr_const(name: Name, ty_args: Vec<Type>) -> Expr {
@@ -292,15 +276,6 @@ impl<'a> Eval<'a> {
                 target.open(&arg);
 
                 Ok((h, target))
-            }
-            Expr::Change(inner) => {
-                let prop = self.certify_formula(&inner.target)?;
-                let (h, p) = self.run_expr(&inner.expr)?;
-                let Some(path) = self.proof_env.tt_env.equiv(&p, &prop) else {
-                    bail!("terms not convertible: {} ≢ {}", p, prop);
-                };
-                let h = mk_proof_conv(path, h);
-                Ok((h, prop))
             }
             Expr::Const(inner) => {
                 let h = mk_proof_ref(inner.name, inner.ty_args.clone());

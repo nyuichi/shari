@@ -1,7 +1,7 @@
 use anyhow::bail;
 
 use crate::{
-    expr::{self, mk_expr_change, Expr},
+    expr::{self, mk_expr_app, mk_expr_assume, mk_expr_assump, Expr},
     kernel::{
         proof::{self, mk_type_prop, Prop},
         tt::{Def, Kind, LocalEnv, Name, Term, Type},
@@ -301,7 +301,11 @@ impl Eval {
                     &mut target.target,
                     &mut mk_type_prop(),
                 )?;
-                let expr = mk_expr_change(target.target.clone(), expr);
+                // auto insert 'change'
+                let expr = mk_expr_app(
+                    mk_expr_assume(target.target.clone(), mk_expr_assump(target.target.clone())),
+                    expr,
+                );
                 let (mut h, _target) =
                     expr::Eval::new(&self.proof_env, &mut local_env).run_expr(&expr)?;
                 self.proof_env.check_prop(

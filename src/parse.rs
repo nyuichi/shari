@@ -3,8 +3,8 @@ use crate::cmd::{
     CmdTypeConst, Fixity, Operator,
 };
 use crate::expr::{
-    mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_change, mk_expr_const, mk_expr_inst,
-    mk_expr_obtain, mk_expr_take, Expr,
+    mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_const, mk_expr_inst, mk_expr_obtain,
+    mk_expr_take, Expr,
 };
 use crate::kernel::proof::{
     mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro, mk_proof_imp_elim,
@@ -775,7 +775,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let m = self.term()?;
                     self.expect_symbol(",")?;
                     let e = self.expr()?;
-                    mk_expr_change(m, e)
+                    mk_expr_app(mk_expr_assume(m.clone(), mk_expr_assump(m)), e)
                 }
                 "have" => {
                     let m = self.term()?;
@@ -783,7 +783,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let e1 = self.expr()?;
                     self.expect_symbol(",")?;
                     let e2 = self.expr()?;
-                    mk_expr_app(mk_expr_assume(m.clone(), e2), mk_expr_change(m, e1))
+                    mk_expr_app(mk_expr_assume(m.clone(), e2), e1)
                 }
                 "obtain" => {
                     self.expect_symbol("(")?;
