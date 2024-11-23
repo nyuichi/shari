@@ -76,6 +76,8 @@ pub struct ExprAssume {
 pub struct ExprApp {
     pub expr1: Expr,
     pub expr2: Expr,
+    // ξ : Prop
+    pub target: Term,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +91,8 @@ pub struct ExprTake {
 pub struct ExprInst {
     pub expr: Expr,
     pub arg: Term,
+    // P : u → Prop
+    pub predicate: Term,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,10 +118,11 @@ pub fn mk_expr_assume(h: Term, e: Expr) -> Expr {
     Expr::Assume(Arc::new(ExprAssume { target: h, expr: e }))
 }
 
-pub fn mk_expr_app(e1: Expr, e2: Expr) -> Expr {
+pub fn mk_expr_app(e1: Expr, e2: Expr, target: Term) -> Expr {
     Expr::App(Arc::new(ExprApp {
         expr1: e1,
         expr2: e2,
+        target,
     }))
 }
 
@@ -125,8 +130,12 @@ pub fn mk_expr_take(name: Name, ty: Type, e: Expr) -> Expr {
     Expr::Take(Arc::new(ExprTake { name, ty, expr: e }))
 }
 
-pub fn mk_expr_inst(e: Expr, m: Term) -> Expr {
-    Expr::Inst(Arc::new(ExprInst { expr: e, arg: m }))
+pub fn mk_expr_inst(e: Expr, m: Term, p: Term) -> Expr {
+    Expr::Inst(Arc::new(ExprInst {
+        expr: e,
+        arg: m,
+        predicate: p,
+    }))
 }
 
 pub fn mk_expr_const(name: Name, ty_args: Vec<Type>) -> Expr {
@@ -189,14 +198,11 @@ impl<'a> Eval<'a> {
                 let (h1, p1) = self.run_expr(&inner.expr1)?;
                 let (h2, p2) = self.run_expr(&inner.expr2)?;
 
-                let mut rhs = mk_fresh_mvar();
-                rhs.apply(
-                    self.local_env
-                        .locals
-                        .iter()
-                        .map(|(name, _)| mk_local(*name)),
-                );
-                let mut pat: Term = Imp { lhs: p2, rhs }.into();
+                let mut pat: Term = Imp {
+                    lhs: p2,
+                    rhs: inner.target.clone(),
+                }
+                .into();
                 let Some(subst) = unify(&p1.clone(), &pat, &self.proof_env.tt_env) else {
                     bail!("not an implication");
                 };
@@ -239,14 +245,8 @@ impl<'a> Eval<'a> {
                 let mut arg = inner.arg.clone();
                 let ty = self.proof_env.tt_env.infer_type(self.local_env, &mut arg)?;
 
-                let mut body = mk_fresh_mvar();
+                let mut body = inner.predicate.clone();
                 body.apply([mk_var(0)]);
-                body.apply(
-                    self.local_env
-                        .locals
-                        .iter()
-                        .map(|(name, _)| mk_local(*name)),
-                );
                 let mut pat: Term = Forall {
                     name: Name::fresh(),
                     ty: ty.clone(),

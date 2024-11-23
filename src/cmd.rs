@@ -305,6 +305,7 @@ impl Eval {
                 let expr = mk_expr_app(
                     mk_expr_assume(target.target.clone(), mk_expr_assump(target.target.clone())),
                     expr,
+                    target.target.clone(),
                 );
                 let (mut h, _target) =
                     expr::Eval::new(&self.proof_env, &mut local_env).run_expr(&expr)?;

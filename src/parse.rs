@@ -11,8 +11,8 @@ use crate::kernel::proof::{
     mk_proof_imp_intro, mk_proof_ref, Proof, Prop,
 };
 use crate::kernel::tt::{
-    mk_app, mk_const, mk_fresh_type_mvar, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
-    Kind, Name, Path, Term, Type,
+    mk_app, mk_const, mk_fresh_mvar, mk_fresh_type_mvar, mk_local, mk_type_arrow, mk_type_const,
+    mk_type_local, Kind, Name, Path, Term, Type,
 };
 
 use crate::lex::{Lex, LexError, SourceInfo, Token, TokenKind};
@@ -707,6 +707,13 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(mk_proof_ref(name, ty_args))
     }
 
+    // Returns (?M l₁ ⋯ lₙ) where ?M is fresh and l₁ ⋯ lₙ are the context in place.
+    fn mk_term_hole(&mut self) -> Term {
+        let mut hole = mk_fresh_mvar();
+        hole.apply(self.locals.iter().map(|name| mk_local(*name)));
+        hole
+    }
+
     fn expr(&mut self) -> Result<Expr, ParseError> {
         self.subexpr(0)
     }
@@ -775,7 +782,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let m = self.term()?;
                     self.expect_symbol(",")?;
                     let e = self.expr()?;
-                    mk_expr_app(mk_expr_assume(m.clone(), mk_expr_assump(m)), e)
+                    mk_expr_app(mk_expr_assume(m.clone(), mk_expr_assump(m.clone())), e, m)
                 }
                 "have" => {
                     let m = self.term()?;
@@ -783,7 +790,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let e1 = self.expr()?;
                     self.expect_symbol(",")?;
                     let e2 = self.expr()?;
-                    mk_expr_app(mk_expr_assume(m.clone(), e2), e1)
+                    mk_expr_app(mk_expr_assume(m.clone(), e2), e1, self.mk_term_hole())
                 }
                 "obtain" => {
                     self.expect_symbol("(")?;
@@ -841,7 +848,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             match led {
                 ExprLed::App => {
                     let right = self.subexpr(1024)?;
-                    left = mk_expr_app(left, right);
+                    left = mk_expr_app(left, right, self.mk_term_hole());
                 }
                 ExprLed::Inst => {
                     self.advance();
@@ -855,7 +862,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     self.expect_symbol("]")?;
                     let mut e = left;
                     for arg in args {
-                        e = mk_expr_inst(e, arg);
+                        e = mk_expr_inst(e, arg, self.mk_term_hole());
                     }
                     left = e;
                 }
