@@ -60,9 +60,9 @@ lemma ma (φ : Prop) : (⊤ = φ) → φ := assume ⊤ = φ, eq.conv[_, _] ⟪�
 
 lemma not.fixed_point_free (φ : Prop) : φ ≠ ¬φ :=
 assume φ = ¬φ,
-have ¬φ := assume φ, contradiction[φ] ⟪φ⟫ (eq.conv[_, _] ⟪φ = ¬φ⟫ ⟪φ⟫),
+have ¬φ := assume φ, contradiction[_] ⟪φ⟫ (eq.conv[_, _] ⟪φ = ¬φ⟫ ⟪φ⟫),
 have φ := eq.conv[_, _] (eq.symm.{Prop}[_, _] ⟪φ = ¬φ⟫) ⟪¬φ⟫,
-contradiction[φ] ⟪φ⟫ ⟪¬φ⟫
+contradiction[_] ⟪φ⟫ ⟪¬φ⟫
 
 /-
 lemma not.fixed_point_free (φ : Prop) : φ ≠ ¬φ :=

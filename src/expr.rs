@@ -41,9 +41,9 @@ use crate::kernel::{
 /// --------------------------------------- (x # Φ)
 /// Γ | Φ ⊢ take (x : u), h : ∀ (x : u), φ
 ///
-/// Γ | Φ ⊢ h : φ    φ ≈ ∀ (x : u), ψ
-/// ---------------------------------- (Γ ⊢ m : u)
-/// Γ | Φ ⊢ h[m] : [m/x]ψ
+/// Γ | Φ ⊢ h : φ    φ ≈ ∀ (x : u), ψ x
+/// ------------------------------------ (Γ ⊢ m : u)
+/// Γ | Φ ⊢ h[m] : ψ m
 ///
 /// -------------------------
 /// Γ | Φ ⊢ c.{u₁, ⋯, uₙ} : φ
@@ -271,7 +271,11 @@ impl Expr {
                 target.normalize();
             }
             Expr::Take(e) => {
-                let ExprTake { name: _, ty, expr } = Arc::make_mut(e);
+                let ExprTake {
+                    name: _,
+                    ty: _,
+                    expr,
+                } = Arc::make_mut(e);
                 expr.normalize();
             }
             Expr::Inst(e) => {
@@ -579,9 +583,17 @@ impl<'a> Env<'a> {
         let type_subst = TypeUnifier::new(self.type_constraints).solve()?;
 
         // we defer type instantiation because our unifier does not touch types.
-        let subst = Unifier::new(self.tt_env, self.term_constraints)
+        let mut subst = Unifier::new(self.tt_env, self.term_constraints)
             .solve()
             .context("unification failed")?;
+        // Because subst is not topologically sorted, make it sorted by applying subst to subst in order.
+        for i in 1..subst.len() {
+            let (first, last) = subst.split_at_mut(i);
+            let (name, m) = first.last().unwrap();
+            for (_, n) in last {
+                n.inst_mvar(&[(*name, m)]);
+            }
+        }
         for (name, m) in subst {
             let subst = [(name, &m)];
             e.inst_mvar(&subst);
