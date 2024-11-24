@@ -68,6 +68,7 @@ enum Nud {
     Uexists,
     Paren,
     Bracket,
+    Hole,
     User(Operator),
     NumLit,
 }
@@ -106,6 +107,7 @@ impl TokenTable {
                     "∀" => Some(Nud::Forall),
                     "∃" => Some(Nud::Exists),
                     "∃!" => Some(Nud::Uexists),
+                    "_" => Some(Nud::Hole),
                     _ => self.nud.get(token.as_str()).map(|op| Nud::User(op.clone())),
                 }
             }
@@ -571,6 +573,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                 Fixity::Infix | Fixity::Infixl | Fixity::Infixr => unreachable!(),
             },
             Nud::NumLit => Self::fail(token, "numeric literal is unsupported")?,
+            Nud::Hole => self.mk_term_hole(),
         };
         while let Some(token) = self.peek_opt() {
             let led = match self.tt.get_led(&token) {
@@ -815,7 +818,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let e2 = self.expr()?;
                     self.locals.pop();
 
-                    // Expand[obtain (x : τ), p := e1, e2] := exists.elim.{τ}[(λ (x : τ), p), ?M] e1 (take (x : τ), assume p, e2)
+                    // Expand[obtain (x : τ), p := e1, e2] := exists.elim.{τ}[(λ (x : τ), p), _] e1 (take (x : τ), assume p, e2)
                     let e = mk_expr_const(Name::intern("exists.elim").unwrap(), vec![ty.clone()]);
                     let mut pred = p.clone();
                     pred.abs(&[(name, name, ty.clone())], true);
@@ -828,6 +831,9 @@ impl<'a, 'b> Parser<'a, 'b> {
                 }
                 _ => {
                     let name = Name::try_from(token.as_str()).unwrap();
+                    let Some(ty_arity) = self.ns.facts.get(&name).copied() else {
+                        return Self::fail(token, "unknown variable");
+                    };
                     let mut ty_args = vec![];
                     if let Some(_token) = self.expect_symbol_opt(".{") {
                         if self.expect_symbol_opt("}").is_none() {
@@ -838,6 +844,10 @@ impl<'a, 'b> Parser<'a, 'b> {
                                 }
                             }
                             self.expect_symbol("}")?;
+                        }
+                    } else {
+                        for _ in 0..ty_arity {
+                            ty_args.push(mk_fresh_type_mvar());
                         }
                     }
                     mk_expr_const(name, ty_args)
