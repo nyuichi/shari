@@ -7,7 +7,7 @@ use crate::expr::{
 };
 use crate::kernel::proof::{
     mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro, mk_proof_imp_elim,
-    mk_proof_imp_intro, mk_proof_ref, Proof, Prop,
+    mk_proof_imp_intro, mk_proof_ref, Proof,
 };
 use crate::kernel::tt::{
     mk_app, mk_const, mk_fresh_mvar, mk_fresh_type_mvar, mk_local, mk_type_arrow, mk_type_const,
@@ -606,12 +606,6 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(left)
     }
 
-    fn prop(&mut self) -> Result<Prop, ParseError> {
-        Ok(Prop {
-            target: self.term()?,
-        })
-    }
-
     fn path(&mut self) -> Result<Path, ParseError> {
         todo!();
     }
@@ -635,12 +629,12 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     fn proof_assump(&mut self) -> Result<Proof, ParseError> {
-        let p = self.prop()?;
+        let p = self.term()?;
         Ok(mk_proof_assump(p))
     }
 
     fn proof_imp_intro(&mut self) -> Result<Proof, ParseError> {
-        let p = self.prop()?;
+        let p = self.term()?;
         self.expect_symbol(",")?;
         let h = self.proof()?;
         Ok(mk_proof_imp_intro(p, h))
@@ -1179,16 +1173,13 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.push(*x);
         }
         self.expect_symbol(":")?;
-        let mut p = self.prop()?;
+        let mut p = self.term()?;
         // Parsing finished. We can now safaly tear off.
         self.locals.truncate(params.len());
         self.type_locals.truncate(local_types.len());
         for (var, ty) in params.into_iter().rev() {
-            p.target.abs(&[(var, var, ty.clone())], true);
-            p.target = mk_app(
-                mk_const(Name::try_from("forall").unwrap(), vec![ty]),
-                p.target,
-            );
+            p.abs(&[(var, var, ty.clone())], true);
+            p = mk_app(mk_const(Name::try_from("forall").unwrap(), vec![ty]), p);
         }
         Ok(CmdAxiom {
             name,
@@ -1232,17 +1223,17 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.push(*x);
         }
         self.expect_symbol(":")?;
-        let mut p = self.prop()?;
+        let mut p = self.term()?;
         self.expect_symbol(":=")?;
         let mut e = self.expr()?;
         // Parsing finished. We can now safaly tear off.
         self.locals.truncate(params.len());
         self.type_locals.truncate(local_types.len());
         for (var, ty) in params.into_iter().rev() {
-            p.target.abs(&[(var, var, ty.clone())], true);
-            p.target = mk_app(
+            p.abs(&[(var, var, ty.clone())], true);
+            p = mk_app(
                 mk_const(Name::try_from("forall").unwrap(), vec![ty.clone()]),
-                p.target,
+                p,
             );
             e = mk_expr_take(var, ty, e);
         }

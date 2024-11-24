@@ -3,7 +3,7 @@ use anyhow::bail;
 use crate::{
     expr::{self, mk_expr_app, mk_expr_assume, mk_expr_assump, Expr},
     kernel::{
-        proof::{self, mk_type_prop, Prop},
+        proof::{self, mk_type_prop},
         tt::{Def, Kind, LocalEnv, Name, Term, Type},
     },
     parse::{Nasmespace, TokenTable},
@@ -88,14 +88,14 @@ pub struct CmdDef {
 pub struct CmdAxiom {
     pub name: Name,
     pub local_types: Vec<Name>,
-    pub target: Prop,
+    pub target: Term,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CmdLemma {
     pub name: Name,
     pub local_types: Vec<Name>,
-    pub target: Prop,
+    pub target: Term,
     pub holes: Vec<(Name, Type)>,
     pub expr: Expr,
 }
@@ -266,7 +266,7 @@ impl Eval {
                 };
                 self.proof_env.tt_env.check_type(
                     &mut local_env,
-                    &mut target.target,
+                    &mut target,
                     &mut mk_type_prop(),
                 )?;
                 if self.proof_env.facts.contains_key(&name) {
@@ -300,14 +300,14 @@ impl Eval {
                 };
                 self.proof_env.tt_env.check_type(
                     &mut local_env,
-                    &mut target.target,
+                    &mut target,
                     &mut mk_type_prop(),
                 )?;
                 // auto insert 'change'
                 let mut expr = mk_expr_app(
-                    mk_expr_assume(target.target.clone(), mk_expr_assump(target.target.clone())),
+                    mk_expr_assume(target.clone(), mk_expr_assump(target.clone())),
                     expr,
-                    target.target.clone(),
+                    target.clone(),
                 );
                 let mut h = expr::Env::new(
                     &self.proof_env.tt_env,

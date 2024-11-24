@@ -9,13 +9,12 @@ use anyhow::{bail, Context};
 
 use crate::kernel::{
     proof::{
-        self, mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro,
+        mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro,
         mk_proof_imp_elim, mk_proof_imp_intro, mk_proof_ref, mk_type_prop, Forall, Imp, Proof,
-        Prop,
     },
     tt::{
-        self, mk_abs, mk_const, mk_fresh_mvar, mk_fresh_type_mvar, mk_local, mk_type_arrow, mk_var,
-        Kind, Name, Term, TermAbs, TermApp, TermConst, Type, TypeApp, TypeArrow,
+        self, mk_fresh_mvar, mk_fresh_type_mvar, mk_local, mk_type_arrow, mk_var, Kind, Name, Term,
+        TermAbs, TermApp, Type, TypeApp, TypeArrow,
     },
 };
 
@@ -256,7 +255,7 @@ pub struct Env<'a> {
     tt_env: &'a tt::Env,
     tt_local_env: &'a mut tt::LocalEnv,
     // Proved or postulated facts
-    facts: &'a HashMap<Name, (Vec<Name>, Prop)>,
+    facts: &'a HashMap<Name, (Vec<Name>, Term)>,
     locals: Vec<Term>,
     type_constraints: Vec<(Type, Type)>,
     term_constraints: Vec<(Term, Term)>,
@@ -266,7 +265,7 @@ impl<'a> Env<'a> {
     pub fn new(
         tt_env: &'a tt::Env,
         tt_local_env: &'a mut tt::LocalEnv,
-        facts: &'a HashMap<Name, (Vec<Name>, Prop)>,
+        facts: &'a HashMap<Name, (Vec<Name>, Term)>,
     ) -> Self {
         Env {
             tt_env,
@@ -527,10 +526,10 @@ impl<'a> Env<'a> {
                     }
                 }
                 let mut target = target.clone();
-                target.target.subst_type(
+                target.subst_type(
                     &std::iter::zip(tv.iter().copied(), &e.ty_args).collect::<Vec<_>>(),
                 );
-                Ok(target.target)
+                Ok(target)
             }
         }
     }
@@ -567,7 +566,7 @@ impl<'a> Env<'a> {
 
 #[derive(Debug)]
 struct Eval<'a> {
-    facts: &'a HashMap<Name, (Vec<Name>, Prop)>,
+    facts: &'a HashMap<Name, (Vec<Name>, Term)>,
     tt_env: &'a tt::Env,
     tt_local_env: &'a mut tt::LocalEnv,
 }
@@ -576,19 +575,12 @@ impl<'a> Eval<'a> {
     fn run_help(&mut self, expr: &Expr) -> (Proof, Term) {
         match expr {
             Expr::Assump(expr) => {
-                let h = mk_proof_assump(Prop {
-                    target: expr.target.clone(),
-                });
+                let h = mk_proof_assump(expr.target.clone());
                 (h, expr.target.clone())
             }
             Expr::Assume(inner) => {
                 let (h, p) = self.run_help(&inner.expr);
-                let h = mk_proof_imp_intro(
-                    Prop {
-                        target: inner.target.clone(),
-                    },
-                    h,
-                );
+                let h = mk_proof_imp_intro(inner.target.clone(), h);
                 (
                     h,
                     Imp {
@@ -670,8 +662,8 @@ impl<'a> Eval<'a> {
                 let h = mk_proof_ref(inner.name, inner.ty_args.clone());
                 let (tv, mut target) = self.facts.get(&inner.name).cloned().unwrap();
                 let subst: Vec<_> = std::iter::zip(tv, inner.ty_args.iter()).collect();
-                target.target.subst_type(&subst);
-                (h, target.target)
+                target.subst_type(&subst);
+                (h, target)
             }
         }
     }
@@ -775,7 +767,7 @@ struct Constraint {
 #[derive(Debug, Clone)]
 struct Snapshot {
     subst_len: usize,
-    history_len: usize,
+    trail_len: usize,
 }
 
 struct Branch<'a> {
@@ -794,9 +786,9 @@ struct Unifier<'a> {
     subst: Vec<(Name, Term)>,
     // this map is always sync'd to subst.
     subst_map: HashMap<Name, Term>,
-    trail: Vec<Branch<'a>>,
+    decisions: Vec<Branch<'a>>,
     // for backjumping
-    history: Vec<Rc<Constraint>>,
+    trail: Vec<Rc<Constraint>>,
     // only used in find_conflict
     stack: Vec<(Term, Term)>,
 }
@@ -812,8 +804,8 @@ impl<'a> Unifier<'a> {
             watch_list: Default::default(),
             subst: Default::default(),
             subst_map: Default::default(),
+            decisions: Default::default(),
             trail: Default::default(),
-            history: Default::default(),
             stack: Default::default(),
         };
         for (left, right) in constraints.into_iter().rev() {
@@ -866,7 +858,7 @@ impl<'a> Unifier<'a> {
             kind,
         });
 
-        self.history.push(c.clone());
+        self.trail.push(c.clone());
 
         match kind {
             ConstraintKind::Delta => {
@@ -1120,7 +1112,7 @@ impl<'a> Unifier<'a> {
     fn save(&self) -> Snapshot {
         Snapshot {
             subst_len: self.subst.len(),
-            history_len: self.history.len(),
+            trail_len: self.trail.len(),
         }
     }
 
@@ -1130,9 +1122,9 @@ impl<'a> Unifier<'a> {
             self.subst_map.remove(&name);
         }
         self.subst.truncate(snapshot.subst_len);
-        for i in 0..self.history.len() - snapshot.history_len {
-            let i = self.history.len() - i - 1;
-            let c = &self.history[i];
+        for i in 0..self.trail.len() - snapshot.trail_len {
+            let i = self.trail.len() - i - 1;
+            let c = &self.trail[i];
             match c.kind {
                 ConstraintKind::Delta => {
                     self.queue_delta.pop_back();
@@ -1156,7 +1148,7 @@ impl<'a> Unifier<'a> {
                 constraints.pop();
             }
         }
-        self.history.truncate(snapshot.history_len);
+        self.trail.truncate(snapshot.trail_len);
     }
 
     fn push_branch(
@@ -1165,7 +1157,7 @@ impl<'a> Unifier<'a> {
         c: Rc<Constraint>,
         choice: Box<dyn Iterator<Item = Vec<(Term, Term)>> + 'a>,
     ) {
-        self.trail.push(Branch {
+        self.decisions.push(Branch {
             snapshot,
             constraint: c,
             choice,
@@ -1173,7 +1165,7 @@ impl<'a> Unifier<'a> {
     }
 
     fn pop_branch(&mut self) -> bool {
-        let Some(br) = self.trail.pop() else {
+        let Some(br) = self.decisions.pop() else {
             return false;
         };
         if br.constraint.kind == ConstraintKind::Delta {
@@ -1183,7 +1175,7 @@ impl<'a> Unifier<'a> {
     }
 
     fn next(&mut self) -> bool {
-        let Some(br) = self.trail.last_mut() else {
+        let Some(br) = self.decisions.last_mut() else {
             return false;
         };
         let Some(constraints) = br.choice.next() else {

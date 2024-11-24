@@ -10,17 +10,6 @@ use super::tt::{
     Path, Term, TermAbs, Type,
 };
 
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Prop {
-    pub target: Term,
-}
-
-impl std::fmt::Display for Prop {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.target)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Proof {
     /// ```text
@@ -28,13 +17,13 @@ pub enum Proof {
     /// ---------------------- (φ ∈ Φ)
     /// Γ | Φ ⊢ assump φ : φ
     /// ```
-    Assump(Prop),
+    Assump(Term),
     /// ```text
     /// Γ | Φ, φ ⊢ h : ψ
     /// ------------------------------
     /// Γ | Φ ⊢ imp_intro φ, h : φ → ψ
     /// ```
-    ImpIntro(Arc<(Prop, Proof)>),
+    ImpIntro(Arc<(Term, Proof)>),
     /// ```text
     /// Γ | Φ ⊢ h₁ : φ → ψ    Γ | Φ ⊢ h₂ : φ
     /// -------------------------------------
@@ -98,11 +87,11 @@ impl std::fmt::Display for Proof {
     }
 }
 
-pub fn mk_proof_assump(p: Prop) -> Proof {
+pub fn mk_proof_assump(p: Term) -> Proof {
     Proof::Assump(p)
 }
 
-pub fn mk_proof_imp_intro(p: Prop, h: Proof) -> Proof {
+pub fn mk_proof_imp_intro(p: Term, h: Proof) -> Proof {
     Proof::ImpIntro(Arc::new((p, h)))
 }
 
@@ -226,12 +215,12 @@ impl From<Forall> for Term {
 pub struct Env {
     pub tt_env: tt::Env,
     // Proved or postulated facts
-    pub facts: HashMap<Name, (Vec<Name>, Prop)>,
+    pub facts: HashMap<Name, (Vec<Name>, Term)>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct Context {
-    pub props: Vec<Prop>,
+    pub props: Vec<Term>,
 }
 
 impl Env {
@@ -276,7 +265,7 @@ impl Env {
         local_env: &mut LocalEnv,
         context: &mut Context,
         h: &mut Proof,
-        prop: &Prop,
+        prop: &Term,
     ) -> anyhow::Result<()> {
         let p = self.infer_prop(local_env, context, h)?;
         if &p != prop {
@@ -290,11 +279,10 @@ impl Env {
         local_env: &mut LocalEnv,
         context: &mut Context,
         h: &mut Proof,
-    ) -> anyhow::Result<Prop> {
+    ) -> anyhow::Result<Term> {
         match h {
             Proof::Assump(p) => {
-                self.tt_env
-                    .check_type(local_env, &mut p.target, &mut mk_type_prop())?;
+                self.tt_env.check_type(local_env, p, &mut mk_type_prop())?;
                 for c in &context.props {
                     if p == c {
                         return Ok(p.clone());
@@ -304,49 +292,40 @@ impl Env {
             }
             Proof::ImpIntro(inner) => {
                 let (p, h) = Arc::make_mut(inner);
-                self.tt_env
-                    .check_type(local_env, &mut p.target, &mut mk_type_prop())?;
+                self.tt_env.check_type(local_env, p, &mut mk_type_prop())?;
                 context.props.push(p.clone());
                 let h = self.infer_prop(local_env, context, h)?;
                 let p = context.props.pop().unwrap();
-                Ok(Prop {
-                    target: Imp {
-                        lhs: p.target,
-                        rhs: h.target,
-                    }
-                    .into(),
-                })
+                Ok(Imp { lhs: p, rhs: h }.into())
             }
             Proof::ImpElim(inner) => {
                 let (h1, h2) = Arc::make_mut(inner);
                 let h1 = self.infer_prop(local_env, context, h1)?;
-                let Ok(Imp { lhs, rhs }) = h1.target.clone().try_into() else {
-                    bail!("not an implication: {}", h1.target);
+                let Ok(Imp { lhs, rhs }) = h1.clone().try_into() else {
+                    bail!("not an implication: {}", h1);
                 };
-                self.check_prop(local_env, context, h2, &Prop { target: lhs })?;
-                Ok(Prop { target: rhs })
+                self.check_prop(local_env, context, h2, &lhs)?;
+                Ok(rhs)
             }
             Proof::ForallIntro(inner) => {
                 let (x, t, h) = Arc::make_mut(inner);
                 self.tt_env.check_kind(local_env, t, &Kind::base())?;
                 for c in &context.props {
-                    if !c.target.is_fresh(&[*x]) {
+                    if !c.is_fresh(&[*x]) {
                         bail!("eigenvariable condition fails");
                     }
                 }
                 local_env.locals.push((*x, t.clone()));
                 let h = self.infer_prop(local_env, context, h)?;
                 let (x, t) = local_env.locals.pop().unwrap();
-                let mut body = h.target;
+                let mut body = h;
                 body.close(x);
-                Ok(Prop {
-                    target: Forall {
-                        name: x,
-                        ty: t,
-                        body,
-                    }
-                    .into(),
-                })
+                Ok(Forall {
+                    name: x,
+                    ty: t,
+                    body,
+                }
+                .into())
             }
             Proof::ForallElim(inner) => {
                 let (m, h) = Arc::make_mut(inner);
@@ -355,20 +334,20 @@ impl Env {
                     name: _,
                     mut ty,
                     body,
-                }) = h.target.clone().try_into()
+                }) = h.clone().try_into()
                 else {
-                    bail!("not a forall: {}", h.target);
+                    bail!("not a forall: {}", h);
                 };
                 self.tt_env.check_type(local_env, m, &mut ty)?;
                 let mut target = body;
                 target.open(&m);
-                Ok(Prop { target })
+                Ok(target)
             }
             Proof::Conv(inner) => {
                 let (h1, h2) = Arc::make_mut(inner);
                 let h1 = self.tt_env.infer_conv(local_env, h1)?;
-                self.check_prop(local_env, context, h2, &Prop { target: h1.left })?;
-                Ok(Prop { target: h1.right })
+                self.check_prop(local_env, context, h2, &h1.left)?;
+                Ok(h1.right)
             }
             Proof::Ref(inner) => {
                 let (name, ty_args) = Arc::make_mut(inner);
@@ -382,7 +361,7 @@ impl Env {
                     self.tt_env.check_kind(local_env, ty_arg, &Kind::base())?;
                 }
                 let subst: Vec<_> = std::iter::zip(tv, ty_args.iter()).collect();
-                target.target.subst_type(&subst);
+                target.subst_type(&subst);
                 Ok(target)
             }
         }
@@ -407,7 +386,7 @@ mod tests {
     }
 
     // Check if (p : Prop) | hs ⊢ h : ?
-    fn check(hs: impl IntoIterator<Item = Prop>, mut h: Proof) -> Prop {
+    fn check(hs: impl IntoIterator<Item = Term>, mut h: Proof) -> Term {
         let env = Env::new_kernel();
         let mut local_env = LocalEnv::default();
         local_env
@@ -424,7 +403,7 @@ mod tests {
     fn test_assume_ok() {
         // terms may contain local variables
         let p = mk_local(*P);
-        insta::assert_snapshot!(check([Prop { target: p.clone() }], mk_proof_assump(Prop { target: p })), @"(local p)");
+        insta::assert_snapshot!(check([p.clone()], mk_proof_assump(p)), @"(local p)");
 
         // terms may contain type variables
         // ∀ x, x ⇒ x
@@ -438,7 +417,7 @@ mod tests {
         );
         let mut q = p.clone();
         infer(&mut q);
-        insta::assert_snapshot!(check([Prop { target: q }], mk_proof_assump(Prop { target: p })), @"(forall.{Prop} (lam Prop ((imp (var 0)) (var 0))))");
+        insta::assert_snapshot!(check([q], mk_proof_assump(p)), @"(forall.{Prop} (lam Prop ((imp (var 0)) (var 0))))");
     }
 
     // #[test]
@@ -550,10 +529,7 @@ mod tests {
         let mut h = mk_proof_forall_intro(
             Name::intern("p").unwrap(),
             mk_type_prop(),
-            mk_proof_imp_intro(
-                Prop { target: p.clone() },
-                mk_proof_assump(Prop { target: p }),
-            ),
+            mk_proof_imp_intro(p.clone(), mk_proof_assump(p)),
         );
         proof_env
             .infer_prop(&mut LocalEnv::default(), &mut Context::default(), &mut h)
