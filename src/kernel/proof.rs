@@ -382,7 +382,7 @@ impl Env {
                     self.tt_env.check_kind(local_env, ty_arg, &Kind::base())?;
                 }
                 let subst: Vec<_> = std::iter::zip(tv, ty_args.iter()).collect();
-                target.target.inst_type_mvar(&subst);
+                target.target.subst_type(&subst);
                 Ok(target)
             }
         }

@@ -3,8 +3,7 @@ use crate::cmd::{
     CmdTypeConst, Fixity, Operator,
 };
 use crate::expr::{
-    mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_const, mk_expr_inst, mk_expr_obtain,
-    mk_expr_take, Expr,
+    mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_const, mk_expr_inst, mk_expr_take, Expr,
 };
 use crate::kernel::proof::{
     mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro, mk_proof_imp_elim,
@@ -150,6 +149,7 @@ pub struct Parser<'a, 'b> {
     ns: &'b Nasmespace,
     type_locals: Vec<Name>,
     locals: Vec<Name>,
+    holes: Vec<(Name, Type)>,
 }
 
 impl<'a, 'b> Parser<'a, 'b> {
@@ -160,6 +160,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             ns,
             type_locals: vec![],
             locals: vec![],
+            holes: vec![],
         }
     }
 
@@ -710,7 +711,12 @@ impl<'a, 'b> Parser<'a, 'b> {
     // Returns (?M l₁ ⋯ lₙ) where ?M is fresh and l₁ ⋯ lₙ are the context in place.
     fn mk_term_hole(&mut self) -> Term {
         let mut hole = mk_fresh_mvar();
+        let Term::Mvar(name) = &hole else {
+            unreachable!()
+        };
+        self.holes.push((*name, mk_fresh_type_mvar()));
         hole.apply(self.locals.iter().map(|name| mk_local(*name)));
+
         hole
     }
 
@@ -808,7 +814,17 @@ impl<'a, 'b> Parser<'a, 'b> {
                     self.locals.push(name);
                     let e2 = self.expr()?;
                     self.locals.pop();
-                    mk_expr_obtain(name, ty, p, e1, e2)
+
+                    // Expand[obtain (x : τ), p := e1, e2] := exists.elim.{τ}[(λ (x : τ), p), ?M] e1 (take (x : τ), assume p, e2)
+                    let e = mk_expr_const(Name::intern("exists.elim").unwrap(), vec![ty.clone()]);
+                    let mut pred = p.clone();
+                    pred.abs(&[(name, name, ty.clone())], true);
+                    let e = mk_expr_inst(e, pred, self.mk_term_hole());
+                    let e = mk_expr_inst(e, self.mk_term_hole(), self.mk_term_hole());
+                    let e = mk_expr_app(e, e1, self.mk_term_hole());
+                    let e_body = mk_expr_assume(p, e2);
+                    let e_body = mk_expr_take(name, ty, e_body);
+                    mk_expr_app(e, e_body, self.mk_term_hole())
                 }
                 _ => {
                     let name = Name::try_from(token.as_str()).unwrap();
@@ -1220,10 +1236,12 @@ impl<'a, 'b> Parser<'a, 'b> {
             );
             e = mk_expr_take(var, ty, e);
         }
+        let holes = self.holes.drain(..).collect();
         Ok(CmdLemma {
             name,
             local_types,
             target: p,
+            holes,
             expr: e,
         })
     }

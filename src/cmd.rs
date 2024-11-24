@@ -96,6 +96,7 @@ pub struct CmdLemma {
     pub name: Name,
     pub local_types: Vec<Name>,
     pub target: Prop,
+    pub holes: Vec<(Name, Type)>,
     pub expr: Expr,
 }
 
@@ -221,7 +222,7 @@ impl Eval {
                 let mut local_env = LocalEnv {
                     local_types,
                     locals: vec![],
-                    mvars: vec![],
+                    holes: vec![],
                 };
                 self.proof_env
                     .tt_env
@@ -261,7 +262,7 @@ impl Eval {
                 let mut local_env = LocalEnv {
                     local_types,
                     locals: vec![],
-                    mvars: vec![],
+                    holes: vec![],
                 };
                 self.proof_env.tt_env.check_type(
                     &mut local_env,
@@ -282,6 +283,7 @@ impl Eval {
                     name,
                     local_types,
                     mut target,
+                    holes,
                     expr,
                 } = inner;
                 for i in 0..local_types.len() {
@@ -294,7 +296,7 @@ impl Eval {
                 let mut local_env = LocalEnv {
                     local_types,
                     locals: vec![],
-                    mvars: vec![],
+                    holes,
                 };
                 self.proof_env.tt_env.check_type(
                     &mut local_env,
@@ -302,13 +304,17 @@ impl Eval {
                     &mut mk_type_prop(),
                 )?;
                 // auto insert 'change'
-                let expr = mk_expr_app(
+                let mut expr = mk_expr_app(
                     mk_expr_assume(target.target.clone(), mk_expr_assump(target.target.clone())),
                     expr,
                     target.target.clone(),
                 );
-                let (mut h, _target) =
-                    expr::Eval::new(&self.proof_env, &mut local_env).run_expr(&expr)?;
+                let mut h = expr::Env::new(
+                    &self.proof_env.tt_env,
+                    &mut local_env,
+                    &self.proof_env.facts,
+                )
+                .elaborate(&mut expr)?;
                 self.proof_env.check_prop(
                     &mut local_env,
                     &mut proof::Context::default(),
@@ -340,7 +346,7 @@ impl Eval {
                 let local_env = LocalEnv {
                     local_types,
                     locals: vec![],
-                    mvars: vec![],
+                    holes: vec![],
                 };
                 self.proof_env
                     .tt_env

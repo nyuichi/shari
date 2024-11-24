@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 
 use crate::kernel::{
     proof::{
@@ -14,8 +14,8 @@ use crate::kernel::{
         Prop,
     },
     tt::{
-        self, mk_abs, mk_const, mk_fresh_mvar, mk_fresh_type_mvar, mk_local, mk_var, Name, Term,
-        Type,
+        self, mk_abs, mk_const, mk_fresh_mvar, mk_fresh_type_mvar, mk_local, mk_type_arrow, mk_var,
+        Kind, Name, Term, TermAbs, TermApp, TermConst, Type, TypeApp, TypeArrow,
     },
 };
 
@@ -25,7 +25,6 @@ use crate::kernel::{
 ///     | take (x : τ), p
 ///     | p[m]
 ///     | c.{u₁, ⋯, uₙ}
-///     | obtain (x : τ), p := e, e
 ///
 ///
 /// --------------- (φ ∈ Φ)
@@ -58,7 +57,6 @@ pub enum Expr {
     Take(Arc<ExprTake>),
     Inst(Arc<ExprInst>),
     Const(Arc<ExprConst>),
-    Obtain(Arc<ExprObtain>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,15 +99,6 @@ pub struct ExprConst {
     pub ty_args: Vec<Type>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExprObtain {
-    pub name: Name,
-    pub ty: Type,
-    pub prop: Term,
-    pub expr: Expr,
-    pub body: Expr,
-}
-
 pub fn mk_expr_assump(m: Term) -> Expr {
     Expr::Assump(Arc::new(ExprAssump { target: m }))
 }
@@ -142,94 +131,503 @@ pub fn mk_expr_const(name: Name, ty_args: Vec<Type>) -> Expr {
     Expr::Const(Arc::new(ExprConst { name, ty_args }))
 }
 
-pub fn mk_expr_obtain(name: Name, ty: Type, prop: Term, expr: Expr, body: Expr) -> Expr {
-    Expr::Obtain(Arc::new(ExprObtain {
-        name,
-        ty,
-        prop,
-        expr,
-        body,
-    }))
+impl std::fmt::Display for Expr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Expr::Assump(e) => {
+                write!(f, "⟪{}⟫", e.target)
+            }
+            Expr::Assume(e) => {
+                write!(f, "assume {}, {}", e.target, e.expr)
+            }
+            Expr::App(e) => {
+                write!(f, "({}) {}", e.expr1, e.expr2)
+            }
+            Expr::Take(e) => {
+                write!(f, "take ({} : {}), {}", e.name, e.ty, e.expr)
+            }
+            Expr::Inst(e) => {
+                write!(f, "({})[{}]", e.expr, e.arg)
+            }
+            Expr::Const(e) => {
+                write!(f, "{}.{{", e.name)?;
+                let mut first = true;
+                for t in &e.ty_args {
+                    if !first {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", t)?;
+                    first = false;
+                }
+                write!(f, "}}")
+            }
+        }
+    }
 }
 
-#[derive(Debug)]
-pub struct Eval<'a> {
-    proof_env: &'a proof::Env,
-    local_env: &'a mut tt::LocalEnv,
-}
-
-impl<'a> Eval<'a> {
-    pub fn new(proof_env: &'a proof::Env, local_env: &'a mut tt::LocalEnv) -> Self {
-        Self {
-            proof_env,
-            local_env,
+impl Expr {
+    fn inst_type_mvar(&mut self, subst: &[(Name, &Type)]) {
+        match self {
+            Expr::Assump(e) => {
+                let ExprAssump { target } = Arc::make_mut(e);
+                target.inst_type_mvar(subst)
+            }
+            Expr::Assume(e) => {
+                let ExprAssume { target, expr } = Arc::make_mut(e);
+                target.inst_type_mvar(subst);
+                expr.inst_type_mvar(subst);
+            }
+            Expr::App(e) => {
+                let ExprApp {
+                    expr1,
+                    expr2,
+                    target,
+                } = Arc::make_mut(e);
+                expr1.inst_type_mvar(subst);
+                expr2.inst_type_mvar(subst);
+                target.inst_type_mvar(subst);
+            }
+            Expr::Take(e) => {
+                let ExprTake { name: _, ty, expr } = Arc::make_mut(e);
+                ty.inst_mvar(subst);
+                expr.inst_type_mvar(subst);
+            }
+            Expr::Inst(e) => {
+                let ExprInst {
+                    expr,
+                    arg,
+                    predicate,
+                } = Arc::make_mut(e);
+                expr.inst_type_mvar(subst);
+                arg.inst_type_mvar(subst);
+                predicate.inst_type_mvar(subst);
+            }
+            Expr::Const(e) => {
+                let ExprConst { name: _, ty_args } = Arc::make_mut(e);
+                for ty_arg in ty_args {
+                    ty_arg.inst_mvar(subst);
+                }
+            }
         }
     }
 
-    fn certify_formula(&mut self, m: &Term) -> anyhow::Result<Term> {
-        let mut m = m.clone();
-        self.proof_env
-            .tt_env
-            .check_type(self.local_env, &mut m, &mut mk_type_prop())?;
-        Ok(m)
+    fn inst_mvar(&mut self, subst: &[(Name, &Term)]) {
+        match self {
+            Expr::Assump(e) => {
+                let ExprAssump { target } = Arc::make_mut(e);
+                target.inst_mvar(subst)
+            }
+            Expr::Assume(e) => {
+                let ExprAssume { target, expr } = Arc::make_mut(e);
+                target.inst_mvar(subst);
+                expr.inst_mvar(subst);
+            }
+            Expr::App(e) => {
+                let ExprApp {
+                    expr1,
+                    expr2,
+                    target,
+                } = Arc::make_mut(e);
+                expr1.inst_mvar(subst);
+                expr2.inst_mvar(subst);
+                target.inst_mvar(subst);
+            }
+            Expr::Take(e) => {
+                let ExprTake { name: _, ty, expr } = Arc::make_mut(e);
+                expr.inst_mvar(subst);
+            }
+            Expr::Inst(e) => {
+                let ExprInst {
+                    expr,
+                    arg,
+                    predicate,
+                } = Arc::make_mut(e);
+                expr.inst_mvar(subst);
+                arg.inst_mvar(subst);
+                predicate.inst_mvar(subst);
+            }
+            Expr::Const(_) => {}
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Env<'a> {
+    tt_env: &'a tt::Env,
+    tt_local_env: &'a mut tt::LocalEnv,
+    // Proved or postulated facts
+    facts: &'a HashMap<Name, (Vec<Name>, Prop)>,
+    locals: Vec<Term>,
+    type_constraints: Vec<(Type, Type)>,
+    term_constraints: Vec<(Term, Term)>,
+}
+
+impl<'a> Env<'a> {
+    pub fn new(
+        tt_env: &'a tt::Env,
+        tt_local_env: &'a mut tt::LocalEnv,
+        facts: &'a HashMap<Name, (Vec<Name>, Prop)>,
+    ) -> Self {
+        Env {
+            tt_env,
+            tt_local_env,
+            facts,
+            locals: vec![],
+            type_constraints: vec![],
+            term_constraints: vec![],
+        }
     }
 
-    pub fn run_expr(&mut self, expr: &Expr) -> anyhow::Result<(Proof, Term)> {
+    fn add_type_constraint(&mut self, t1: Type, t2: Type) {
+        self.type_constraints.push((t1, t2));
+    }
+
+    fn add_term_constraint(&mut self, m1: Term, m2: Term) {
+        self.term_constraints.push((m1, m2));
+    }
+
+    fn visit_type(&self, t: Type) -> anyhow::Result<Kind> {
+        match t {
+            Type::Const(t) => {
+                let Some(kind) = self.tt_env.type_consts.get(&t) else {
+                    bail!("constant type not found");
+                };
+                Ok(kind.clone())
+            }
+            Type::Arrow(t) => {
+                let TypeArrow { dom, cod } = Arc::unwrap_or_clone(t);
+                let dom_kind = self.visit_type(dom)?;
+                if !dom_kind.is_base() {
+                    bail!("expected Type, but got {dom_kind}");
+                }
+                let cod_kind = self.visit_type(cod)?;
+                if !cod_kind.is_base() {
+                    bail!("expected Type, but got {cod_kind}");
+                }
+                Ok(Kind::base())
+            }
+            Type::App(t) => {
+                let TypeApp { fun, arg } = Arc::unwrap_or_clone(t);
+                let fun_kind = self.visit_type(fun.clone())?;
+                if fun_kind.is_base() {
+                    bail!("too many type arguments: {fun} {arg}");
+                }
+                let arg_kind = self.visit_type(arg)?;
+                if !arg_kind.is_base() {
+                    bail!("expected Type, but got {arg_kind}");
+                }
+                Ok(Kind(fun_kind.0 - 1))
+            }
+            Type::Local(t) => {
+                for local_type in self.tt_local_env.local_types.iter().rev() {
+                    if *local_type == t {
+                        return Ok(Kind::base());
+                    }
+                }
+                bail!("unbound local type: {t}");
+            }
+            Type::Mvar(_) => Ok(Kind::base()),
+        }
+    }
+
+    fn visit_term(&mut self, m: Term) -> anyhow::Result<Type> {
+        match m {
+            Term::Local(m) => {
+                for (local, ty) in &self.tt_local_env.locals {
+                    if *local == m {
+                        return Ok(ty.clone());
+                    }
+                }
+                bail!("unknown local variable: {m}");
+            }
+            Term::Mvar(m) => {
+                for (local, ty) in &self.tt_local_env.holes {
+                    if *local == m {
+                        return Ok(ty.clone());
+                    }
+                }
+                bail!("unknown meta variable");
+            }
+            Term::Var(_) => {
+                bail!("term not locally closed");
+            }
+            Term::Abs(m) => {
+                let TermAbs {
+                    binder_type: arg_ty,
+                    binder_name: _,
+                    mut body,
+                } = Arc::unwrap_or_clone(m);
+
+                let arg_ty_kind = self.visit_type(arg_ty.clone())?;
+                if !arg_ty_kind.is_base() {
+                    bail!("expected Type, but got {arg_ty_kind}");
+                }
+
+                let x = Name::fresh();
+                self.tt_local_env.locals.push((x, arg_ty.clone()));
+                body.open(&mk_local(x));
+                let body_ty = self.visit_term(body)?;
+                self.tt_local_env.locals.pop();
+
+                Ok(mk_type_arrow(arg_ty, body_ty))
+            }
+            Term::App(m) => {
+                let TermApp { fun, arg } = Arc::unwrap_or_clone(m);
+
+                let fun_ty = self.visit_term(fun)?;
+                let arg_ty = self.visit_term(arg)?;
+                let ret_ty = mk_fresh_type_mvar();
+
+                self.add_type_constraint(fun_ty, mk_type_arrow(arg_ty, ret_ty.clone()));
+
+                Ok(ret_ty)
+            }
+            Term::Const(m) => {
+                let Some((tv, ty)) = self.tt_env.consts.get(&m.name) else {
+                    bail!("constant not found");
+                };
+                if tv.len() != m.ty_args.len() {
+                    bail!("number of type variables mismatch");
+                }
+                for ty_arg in &m.ty_args {
+                    let ty_arg_kind = self.visit_type(ty_arg.clone())?;
+                    if !ty_arg_kind.is_base() {
+                        bail!("expected Type, but got {ty_arg_kind}");
+                    }
+                }
+                let mut ty = ty.clone();
+                ty.subst(&std::iter::zip(tv.iter().copied(), &m.ty_args).collect::<Vec<_>>());
+                Ok(ty)
+            }
+        }
+    }
+
+    fn visit_expr(&mut self, e: &Expr) -> anyhow::Result<Term> {
+        match e {
+            Expr::Assump(e) => {
+                let ExprAssump { target } = &**e;
+
+                let target_ty = self.visit_term(target.clone())?;
+                self.add_type_constraint(target_ty, mk_type_prop());
+
+                let mut found = false;
+                for local in &self.locals {
+                    // use literal equality by intention
+                    if local.untyped_eq(target) {
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    bail!("assumption not found: {target}");
+                }
+
+                Ok(target.clone())
+            }
+            Expr::Assume(e) => {
+                let ExprAssume { target, expr } = &**e;
+
+                let target_ty = self.visit_term(target.clone())?;
+                self.add_type_constraint(target_ty, mk_type_prop());
+
+                self.locals.push(target.clone());
+                let rhs = self.visit_expr(expr)?;
+                self.locals.pop();
+
+                Ok(Imp {
+                    lhs: target.clone(),
+                    rhs,
+                }
+                .into())
+            }
+            Expr::App(e) => {
+                let ExprApp {
+                    expr1,
+                    expr2,
+                    target,
+                } = &**e;
+
+                let fun_prop = self.visit_expr(expr1)?;
+                let arg_prop = self.visit_expr(expr2)?;
+                let target_ty = self.visit_term(target.clone())?;
+                self.add_type_constraint(target_ty, mk_type_prop());
+
+                let pat: Term = Imp {
+                    lhs: arg_prop,
+                    rhs: target.clone(),
+                }
+                .into();
+                self.add_term_constraint(pat, fun_prop);
+
+                Ok(target.clone())
+            }
+            Expr::Take(e) => {
+                let ExprTake { name, ty, expr } = &**e;
+
+                let ty_kind = self.visit_type(ty.clone())?;
+                if !ty_kind.is_base() {
+                    bail!("expected Type, but got {ty_kind}");
+                }
+
+                self.tt_local_env.locals.push((*name, ty.clone()));
+                let body_prop = self.visit_expr(expr)?;
+                self.tt_local_env.locals.pop();
+
+                let mut body = body_prop;
+                body.close(*name);
+
+                Ok(Forall {
+                    name: *name,
+                    ty: ty.clone(),
+                    body,
+                }
+                .into())
+            }
+            Expr::Inst(e) => {
+                let ExprInst {
+                    expr,
+                    arg,
+                    predicate,
+                } = &**e;
+
+                let arg_ty = self.visit_term(arg.clone())?;
+                let predicate_ty = self.visit_term(predicate.clone())?;
+                self.add_type_constraint(
+                    predicate_ty,
+                    mk_type_arrow(arg_ty.clone(), mk_type_prop()),
+                );
+
+                let expr_prop = self.visit_expr(expr)?;
+
+                let mut body = predicate.clone();
+                body.apply([mk_var(0)]);
+                let pat: Term = Forall {
+                    name: Name::fresh(),
+                    ty: arg_ty.clone(),
+                    body,
+                }
+                .into();
+                self.add_term_constraint(pat, expr_prop);
+
+                let mut target = predicate.clone();
+                target.apply([arg.clone()]);
+                Ok(target)
+            }
+            Expr::Const(e) => {
+                let Some((tv, target)) = self.facts.get(&e.name) else {
+                    bail!("proposition not found: {}", e.name);
+                };
+                if tv.len() != e.ty_args.len() {
+                    bail!("number of type variables mismatch");
+                }
+                for ty_arg in &e.ty_args {
+                    let ty_arg_kind = self.visit_type(ty_arg.clone())?;
+                    if !ty_arg_kind.is_base() {
+                        bail!("expected Type, but got {ty_arg_kind}");
+                    }
+                }
+                let mut target = target.clone();
+                target.target.subst_type(
+                    &std::iter::zip(tv.iter().copied(), &e.ty_args).collect::<Vec<_>>(),
+                );
+                Ok(target.target)
+            }
+        }
+    }
+
+    pub fn elaborate(mut self, e: &mut Expr) -> anyhow::Result<Proof> {
+        self.visit_expr(e)?;
+
+        let type_subst = TypeUnifier::new(self.type_constraints).solve()?;
+
+        // we defer type instantiation because our unifier does not touch types.
+        let subst = Unifier::new(self.tt_env, self.term_constraints)
+            .solve()
+            .context("unification failed")?;
+        for (name, m) in subst {
+            let subst = [(name, &m)];
+            e.inst_mvar(&subst);
+        }
+
+        for (name, ty) in type_subst {
+            let subst = [(name, &ty)];
+            e.inst_type_mvar(&subst);
+        }
+
+        let h = Eval {
+            facts: self.facts,
+            tt_env: self.tt_env,
+            tt_local_env: self.tt_local_env,
+        }
+        .run(e);
+
+        Ok(h)
+    }
+}
+
+#[derive(Debug)]
+struct Eval<'a> {
+    facts: &'a HashMap<Name, (Vec<Name>, Prop)>,
+    tt_env: &'a tt::Env,
+    tt_local_env: &'a mut tt::LocalEnv,
+}
+
+impl<'a> Eval<'a> {
+    fn run_help(&mut self, expr: &Expr) -> (Proof, Term) {
         match expr {
-            Expr::Assump(inner) => {
-                let prop = self.certify_formula(&inner.target)?;
+            Expr::Assump(expr) => {
                 let h = mk_proof_assump(Prop {
-                    target: prop.clone(),
+                    target: expr.target.clone(),
                 });
-                Ok((h, prop))
+                (h, expr.target.clone())
             }
             Expr::Assume(inner) => {
-                let prop = self.certify_formula(&inner.target)?;
-                let (h, p) = self.run_expr(&inner.expr)?;
+                let (h, p) = self.run_help(&inner.expr);
                 let h = mk_proof_imp_intro(
                     Prop {
-                        target: prop.clone(),
+                        target: inner.target.clone(),
                     },
                     h,
                 );
-                Ok((h, Imp { lhs: prop, rhs: p }.into()))
+                (
+                    h,
+                    Imp {
+                        lhs: inner.target.clone(),
+                        rhs: p,
+                    }
+                    .into(),
+                )
             }
             Expr::App(inner) => {
-                let (h1, p1) = self.run_expr(&inner.expr1)?;
-                let (h2, p2) = self.run_expr(&inner.expr2)?;
+                let (h1, p1) = self.run_help(&inner.expr1);
+                let (h2, p2) = self.run_help(&inner.expr2);
 
                 let mut pat: Term = Imp {
                     lhs: p2,
                     rhs: inner.target.clone(),
                 }
                 .into();
-                let Some(subst) = unify(&p1.clone(), &pat, &self.proof_env.tt_env) else {
-                    bail!("not an implication");
-                };
-                for (name, m) in &subst {
-                    pat.inst_mvar(&[(*name, m)]);
-                }
                 pat.normalize();
-                self.proof_env.tt_env.infer_type(self.local_env, &mut pat)?;
 
-                let Some(path) = self.proof_env.tt_env.equiv(&p1, &pat) else {
-                    bail!("terms not convertible: {} ≢ {}", p1, pat);
-                };
+                let path = self.tt_env.equiv(&p1, &pat).unwrap();
                 let h = mk_proof_imp_elim(mk_proof_conv(path, h1), h2);
 
                 let Imp { lhs: _lhs, rhs } = pat.try_into().unwrap();
-                Ok((h, rhs))
+                (h, rhs)
             }
             Expr::Take(inner) => {
-                self.local_env.locals.push((inner.name, inner.ty.clone()));
-                let (h, p) = self.run_expr(&inner.expr)?;
-                self.local_env.locals.pop();
+                self.tt_local_env
+                    .locals
+                    .push((inner.name, inner.ty.clone()));
+                let (h, p) = self.run_help(&inner.expr);
+                self.tt_local_env.locals.pop();
+
                 let h = mk_proof_forall_intro(inner.name, inner.ty.clone(), h);
 
                 let mut body = p;
                 body.close(inner.name);
 
-                Ok((
+                (
                     h,
                     Forall {
                         name: inner.name,
@@ -237,13 +635,13 @@ impl<'a> Eval<'a> {
                         body,
                     }
                     .into(),
-                ))
+                )
             }
             Expr::Inst(inner) => {
-                let (h, p) = self.run_expr(&inner.expr)?;
+                let (h, p) = self.run_help(&inner.expr);
 
                 let mut arg = inner.arg.clone();
-                let ty = self.proof_env.tt_env.infer_type(self.local_env, &mut arg)?;
+                let ty = self.tt_env.infer_type(self.tt_local_env, &mut arg).unwrap();
 
                 let mut body = inner.predicate.clone();
                 body.apply([mk_var(0)]);
@@ -253,18 +651,9 @@ impl<'a> Eval<'a> {
                     body,
                 }
                 .into();
-                let Some(subst) = unify(&p, &pat, &self.proof_env.tt_env) else {
-                    bail!("not an implication");
-                };
-                for (name, m) in &subst {
-                    pat.inst_mvar(&[(*name, m)]);
-                }
                 pat.normalize();
-                self.proof_env.tt_env.infer_type(self.local_env, &mut pat)?;
 
-                let Some(path) = self.proof_env.tt_env.equiv(&p, &pat) else {
-                    bail!("terms not convertible: {} ≢ {}", p, pat);
-                };
+                let path = self.tt_env.equiv(&p, &pat).unwrap();
                 let h = mk_proof_forall_elim(arg.clone(), mk_proof_conv(path, h));
 
                 let Forall {
@@ -275,75 +664,96 @@ impl<'a> Eval<'a> {
                 let mut target = body;
                 target.open(&arg);
 
-                Ok((h, target))
+                (h, target)
             }
             Expr::Const(inner) => {
                 let h = mk_proof_ref(inner.name, inner.ty_args.clone());
-                let Some((tv, mut target)) = self.proof_env.facts.get(&inner.name).cloned() else {
-                    bail!("proposition not found: {}", inner.name);
-                };
+                let (tv, mut target) = self.facts.get(&inner.name).cloned().unwrap();
                 let subst: Vec<_> = std::iter::zip(tv, inner.ty_args.iter()).collect();
-                target.target.inst_type_mvar(&subst);
-                Ok((h, target.target))
-            }
-            Expr::Obtain(inner) => {
-                let (h1, p1) = self.run_expr(&inner.expr)?;
-
-                let expr2 = mk_expr_take(
-                    inner.name,
-                    inner.ty.clone(),
-                    mk_expr_assume(inner.prop.clone(), inner.body.clone()),
-                );
-                let (h2, p2) = self.run_expr(&expr2)?;
-
-                let Forall {
-                    name: _,
-                    ty: _,
-                    body,
-                } = p2.clone().try_into().unwrap();
-                let Imp {
-                    lhs: prop,
-                    rhs: target,
-                } = body.try_into().unwrap();
-
-                if !target.is_lclosed() {
-                    bail!("eigenvariable condition failed");
-                }
-
-                let pred = mk_abs(inner.name, inner.ty.clone(), prop.clone());
-
-                let mut exists_p =
-                    mk_const(Name::intern("exists").unwrap(), vec![inner.ty.clone()]);
-                exists_p.apply([pred.clone()]);
-                let Some(path1) = self.proof_env.tt_env.equiv(&p1, &exists_p) else {
-                    bail!("terms not convertible: {} ≢ {}", p1, exists_p);
-                };
-
-                let mut p_x = pred.clone();
-                p_x.apply([mk_var(0)]);
-                let q: Term = Forall {
-                    name: inner.name,
-                    ty: inner.ty.clone(),
-                    body: Imp {
-                        lhs: p_x,
-                        rhs: target.clone(),
-                    }
-                    .into(),
-                }
-                .into();
-                let Some(path2) = self.proof_env.tt_env.equiv(&p2, &q) else {
-                    bail!("terms not convertible: {} ≢ {}", p2, q);
-                };
-
-                let exists_elim =
-                    mk_proof_ref(Name::intern("exists.elim").unwrap(), vec![inner.ty.clone()]);
-                let h = mk_proof_forall_elim(pred.clone(), exists_elim);
-                let h = mk_proof_forall_elim(target.clone(), h);
-                let h = mk_proof_imp_elim(h, mk_proof_conv(path1, h1));
-                let h = mk_proof_imp_elim(h, mk_proof_conv(path2, h2));
-                Ok((h, target))
+                target.target.subst_type(&subst);
+                (h, target.target)
             }
         }
+    }
+
+    fn run(&mut self, e: &Expr) -> Proof {
+        self.run_help(e).0
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct TypeUnifier {
+    constraints: Vec<(Type, Type)>,
+    subst: Vec<(Name, Type)>,
+    subst_map: HashMap<Name, Type>,
+}
+
+impl TypeUnifier {
+    fn new(constraints: Vec<(Type, Type)>) -> Self {
+        TypeUnifier {
+            constraints,
+            subst: vec![],
+            subst_map: Default::default(),
+        }
+    }
+
+    fn add_constraint(&mut self, t1: Type, t2: Type) {
+        self.constraints.push((t1, t2));
+    }
+
+    fn add_subst(&mut self, name: Name, ty: Type) {
+        self.subst.push((name, ty.clone()));
+        self.subst_map.insert(name, ty);
+    }
+
+    fn find(&mut self, ty: Type) -> Type {
+        let Type::Mvar(name) = ty else {
+            return ty;
+        };
+        let Some(ty) = self.subst_map.get(&name).cloned() else {
+            return ty;
+        };
+        // During calling `find` parents[name] will NOT be updated
+        // because a unification solution is not cyclic.
+        let ty = self.find(ty);
+        self.subst_map.insert(name, ty.clone());
+        ty
+    }
+
+    fn solve(mut self) -> anyhow::Result<Vec<(Name, Type)>> {
+        while let Some((t1, t2)) = self.constraints.pop() {
+            let t1 = self.find(t1);
+            let t2 = self.find(t2);
+            if t1 == t2 {
+                continue;
+            }
+            match (t1, t2) {
+                (Type::Arrow(inner1), Type::Arrow(inner2)) => {
+                    let inner1 = Arc::try_unwrap(inner1).unwrap_or_else(|arc| (*arc).clone());
+                    let inner2 = Arc::try_unwrap(inner2).unwrap_or_else(|arc| (*arc).clone());
+                    self.add_constraint(inner1.dom, inner2.dom);
+                    self.add_constraint(inner1.cod, inner2.cod);
+                }
+                (Type::App(inner1), Type::App(inner2)) => {
+                    // Since we have no higher-kinded polymorphism, mvars will only be typed as `Type`,
+                    // it is illegal to match the following two types:
+                    //  ?M₁ t =?= ?M₂ t₁ t₂
+                    // But such a case is checked and ruled out in the kind checking phase that runs before
+                    // this unificaiton phase.
+                    let inner1 = Arc::try_unwrap(inner1).unwrap_or_else(|arc| (*arc).clone());
+                    let inner2 = Arc::try_unwrap(inner2).unwrap_or_else(|arc| (*arc).clone());
+                    self.add_constraint(inner1.fun, inner2.fun);
+                    self.add_constraint(inner1.arg, inner2.arg);
+                }
+                (Type::Mvar(name), t) | (t, Type::Mvar(name)) => {
+                    self.add_subst(name, t);
+                }
+                (t1, t2) => {
+                    bail!("type mismatch: {t1} =/= {t2}");
+                }
+            }
+        }
+        Ok(self.subst)
     }
 }
 
@@ -359,21 +769,7 @@ enum ConstraintKind {
 struct Constraint {
     left: Term,
     right: Term,
-    justification: Justification,
     kind: ConstraintKind,
-}
-
-#[derive(Debug, Clone)]
-struct Justification {
-    decision_level: usize,
-}
-
-impl Justification {
-    fn join(&self, other: &Self) -> Self {
-        Justification {
-            decision_level: self.decision_level.max(other.decision_level),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -385,7 +781,7 @@ struct Snapshot {
 struct Branch<'a> {
     snapshot: Snapshot,
     constraint: Rc<Constraint>,
-    choice: Box<dyn Iterator<Item = Vec<(Term, Term, Justification)>> + 'a>,
+    choice: Box<dyn Iterator<Item = Vec<(Term, Term)>> + 'a>,
 }
 
 struct Unifier<'a> {
@@ -396,12 +792,13 @@ struct Unifier<'a> {
     queue_ff: VecDeque<Rc<Constraint>>,
     watch_list: HashMap<Name, Vec<Rc<Constraint>>>,
     subst: Vec<(Name, Term)>,
+    // this map is always sync'd to subst.
     subst_map: HashMap<Name, Term>,
     trail: Vec<Branch<'a>>,
     // for backjumping
     history: Vec<Rc<Constraint>>,
     // only used in find_conflict
-    stack: Vec<(Term, Term, Justification)>,
+    stack: Vec<(Term, Term)>,
 }
 
 impl<'a> Unifier<'a> {
@@ -420,9 +817,7 @@ impl<'a> Unifier<'a> {
             stack: Default::default(),
         };
         for (left, right) in constraints.into_iter().rev() {
-            solver
-                .stack
-                .push((left, right, Justification { decision_level: 0 }));
+            solver.stack.push((left, right));
         }
         solver
     }
@@ -447,13 +842,7 @@ impl<'a> Unifier<'a> {
         false
     }
 
-    fn add_derived_constraint(
-        &mut self,
-        mut left: Term,
-        mut right: Term,
-        is_delta: bool,
-        justification: Justification,
-    ) {
+    fn add_derived_constraint(&mut self, mut left: Term, mut right: Term, is_delta: bool) {
         let kind;
         if is_delta {
             kind = ConstraintKind::Delta;
@@ -474,7 +863,6 @@ impl<'a> Unifier<'a> {
         let c = Rc::new(Constraint {
             left: left.clone(),
             right: right.clone(),
-            justification,
             kind,
         });
 
@@ -524,8 +912,8 @@ impl<'a> Unifier<'a> {
         self.subst_map.insert(name, m);
     }
 
-    fn find_conflict(&mut self) -> Option<Justification> {
-        while let Some((mut left, mut right, justification)) = self.stack.pop() {
+    fn find_conflict(&mut self) -> Option<()> {
+        while let Some((mut left, mut right)) = self.stack.pop() {
             if left.untyped_eq(&right) {
                 continue;
             }
@@ -535,11 +923,11 @@ impl<'a> Unifier<'a> {
                 Arc::make_mut(r).body.open(&mk_local(x));
                 let left = mem::take(&mut Arc::make_mut(l).body);
                 let right = mem::take(&mut Arc::make_mut(r).body);
-                self.stack.push((left, right, justification));
+                self.stack.push((left, right));
                 continue;
             }
             if left.whnf().is_some() || right.whnf().is_some() {
-                self.stack.push((left, right, justification));
+                self.stack.push((left, right));
                 continue;
             }
             if left.is_abs() {
@@ -550,14 +938,14 @@ impl<'a> Unifier<'a> {
                 if left.head().is_mvar() {
                     // this case is handled later.
                 } else if self.tt_env.unfold_head(&mut left).is_some() {
-                    self.stack.push((left, right, justification));
+                    self.stack.push((left, right));
                     continue;
                 } else {
-                    return Some(justification);
+                    return Some(());
                 }
             }
             if self.inst_head(&mut left, &mut right) {
-                self.stack.push((left, right, justification));
+                self.stack.push((left, right));
                 continue;
             }
             // then each of the heads can be a local, a const, or an mvar
@@ -586,11 +974,7 @@ impl<'a> Unifier<'a> {
                                 let subst = [(right_head, &left)];
                                 c.left.inst_mvar(&subst);
                                 c.right.inst_mvar(&subst);
-                                self.stack.push((
-                                    c.left,
-                                    c.right,
-                                    c.justification.join(&justification),
-                                ));
+                                self.stack.push((c.left, c.right));
                             }
                         }
                         continue;
@@ -622,11 +1006,7 @@ impl<'a> Unifier<'a> {
                                 let subst = [(left_head, &right)];
                                 c.left.inst_mvar(&subst);
                                 c.right.inst_mvar(&subst);
-                                self.stack.push((
-                                    c.left,
-                                    c.right,
-                                    c.justification.join(&justification),
-                                ));
+                                self.stack.push((c.left, c.right));
                             }
                         }
                         continue;
@@ -634,7 +1014,7 @@ impl<'a> Unifier<'a> {
                 }
             }
             if right.head().is_mvar() || left.head().is_mvar() {
-                self.add_derived_constraint(left, right, false, justification);
+                self.add_derived_constraint(left, right, false);
                 continue;
             }
             // then each of the heads can be a local or a const.
@@ -649,22 +1029,22 @@ impl<'a> Unifier<'a> {
                         match left_hint.cmp(&right_hint) {
                             std::cmp::Ordering::Greater => {
                                 self.tt_env.unfold_head(&mut left).unwrap();
-                                self.stack.push((left, right, justification));
+                                self.stack.push((left, right));
                                 continue;
                             }
                             std::cmp::Ordering::Less => {
                                 self.tt_env.unfold_head(&mut right).unwrap();
-                                self.stack.push((left, right, justification));
+                                self.stack.push((left, right));
                                 continue;
                             }
                             std::cmp::Ordering::Equal => {
                                 if left_hint == 0 {
                                     // (f t₁ ⋯ tₙ) ≈ (g s₁ ⋯ sₘ) where f and g are both irreducible.
-                                    return Some(justification);
+                                    return Some(());
                                 }
                                 self.tt_env.unfold_head(&mut left).unwrap();
                                 self.tt_env.unfold_head(&mut right).unwrap();
-                                self.stack.push((left, right, justification));
+                                self.stack.push((left, right));
                                 continue;
                             }
                         }
@@ -674,48 +1054,46 @@ impl<'a> Unifier<'a> {
                         let left_args = left.unapply();
                         let right_args = right.unapply();
                         if left_args.len() != right_args.len() {
-                            return Some(justification);
+                            return Some(());
                         }
                         for (left_arg, right_arg) in
                             left_args.into_iter().zip(right_args.into_iter()).rev()
                         {
-                            self.stack
-                                .push((left_arg, right_arg, justification.clone()));
+                            self.stack.push((left_arg, right_arg));
                         }
                         continue;
                     }
                     // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where any of t or s contains an mvar.
-                    self.add_derived_constraint(left, right, true, justification);
+                    self.add_derived_constraint(left, right, true);
                     continue;
                 }
                 (Term::Const(left_head), Term::Local(right_head)) => {
                     // yuichi: perhaps we can simply give up on this case, when completeness is not important.
                     if self.tt_env.def_hint(left_head.name).is_none() {
-                        return Some(justification);
+                        return Some(());
                     }
                     left.close(*right_head);
                     if left.is_lclosed() {
-                        return Some(justification);
+                        return Some(());
                     }
                     left.open(&mk_local(*right_head));
                     self.tt_env.unfold_head(&mut left).unwrap();
-                    self.stack.push((left, right, justification));
+                    self.stack.push((left, right));
                     continue;
                 }
                 (Term::Local(left_head), Term::Local(right_head)) => {
                     if left_head != right_head {
-                        return Some(justification);
+                        return Some(());
                     }
                     let left_args = left.unapply();
                     let right_args = right.unapply();
                     if left_args.len() != right_args.len() {
-                        return Some(justification);
+                        return Some(());
                     }
                     for (left_arg, right_arg) in
                         left_args.into_iter().zip(right_args.into_iter()).rev()
                     {
-                        self.stack
-                            .push((left_arg, right_arg, justification.clone()));
+                        self.stack.push((left_arg, right_arg));
                     }
                     continue;
                 }
@@ -785,7 +1163,7 @@ impl<'a> Unifier<'a> {
         &mut self,
         snapshot: Snapshot,
         c: Rc<Constraint>,
-        choice: Box<dyn Iterator<Item = Vec<(Term, Term, Justification)>> + 'a>,
+        choice: Box<dyn Iterator<Item = Vec<(Term, Term)>> + 'a>,
     ) {
         self.trail.push(Branch {
             snapshot,
@@ -814,26 +1192,20 @@ impl<'a> Unifier<'a> {
         let snapshot = br.snapshot.clone();
         self.restore(&snapshot);
         self.stack.clear();
-        for (left, right, justification) in constraints.into_iter().rev() {
-            self.stack.push((
-                left,
-                right,
-                justification.join(&Justification {
-                    decision_level: self.stack.len() + 1,
-                }),
-            ));
+        for (left, right) in constraints.into_iter().rev() {
+            self.stack.push((left, right));
         }
         true
     }
 
-    fn choice_delta(&self, c: &Constraint) -> Vec<Vec<(Term, Term, Justification)>> {
+    fn choice_delta(&self, c: &Constraint) -> Vec<Vec<(Term, Term)>> {
         // suppose (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₙ)
         let left_args = c.left.args();
         let right_args = c.right.args();
         // Try first (t₁ ≈ s₁) ∧ ⋯ ∧ (tₙ ≈ sₙ)
         let mut a1 = vec![];
         for (&left_arg, &right_arg) in left_args.iter().zip(right_args.iter()) {
-            a1.push((left_arg.clone(), right_arg.clone(), c.justification.clone()));
+            a1.push((left_arg.clone(), right_arg.clone()));
         }
         // Try second ((unfold f) t₁ ⋯ tₙ ≈ (unfold f) s₁ ⋯ sₙ)
         let mut a2 = vec![];
@@ -842,12 +1214,12 @@ impl<'a> Unifier<'a> {
             let mut right = c.right.clone();
             self.tt_env.unfold_head(&mut left).unwrap();
             self.tt_env.unfold_head(&mut right).unwrap();
-            a2.push((left, right, c.justification.clone()));
+            a2.push((left, right));
         }
         vec![a1, a2]
     }
 
-    fn choice_fr(&self, c: &Constraint) -> Vec<Vec<(Term, Term, Justification)>> {
+    fn choice_fr(&self, c: &Constraint) -> Vec<Vec<(Term, Term)>> {
         let left = &c.left;
         let mut right = c.right.clone();
 
@@ -894,7 +1266,7 @@ impl<'a> Unifier<'a> {
                 let mut cand = mk_local(*x);
                 cand.apply(new_args.clone());
                 cand.abs(&new_binders, true);
-                choice.push(vec![(left_head.clone(), cand, c.justification.clone())]);
+                choice.push(vec![(left_head.clone(), cand)]);
             }
 
             // imitation
@@ -903,7 +1275,7 @@ impl<'a> Unifier<'a> {
                     let mut cand = right_head.clone();
                     cand.apply(new_args.clone());
                     cand.abs(&new_binders, true);
-                    choice.push(vec![(left_head.clone(), cand, c.justification.clone())]);
+                    choice.push(vec![(left_head.clone(), cand)]);
                 }
                 Term::Local(name) => {
                     // @ ∈ { x[1], .., x[m] }
@@ -911,7 +1283,7 @@ impl<'a> Unifier<'a> {
                         let mut cand = right_head.clone();
                         cand.apply(new_args.clone());
                         cand.abs(&new_binders, true);
-                        choice.push(vec![(left_head.clone(), cand, c.justification.clone())]);
+                        choice.push(vec![(left_head.clone(), cand)]);
                     }
                 }
                 _ => unreachable!(),
@@ -959,7 +1331,7 @@ impl<'a> Unifier<'a> {
                     let mut cand = mk_local(*x);
                     cand.apply(new_args.clone());
                     cand.abs(&new_binders, true);
-                    choice.push(vec![(left_head.clone(), cand, c.justification.clone())]);
+                    choice.push(vec![(left_head.clone(), cand)]);
                 }
 
                 // imitation
@@ -968,7 +1340,7 @@ impl<'a> Unifier<'a> {
                         let mut cand = right_head.clone();
                         cand.apply(new_args.clone());
                         cand.abs(&new_binders, true);
-                        choice.push(vec![(left_head.clone(), cand, c.justification.clone())]);
+                        choice.push(vec![(left_head.clone(), cand)]);
                     }
                     Term::Local(_) => {}
                     _ => unreachable!(),
@@ -1006,13 +1378,7 @@ impl<'a> Unifier<'a> {
         false
     }
 
-    fn backjump(&mut self, justification: &Justification) -> bool {
-        if justification.decision_level == 0 {
-            return false;
-        }
-        while justification.decision_level < self.trail.len() {
-            self.pop_branch();
-        }
+    fn backjump(&mut self) -> bool {
         while !self.next() {
             if !self.pop_branch() {
                 return false;
@@ -1023,8 +1389,8 @@ impl<'a> Unifier<'a> {
 
     fn solve(mut self) -> Option<Vec<(Name, Term)>> {
         loop {
-            while let Some(justification) = self.find_conflict() {
-                if !self.backjump(&justification) {
+            while let Some(()) = self.find_conflict() {
+                if !self.backjump() {
                     return None;
                 }
             }
@@ -1033,9 +1399,4 @@ impl<'a> Unifier<'a> {
             }
         }
     }
-}
-
-fn unify(x: &Term, y: &Term, tt_env: &tt::Env) -> Option<Vec<(Name, Term)>> {
-    let solver = Unifier::new(tt_env, vec![(x.clone(), y.clone())]);
-    solver.solve()
 }

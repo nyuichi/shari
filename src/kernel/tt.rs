@@ -221,6 +221,28 @@ impl Type {
         }
     }
 
+    pub fn inst_mvar(&mut self, subst: &[(Name, &Type)]) {
+        match self {
+            Type::Const(_) => {}
+            Type::Arrow(inner) => {
+                let inner = Arc::make_mut(inner);
+                inner.dom.inst_mvar(subst);
+                inner.cod.inst_mvar(subst);
+            }
+            Type::App(inner) => {
+                let inner = Arc::make_mut(inner);
+                inner.fun.inst_mvar(subst);
+                inner.arg.inst_mvar(subst);
+            }
+            Type::Local(_) => {}
+            Type::Mvar(name) => {
+                if let Some((_, ty)) = subst.iter().find(|(x, _)| x == name) {
+                    *self = (*ty).clone();
+                };
+            }
+        }
+    }
+
     /// Returns [true] if [self] contains no meta variables.
     pub fn is_ground(&self) -> bool {
         match self {
@@ -711,12 +733,35 @@ impl Term {
         }
     }
 
-    pub fn inst_type_mvar(&mut self, subst: &[(Name, &Type)]) {
+    pub fn subst_type(&mut self, subst: &[(Name, &Type)]) {
         match self {
             Term::Var(_) => {}
             Term::Abs(inner) => {
                 let inner = Arc::make_mut(inner);
                 inner.binder_type.subst(subst);
+                inner.body.subst_type(subst);
+            }
+            Term::App(inner) => {
+                let inner = Arc::make_mut(inner);
+                inner.fun.subst_type(subst);
+                inner.arg.subst_type(subst);
+            }
+            Term::Local(_) => {}
+            Term::Const(inner) => {
+                for s in &mut Arc::make_mut(inner).ty_args {
+                    s.subst(subst);
+                }
+            }
+            Term::Mvar(_) => {}
+        }
+    }
+
+    pub fn inst_type_mvar(&mut self, subst: &[(Name, &Type)]) {
+        match self {
+            Term::Var(_) => {}
+            Term::Abs(inner) => {
+                let inner = Arc::make_mut(inner);
+                inner.binder_type.inst_mvar(subst);
                 inner.body.inst_type_mvar(subst);
             }
             Term::App(inner) => {
@@ -727,7 +772,7 @@ impl Term {
             Term::Local(_) => {}
             Term::Const(inner) => {
                 for s in &mut Arc::make_mut(inner).ty_args {
-                    s.subst(subst);
+                    s.inst_mvar(subst);
                 }
             }
             Term::Mvar(_) => {}
@@ -1009,7 +1054,8 @@ pub struct Def {
 pub struct LocalEnv {
     pub local_types: Vec<Name>,
     pub locals: Vec<(Name, Type)>,
-    pub mvars: Vec<(Name, Type)>,
+    // type context of meta variables
+    pub holes: Vec<(Name, Type)>,
 }
 
 impl Env {
@@ -1178,7 +1224,7 @@ impl Env {
                     self.check_kind(local_env, t, &Kind::base())?;
                     subst.push((x, t));
                 }
-                target.inst_type_mvar(&subst);
+                target.subst_type(&subst);
                 let c = mk_const(*name, ty_args.clone());
                 Ok(Conv {
                     left: c,
@@ -1208,7 +1254,7 @@ impl Env {
             return None;
         }
         let subst: Vec<_> = std::iter::zip(local_types.iter().copied(), ty_args.iter()).collect();
-        target.inst_type_mvar(&subst);
+        target.subst_type(&subst);
         let path = mk_path_delta(*name, mem::take(ty_args));
         *m = target;
         Some(path)
@@ -1377,7 +1423,7 @@ impl<'a> Infer<'a> {
                 bail!("unknown local variable");
             }
             Term::Mvar(name) => {
-                for (local, ty) in &self.local_env.mvars {
+                for (local, ty) in &self.local_env.holes {
                     if local == name {
                         self.eq_set.unify(ty.clone(), target.clone());
                         return Ok(());
