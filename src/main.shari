@@ -155,7 +155,7 @@ lemma uexists.intro.{u} (P : u → Prop) : exists P → unique P → uexists P :
 assume exists P,
 assume unique P,
 obtain (x : u), P x := ⟪exists P⟫,
-exists.intro.{u}[(λ x, P x ∧ ∀ y, P y → x = y), x] (and.intro[P x, ∀ y, P y → x = y] ⟪P x⟫ (take (y : u), assume P y, (change ∀ x₁ x₂, P x₁ → P x₂ → x₁ = x₂, ⟪unique P⟫)[x, y] ⟪P x⟫ ⟪P y⟫))
+exists.intro.{u}[(λ x, P x ∧ ∀ y, P y → x = y), x] (and.intro[_, _] ⟪P x⟫ (take (y : u), assume P y, (change ∀ x₁ x₂, P x₁ → P x₂ → x₁ = x₂, ⟪unique P⟫)[x, y] ⟪P x⟫ ⟪P y⟫))
 
 lemma uexists.exists.{u} (P : u → Prop) : uexists P → exists P :=
 assume uexists P,
@@ -169,7 +169,7 @@ take (x₂ : u),
 assume P x₁,
 assume P x₂,
 obtain (x : u), P x ∧ ∀ y, P y → x = y := ⟪uexists P⟫,
-have ∀ y, P y → x = y := and.right[P x, ∀ y, P y → x = y] ⟪P x ∧ ∀ y, P y → x = y⟫,
+have ∀ y, P y → x = y := and.right[_, _] ⟪P x ∧ ∀ y, P y → x = y⟫,
 have x = x₁ := ⟪∀ y, P y → x = y⟫[x₁] ⟪P x₁⟫,
 have x = x₂ := ⟪∀ y, P y → x = y⟫[x₂] ⟪P x₂⟫,
 eq.trans.{u}[_, _, _] (eq.symm.{u}[_, _] ⟪x = x₁⟫) ⟪x = x₂⟫
@@ -177,7 +177,7 @@ eq.trans.{u}[_, _, _] (eq.symm.{u}[_, _] ⟪x = x₁⟫) ⟪x = x₂⟫
 lemma iff.intro (φ ψ : Prop) : (φ → ψ) → (ψ → φ) → (φ ↔ ψ) :=
 assume φ → ψ,
 assume ψ → φ,
-and.intro[φ → ψ, ψ → φ] ⟪φ → ψ⟫ ⟪ψ → φ⟫
+and.intro[_, _] ⟪φ → ψ⟫ ⟪ψ → φ⟫
 
 lemma iff.right (φ ψ : Prop) : (φ ↔ ψ) → φ → ψ :=
 assume φ ↔ ψ,
@@ -243,10 +243,10 @@ have f (e x x) = e x x := eq.congr_fun.{u, v}[_, _, x] ⟪(λ x, f (e x x)) = e 
 exists.intro.{v}[(λ y, y = f y), e x x] (eq.symm.{v}[_, _] ⟪f (e x x) = e x x⟫)
 
 lemma cantor.{u} : ¬(∃ (e : u → u → Prop), surjective e) :=
-mt[(∃ (e : u → u → Prop), surjective e), ∀ (f : Prop → Prop), ∃ y, y = f y] lawvere_fixpoint.{u, Prop} (
+mt[_, _] lawvere_fixpoint.{u, Prop} (
     assume ∀ (f : Prop → Prop), ∃ y, y = f y,
     obtain (y : Prop), y = ¬y := ⟪∀ (f : Prop → Prop), ∃ y, y = f y⟫[not],
-    contradiction[y = ¬y] ⟪y = ¬y⟫ (not.fixed_point_free[y]))
+    contradiction[_] ⟪y = ¬y⟫ (not.fixed_point_free[y]))
 
 lemma injective.unique.{u, v} (f : u → v) : injective f → ∀ y, unique (λ x, y = f x) :=
 assume injective f,
@@ -303,17 +303,17 @@ axiom bool.spec : bool.char = char bool.comprehension
 lemma bool.char.unfold (φ : Prop) : bool.char φ → char bool.comprehension φ := assume bool.char φ, eq.conv[_, _] (eq.congr_fun.{Prop, Prop}[_, _, φ] bool.spec) ⟪bool.char φ⟫
 lemma bool.char.fold (φ : Prop) : char bool.comprehension φ → bool.char φ := assume char bool.comprehension φ, eq.conv[_, _] (eq.congr_fun.{Prop, Prop}[_, _, φ] (eq.symm.{Prop → Prop}[_, _] bool.spec)) ⟪char bool.comprehension φ⟫
 def bool.rep : bool → Prop := rep bool.comprehension
-lemma bool.char.abs (φ : Prop) : bool.char φ → ∃! x, φ = bool.rep x := assume bool.char φ, char.abs.{Prop, bool}[bool.comprehension, φ] (bool.char.unfold[φ] ⟪bool.char φ⟫)
-lemma bool.rep.char (φ : Prop) : (∃! x, φ = bool.rep x) → bool.char φ := assume ∃! x, φ = bool.rep x, bool.char.fold[φ] (rep.char.{Prop, bool}[bool.comprehension, φ] ⟪∃! x, φ = bool.rep x⟫)
-lemma bool.char.rep (x : bool) : bool.char (bool.rep x) := bool.char.fold[bool.rep x] char.rep.{Prop, bool}[bool.comprehension, x]
-lemma bool.comprehension.ind (P : bool → Prop) : (∀ (φ : Prop) (x : bool), φ = bool.rep x → P x) → ∀ x, P x := comprehension.ind.{Prop, bool}[bool.comprehension, P]
-lemma bool.rep.injective : injective bool.rep := rep.injective.{Prop, bool}[bool.comprehension]
+lemma bool.char.abs (φ : Prop) : bool.char φ → ∃! x, φ = bool.rep x := assume bool.char φ, char.abs.{Prop, bool}[_, φ] (bool.char.unfold[φ] ⟪bool.char φ⟫)
+lemma bool.rep.char (φ : Prop) : (∃! x, φ = bool.rep x) → bool.char φ := assume ∃! x, φ = bool.rep x, bool.char.fold[φ] (rep.char.{Prop, bool}[_, φ] ⟪∃! x, φ = bool.rep x⟫)
+lemma bool.char.rep (x : bool) : bool.char (bool.rep x) := bool.char.fold[bool.rep x] char.rep.{Prop, bool}[_, x]
+lemma bool.comprehension.ind (P : bool → Prop) : (∀ (φ : Prop) (x : bool), φ = bool.rep x → P x) → ∀ x, P x := comprehension.ind.{Prop, bool}[_, P]
+lemma bool.rep.injective : injective bool.rep := rep.injective.{Prop, bool}[_]
 
 lemma bool.tt_uexists : ∃! (tt : bool), ⊤ = bool.rep tt :=
-bool.char.abs[⊤] (or.left[⊤ = ⊤, ⊤ = ⊥] eq.refl.{Prop}[⊤])
+bool.char.abs[⊤] (or.left[_, ⊤ = ⊥] eq.refl.{Prop}[⊤])
 
 lemma bool.ff_uexists : ∃! (ff : bool), ⊥ = bool.rep ff :=
-bool.char.abs[⊥] (or.right[⊥ = ⊤, ⊥ = ⊥] eq.refl.{Prop}[⊥])
+bool.char.abs[⊥] (or.right[⊥ = ⊤, _] eq.refl.{Prop}[⊥])
 
 
 -- def (tt : bool), ⊤ = bool.rep tt := bool.tt.uexists
@@ -330,35 +330,35 @@ bool.comprehension.ind[P] (
   take (φ : Prop),
   take (b : bool),
   assume φ = bool.rep b,
-  have φ = ⊤ ∨ φ = ⊥ := eq.transport.{Prop}[bool.rep b, φ, bool.char] (eq.symm.{Prop}[φ, bool.rep b] ⟪φ = bool.rep b⟫) bool.char.rep[b],
-  or.elim[φ = ⊤, φ = ⊥, P b] ⟪φ = ⊤ ∨ φ = ⊥⟫
+  have φ = ⊤ ∨ φ = ⊥ := eq.transport.{Prop}[_, _, bool.char] (eq.symm.{Prop}[_, _] ⟪φ = bool.rep b⟫) bool.char.rep[b],
+  or.elim[_, _, _] ⟪φ = ⊤ ∨ φ = ⊥⟫
     (assume φ = ⊤,
-      have bool.rep tt = bool.rep b := eq.trans.{Prop}[bool.rep tt, ⊤, bool.rep b] (eq.symm.{Prop}[⊤, bool.rep tt] tt.spec) (eq.trans.{Prop}[⊤, φ, bool.rep b] (eq.symm.{Prop}[φ, ⊤] ⟪φ = ⊤⟫) ⟪φ = bool.rep b⟫),
+      have bool.rep tt = bool.rep b := eq.trans.{Prop}[_, _, _] (eq.symm.{Prop}[_, _] tt.spec) (eq.trans.{Prop}[_, _, _] (eq.symm.{Prop}[_, _] ⟪φ = ⊤⟫) ⟪φ = bool.rep b⟫),
       have tt = b := (change ∀ x y, bool.rep x = bool.rep y → x = y, bool.rep.injective)[tt, b] ⟪bool.rep tt = bool.rep b⟫,
-      eq.transport.{bool}[tt, b, P] ⟪tt = b⟫ ⟪P tt⟫)
+      eq.transport.{bool}[_, _, P] ⟪tt = b⟫ ⟪P tt⟫)
     (assume φ = ⊥,
-      have bool.rep ff = bool.rep b := eq.trans.{Prop}[bool.rep ff, ⊥, bool.rep b] (eq.symm.{Prop}[⊥, bool.rep ff] ff.spec) (eq.trans.{Prop}[⊥, φ, bool.rep b] (eq.symm.{Prop}[φ, ⊥] ⟪φ = ⊥⟫) ⟪φ = bool.rep b⟫),
+      have bool.rep ff = bool.rep b := eq.trans.{Prop}[_, _, _] (eq.symm.{Prop}[_, _] ff.spec) (eq.trans.{Prop}[_, _, _] (eq.symm.{Prop}[_, _] ⟪φ = ⊥⟫) ⟪φ = bool.rep b⟫),
       have ff = b := (change ∀ x y, bool.rep x = bool.rep y → x = y, bool.rep.injective)[ff, b] ⟪bool.rep ff = bool.rep b⟫,
-      eq.transport.{bool}[ff, b, P] ⟪ff = b⟫ ⟪P ff⟫))
+      eq.transport.{bool}[_, _, P] ⟪ff = b⟫ ⟪P ff⟫))
 
 lemma bool.case : ∀ b, b = tt ∨ b = ff :=
-bool.ind[λ b, b = tt ∨ b = ff] (or.left[tt = tt, tt = ff] eq.refl.{bool}[tt]) (or.right[ff = tt, ff = ff] eq.refl.{bool}[ff])
+bool.ind[λ b, b = tt ∨ b = ff] (or.left[_, tt = ff] eq.refl.{bool}[tt]) (or.right[ff = tt, _] eq.refl.{bool}[ff])
 
 lemma bool.tt_ne_ff : tt ≠ ff :=
 assume tt = ff,
-(change (⊤ = ⊥) → ⊥, top_ne_bot) (eq.trans.{Prop}[⊤, bool.rep tt, ⊥] tt.spec (eq.trans.{Prop}[bool.rep tt, bool.rep ff, ⊥] (eq.congr_arg.{bool, Prop}[bool.rep, tt, ff] ⟪tt = ff⟫) (eq.symm.{Prop}[⊥, bool.rep ff] ff.spec)))
+(change (⊤ = ⊥) → ⊥, top_ne_bot) (eq.trans.{Prop}[_, _, _] tt.spec (eq.trans.{Prop}[_, _, _] (eq.congr_arg.{bool, Prop}[bool.rep, _, _] ⟪tt = ff⟫) (eq.symm.{Prop}[_, _] ff.spec)))
 
 lemma bool.rec_exists.{u} (on_tt : u) (on_ff : u) (b : bool) : ∃ (rec : u), (b = tt → rec = on_tt) ∧ (b = ff → rec = on_ff) :=
-or.elim[b = tt, b = ff, ∃ rec, (b = tt → rec = on_tt) ∧ (b = ff → rec = on_ff)] bool.case[b]
+or.elim[_, _, _] bool.case[b]
   (assume b = tt,
     exists.intro.{u}[(λ rec, (b = tt → rec = on_tt) ∧ (b = ff → rec = on_ff)), on_tt]
-      (and.intro[b = tt → on_tt = on_tt, b = ff → on_tt = on_ff]
+      (and.intro[_, _]
         (assume b = tt, eq.refl.{u}[on_tt])
-        (assume b = ff, absurd[on_tt = on_ff] ((change tt = ff → ⊥, bool.tt_ne_ff) (eq.trans.{bool}[tt, b, ff] (eq.symm.{bool}[b, tt] ⟪b = tt⟫) ⟪b = ff⟫)))))
+        (assume b = ff, absurd[on_tt = on_ff] ((change tt = ff → ⊥, bool.tt_ne_ff) (eq.trans.{bool}[_, _, _] (eq.symm.{bool}[_, _] ⟪b = tt⟫) ⟪b = ff⟫)))))
   (assume b = ff,
     exists.intro.{u}[(λ rec, (b = tt → rec = on_tt) ∧ (b = ff → rec = on_ff)), on_ff]
-      (and.intro[b = tt → on_ff = on_tt, b = ff → on_ff = on_ff]
-        (assume b = tt, absurd[on_ff = on_tt] ((change tt = ff → ⊥, bool.tt_ne_ff) (eq.trans.{bool}[tt, b, ff] (eq.symm.{bool}[b, tt] ⟪b = tt⟫) ⟪b = ff⟫)))
+      (and.intro[_, _]
+        (assume b = tt, absurd[on_ff = on_tt] ((change tt = ff → ⊥, bool.tt_ne_ff) (eq.trans.{bool}[_, _, _] (eq.symm.{bool}[_, _] ⟪b = tt⟫) ⟪b = ff⟫)))
         (assume b = ff, eq.refl.{u}[on_ff])))
 
 lemma bool.rec_unique.{u} (on_tt : u) (on_ff : u) (b : bool) : unique λ (rec : u), (b = tt → rec = on_tt) ∧ (b = ff → rec = on_ff) :=
@@ -366,15 +366,15 @@ take (r₁ : u),
 take (r₂ : u),
 assume (b = tt → r₁ = on_tt) ∧ (b = ff → r₁ = on_ff),
 assume (b = tt → r₂ = on_tt) ∧ (b = ff → r₂ = on_ff),
-or.elim[b = tt, b = ff, r₁ = r₂] bool.case[b]
+or.elim[_, _, _] bool.case[b]
   (assume b = tt,
-    have r₁ = on_tt := and.left[b = tt → r₁ = on_tt, b = ff → r₁ = on_ff] ⟪(b = tt → r₁ = on_tt) ∧ (b = ff → r₁ = on_ff)⟫ ⟪b = tt⟫,
-    have r₂ = on_tt := and.left[b = tt → r₂ = on_tt, b = ff → r₂ = on_ff] ⟪(b = tt → r₂ = on_tt) ∧ (b = ff → r₂ = on_ff)⟫ ⟪b = tt⟫,
-    eq.trans.{u}[r₁, on_tt, r₂] ⟪r₁ = on_tt⟫ (eq.symm.{u}[r₂, on_tt] ⟪r₂ = on_tt⟫))
+    have r₁ = on_tt := and.left[_, _] ⟪(b = tt → r₁ = on_tt) ∧ (b = ff → r₁ = on_ff)⟫ ⟪b = tt⟫,
+    have r₂ = on_tt := and.left[_, _] ⟪(b = tt → r₂ = on_tt) ∧ (b = ff → r₂ = on_ff)⟫ ⟪b = tt⟫,
+    eq.trans.{u}[_, _, _] ⟪r₁ = on_tt⟫ (eq.symm.{u}[_, _] ⟪r₂ = on_tt⟫))
   (assume b = ff,
-    have r₁ = on_ff := and.right[b = tt → r₁ = on_tt, b = ff → r₁ = on_ff] ⟪(b = tt → r₁ = on_tt) ∧ (b = ff → r₁ = on_ff)⟫ ⟪b = ff⟫,
-    have r₂ = on_ff := and.right[b = tt → r₂ = on_tt, b = ff → r₂ = on_ff] ⟪(b = tt → r₂ = on_tt) ∧ (b = ff → r₂ = on_ff)⟫ ⟪b = ff⟫,
-    eq.trans.{u}[r₁, on_ff, r₂] ⟪r₁ = on_ff⟫ (eq.symm.{u}[r₂, on_ff] ⟪r₂ = on_ff⟫))
+    have r₁ = on_ff := and.right[_, _] ⟪(b = tt → r₁ = on_tt) ∧ (b = ff → r₁ = on_ff)⟫ ⟪b = ff⟫,
+    have r₂ = on_ff := and.right[_, _] ⟪(b = tt → r₂ = on_tt) ∧ (b = ff → r₂ = on_ff)⟫ ⟪b = ff⟫,
+    eq.trans.{u}[_, _, _] ⟪r₁ = on_ff⟫ (eq.symm.{u}[_, _] ⟪r₂ = on_ff⟫))
 
 lemma bool.rec_uexists.{u} (on_tt : u) (on_ff : u) (b : bool) : ∃! (rec : u), (b = tt → rec = on_tt) ∧ (b = ff → rec = on_ff) :=
 uexists.intro.{u}[λ (rec : u), (b = tt → rec = on_tt) ∧ (b = ff → rec = on_ff)] bool.rec_exists.{u}[on_tt, on_ff, b] bool.rec_unique.{u}[on_tt, on_ff, b]
@@ -395,14 +395,14 @@ type const unit : Type
 const unit.comprehension : comprehension Prop unit
 def unit.char : Prop → Prop := λ φ, ⊤ = φ
 axiom unit.spec : unit.char = char unit.comprehension
-lemma unit.char.unfold (φ : Prop) : unit.char φ → char unit.comprehension φ := assume unit.char φ, eq.conv[unit.char φ, char unit.comprehension φ] (eq.congr_fun.{Prop, Prop}[unit.char, char unit.comprehension, φ] unit.spec) ⟪unit.char φ⟫
-lemma unit.char.fold (φ : Prop) : char unit.comprehension φ → unit.char φ := assume char unit.comprehension φ, eq.conv[char unit.comprehension φ, unit.char φ] (eq.congr_fun.{Prop, Prop}[char unit.comprehension, unit.char, φ] (eq.symm.{Prop → Prop}[unit.char, char unit.comprehension] unit.spec)) ⟪char unit.comprehension φ⟫
+lemma unit.char.unfold (φ : Prop) : unit.char φ → char unit.comprehension φ := assume unit.char φ, eq.conv[_, _] (eq.congr_fun.{Prop, Prop}[_, _, φ] unit.spec) ⟪unit.char φ⟫
+lemma unit.char.fold (φ : Prop) : char unit.comprehension φ → unit.char φ := assume char unit.comprehension φ, eq.conv[_, _] (eq.congr_fun.{Prop, Prop}[_, _, φ] (eq.symm.{Prop → Prop}[_, _] unit.spec)) ⟪char unit.comprehension φ⟫
 def unit.rep : unit → Prop := rep unit.comprehension
-lemma unit.char.abs (φ : Prop) : unit.char φ → ∃! x, φ = unit.rep x := assume unit.char φ, char.abs.{Prop, unit}[unit.comprehension, φ] (unit.char.unfold[φ] ⟪unit.char φ⟫)
-lemma unit.rep.char (φ : Prop) : (∃! x, φ = unit.rep x) → unit.char φ := assume ∃! x, φ = unit.rep x, unit.char.fold[φ] (rep.char.{Prop, unit}[unit.comprehension, φ] ⟪∃! x, φ = unit.rep x⟫)
-lemma unit.char.rep (x : unit) : unit.char (unit.rep x) := unit.char.fold[unit.rep x] char.rep.{Prop, unit}[unit.comprehension, x]
-lemma unit.comprehension.ind (P : unit → Prop) : (∀ (φ : Prop) (x : unit), φ = unit.rep x → P x) → ∀ x, P x := comprehension.ind.{Prop, unit}[unit.comprehension, P]
-lemma unit.rep.injective : injective unit.rep := rep.injective.{Prop, unit}[unit.comprehension]
+lemma unit.char.abs (φ : Prop) : unit.char φ → ∃! x, φ = unit.rep x := assume unit.char φ, char.abs.{Prop, unit}[_, φ] (unit.char.unfold[φ] ⟪unit.char φ⟫)
+lemma unit.rep.char (φ : Prop) : (∃! x, φ = unit.rep x) → unit.char φ := assume ∃! x, φ = unit.rep x, unit.char.fold[φ] (rep.char.{Prop, unit}[_, φ] ⟪∃! x, φ = unit.rep x⟫)
+lemma unit.char.rep (x : unit) : unit.char (unit.rep x) := unit.char.fold[unit.rep x] char.rep.{Prop, unit}[_, x]
+lemma unit.comprehension.ind (P : unit → Prop) : (∀ (φ : Prop) (x : unit), φ = unit.rep x → P x) → ∀ x, P x := comprehension.ind.{Prop, unit}[_, P]
+lemma unit.rep.injective : injective unit.rep := rep.injective.{Prop, unit}[_]
 
 lemma unit.star_uexists : ∃! (star : unit), ⊤ = unit.rep star :=
 unit.char.abs[⊤] eq.refl.{Prop}[⊤]
@@ -412,7 +412,7 @@ const star : unit
 axiom star.spec : ⊤ = unit.rep star
 
 lemma unit.unique (x y : unit) : x = y :=
-have unit.rep x = unit.rep y := eq.trans.{Prop}[unit.rep x, ⊤, unit.rep y] (eq.symm.{Prop}[⊤, unit.rep x] unit.char.rep[x]) unit.char.rep[y],
+have unit.rep x = unit.rep y := eq.trans.{Prop}[_, _, _] (eq.symm.{Prop}[_, _] unit.char.rep[x]) unit.char.rep[y],
 (change ∀ x y, unit.rep x = unit.rep y → x = y, unit.rep.injective)[x, y] ⟪unit.rep x = unit.rep y⟫
 
 lemma unit.eta_expand (x : unit) : x = star :=
@@ -424,7 +424,7 @@ unit.unique[star, x]
 lemma unit.ind (P : unit → Prop) : P star → ∀ (x : unit), P x :=
 assume P star,
 take (x : unit),
-eq.transport.{unit}[star, x, P] unit.eta_reduce[x] ⟪P star⟫
+eq.transport.{unit}[_, _, P] unit.eta_reduce[x] ⟪P star⟫
 
 /-
  - support
@@ -436,34 +436,30 @@ type const support : Type → Type
 const support.comprehension.{u} : comprehension unit (support u)
 def support.char.{u} : unit → Prop := λ x, ∃ (a : u), ⊤
 axiom support.spec.{u} : support.char.{u} = char support.comprehension.{u}
-lemma support.char.unfold.{u} (x : unit) : support.char.{u} x → char support.comprehension.{u} x := assume support.char.{u} x, eq.conv[support.char.{u} x, char support.comprehension.{u} x] (eq.congr_fun.{unit, Prop}[support.char.{u}, char support.comprehension.{u}, x] support.spec.{u}) ⟪support.char.{u} x⟫
-lemma support.char.fold.{u} (x : unit) : char support.comprehension.{u} x → support.char.{u} x := assume char support.comprehension.{u} x, eq.conv[char support.comprehension.{u} x, support.char.{u} x] (eq.congr_fun.{unit, Prop}[char support.comprehension.{u}, support.char.{u}, x] (eq.symm.{unit → Prop}[support.char.{u}, char support.comprehension.{u}] support.spec.{u})) ⟪char support.comprehension.{u} x⟫
+lemma support.char.unfold.{u} (x : unit) : support.char.{u} x → char support.comprehension.{u} x := assume support.char.{u} x, eq.conv[_, _] (eq.congr_fun.{unit, Prop}[_, _, x] support.spec.{u}) ⟪support.char.{u} x⟫
+lemma support.char.fold.{u} (x : unit) : char support.comprehension.{u} x → support.char.{u} x := assume char support.comprehension.{u} x, eq.conv[_, _] (eq.congr_fun.{unit, Prop}[_, _, x] (eq.symm.{unit → Prop}[_, _] support.spec.{u})) ⟪char support.comprehension.{u} x⟫
 def support.rep.{u} : support u → unit := rep support.comprehension.{u}
-lemma support.char.abs.{u} (x : unit) : support.char.{u} x → ∃! h, x = support.rep.{u} h := assume support.char.{u} x, char.abs.{unit, support u}[support.comprehension.{u}, x] (support.char.unfold.{u}[x] ⟪support.char.{u} x⟫)
-lemma support.rep.char.{u} (x : unit) : (∃! h, x = support.rep.{u} h) → support.char.{u} x := assume ∃! h, x = support.rep.{u} h, support.char.fold.{u}[x] (rep.char.{unit, support u}[support.comprehension.{u}, x] ⟪∃! h, x = support.rep.{u} h⟫)
-lemma support.char.rep.{u} (h : support u) : support.char.{u} (support.rep.{u} h) := support.char.fold.{u}[support.rep.{u} h] char.rep.{unit, support u}[support.comprehension.{u}, h]
-lemma support.comprehension.ind.{u} (P : support u → Prop) : (∀ (x : unit) (h : support u), x = support.rep.{u} h → P h) → ∀ h, P h := comprehension.ind.{unit, support u}[support.comprehension.{u}, P]
-lemma support.rep.injective.{u} : injective support.rep.{u} := rep.injective.{unit, support u}[support.comprehension.{u}]
+lemma support.char.abs.{u} (x : unit) : support.char.{u} x → ∃! h, x = support.rep.{u} h := assume support.char.{u} x, char.abs.{unit, support u}[_, x] (support.char.unfold.{u}[x] ⟪support.char.{u} x⟫)
+lemma support.rep.char.{u} (x : unit) : (∃! h, x = support.rep.{u} h) → support.char.{u} x := assume ∃! h, x = support.rep.{u} h, support.char.fold.{u}[x] (rep.char.{unit, support u}[_, x] ⟪∃! h, x = support.rep.{u} h⟫)
+lemma support.char.rep.{u} (h : support u) : support.char.{u} (support.rep.{u} h) := support.char.fold.{u}[support.rep.{u} h] char.rep.{unit, support u}[_, h]
+lemma support.comprehension.ind.{u} (P : support u → Prop) : (∀ (x : unit) (h : support u), x = support.rep.{u} h → P h) → ∀ h, P h := comprehension.ind.{unit, support u}[_, P]
+lemma support.rep.injective.{u} : injective support.rep.{u} := rep.injective.{unit, support u}[_]
 
-lemma support.char.unfold_.{u} : support.char.{u} star → char support.comprehension.{u} star := assume support.char.{u} star, eq.conv[support.char.{u} star, char support.comprehension.{u} star] (eq.congr_fun.{unit, Prop}[support.char.{u}, char support.comprehension.{u}, star] support.spec.{u}) ⟪support.char.{u} star⟫
-lemma support.char.fold_.{u} : char support.comprehension.{u} star → support.char.{u} star := assume char support.comprehension.{u} star, eq.conv[char support.comprehension.{u} star, support.char.{u} star] (eq.congr_fun.{unit, Prop}[char support.comprehension.{u}, support.char.{u}, star] (eq.symm.{unit → Prop}[support.char.{u}, char support.comprehension.{u}] support.spec.{u})) ⟪char support.comprehension.{u} star⟫
+lemma support.char.unfold_.{u} : support.char.{u} star → char support.comprehension.{u} star := assume support.char.{u} star, eq.conv[_, _] (eq.congr_fun.{unit, Prop}[_, _, star] support.spec.{u}) ⟪support.char.{u} star⟫
+lemma support.char.fold_.{u} : char support.comprehension.{u} star → support.char.{u} star := assume char support.comprehension.{u} star, eq.conv[_, _] (eq.congr_fun.{unit, Prop}[_, _, star] (eq.symm.{unit → Prop}[_, _] support.spec.{u})) ⟪char support.comprehension.{u} star⟫
 lemma support.char.help.{u} : (∃! (h : support u), ⊤) ↔ (∃! (h : support u), star = support.rep.{u} h) :=
 (uexists.congr.{support u}[(λ (h : support u), ⊤), (λ h, star = support.rep.{u} h)]
   (take (h : support u),
-    iff.intro[⊤, star = support.rep.{u} h]
+    iff.intro[_, _]
       (assume ⊤,
         unit.eta_reduce[support.rep.{u} h])
       (assume star = support.rep.{u} h,
         top.intro)))
-lemma support.char.abs_.{u} : support.char.{u} star → ∃! (h : support u), ⊤ :=
-assume support.char.{u} star,
-iff.left[(∃! (h : support u), ⊤), (∃! (h : support u), star = support.rep.{u} h)]
-  support.char.help.{u}
-  (support.char.abs.{u}[star] ⟪support.char.{u} star⟫)
+lemma support.char.abs_.{u} : support.char.{u} star → ∃! (h : support u), ⊤ := assume support.char.{u} star, iff.left[_, _] support.char.help.{u} (support.char.abs.{u}[star] ⟪support.char.{u} star⟫)
 lemma support.rep.char_.{u} : (∃! (h : support u), ⊤) → support.char.{u} star :=
 assume ∃! (h : support u), ⊤,
 have ∃! (h : support u), star = support.rep.{u} h :=
-  iff.right[(∃! (h : support u), ⊤), (∃! (h : support u), star = support.rep.{u} h)] support.char.help.{u} ⟪∃! (h : support u), ⊤⟫,
+  iff.right[_, _] support.char.help.{u} ⟪∃! (h : support u), ⊤⟫,
 support.rep.char.{u}[star] ⟪∃! (h : support u), star = support.rep.{u} h⟫
 lemma support.char.rep_.{u} (h : support u) : support.char.{u} star := support.char.rep.{u}[h]
 
