@@ -248,6 +248,45 @@ impl Expr {
             Expr::Const(_) => {}
         }
     }
+
+    fn normalize(&mut self) {
+        match self {
+            Expr::Assump(e) => {
+                let ExprAssump { target } = Arc::make_mut(e);
+                target.normalize();
+            }
+            Expr::Assume(e) => {
+                let ExprAssume { target, expr } = Arc::make_mut(e);
+                target.normalize();
+                expr.normalize();
+            }
+            Expr::App(e) => {
+                let ExprApp {
+                    expr1,
+                    expr2,
+                    target,
+                } = Arc::make_mut(e);
+                expr1.normalize();
+                expr2.normalize();
+                target.normalize();
+            }
+            Expr::Take(e) => {
+                let ExprTake { name: _, ty, expr } = Arc::make_mut(e);
+                expr.normalize();
+            }
+            Expr::Inst(e) => {
+                let ExprInst {
+                    expr,
+                    arg,
+                    predicate,
+                } = Arc::make_mut(e);
+                expr.normalize();
+                arg.normalize();
+                predicate.normalize();
+            }
+            Expr::Const(_) => {}
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -547,6 +586,7 @@ impl<'a> Env<'a> {
             let subst = [(name, &m)];
             e.inst_mvar(&subst);
         }
+        e.normalize();
 
         for (name, ty) in type_subst {
             let subst = [(name, &ty)];
@@ -594,12 +634,11 @@ impl<'a> Eval<'a> {
                 let (h1, p1) = self.run_help(&inner.expr1);
                 let (h2, p2) = self.run_help(&inner.expr2);
 
-                let mut pat: Term = Imp {
+                let pat: Term = Imp {
                     lhs: p2,
                     rhs: inner.target.clone(),
                 }
                 .into();
-                pat.normalize();
 
                 let path = self.tt_env.equiv(&p1, &pat).unwrap();
                 let h = mk_proof_imp_elim(mk_proof_conv(path, h1), h2);
@@ -637,13 +676,12 @@ impl<'a> Eval<'a> {
 
                 let mut body = inner.predicate.clone();
                 body.apply([mk_var(0)]);
-                let mut pat: Term = Forall {
+                let pat: Term = Forall {
                     name: Name::fresh(),
                     ty: ty.clone(),
                     body,
                 }
                 .into();
-                pat.normalize();
 
                 let path = self.tt_env.equiv(&p, &pat).unwrap();
                 let h = mk_proof_forall_elim(arg.clone(), mk_proof_conv(path, h));

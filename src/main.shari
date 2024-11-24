@@ -50,8 +50,8 @@ lemma and.intro (φ ψ : Prop) : φ → ψ → φ ∧ ψ := assume φ, assume ψ
 lemma mp (φ ψ : Prop) : φ → (φ → ψ) → ψ := assume φ, assume φ → ψ, ⟪φ → ψ⟫ ⟪φ⟫
 lemma imp.trans (φ ψ ξ : Prop) : (φ → ψ) → (ψ → ξ) → φ → ξ := assume φ → ψ, assume ψ → ξ, assume φ, ⟪ψ → ξ⟫ (⟪φ → ψ⟫ ⟪φ⟫)
 -- modus tollens
-lemma mt (φ ψ : Prop) : (φ → ψ) → ¬ψ → ¬φ := imp.trans[_, _, ⊥]
-lemma contradiction (φ : Prop) : φ → ¬φ → ⊥ := mp[_, ⊥]
+lemma mt (φ ψ : Prop) : (φ → ψ) → ¬ψ → ¬φ := imp.trans[_, _, _]
+lemma contradiction (φ : Prop) : φ → ¬φ → ⊥ := mp[_, _]
 lemma absurd (φ : Prop) : ⊥ → φ := assume ⊥, (change ∀ ξ, ξ, ⟪⊥⟫)[φ]
 
 lemma eq.conv (φ ψ : Prop) : (φ = ψ) → φ → ψ := assume φ = ψ, (eq.transport.{Prop}[_, _, λ (ξ : Prop), ξ] ⟪φ = ψ⟫)
