@@ -1,9 +1,9 @@
 infixr → : 25 := imp
 infix = : 50 := eq
 nofix ⊤ := top
-infixr ∧ : 35 := and
+infixl ∧ : 35 := and
 nofix ⊥ := bot
-infixr ∨ : 30 := or
+infixl ∨ : 30 := or
 prefix ¬ : 40 := not
 infix ↔ : 20 := iff
 infix ≠ : 50 := ne
@@ -255,12 +255,11 @@ assume y = f x₂,
  - sets
  -/
 
-
 infix ∈ : 50 := in
 infix ∉ : 50 := notin
 infix ⊆ : 50 := subset
-infixr ∩ : 70 := cap
-infixr ∪ : 65 := cup
+infixl ∩ : 70 := cap
+infixl ∪ : 65 := cup
 infix ∖ : 70 := setminus
 nofix ∅ := empty
 
@@ -343,7 +342,6 @@ bool.char.abs[⊤] (or.left[_, ⊤ = ⊥] eq.refl.{Prop}[⊤])
 
 lemma bool.ff_uexists : ∃! (ff : bool), ⊥ = bool.rep ff :=
 bool.char.abs[⊥] (or.right[⊥ = ⊤, _] eq.refl.{Prop}[⊥])
-
 
 -- def (tt : bool), ⊤ = bool.rep tt := bool.tt.uexists
 -- def (ff : bool), ⊥ = bool.rep ff := bool.ff.uexists
@@ -524,30 +522,42 @@ const support.join.{u} : support (support u) → support u
 -- to the law of double negation.
 const choice.{u} : support u → u
 
+/-
+ - natural numbers
+ -/
+
+type const ℕ : Type
+const zero : ℕ
+const succ : ℕ → ℕ
+axiom ind : ∀ n, ∀ P, P zero ∧ (∀ n, P n → P (succ n)) → P n
+const rec.{u} : ℕ → u → (u → u) → u
+axiom rec.spec.{u} : ∀ (d₁ : u) (d₂ : u → u), rec zero d₁ d₂ = d₁ ∧ (∀ n, rec (succ n) d₁ d₂ = d₂ (rec n d₁ d₂))
+
+infixl + : 65 := add
+infixl - : 65 := sub
+infixl * : 70 := mul
+infixl / : 70 := div
+prefix - : 100 := neg
+infixr ^ : 80 := pow
+infix ≤ : 50 := le
+infix < : 50 := lt
+infix ≥ : 50 := ge
+infix > : 50 := gt
+
+def add (n m : ℕ) : ℕ := rec n m succ
+def mul (n m : ℕ) : ℕ := rec n zero (add m)
+
+def bit0 (n : ℕ) : ℕ := n + n
+def bit1 (n : ℕ) : ℕ := succ (bit0 n)
+
 ------------------------------------------------------------
 
 /-
 
-inductive inhabited (u : Type) :=
-| mk :: u → inhabited u
-
-type const inhabited : Type → Type
-const inhabited.mk.{u} : u → inhabited u
-const inhabited.rec.{u, v} : inhabited u → (u → v) → v
-axiom inhabited.rec.spec.{u, v} (x : u) (f : u → v) : inhabited.rec.{u, v} (inhabited.mk.{u} x) f = f x
-
-instance Prop.inhabited : inhabited Prop := inhabited.mk.{Prop} ⊤
-
-def Prop.inhabited : inhabited Prop := inhabited.mk.{Prop} ⊤
-
-const epsilon.{u} : inhabited u → (u → Prop) → u
-axiom epsilon.spec.{u} (h : inhabited u) (P : u → Prop) : (∃ x, P x) → P (epsilon.{u} h P)
-
-lemma epsilon.singleton.{u} (x : u) : epsilon.{u} (inhabited.mk.{u} x) (λ y, y = x) = x :=
-epsilon.spec.{u}[inhabited.mk.{u} x, (λ y, y = x)] (exists.intro.{u}[(λ y, y = x), x] eq.refl.{u}[x])
+def split.{u, v} (f : u → v) : Prop := ∃ g, ∀ y, y = f (g y)
 
 -- internal axiom of choice
-lemma ac.{u, v} (f : u → v) : surjective f → ∃ g, ∀ y, y = f (g y)
+lemma ac.{u, v} (f : u → v) : surjective f → split f
 
 /-
 lemma ac.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) :=
@@ -563,12 +573,6 @@ type def proof (φ : Prop) := { h : unit | φ }
 lemma to_proof (φ : Prop) : φ → ∃! (h : proof φ), ⊤
 lemma from_proof (φ : Prop) (h : proof φ) : φ
 
-// axiom foo : φ
-//
-// check foo : support { x : unit | φ }
-//
-// def epsilon (P : u → Prop) : support { x : u | P x } → { x : u | P x } := choice.{{ x : u | P x }}
-
 class comprehension u :=
   (type base : Type)
   (char : base → Prop)
@@ -577,8 +581,6 @@ namespace comprehension {
   const rep.{u} [comprehension u] : u → base u
   axiom rep.spec.{u} [comprehension u] : injective rep ∧ (∀ y, (∃! x, y = rep x) ↔ char y)
 }
-
-ac : (∀ (X : { X : Prop → Prop | X = U ∨ X = V }), ∃ y, X y) → ∃ (f : { X : Prop → Prop | X = U ∨ X = V } → Prop), ∀ (X : { X : Prop → Prop | X = U ∨ X = V }), X (f X)
 
 -- Diaconescu's argument: AC + prop_ext + fun_ext → EM
 lemma em (φ : Prop) : φ ∨ ¬φ :=

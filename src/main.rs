@@ -28,11 +28,14 @@ fn main() -> anyhow::Result<()> {
         };
         state.run_cmd(cmd.clone())?;
         match cmd {
-            cmd::Cmd::Def(cmd_def) => {
-                println!("defined {}", cmd_def.name);
+            cmd::Cmd::Def(cmd) => {
+                println!("defined {}", cmd.name);
             }
-            cmd::Cmd::Lemma(cmd_lemma) => {
-                println!("proved {}", cmd_lemma.name);
+            cmd::Cmd::Lemma(cmd) => {
+                println!("proved {}", cmd.name);
+            }
+            cmd::Cmd::Axiom(cmd) => {
+                println!("postulated {}", cmd.name);
             }
             _ => {}
         }
