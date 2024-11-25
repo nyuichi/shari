@@ -242,12 +242,6 @@ obtain (x : u), (λ x, f (e x x)) = e x := (change ∀ g, ∃ x, g = e x, ⟪sur
 have f (e x x) = e x x := eq.congr_fun.{u, v}[_, _, x] ⟪(λ x, f (e x x)) = e x⟫,
 exists.intro.{v}[(λ y, y = f y), e x x] (eq.symm.{v}[_, _] ⟪f (e x x) = e x x⟫)
 
-lemma cantor.{u} : ¬(∃ (e : u → u → Prop), surjective e) :=
-mt[_, _] lawvere_fixpoint.{u, Prop} (
-    assume ∀ (f : Prop → Prop), ∃ y, y = f y,
-    obtain (y : Prop), y = ¬y := ⟪∀ (f : Prop → Prop), ∃ y, y = f y⟫[not],
-    contradiction[_] ⟪y = ¬y⟫ (not.fixed_point_free[y]))
-
 lemma injective.unique.{u, v} (f : u → v) : injective f → ∀ y, unique (λ x, y = f x) :=
 assume injective f,
 take (y : v),
@@ -256,6 +250,41 @@ take (x₂ : u),
 assume y = f x₁,
 assume y = f x₂,
 (change ∀ x y, f x = f y → x = y, ⟪injective f⟫)[x₁, x₂] (eq.trans.{v}[_, _, _] (eq.symm.{v}[_, _] ⟪y = f x₁⟫) ⟪y = f x₂⟫)
+
+/-
+ - sets
+ -/
+
+
+infix ∈ : 50 := in
+infix ∉ : 50 := notin
+infix ⊆ : 50 := subset
+infixr ∩ : 70 := cap
+infixr ∪ : 65 := cup
+infix ∖ : 70 := setminus
+nofix ∅ := empty
+
+-- type set u := u → Prop
+
+def in.{u} (x : u) (s : set u) : Prop := s x
+def notin.{u} (x : u) (s : set u) : Prop := ¬(x ∈ s)
+def univ.{u} : set u := λ x, ⊤
+def empty.{u} : set u := λ x, ⊥
+def subset.{u} (s : set u) (t : set u) : Prop := ∀ x, x ∈ s → x ∈ t
+def sep.{u} (s : set u) (φ : set u) : set u := λ x, x ∈ s ∧ φ x
+def cap.{u} (s : set u) (t : set u) : set u := { x | x ∈ s ∧ x ∈ t }
+def cup.{u} (s : set u) (t : set u) : set u := { x | x ∈ s ∨ x ∈ t }
+def bigcap.{u} (a : set (set u)) : set u := { x | ∀ s, s ∈ a → x ∈ s }
+def bigcup.{u} (a : set (set u)) : set u := { x | ∃ s, s ∈ a ∧ x ∈ s }
+def power.{u} (s : set u) : set (set u) := { t | t ⊆ s }
+def setminus.{u} (s : set u) (t : set u) : set u := { x | x ∈ s ∧ x ∉ t }
+def im.{u, v} (f : u → v) (s : set u) : set v := { y | ∃ x, x ∈ s ∧ y = f x }
+
+lemma cantor.{u} : ¬(∃ (e : u → set u), surjective e) :=
+mt[_, _] lawvere_fixpoint.{u, Prop} (
+    assume ∀ (f : Prop → Prop), ∃ y, y = f y,
+    obtain (y : Prop), y = ¬y := ⟪∀ (f : Prop → Prop), ∃ y, y = f y⟫[not],
+    contradiction[_] ⟪y = ¬y⟫ (not.fixed_point_free[y]))
 
 /-
  - comprehension types

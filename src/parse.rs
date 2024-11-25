@@ -7,7 +7,7 @@ use crate::expr::{
 };
 use crate::kernel::proof::{
     mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro, mk_proof_imp_elim,
-    mk_proof_imp_intro, mk_proof_ref, Proof,
+    mk_proof_imp_intro, mk_proof_ref, mk_type_prop, Proof,
 };
 use crate::kernel::tt::{
     mk_app, mk_const, mk_fresh_mvar, mk_fresh_type_mvar, mk_local, mk_type_arrow, mk_type_const,
@@ -69,6 +69,7 @@ enum Nud {
     Paren,
     Bracket,
     Hole,
+    Brace,
     User(Operator),
     NumLit,
 }
@@ -108,6 +109,7 @@ impl TokenTable {
                     "∃" => Some(Nud::Exists),
                     "∃!" => Some(Nud::Uexists),
                     "_" => Some(Nud::Hole),
+                    "{" => Some(Nud::Brace),
                     _ => self.nud.get(token.as_str()).map(|op| Nud::User(op.clone())),
                 }
             }
@@ -330,6 +332,9 @@ impl<'a, 'b> Parser<'a, 'b> {
                 Ok(mk_type_local(name))
             } else if self.ns.type_consts.contains(&name) {
                 Ok(mk_type_const(name))
+            } else if token.as_str() == "set" {
+                let t = self.subty(1024)?;
+                Ok(mk_type_arrow(t, mk_type_prop()))
             } else {
                 Self::fail(token, "unknown type variable")
             }
@@ -480,6 +485,23 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(m)
     }
 
+    fn term_sep(&mut self, _token: Token<'a>) -> Result<Term, ParseError> {
+        let name = self.name()?;
+        let t;
+        if let Some(_token) = self.expect_symbol_opt(":") {
+            t = self.ty()?;
+        } else {
+            t = mk_fresh_type_mvar();
+        }
+        self.expect_symbol("|")?;
+        self.locals.push(name);
+        let mut m = self.subterm(0)?;
+        self.locals.pop();
+        m.abs(&[(name, name, t)], true);
+        self.expect_symbol("}")?;
+        Ok(m)
+    }
+
     fn term_var(&mut self, token: Token<'a>, entity: Option<Name>) -> Result<Term, ParseError> {
         let name = match entity {
             None => Name::try_from(token.as_str()).expect("logic flaw"),
@@ -574,6 +596,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             },
             Nud::NumLit => Self::fail(token, "numeric literal is unsupported")?,
             Nud::Hole => self.mk_term_hole(),
+            Nud::Brace => self.term_sep(token)?,
         };
         while let Some(token) = self.peek_opt() {
             let led = match self.tt.get_led(&token) {
