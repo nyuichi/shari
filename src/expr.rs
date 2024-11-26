@@ -966,7 +966,7 @@ impl<'a> Unifier<'a> {
         if let &Term::Mvar(m_head) = m.head() {
             if let Some(a) = self.subst_map.get(&m_head) {
                 let subst = [(m_head, a)];
-                m.inst_mvar(&subst);
+                m.head_mut().inst_mvar(&subst);
                 m.whnf();
                 return true;
             }
@@ -975,11 +975,9 @@ impl<'a> Unifier<'a> {
     }
 
     fn inst_arg_heads(&self, m: &mut Term) {
-        let mut args = m.unapply();
-        for arg in &mut args {
+        for arg in &mut m.args_mut() {
             self.inst_head(arg);
         }
-        m.apply(args);
     }
 
     fn inst(&self, m: &mut Term, occur_check: Name) -> bool {
@@ -1129,11 +1127,12 @@ impl<'a> Unifier<'a> {
                 continue;
             }
             // then each of the heads can be a local, a const, or an mvar
-            if let &Term::Mvar(right_head) = right.head() {
-                // TODO: avoid full instantiation
-                if self.inst(&mut left, right_head) {
-                    left.normalize(); // TODO: avoid full normalization
-                    if let Some(args) = right.is_pattern() {
+            if let Term::Mvar(right_head) = right.head() {
+                let right_head = *right_head;
+                self.inst_arg_heads(&mut right);
+                if let Some(args) = right.is_pattern() {
+                    // TODO: avoid full instantiation
+                    if self.inst(&mut left, right_head) {
                         let args = args
                             .into_iter()
                             .map(|n| (n, n, mk_fresh_type_mvar()))
@@ -1165,10 +1164,11 @@ impl<'a> Unifier<'a> {
                     }
                 }
             }
-            if let &Term::Mvar(left_head) = left.head() {
-                if self.inst(&mut right, left_head) {
-                    right.normalize();
-                    if let Some(args) = left.is_pattern() {
+            if let Term::Mvar(left_head) = left.head() {
+                let left_head = *left_head;
+                self.inst_arg_heads(&mut left);
+                if let Some(args) = left.is_pattern() {
+                    if self.inst(&mut right, left_head) {
                         let args = args
                             .into_iter()
                             .map(|n| (n, n, mk_fresh_type_mvar()))

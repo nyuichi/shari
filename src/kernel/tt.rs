@@ -529,6 +529,17 @@ impl Term {
         m
     }
 
+    pub fn head_mut(&mut self) -> &mut Term {
+        if self.is_abs() {
+            return self;
+        }
+        let mut m = self;
+        while let Self::App(inner) = m {
+            m = &mut Arc::make_mut(inner).fun;
+        }
+        m
+    }
+
     pub fn args(&self) -> Vec<&Term> {
         if self.is_abs() {
             return vec![];
@@ -538,6 +549,21 @@ impl Term {
         while let Self::App(inner) = m {
             m = &inner.fun;
             args.push(&inner.arg);
+        }
+        args.reverse();
+        args
+    }
+
+    pub fn args_mut(&mut self) -> Vec<&mut Term> {
+        if self.is_abs() {
+            return vec![];
+        }
+        let mut m = self;
+        let mut args = vec![];
+        while let Self::App(inner) = m {
+            let TermApp { fun, arg } = Arc::make_mut(inner);
+            m = fun;
+            args.push(arg);
         }
         args.reverse();
         args
