@@ -11,7 +11,7 @@ use std::{mem, vec};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
-pub struct Name(usize);
+pub struct Name(pub usize);
 
 static NAME_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static NAME_TABLE: LazyLock<RwLock<HashMap<String, Name>>> = LazyLock::new(Default::default);

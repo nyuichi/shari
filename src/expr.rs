@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
+    iter::repeat_n,
     mem,
     rc::Rc,
     sync::Arc,
@@ -821,12 +822,13 @@ struct Snapshot {
 }
 
 struct Branch<'a> {
+    trail_len: usize,
     snapshot: Snapshot,
-    constraint: Rc<Constraint>,
     choice: Box<dyn Iterator<Item = Vec<(Term, Term)>> + 'a>,
 }
 
 struct Unifier<'a> {
+    debug: bool,
     tt_env: &'a tt::Env,
     queue_delta: VecDeque<Rc<Constraint>>,
     queue_qpat: VecDeque<Rc<Constraint>>,
@@ -846,6 +848,7 @@ struct Unifier<'a> {
 impl<'a> Unifier<'a> {
     fn new(tt_env: &'a tt::Env, constraints: Vec<(Term, Term)>) -> Self {
         let mut solver = Self {
+            debug: false,
             tt_env,
             queue_delta: Default::default(),
             queue_qpat: Default::default(),
@@ -864,42 +867,190 @@ impl<'a> Unifier<'a> {
         solver
     }
 
-    fn inst_head(&self, left: &mut Term, right: &mut Term) -> bool {
-        if let &Term::Mvar(left_head) = left.head() {
-            if let Some(m) = self.subst_map.get(&left_head) {
-                let subst = [(left_head, m)];
-                left.inst_mvar(&subst);
-                right.inst_mvar(&subst);
-                return true;
+    #[allow(unused)]
+    fn print_state(&self) {
+        let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
+        println!("{sp}+current state");
+        if !self.stack.is_empty() {
+            println!("{sp}| stack:");
+            for (left, right) in &self.stack {
+                println!("{sp}| - {}\n{sp}|   {}", left, right);
+            }
+            println!();
+        }
+        if !self.queue_delta.is_empty() {
+            println!("{sp}| delta:");
+            for c in &self.queue_delta {
+                println!("{sp}| - {}\n{sp}|   {}", c.left, c.right);
+            }
+            println!();
+        }
+        if !self.queue_qpat.is_empty() {
+            println!("{sp}| qpat:");
+            for c in &self.queue_qpat {
+                println!("{sp}| - {}\n{sp}|   {}", c.left, c.right);
+            }
+            println!();
+        }
+        if !self.queue_fr.is_empty() {
+            println!("{sp}| fr:");
+            for c in &self.queue_fr {
+                println!("{sp}| - {}\n{sp}|   {}", c.left, c.right);
+            }
+            println!();
+        }
+        if !self.queue_ff.is_empty() {
+            println!("{sp}| qpat:");
+            for c in &self.queue_ff {
+                println!("{sp}| - {}\n{sp}|   {}", c.left, c.right);
+            }
+            println!();
+        }
+        println!();
+    }
+
+    fn watch(&mut self, c: Rc<Constraint>) {
+        if c.kind != ConstraintKind::Delta {
+            if let &Term::Mvar(left_head) = c.left.head() {
+                match self.watch_list.get_mut(&left_head) {
+                    Some(watch_list) => {
+                        watch_list.push(c.clone());
+                    }
+                    None => {
+                        self.watch_list.insert(left_head, vec![c.clone()]);
+                    }
+                }
+            }
+            if let &Term::Mvar(right_head) = c.right.head() {
+                match self.watch_list.get_mut(&right_head) {
+                    Some(watch_list) => {
+                        watch_list.push(c);
+                    }
+                    None => {
+                        self.watch_list.insert(right_head, vec![c]);
+                    }
+                }
             }
         }
-        if let &Term::Mvar(right_head) = right.head() {
-            if let Some(m) = self.subst_map.get(&right_head) {
-                let subst = [(right_head, m)];
-                left.inst_mvar(&subst);
-                right.inst_mvar(&subst);
+    }
+
+    fn unwatch(&mut self, c: &Rc<Constraint>) {
+        if c.kind != ConstraintKind::Delta {
+            if let &Term::Mvar(left_head) = c.left.head() {
+                let watch_list = self.watch_list.get_mut(&left_head).unwrap();
+                let mut index = 0;
+                for i in (0..watch_list.len()).rev() {
+                    if Rc::ptr_eq(&watch_list[i], c) {
+                        index = i;
+                        break;
+                    }
+                }
+                watch_list.swap_remove(index);
+            }
+            if let &Term::Mvar(right_head) = c.right.head() {
+                let watch_list = self.watch_list.get_mut(&right_head).unwrap();
+                let mut index = 0;
+                for i in (0..watch_list.len()).rev() {
+                    if Rc::ptr_eq(&watch_list[i], c) {
+                        index = i;
+                        break;
+                    }
+                }
+                watch_list.swap_remove(index);
+            }
+        }
+    }
+
+    // Instantiate the head and call whnf
+    fn inst_head(&self, m: &mut Term) -> bool {
+        if let &Term::Mvar(m_head) = m.head() {
+            if let Some(a) = self.subst_map.get(&m_head) {
+                let subst = [(m_head, a)];
+                m.inst_mvar(&subst);
+                m.whnf();
                 return true;
             }
         }
         false
     }
 
+    fn inst_arg_heads(&self, m: &mut Term) {
+        let mut args = m.unapply();
+        for arg in &mut args {
+            self.inst_head(arg);
+        }
+        m.apply(args);
+    }
+
+    fn inst(&self, m: &mut Term, occur_check: Name) -> bool {
+        match m {
+            Term::Var(_) => true,
+            Term::Abs(m) => {
+                let TermAbs {
+                    binder_type: _,
+                    binder_name: _,
+                    body,
+                } = Arc::make_mut(m);
+                self.inst(body, occur_check)
+            }
+            Term::App(m) => {
+                let TermApp { fun, arg } = Arc::make_mut(m);
+                self.inst(fun, occur_check) && self.inst(arg, occur_check)
+            }
+            Term::Local(_) => true,
+            Term::Const(_) => true,
+            Term::Mvar(name) => {
+                if *name == occur_check {
+                    return false;
+                }
+                let Some(a) = self.subst_map.get(name).cloned() else {
+                    return true;
+                };
+                *m = a;
+                self.inst(m, occur_check)
+            }
+        }
+    }
+
+    fn is_fully_inst(&self, m: &Term) -> bool {
+        match m {
+            Term::Var(_) => true,
+            Term::Abs(m) => self.is_fully_inst(&m.body),
+            Term::App(m) => self.is_fully_inst(&m.fun) && self.is_fully_inst(&m.arg),
+            Term::Local(_) => true,
+            Term::Const(_) => true,
+            Term::Mvar(name) => !self.subst_map.contains_key(name),
+        }
+    }
+
     fn add_derived_constraint(&mut self, mut left: Term, mut right: Term, is_delta: bool) {
         let kind;
         if is_delta {
             kind = ConstraintKind::Delta;
-        } else if left.is_quasi_pattern() {
-            kind = ConstraintKind::QuasiPattern;
-        } else if right.is_quasi_pattern() {
-            mem::swap(&mut left, &mut right);
-            kind = ConstraintKind::QuasiPattern;
-        } else if left.head().is_mvar() && right.head().is_mvar() {
-            kind = ConstraintKind::FlexFlex;
-        } else if left.head().is_mvar() {
-            kind = ConstraintKind::FlexRigid;
         } else {
-            mem::swap(&mut left, &mut right);
-            kind = ConstraintKind::FlexRigid;
+            self.inst_arg_heads(&mut left);
+            self.inst_arg_heads(&mut right);
+            if left.is_quasi_pattern() {
+                kind = ConstraintKind::QuasiPattern;
+            } else if right.is_quasi_pattern() {
+                mem::swap(&mut left, &mut right);
+                kind = ConstraintKind::QuasiPattern;
+            } else if left.head().is_mvar() && right.head().is_mvar() {
+                kind = ConstraintKind::FlexFlex;
+            } else if left.head().is_mvar() {
+                kind = ConstraintKind::FlexRigid;
+            } else {
+                mem::swap(&mut left, &mut right);
+                kind = ConstraintKind::FlexRigid;
+            }
+        }
+
+        if self.debug {
+            let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
+            println!(
+                "{sp}new constraint ({kind:#?}):\n{sp}- {}\n{sp}  {}",
+                left, right
+            );
         }
 
         let c = Rc::new(Constraint {
@@ -925,36 +1076,23 @@ impl<'a> Unifier<'a> {
             }
         }
 
-        if !is_delta {
-            if let &Term::Mvar(left_head) = left.head() {
-                match self.watch_list.get_mut(&left_head) {
-                    Some(constraints) => {
-                        constraints.push(c.clone());
-                    }
-                    None => {
-                        self.watch_list.insert(left_head, vec![c.clone()]);
-                    }
-                }
-            }
-            if let &Term::Mvar(right_head) = right.head() {
-                match self.watch_list.get_mut(&right_head) {
-                    Some(constraints) => {
-                        constraints.push(c);
-                    }
-                    None => {
-                        self.watch_list.insert(right_head, vec![c]);
-                    }
-                }
-            }
-        }
+        self.watch(c);
     }
 
     fn add_subst(&mut self, name: Name, m: Term) {
+        if self.debug {
+            let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
+            println!("{sp}new subst {name} := {m}");
+        }
+
         self.subst.push((name, m.clone()));
         self.subst_map.insert(name, m);
     }
 
     fn find_conflict(&mut self) -> Option<()> {
+        if self.debug {
+            self.print_state();
+        }
         while let Some((mut left, mut right)) = self.stack.pop() {
             if left.untyped_eq(&right) {
                 continue;
@@ -986,72 +1124,79 @@ impl<'a> Unifier<'a> {
                     return Some(());
                 }
             }
-            if self.inst_head(&mut left, &mut right) {
+            if self.inst_head(&mut left) || self.inst_head(&mut right) {
                 self.stack.push((left, right));
                 continue;
             }
             // then each of the heads can be a local, a const, or an mvar
             if let &Term::Mvar(right_head) = right.head() {
-                if let Some(args) = right.is_pattern() {
-                    let args = args
-                        .into_iter()
-                        .map(|n| (n, n, mk_fresh_type_mvar()))
-                        .collect::<Vec<_>>();
-                    if left.abs(&args, false) {
-                        self.add_subst(right_head, left.clone());
-                        if let Some(constraints) = self.watch_list.get(&right_head) {
-                            for c in constraints.iter().rev() {
-                                if c.left.head() == &Term::Mvar(right_head) {
-                                    if let Term::Mvar(right_head) = c.right.head() {
-                                        if self.subst_map.contains_key(right_head) {
+                // TODO: avoid full instantiation
+                if self.inst(&mut left, right_head) {
+                    left.normalize(); // TODO: avoid full normalization
+                    if let Some(args) = right.is_pattern() {
+                        let args = args
+                            .into_iter()
+                            .map(|n| (n, n, mk_fresh_type_mvar()))
+                            .collect::<Vec<_>>();
+                        if left.abs(&args, false) {
+                            self.add_subst(right_head, left.clone());
+                            if let Some(constraints) = self.watch_list.get(&right_head) {
+                                for c in constraints.iter().rev() {
+                                    if c.left.head() == &Term::Mvar(right_head) {
+                                        if let Term::Mvar(right_head) = c.right.head() {
+                                            if self.subst_map.contains_key(right_head) {
+                                                continue;
+                                            }
+                                        }
+                                    } else if let Term::Mvar(left_head) = c.left.head() {
+                                        if self.subst_map.contains_key(left_head) {
                                             continue;
                                         }
                                     }
-                                } else if let Term::Mvar(left_head) = c.left.head() {
-                                    if self.subst_map.contains_key(left_head) {
-                                        continue;
-                                    }
+                                    let mut c = (**c).clone();
+                                    let subst = [(right_head, &left)];
+                                    c.left.inst_mvar(&subst);
+                                    c.right.inst_mvar(&subst);
+                                    self.stack.push((c.left, c.right));
                                 }
-                                let mut c = (**c).clone();
-                                let subst = [(right_head, &left)];
-                                c.left.inst_mvar(&subst);
-                                c.right.inst_mvar(&subst);
-                                self.stack.push((c.left, c.right));
                             }
+                            continue;
                         }
-                        continue;
                     }
                 }
             }
             if let &Term::Mvar(left_head) = left.head() {
-                if let Some(args) = left.is_pattern() {
-                    let args = args
-                        .into_iter()
-                        .map(|n| (n, n, mk_fresh_type_mvar()))
-                        .collect::<Vec<_>>();
-                    if right.abs(&args, false) {
-                        self.add_subst(left_head, right.clone());
-                        if let Some(constraints) = self.watch_list.get(&left_head) {
-                            for c in constraints.iter().rev() {
-                                if c.left.head() == &Term::Mvar(left_head) {
-                                    if let Term::Mvar(right_head) = c.right.head() {
-                                        if self.subst_map.contains_key(right_head) {
+                if self.inst(&mut right, left_head) {
+                    right.normalize();
+                    if let Some(args) = left.is_pattern() {
+                        let args = args
+                            .into_iter()
+                            .map(|n| (n, n, mk_fresh_type_mvar()))
+                            .collect::<Vec<_>>();
+                        if right.abs(&args, false) {
+                            self.add_subst(left_head, right.clone());
+                            if let Some(constraints) = self.watch_list.get(&left_head) {
+                                for c in constraints.iter().rev() {
+                                    if c.left.head() == &Term::Mvar(left_head) {
+                                        if let Term::Mvar(right_head) = c.right.head() {
+                                            if self.subst_map.contains_key(right_head) {
+                                                continue;
+                                            }
+                                        }
+                                    } else if let Term::Mvar(left_head) = c.left.head() {
+                                        if self.subst_map.contains_key(left_head) {
                                             continue;
                                         }
                                     }
-                                } else if let Term::Mvar(left_head) = c.left.head() {
-                                    if self.subst_map.contains_key(left_head) {
-                                        continue;
-                                    }
+                                    let mut c = (**c).clone();
+                                    let subst = [(left_head, &right)];
+                                    c.left.inst_mvar(&subst);
+                                    c.right.inst_mvar(&subst);
+                                    self.stack.push((c.left, c.right));
                                 }
-                                let mut c = (**c).clone();
-                                let subst = [(left_head, &right)];
-                                c.left.inst_mvar(&subst);
-                                c.right.inst_mvar(&subst);
-                                self.stack.push((c.left, c.right));
                             }
+                            continue;
                         }
-                        continue;
                     }
                 }
             }
@@ -1145,20 +1290,6 @@ impl<'a> Unifier<'a> {
         None
     }
 
-    fn is_resolved_constraint(&self, c: &Constraint) -> bool {
-        if let &Term::Mvar(right_head) = c.right.head() {
-            if self.subst_map.contains_key(&right_head) {
-                return true;
-            }
-        }
-        if let &Term::Mvar(left_head) = c.left.head() {
-            if self.subst_map.contains_key(&left_head) {
-                return true;
-            }
-        }
-        false
-    }
-
     fn save(&self) -> Snapshot {
         Snapshot {
             subst_len: self.subst.len(),
@@ -1189,27 +1320,20 @@ impl<'a> Unifier<'a> {
                     self.queue_ff.pop_back();
                 }
             }
-            if let &Term::Mvar(left_head) = c.left.head() {
-                let constraints = self.watch_list.get_mut(&left_head).unwrap();
-                constraints.pop();
-            }
-            if let &Term::Mvar(right_head) = c.right.head() {
-                let constraints = self.watch_list.get_mut(&right_head).unwrap();
-                constraints.pop();
-            }
+            self.unwatch(&c.clone());
         }
         self.trail.truncate(snapshot.trail_len);
     }
 
     fn push_branch(
         &mut self,
-        snapshot: Snapshot,
-        c: Rc<Constraint>,
+        trail_len: usize,
         choice: Box<dyn Iterator<Item = Vec<(Term, Term)>> + 'a>,
     ) {
+        let snapshot = self.save();
         self.decisions.push(Branch {
+            trail_len,
             snapshot,
-            constraint: c,
             choice,
         });
     }
@@ -1218,8 +1342,10 @@ impl<'a> Unifier<'a> {
         let Some(br) = self.decisions.pop() else {
             return false;
         };
-        if br.constraint.kind == ConstraintKind::Delta {
-            self.queue_delta.push_front(br.constraint);
+        for _ in 0..self.trail.len() - br.trail_len {
+            let c = self.trail.pop().unwrap();
+            assert_eq!(c.kind, ConstraintKind::Delta);
+            self.queue_delta.push_front(c);
         }
         true
     }
@@ -1231,9 +1357,9 @@ impl<'a> Unifier<'a> {
         let Some(constraints) = br.choice.next() else {
             return false;
         };
+        self.stack.clear();
         let snapshot = br.snapshot.clone();
         self.restore(&snapshot);
-        self.stack.clear();
         for (left, right) in constraints.into_iter().rev() {
             self.stack.push((left, right));
         }
@@ -1392,32 +1518,49 @@ impl<'a> Unifier<'a> {
         choice
     }
 
-    // Returns false if the constraints are pre-unified.
-    fn decide(&mut self) -> bool {
-        let snapshot = self.save();
-        if let Some(c) = self.queue_delta.pop_front() {
-            let choice = self.choice_delta(&c);
-            self.push_branch(snapshot, c, Box::new(choice.into_iter()));
-            self.next();
-            return true;
-        }
-        if let Some(c) = self.queue_qpat.front() {
-            if !self.is_resolved_constraint(c) {
-                let choice = self.choice_fr(c);
-                self.push_branch(snapshot, c.clone(), Box::new(choice.into_iter()));
-                self.next();
+    fn is_resolved_constraint(&self, c: &Constraint) -> bool {
+        if let &Term::Mvar(right_head) = c.right.head() {
+            if self.subst_map.contains_key(&right_head) {
                 return true;
             }
         }
-        if let Some(c) = self.queue_fr.front() {
-            if !self.is_resolved_constraint(c) {
-                let choice = self.choice_fr(c);
-                self.push_branch(snapshot, c.clone(), Box::new(choice.into_iter()));
-                self.next();
+        if let &Term::Mvar(left_head) = c.left.head() {
+            if self.subst_map.contains_key(&left_head) {
                 return true;
             }
         }
         false
+    }
+
+    // Returns false if the constraints are pre-unified.
+    fn decide(&mut self) -> bool {
+        let trail_len = self.trail.len();
+        let c = 'next: {
+            if let Some(c) = self.queue_delta.pop_front() {
+                self.trail.push(c.clone());
+                break 'next c;
+            }
+            for c in &self.queue_qpat {
+                if !self.is_resolved_constraint(c) {
+                    break 'next c.clone();
+                }
+            }
+            for c in &self.queue_fr {
+                if !self.is_resolved_constraint(c) {
+                    break 'next c.clone();
+                }
+            }
+            return false;
+        };
+        let choice = match c.kind {
+            ConstraintKind::Delta => self.choice_delta(&c),
+            ConstraintKind::QuasiPattern => self.choice_fr(&c),
+            ConstraintKind::FlexRigid => self.choice_fr(&c),
+            ConstraintKind::FlexFlex => unreachable!(),
+        };
+        self.push_branch(trail_len, Box::new(choice.into_iter()));
+        self.next();
+        true
     }
 
     fn backjump(&mut self) -> bool {
@@ -1432,6 +1575,10 @@ impl<'a> Unifier<'a> {
     fn solve(mut self) -> Option<Vec<(Name, Term)>> {
         loop {
             while let Some(()) = self.find_conflict() {
+                if self.debug {
+                    let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
+                    println!("{sp}conflict found!");
+                }
                 if !self.backjump() {
                     return None;
                 }

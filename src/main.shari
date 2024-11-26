@@ -39,11 +39,11 @@ axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) → ∃! f, ∀
 lemma tautology : ∀ φ, φ → φ := take (φ : Prop), assume φ, ⟪φ⟫
 lemma top.intro : ⊤ := tautology
 
-lemma eq.refl.{u} (m : u) : m = m := take (P : u → Prop), tautology[P m]
+lemma eq.refl.{u} (m : u) : m = m := take (P : u → Prop), tautology[_]
 
 lemma eq.transport.{u} (m₁ m₂ : u) (P : u → Prop) : m₁ = m₂ → P m₁ → P m₂ := assume m₁ = m₂, (change ∀ P, P m₁ → P m₂, ⟪m₁ = m₂⟫)[P]
-lemma eq.symm.{u} (m₁ m₂ : u) : m₁ = m₂ → m₂ = m₁ := assume m₁ = m₂, eq.transport.{u}[_, _, λ m, m = m₁] ⟪m₁ = m₂⟫ eq.refl.{u}[m₁]
-lemma eq.trans.{u} (m₁ m₂ m₃ : u) : m₁ = m₂ → m₂ = m₃ → m₁ = m₃ := assume m₁ = m₂, assume m₂ = m₃, eq.transport.{u}[_, _, λ m, m₁ = m] ⟪m₂ = m₃⟫ ⟪m₁ = m₂⟫
+lemma eq.symm.{u} (m₁ m₂ : u) : m₁ = m₂ → m₂ = m₁ := assume m₁ = m₂, eq.transport.{u}[_, _, _] ⟪m₁ = m₂⟫ eq.refl.{u}[m₁]
+lemma eq.trans.{u} (m₁ m₂ m₃ : u) : m₁ = m₂ → m₂ = m₃ → m₁ = m₃ := assume m₁ = m₂, assume m₂ = m₃, eq.transport.{u}[_, _, _] ⟪m₂ = m₃⟫ ⟪m₁ = m₂⟫
 lemma and.intro (φ ψ : Prop) : φ → ψ → φ ∧ ψ := assume φ, assume ψ, take (ξ : Prop), assume φ → ψ → ξ, ⟪φ → ψ → ξ⟫ ⟪φ⟫ ⟪ψ⟫
 
 -- modus ponens
