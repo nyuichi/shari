@@ -831,7 +831,7 @@ struct Unifier<'a> {
     debug: bool,
     tt_env: &'a tt::Env,
     queue_delta: VecDeque<Rc<Constraint>>,
-    queue_qpat: VecDeque<Rc<Constraint>>,
+    queue_qp: VecDeque<Rc<Constraint>>,
     queue_fr: VecDeque<Rc<Constraint>>,
     queue_ff: VecDeque<Rc<Constraint>>,
     watch_list: HashMap<Name, Vec<Rc<Constraint>>>,
@@ -851,7 +851,7 @@ impl<'a> Unifier<'a> {
             debug: false,
             tt_env,
             queue_delta: Default::default(),
-            queue_qpat: Default::default(),
+            queue_qp: Default::default(),
             queue_fr: Default::default(),
             queue_ff: Default::default(),
             watch_list: Default::default(),
@@ -879,15 +879,15 @@ impl<'a> Unifier<'a> {
             println!();
         }
         if !self.queue_delta.is_empty() {
-            println!("{sp}| delta:");
+            println!("{sp}| delta ({}):", self.queue_delta.len());
             for c in &self.queue_delta {
                 println!("{sp}| - {}\n{sp}|   {}", c.left, c.right);
             }
             println!();
         }
-        if !self.queue_qpat.is_empty() {
-            println!("{sp}| qpat:");
-            for c in &self.queue_qpat {
+        if !self.queue_qp.is_empty() {
+            println!("{sp}| qp:");
+            for c in &self.queue_qp {
                 println!("{sp}| - {}\n{sp}|   {}", c.left, c.right);
             }
             println!();
@@ -900,7 +900,7 @@ impl<'a> Unifier<'a> {
             println!();
         }
         if !self.queue_ff.is_empty() {
-            println!("{sp}| qpat:");
+            println!("{sp}| qp:");
             for c in &self.queue_ff {
                 println!("{sp}| - {}\n{sp}|   {}", c.left, c.right);
             }
@@ -961,13 +961,12 @@ impl<'a> Unifier<'a> {
         }
     }
 
-    // Instantiate the head and call whnf
+    // Note that the result term may contain redex in head
     fn inst_head(&self, m: &mut Term) -> bool {
         if let &Term::Mvar(m_head) = m.head() {
             if let Some(a) = self.subst_map.get(&m_head) {
                 let subst = [(m_head, a)];
                 m.head_mut().inst_mvar(&subst);
-                m.whnf();
                 return true;
             }
         }
@@ -976,7 +975,12 @@ impl<'a> Unifier<'a> {
 
     fn inst_arg_heads(&self, m: &mut Term) {
         for arg in &mut m.args_mut() {
-            self.inst_head(arg);
+            arg.whnf();
+            while self.inst_head(arg) {
+                if arg.whnf().is_none() {
+                    break;
+                }
+            }
         }
     }
 
@@ -1059,12 +1063,14 @@ impl<'a> Unifier<'a> {
 
         self.trail.push(c.clone());
 
+        assert!(!self.is_resolved_constraint(&c));
+
         match kind {
             ConstraintKind::Delta => {
                 self.queue_delta.push_back(c.clone());
             }
             ConstraintKind::QuasiPattern => {
-                self.queue_qpat.push_back(c.clone());
+                self.queue_qp.push_back(c.clone());
             }
             ConstraintKind::FlexRigid => {
                 self.queue_fr.push_back(c.clone());
@@ -1311,7 +1317,7 @@ impl<'a> Unifier<'a> {
                     self.queue_delta.pop_back();
                 }
                 ConstraintKind::QuasiPattern => {
-                    self.queue_qpat.pop_back();
+                    self.queue_qp.pop_back();
                 }
                 ConstraintKind::FlexRigid => {
                     self.queue_fr.pop_back();
@@ -1342,6 +1348,7 @@ impl<'a> Unifier<'a> {
         let Some(br) = self.decisions.pop() else {
             return false;
         };
+        self.restore(&br.snapshot);
         for _ in 0..self.trail.len() - br.trail_len {
             let c = self.trail.pop().unwrap();
             assert_eq!(c.kind, ConstraintKind::Delta);
@@ -1357,7 +1364,6 @@ impl<'a> Unifier<'a> {
         let Some(constraints) = br.choice.next() else {
             return false;
         };
-        self.stack.clear();
         let snapshot = br.snapshot.clone();
         self.restore(&snapshot);
         for (left, right) in constraints.into_iter().rev() {
@@ -1540,7 +1546,7 @@ impl<'a> Unifier<'a> {
                 self.trail.push(c.clone());
                 break 'next c;
             }
-            for c in &self.queue_qpat {
+            for c in &self.queue_qp {
                 if !self.is_resolved_constraint(c) {
                     break 'next c.clone();
                 }
@@ -1558,12 +1564,22 @@ impl<'a> Unifier<'a> {
             ConstraintKind::FlexRigid => self.choice_fr(&c),
             ConstraintKind::FlexFlex => unreachable!(),
         };
+
+        if self.debug {
+            let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
+            println!(
+                "{sp}decision is made for ({:?}):\n{sp}- {}\n{sp}  {}",
+                c.kind, c.left, c.right
+            );
+        }
+
         self.push_branch(trail_len, Box::new(choice.into_iter()));
         self.next();
         true
     }
 
     fn backjump(&mut self) -> bool {
+        self.stack.clear();
         while !self.next() {
             if !self.pop_branch() {
                 return false;
