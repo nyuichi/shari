@@ -34,7 +34,9 @@ axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) → ∃! f, ∀
  - TODO:
  - * stronger type inference. (propagate constraints among exprs)
  - * automatic insertion of forall_elim using higher-order unification
- - * field access notation
+ - * field access notation (ad hoc overload)
+ - * coersion (especially automatic insertion of rep)
+ - * type class
  -/
 lemma tautology : ∀ φ, φ → φ := take (φ : Prop), assume φ, ⟪φ⟫
 lemma top.intro : ⊤ := tautology
@@ -661,6 +663,89 @@ const support.join.{u} : support (support u) → support u
 const epsilon.{u} : support u → u
 
 /-
+ - choice
+ -/
+
+-- type inhabited_subset u := { s : u → Prop | ∃ x, x ∈ s }
+type const inhabited_subset : Type → Type
+const inhabited_subset.comprehension.{u} : comprehension (u → Prop) (inhabited_subset u)
+def inhabited_subset.char.{u} : (u → Prop) → Prop := λ s, ∃ x, x ∈ s
+axiom inhabited_subset.spec.{u} : inhabited_subset.char.{u} = char inhabited_subset.comprehension.{u}
+lemma inhabited_subset.char.unfold.{u} (s : u → Prop) : inhabited_subset.char.{u} s → char inhabited_subset.comprehension.{u} s := assume inhabited_subset.char.{u} s, eq.conv[_, _] (eq.congr_fun.{u → Prop, Prop}[_, _, s] inhabited_subset.spec.{u}) ⟪inhabited_subset.char.{u} s⟫
+lemma inhabited_subset.char.fold.{u} (s : u → Prop) : char inhabited_subset.comprehension.{u} s → inhabited_subset.char.{u} s := assume char inhabited_subset.comprehension.{u} s, eq.conv[_, _] (eq.congr_fun.{u → Prop, Prop}[_, _, s] (eq.symm.{(u → Prop) → Prop}[_, _] inhabited_subset.spec.{u})) ⟪char inhabited_subset.comprehension.{u} s⟫
+def inhabited_subset.rep.{u} : inhabited_subset u → u → Prop := rep inhabited_subset.comprehension.{u}
+lemma inhabited_subset.char.abs.{u} (s : u → Prop) : inhabited_subset.char.{u} s → ∃! h, s = inhabited_subset.rep.{u} h := assume inhabited_subset.char.{u} s, char.abs.{u → Prop, inhabited_subset u}[_, s] (inhabited_subset.char.unfold.{u}[s] ⟪inhabited_subset.char.{u} s⟫)
+lemma inhabited_subset.rep.char.{u} (s : u → Prop) : (∃! h, s = inhabited_subset.rep.{u} h) → inhabited_subset.char.{u} s := assume ∃! h, s = inhabited_subset.rep.{u} h, inhabited_subset.char.fold.{u}[s] (rep.char.{u → Prop, inhabited_subset u}[_, s] ⟪∃! h, s = inhabited_subset.rep.{u} h⟫)
+lemma inhabited_subset.char.rep.{u} (h : inhabited_subset u) : inhabited_subset.char.{u} (inhabited_subset.rep.{u} h) := inhabited_subset.char.fold.{u}[inhabited_subset.rep.{u} h] char.rep.{u → Prop, inhabited_subset u}[_, h]
+lemma inhabited_subset.rep.injective.{u} : injective inhabited_subset.rep.{u} := rep.injective.{u → Prop, inhabited_subset u}[_]
+
+-- The exisistence of the constant and the axiom state that every type u is a choice type.
+const choice.{u} : inhabited_subset u → u
+axiom choice.spec.{u} (x : inhabited_subset u) : choice x ∈ inhabited_subset.rep x
+
+lemma ac.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ (f : u → v), ∀ x, R x (f x) :=
+assume ∀ x, ∃ y, R x y,
+have ∀ x, ∃! (h : inhabited_subset v), R x = inhabited_subset.rep h :=
+  take (x : u),
+  inhabited_subset.char.abs.{v}[R x] ⟪∀ x, ∃ y, R x y⟫[x],
+have ∃! (f : u → inhabited_subset v), ∀ x, R x = inhabited_subset.rep (f x) :=
+  auc.{u, inhabited_subset v}[_] ⟪∀ x, ∃! (h : inhabited_subset v), R x = inhabited_subset.rep h⟫,
+obtain (f : u → inhabited_subset v), ∀ x, R x = inhabited_subset.rep (f x) :=
+  uexists.exists.{u → inhabited_subset v}[_] ⟪∃! (f : u → inhabited_subset v), ∀ x, R x = inhabited_subset.rep (f x)⟫,
+exists.intro.{u → v}[_, λ x, choice (f x)]
+  (take (x : u),
+   have inhabited_subset.rep (f x) (choice (f x)) :=
+     choice.spec.{v}[f x],
+   eq.conv[_, _] (eq.symm.{Prop}[_, _] (eq.congr_fun.{v, Prop}[_, _, choice (f x)] ⟪∀ x, R x = inhabited_subset.rep (f x)⟫[x])) ⟪inhabited_subset.rep (f x) (choice (f x))⟫)
+
+lemma surjective.split.{u, v} (f : u → v) : surjective f → split f :=
+assume surjective f,
+ac.{v, u}[_] ⟪surjective f⟫
+
+-- Diaconescu's argument: ac + prop_ext + fun_ext → em
+--
+-- The bool type having a choice function is in fact equivalent to em.
+lemma em (φ : Prop) : φ ∨ ¬φ :=
+have ∃ b, φ ∨ b = tt := exists.intro.{bool}[_, _] (or.right[_, _] eq.refl.{bool}[tt]),
+have ∃ b, φ ∨ b = ff := exists.intro.{bool}[_, _] (or.right[_, _] eq.refl.{bool}[ff]),
+obtain (h₁ : inhabited_subset bool), (λ b, φ ∨ b = tt) = inhabited_subset.rep h₁ :=
+  uexists.exists.{inhabited_subset bool}[_]
+    (inhabited_subset.char.abs.{bool}[_] ⟪∃ b, φ ∨ b = tt⟫),
+obtain (h₂ : inhabited_subset bool), (λ b, φ ∨ b = ff) = inhabited_subset.rep h₂ :=
+  uexists.exists.{inhabited_subset bool}[_]
+    (inhabited_subset.char.abs.{bool}[_] ⟪∃ b, φ ∨ b = ff⟫),
+have φ → choice h₁ = choice h₂ :=
+  assume φ,
+  have (λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff) := fun_ext.{bool, Prop}[_, _] (
+    take (b : bool),
+    have φ ∨ b = tt := or.left[_, _] ⟪φ⟫,
+    have φ ∨ b = ff := or.left[_, _] ⟪φ⟫,
+    prop_ext[_, _] (iff.intro[_, _] (assume φ ∨ b = tt, ⟪φ ∨ b = ff⟫) (assume φ ∨ b = ff, ⟪φ ∨ b = tt⟫))
+  ),
+  have inhabited_subset.rep h₁ = inhabited_subset.rep h₂ :=
+    eq.trans.{bool → Prop}[_, _, _] (eq.symm.{bool → Prop}[_, _] ⟪(λ b, φ ∨ b = tt) = inhabited_subset.rep h₁⟫) (eq.trans.{bool → Prop}[_, _, _] ⟪(λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff)⟫ ⟪(λ b, φ ∨ b = ff) = inhabited_subset.rep h₂⟫),
+  have h₁ = h₂ :=
+    inhabited_subset.rep.injective.{bool}[_, _] ⟪inhabited_subset.rep h₁ = inhabited_subset.rep h₂⟫,
+  eq.congr_arg.{inhabited_subset bool, bool}[_, _, _] ⟪h₁ = h₂⟫,
+have φ ∨ choice h₁ = tt :=
+  eq.conv[_, _] (eq.symm.{Prop}[_, _] (eq.congr_fun.{bool, Prop}[_, _, choice h₁] ⟪(λ b, φ ∨ b = tt) = inhabited_subset.rep h₁⟫)) choice.spec.{bool}[h₁],
+have φ ∨ choice h₂ = ff :=
+  eq.conv[_, _] (eq.symm.{Prop}[_, _] (eq.congr_fun.{bool, Prop}[_, _, choice h₂] ⟪(λ b, φ ∨ b = ff) = inhabited_subset.rep h₂⟫)) choice.spec.{bool}[h₂],
+have φ ∨ choice h₁ ≠ choice h₂ :=
+  or.elim[_, _, _] ⟪φ ∨ choice h₁ = tt⟫
+    (assume φ, or.left[_, _] ⟪φ⟫)
+    (assume choice h₁ = tt,
+      or.elim[_, _, _] ⟪φ ∨ choice h₂ = ff⟫
+        (assume φ, or.left[_, _] ⟪φ⟫)
+        (assume choice h₂ = ff,
+          or.right[_, _] (eq.transport.{bool}[_, _, _] (eq.symm.{bool}[_, _] ⟪choice h₂ = ff⟫) (eq.transport.{bool}[_, _, _] (eq.symm.{bool}[_, _] ⟪choice h₁ = tt⟫) bool.tt_ne_ff)))),
+or.elim[_, _, _] ⟪φ ∨ choice h₁ ≠ choice h₂⟫
+  (assume φ,
+    or.left[_, _] ⟪φ⟫)
+  (assume choice h₁ ≠ choice h₂,
+    or.right[_, _] (mt[_, _] ⟪φ → choice h₁ = choice h₂⟫ ⟪choice h₁ ≠ choice h₂⟫))
+
+/-
  - natural numbers
  -/
 
@@ -691,18 +776,6 @@ def bit1 (n : ℕ) : ℕ := succ (bit0 n)
 ------------------------------------------------------------
 
 /-
-
-def split.{u, v} (f : u → v) : Prop := ∃ g, ∀ y, y = f (g y)
-
--- internal axiom of choice
-lemma ac.{u, v} (f : u → v) : surjective f → split f
-
-/-
-lemma ac.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) :=
-assume ∀ x, ∃ y, R x y,
-exists.intro.{u → v}[(λ (f : u → v), ∀ x, R x (f x)), (λ (x : u), epsilon.{v} (λ y, R x y))]
--/
-
 type def proof := { φ : Prop | φ }
 def proof.target : proof → Prop := proof.rep
 
@@ -719,39 +792,4 @@ namespace comprehension {
   const rep.{u} [comprehension u] : u → base u
   axiom rep.spec.{u} [comprehension u] : injective rep ∧ (∀ y, (∃! x, y = rep x) ↔ char y)
 }
-
--- Diaconescu's argument: AC + prop_ext + fun_ext → EM
-lemma em (φ : Prop) : φ ∨ ¬φ :=
-let (U : Prop → Prop) := λ (ψ : Prop), φ ∨ ψ,
-let (V : Prop → Prop) := λ (ψ : Prop), φ ∨ ¬ψ,
-have exists U := exists.intro.{Prop}[U, ⊤] (or.right[φ, ⊤] top.intro),
-have exists V := exists.intro.{Prop}[V, ⊥] (or.right[φ, ¬⊥] (assume ⊥, ⟪⊥⟫)),
-let (u : Prop) := choice.{Prop} Prop.inhabited (exists U),
-let (v : Prop) := choice.{Prop} Prop.inhabited (exists V),
-have φ → u = v :=
-  assume φ,
-  have U = V := fun_ext (
-    take ψ,
-    have U ψ := or.left ⟪φ⟫,
-    have V ψ := or.left ⟪φ⟫,
-    have U ψ = V ψ := prop_ext (assume U ψ, ⟪V ψ⟫) (assume V ψ, ⟪U ψ⟫)
-  ),
-  eq.transport ⟪U = V⟫ eq.refl,
-have φ ∨ u := choice.spec.{Prop}[Prop.inhabited, U] ⟪exists U⟫,
-have φ ∨ ¬v := choice.spec.{Prop}[Prop.inhabited, V] ⟪exists V⟫,
-have φ ∨ u ≠ v :=
-  cases := ⟪φ ∨ u⟫,
-  have φ,
-    or.left ⟪φ⟫,
-  have u,
-    cases := ⟪φ ∨ ¬v⟫,
-    have φ,
-      or.left ⟪φ⟫,
-    have ¬v,
-      or.right (contradiction (assume u = v, eq.conv ⟪u = v⟫ u) ⟪¬v⟫),
-cases := ⟪φ ∨ u ≠ v⟫,
-  have φ,
-    or.left ⟪φ⟫
-  have u ≠ v,
-    or.right (mt ⟪φ → u = v⟫ ⟪u ≠ v⟫),
 -/
