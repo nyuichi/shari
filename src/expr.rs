@@ -581,8 +581,6 @@ impl<'a> Env<'a> {
     pub fn elaborate(mut self, e: &mut Expr) -> anyhow::Result<Proof> {
         self.visit_expr(e)?;
 
-        let type_subst = TypeUnifier::new(self.type_constraints).solve()?;
-
         // we defer type instantiation because our unifier does not touch types.
         let mut subst = Unifier::new(self.tt_env, self.term_constraints)
             .solve()
@@ -600,6 +598,12 @@ impl<'a> Env<'a> {
             e.inst_mvar(&subst);
         }
         e.normalize();
+
+        // A trick to allow omit explicit type anotation in exprs
+        self.term_constraints = vec![];
+        self.type_constraints = vec![];
+        self.visit_expr(e)?;
+        let type_subst = TypeUnifier::new(self.type_constraints).solve()?;
 
         for (name, ty) in type_subst {
             let subst = [(name, &ty)];
