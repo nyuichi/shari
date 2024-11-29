@@ -266,7 +266,7 @@ impl<'a> Iterator for Lex<'a> {
                         kind = TokenKind::Symbol;
                     }
                     "infixr" | "nofix" | "infixl" | "infix" | "prefix" | "axiom" | "def"
-                    | "lemma" | "const" | "type" => {
+                    | "lemma" | "const" | "type" | "variable" => {
                         kind = TokenKind::Keyword;
                     }
                     _ => {

@@ -1,6 +1,6 @@
 use crate::cmd::{
     Cmd, CmdAxiom, CmdConst, CmdDef, CmdInfix, CmdInfixl, CmdInfixr, CmdLemma, CmdNofix, CmdPrefix,
-    CmdTypeConst, Fixity, Operator,
+    CmdTypeConst, CmdTypeVariable, Fixity, Operator,
 };
 use crate::expr::{
     mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_const, mk_expr_inst, mk_expr_take, Expr,
@@ -154,10 +154,17 @@ pub struct Parser<'a, 'b> {
     type_locals: Vec<Name>,
     locals: Vec<Name>,
     holes: Vec<(Name, Type)>,
+    // type variables declared by 'type variable' command
+    type_variables: Vec<Name>,
 }
 
 impl<'a, 'b> Parser<'a, 'b> {
-    pub fn new(lex: &'b mut Lex<'a>, tt: &'b TokenTable, ns: &'b Nasmespace) -> Self {
+    pub fn new(
+        lex: &'b mut Lex<'a>,
+        tt: &'b TokenTable,
+        ns: &'b Nasmespace,
+        type_variables: Vec<Name>,
+    ) -> Self {
         Self {
             lex,
             tt,
@@ -165,6 +172,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             type_locals: vec![],
             locals: vec![],
             holes: vec![],
+            type_variables,
         }
     }
 
@@ -967,6 +975,31 @@ impl<'a, 'b> Parser<'a, 'b> {
     //     Ok(left)
     // }
 
+    fn local_type_binder(&mut self) -> Result<Option<Vec<Name>>, ParseError> {
+        if let Some(_token) = self.expect_symbol_opt(".{") {
+            let mut local_types = vec![];
+            if self.expect_symbol_opt("}").is_none() {
+                loop {
+                    let token = self.ident()?;
+                    let tv = Name::intern(token.as_str()).unwrap();
+                    for v in &local_types {
+                        if &tv == v {
+                            return Self::fail(token, "duplicate type variable")?;
+                        }
+                    }
+                    local_types.push(tv);
+                    if self.expect_symbol_opt(",").is_none() {
+                        break;
+                    }
+                }
+                self.expect_symbol("}")?;
+            }
+            Ok(Some(local_types))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn cmd(&mut self) -> Result<Cmd, ParseError> {
         let keyword = self.keyword()?;
         let cmd = match keyword.as_str() {
@@ -1007,8 +1040,20 @@ impl<'a, 'b> Parser<'a, 'b> {
                 Cmd::Const(const_cmd)
             }
             "type" => {
-                let type_const_cmd = self.type_const_cmd(keyword)?;
-                Cmd::TypeConst(type_const_cmd)
+                let keyword2 = self.keyword()?;
+                match keyword2.as_str() {
+                    "const" => {
+                        let type_const_cmd = self.type_const_cmd(keyword)?;
+                        Cmd::TypeConst(type_const_cmd)
+                    }
+                    "variable" => {
+                        let type_variable_cmd = self.type_variable_cmd(keyword)?;
+                        Cmd::TypeVariable(type_variable_cmd)
+                    }
+                    _ => {
+                        return Self::fail(keyword, "unknown command");
+                    }
+                }
             }
             // "meta" => {
             //     let keyword = self.ident()?;
@@ -1110,27 +1155,18 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     fn def_cmd(&mut self, _token: Token) -> Result<CmdDef, ParseError> {
         let name = self.name()?;
-        let mut local_types = vec![];
-        if let Some(_token) = self.expect_symbol_opt(".{") {
-            if self.expect_symbol_opt("}").is_none() {
-                loop {
-                    let token = self.ident()?;
-                    let tv = Name::intern(token.as_str()).unwrap();
-                    for v in &local_types {
-                        if &tv == v {
-                            return Self::fail(token, "duplicate type variable")?;
-                        }
-                    }
-                    local_types.push(tv);
-                    if self.expect_symbol_opt(",").is_none() {
-                        break;
-                    }
+        let local_types = self.local_type_binder()?;
+        match &local_types {
+            Some(local_types) => {
+                for ty in local_types {
+                    self.type_locals.push(*ty);
                 }
-                self.expect_symbol("}")?;
             }
-        }
-        for ty in &local_types {
-            self.type_locals.push(*ty);
+            None => {
+                for ty in &self.type_variables {
+                    self.type_locals.push(*ty);
+                }
+            }
         }
         let mut params = vec![];
         while let Some(token) = self.expect_symbol_opt("(") {
@@ -1148,7 +1184,14 @@ impl<'a, 'b> Parser<'a, 'b> {
         let mut m = self.term()?;
         // Parsing finished. We can now safaly tear off.
         self.locals.truncate(params.len());
-        self.type_locals.truncate(local_types.len());
+        match &local_types {
+            Some(local_types) => {
+                self.type_locals.truncate(local_types.len());
+            }
+            None => {
+                self.type_locals.truncate(self.type_variables.len());
+            }
+        }
         for (var, ty) in params.into_iter().rev() {
             m.abs(&[(var, var, ty.clone())], true);
             t = mk_type_arrow(ty, t);
@@ -1163,27 +1206,18 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     fn axiom_cmd(&mut self, _token: Token) -> Result<CmdAxiom, ParseError> {
         let name = self.name()?;
-        let mut local_types = vec![];
-        if let Some(_token) = self.expect_symbol_opt(".{") {
-            if self.expect_symbol_opt("}").is_none() {
-                loop {
-                    let token = self.ident()?;
-                    let tv = Name::intern(token.as_str()).unwrap();
-                    for v in &local_types {
-                        if &tv == v {
-                            return Self::fail(token, "duplicate type variable")?;
-                        }
-                    }
-                    local_types.push(tv);
-                    if self.expect_symbol_opt(",").is_none() {
-                        break;
-                    }
+        let local_types = self.local_type_binder()?;
+        match &local_types {
+            Some(local_types) => {
+                for ty in local_types {
+                    self.type_locals.push(*ty);
                 }
-                self.expect_symbol("}")?;
             }
-        }
-        for ty in &local_types {
-            self.type_locals.push(*ty);
+            None => {
+                for ty in &self.type_variables {
+                    self.type_locals.push(*ty);
+                }
+            }
         }
         let mut params = vec![];
         while let Some(token) = self.expect_symbol_opt("(") {
@@ -1199,7 +1233,14 @@ impl<'a, 'b> Parser<'a, 'b> {
         let mut p = self.term()?;
         // Parsing finished. We can now safaly tear off.
         self.locals.truncate(params.len());
-        self.type_locals.truncate(local_types.len());
+        match &local_types {
+            Some(local_types) => {
+                self.type_locals.truncate(local_types.len());
+            }
+            None => {
+                self.type_locals.truncate(self.type_variables.len());
+            }
+        }
         for (var, ty) in params.into_iter().rev() {
             p.abs(&[(var, var, ty.clone())], true);
             p = mk_app(mk_const(Name::try_from("forall").unwrap(), vec![ty]), p);
@@ -1213,27 +1254,18 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     fn lemma_cmd(&mut self, _token: Token) -> Result<CmdLemma, ParseError> {
         let name = self.name()?;
-        let mut local_types = vec![];
-        if let Some(_token) = self.expect_symbol_opt(".{") {
-            if self.expect_symbol_opt("}").is_none() {
-                loop {
-                    let token = self.ident()?;
-                    let tv = Name::intern(token.as_str()).unwrap();
-                    for v in &local_types {
-                        if &tv == v {
-                            return Self::fail(token, "duplicate type variable")?;
-                        }
-                    }
-                    local_types.push(tv);
-                    if self.expect_symbol_opt(",").is_none() {
-                        break;
-                    }
+        let local_types = self.local_type_binder()?;
+        match &local_types {
+            Some(local_types) => {
+                for ty in local_types {
+                    self.type_locals.push(*ty);
                 }
-                self.expect_symbol("}")?;
             }
-        }
-        for ty in &local_types {
-            self.type_locals.push(*ty);
+            None => {
+                for ty in &self.type_variables {
+                    self.type_locals.push(*ty);
+                }
+            }
         }
         let mut params = vec![];
         while let Some(token) = self.expect_symbol_opt("(") {
@@ -1251,7 +1283,14 @@ impl<'a, 'b> Parser<'a, 'b> {
         let mut e = self.expr()?;
         // Parsing finished. We can now safaly tear off.
         self.locals.truncate(params.len());
-        self.type_locals.truncate(local_types.len());
+        match &local_types {
+            Some(local_types) => {
+                self.type_locals.truncate(local_types.len());
+            }
+            None => {
+                self.type_locals.truncate(self.type_variables.len());
+            }
+        }
         for (var, ty) in params.into_iter().rev() {
             p.abs(&[(var, var, ty.clone())], true);
             p = mk_app(
@@ -1272,32 +1311,30 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     fn const_cmd(&mut self, _token: Token) -> Result<CmdConst, ParseError> {
         let name = self.name()?;
-        let mut local_types = vec![];
-        if let Some(_token) = self.expect_symbol_opt(".{") {
-            if self.expect_symbol_opt("}").is_none() {
-                loop {
-                    let token = self.ident()?;
-                    let tv = Name::intern(token.as_str()).unwrap();
-                    for v in &local_types {
-                        if &tv == v {
-                            return Self::fail(token, "duplicate type variable")?;
-                        }
-                    }
-                    local_types.push(tv);
-                    if self.expect_symbol_opt(",").is_none() {
-                        break;
-                    }
+        let local_types = self.local_type_binder()?;
+        match &local_types {
+            Some(local_types) => {
+                for ty in local_types {
+                    self.type_locals.push(*ty);
                 }
-                self.expect_symbol("}")?;
             }
-        }
-        for ty in &local_types {
-            self.type_locals.push(*ty);
+            None => {
+                for ty in &self.type_variables {
+                    self.type_locals.push(*ty);
+                }
+            }
         }
         self.expect_symbol(":")?;
         let t = self.ty()?;
         // Parsing finished. We can now safaly tear off.
-        self.type_locals.truncate(local_types.len());
+        match &local_types {
+            Some(local_types) => {
+                self.type_locals.truncate(local_types.len());
+            }
+            None => {
+                self.type_locals.truncate(self.type_variables.len());
+            }
+        }
         Ok(CmdConst {
             name,
             local_types,
@@ -1306,11 +1343,18 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     fn type_const_cmd(&mut self, _token: Token) -> Result<CmdTypeConst, ParseError> {
-        self.expect_keyword("const")?;
         let name = self.name()?;
         self.expect_symbol(":")?;
         let kind = self.kind()?;
         Ok(CmdTypeConst { name, kind })
+    }
+
+    fn type_variable_cmd(&mut self, _token: Token) -> Result<CmdTypeVariable, ParseError> {
+        let mut variables = vec![];
+        while let Some(name) = self.name_opt() {
+            variables.push(name);
+        }
+        Ok(CmdTypeVariable { variables })
     }
 
     // fn meta_def_cmd(&mut self, _token: Token) -> Result<CmdMetaDef, ParseError> {
@@ -1367,7 +1411,7 @@ fn parse_term() {
 
     let parse = |input: &str| -> Term {
         let mut lex = Lex::new(input);
-        let mut parser = Parser::new(&mut lex, &tt, &ns);
+        let mut parser = Parser::new(&mut lex, &tt, &ns, vec![]);
         let m = parser.term().unwrap();
         parser.eof().unwrap();
         m

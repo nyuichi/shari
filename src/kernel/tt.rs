@@ -253,6 +253,16 @@ impl Type {
             Type::Mvar(_) => false,
         }
     }
+
+    pub fn contains_local(&self, name: &Name) -> bool {
+        match self {
+            Type::Const(_) => false,
+            Type::Arrow(t) => t.dom.contains_local(name) || t.cod.contains_local(name),
+            Type::App(t) => t.fun.contains_local(name) || t.arg.contains_local(name),
+            Type::Local(t) => t == name,
+            Type::Mvar(_) => false,
+        }
+    }
 }
 
 /// Locally nameless representation. See [Charguéraud, 2012].
@@ -620,6 +630,17 @@ impl Term {
             };
         }
         true
+    }
+
+    pub fn contains_local_type(&self, name: &Name) -> bool {
+        match self {
+            Term::Var(_) => false,
+            Term::Abs(m) => m.binder_type.contains_local(name) || m.body.contains_local_type(name),
+            Term::App(m) => m.fun.contains_local_type(name) || m.arg.contains_local_type(name),
+            Term::Local(_) => false,
+            Term::Const(m) => m.ty_args.iter().any(|t| t.contains_local(name)),
+            Term::Mvar(_) => false,
+        }
     }
 
     /// m.apply([l₁ ⋯ lₙ])
