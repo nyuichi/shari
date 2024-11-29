@@ -581,10 +581,10 @@ impl<'a> Env<'a> {
     pub fn elaborate(mut self, e: &mut Expr) -> anyhow::Result<Proof> {
         self.visit_expr(e)?;
 
-        // we defer type instantiation because our unifier does not touch types.
-        let mut subst = Unifier::new(self.tt_env, self.term_constraints)
-            .solve()
-            .context("unification failed")?;
+        let (mut subst, mut type_subst) =
+            Unifier::new(self.tt_env, self.term_constraints, self.type_constraints)
+                .solve()
+                .context("unification failed")?;
         // Because subst is not topologically sorted, make it sorted by applying subst to subst in order.
         for i in 1..subst.len() {
             let (first, last) = subst.split_at_mut(i);
@@ -593,17 +593,19 @@ impl<'a> Env<'a> {
                 n.inst_mvar(&[(*name, m)]);
             }
         }
+        for i in 1..type_subst.len() {
+            let (first, last) = type_subst.split_at_mut(i);
+            let (name, m) = first.last().unwrap();
+            for (_, n) in last {
+                n.inst_mvar(&[(*name, m)]);
+            }
+        }
+
         for (name, m) in subst {
             let subst = [(name, &m)];
             e.inst_mvar(&subst);
         }
         e.normalize();
-
-        // A trick to allow omit explicit type anotation in exprs
-        self.term_constraints = vec![];
-        self.type_constraints = vec![];
-        self.visit_expr(e)?;
-        let type_subst = TypeUnifier::new(self.type_constraints).solve()?;
 
         for (name, ty) in type_subst {
             let subst = [(name, &ty)];
@@ -728,82 +730,6 @@ impl<'a> Eval<'a> {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-struct TypeUnifier {
-    constraints: Vec<(Type, Type)>,
-    subst: Vec<(Name, Type)>,
-    subst_map: HashMap<Name, Type>,
-}
-
-impl TypeUnifier {
-    fn new(constraints: Vec<(Type, Type)>) -> Self {
-        TypeUnifier {
-            constraints,
-            subst: vec![],
-            subst_map: Default::default(),
-        }
-    }
-
-    fn add_constraint(&mut self, t1: Type, t2: Type) {
-        self.constraints.push((t1, t2));
-    }
-
-    fn add_subst(&mut self, name: Name, ty: Type) {
-        self.subst.push((name, ty.clone()));
-        self.subst_map.insert(name, ty);
-    }
-
-    fn find(&mut self, ty: Type) -> Type {
-        let Type::Mvar(name) = ty else {
-            return ty;
-        };
-        let Some(ty) = self.subst_map.get(&name).cloned() else {
-            return ty;
-        };
-        // During calling `find` parents[name] will NOT be updated
-        // because a unification solution is not cyclic.
-        let ty = self.find(ty);
-        self.subst_map.insert(name, ty.clone());
-        ty
-    }
-
-    fn solve(mut self) -> anyhow::Result<Vec<(Name, Type)>> {
-        while let Some((t1, t2)) = self.constraints.pop() {
-            let t1 = self.find(t1);
-            let t2 = self.find(t2);
-            if t1 == t2 {
-                continue;
-            }
-            match (t1, t2) {
-                (Type::Arrow(inner1), Type::Arrow(inner2)) => {
-                    let inner1 = Arc::try_unwrap(inner1).unwrap_or_else(|arc| (*arc).clone());
-                    let inner2 = Arc::try_unwrap(inner2).unwrap_or_else(|arc| (*arc).clone());
-                    self.add_constraint(inner1.dom, inner2.dom);
-                    self.add_constraint(inner1.cod, inner2.cod);
-                }
-                (Type::App(inner1), Type::App(inner2)) => {
-                    // Since we have no higher-kinded polymorphism, mvars will only be typed as `Type`,
-                    // it is illegal to match the following two types:
-                    //  ?M₁ t =?= ?M₂ t₁ t₂
-                    // But such a case is checked and ruled out in the kind checking phase that runs before
-                    // this unificaiton phase.
-                    let inner1 = Arc::try_unwrap(inner1).unwrap_or_else(|arc| (*arc).clone());
-                    let inner2 = Arc::try_unwrap(inner2).unwrap_or_else(|arc| (*arc).clone());
-                    self.add_constraint(inner1.fun, inner2.fun);
-                    self.add_constraint(inner1.arg, inner2.arg);
-                }
-                (Type::Mvar(name), t) | (t, Type::Mvar(name)) => {
-                    self.add_subst(name, t);
-                }
-                (t1, t2) => {
-                    bail!("type mismatch: {t1} =/= {t2}");
-                }
-            }
-        }
-        Ok(self.subst)
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConstraintKind {
     Delta,
@@ -823,6 +749,8 @@ struct Constraint {
 struct Snapshot {
     subst_len: usize,
     trail_len: usize,
+    type_constraints_len: usize,
+    type_subst_len: usize,
 }
 
 struct Branch<'a> {
@@ -847,10 +775,18 @@ struct Unifier<'a> {
     trail: Vec<Rc<Constraint>>,
     // only used in find_conflict
     stack: Vec<(Term, Term)>,
+    type_constraints_index: usize,
+    type_constraints: Vec<(Type, Type)>,
+    type_subst: Vec<(Name, Type)>,
+    type_subst_map: HashMap<Name, Type>,
 }
 
 impl<'a> Unifier<'a> {
-    fn new(tt_env: &'a tt::Env, constraints: Vec<(Term, Term)>) -> Self {
+    fn new(
+        tt_env: &'a tt::Env,
+        constraints: Vec<(Term, Term)>,
+        type_constraints: Vec<(Type, Type)>,
+    ) -> Self {
         let mut solver = Self {
             debug: false,
             tt_env,
@@ -864,6 +800,10 @@ impl<'a> Unifier<'a> {
             decisions: Default::default(),
             trail: Default::default(),
             stack: Default::default(),
+            type_constraints_index: 0,
+            type_constraints,
+            type_subst: vec![],
+            type_subst_map: Default::default(),
         };
         for (left, right) in constraints.into_iter().rev() {
             solver.stack.push((left, right));
@@ -1097,191 +1037,218 @@ impl<'a> Unifier<'a> {
         self.subst_map.insert(name, m);
     }
 
-    fn find_conflict(&mut self) -> Option<()> {
+    fn add_type_constraint(&mut self, t1: Type, t2: Type) {
+        self.type_constraints.push((t1, t2));
+    }
+
+    fn add_type_subst(&mut self, name: Name, ty: Type) {
         if self.debug {
-            self.print_state();
+            let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
+            println!("{sp}new type subst {name} := {ty}");
         }
-        while let Some((mut left, mut right)) = self.stack.pop() {
-            if left.untyped_eq(&right) {
-                continue;
+
+        self.type_subst.push((name, ty.clone()));
+        self.type_subst_map.insert(name, ty);
+    }
+
+    fn inst_type_head(&mut self, ty: Type) -> Type {
+        let Type::Mvar(name) = ty else {
+            return ty;
+        };
+        let Some(ty) = self.type_subst_map.get(&name).cloned() else {
+            return ty;
+        };
+        self.inst_type_head(ty)
+    }
+
+    fn find_conflict_in_types(&mut self, t1: Type, t2: Type) -> Option<()> {
+        let t1 = self.inst_type_head(t1);
+        let t2 = self.inst_type_head(t2);
+        if t1 == t2 {
+            return None;
+        }
+        match (t1, t2) {
+            (Type::Arrow(inner1), Type::Arrow(inner2)) => {
+                let inner1 = Arc::try_unwrap(inner1).unwrap_or_else(|arc| (*arc).clone());
+                let inner2 = Arc::try_unwrap(inner2).unwrap_or_else(|arc| (*arc).clone());
+                self.add_type_constraint(inner1.dom, inner2.dom);
+                self.add_type_constraint(inner1.cod, inner2.cod);
             }
-            if let (Term::Abs(l), Term::Abs(r)) = (&mut left, &mut right) {
-                let x = Name::fresh();
-                Arc::make_mut(l).body.open(&mk_local(x));
-                Arc::make_mut(r).body.open(&mk_local(x));
-                let left = mem::take(&mut Arc::make_mut(l).body);
-                let right = mem::take(&mut Arc::make_mut(r).body);
+            (Type::App(inner1), Type::App(inner2)) => {
+                // Since we have no higher-kinded polymorphism, mvars will only be typed as `Type`,
+                // it is illegal to match the following two types:
+                //  ?M₁ t =?= ?M₂ t₁ t₂
+                // But such a case is checked and ruled out in the kind checking phase that runs before
+                // this unificaiton phase.
+                let inner1 = Arc::try_unwrap(inner1).unwrap_or_else(|arc| (*arc).clone());
+                let inner2 = Arc::try_unwrap(inner2).unwrap_or_else(|arc| (*arc).clone());
+                self.add_type_constraint(inner1.fun, inner2.fun);
+                self.add_type_constraint(inner1.arg, inner2.arg);
+            }
+            (Type::Mvar(name), t) | (t, Type::Mvar(name)) => {
+                self.add_type_subst(name, t);
+            }
+            (_, _) => {
+                return Some(());
+            }
+        }
+        None
+    }
+
+    fn find_conflict_in_terms(&mut self, mut left: Term, mut right: Term) -> Option<()> {
+        if left == right {
+            return None;
+        }
+        if let (Term::Abs(l), Term::Abs(r)) = (&mut left, &mut right) {
+            let x = Name::fresh();
+            Arc::make_mut(l).body.open(&mk_local(x));
+            Arc::make_mut(r).body.open(&mk_local(x));
+            // TODO: I think this line is not necessary...
+            self.add_type_constraint(l.binder_type.clone(), r.binder_type.clone());
+            let left = mem::take(&mut Arc::make_mut(l).body);
+            let right = mem::take(&mut Arc::make_mut(r).body);
+            self.stack.push((left, right));
+            return None;
+        }
+        if left.whnf().is_some() || right.whnf().is_some() {
+            self.stack.push((left, right));
+            return None;
+        }
+        if left.is_abs() {
+            mem::swap(&mut left, &mut right);
+        }
+        if right.is_abs() {
+            // L ≡ (?M t₁ ⋯ tₙ)
+            if left.head().is_mvar() {
+                // this case is handled later.
+            } else if self.tt_env.unfold_head(&mut left).is_some() {
                 self.stack.push((left, right));
-                continue;
+                return None;
+            } else {
+                return Some(());
             }
-            if left.whnf().is_some() || right.whnf().is_some() {
-                self.stack.push((left, right));
-                continue;
-            }
-            if left.is_abs() {
-                mem::swap(&mut left, &mut right);
-            }
-            if right.is_abs() {
-                // L ≡ (?M t₁ ⋯ tₙ)
-                if left.head().is_mvar() {
-                    // this case is handled later.
-                } else if self.tt_env.unfold_head(&mut left).is_some() {
-                    self.stack.push((left, right));
-                    continue;
-                } else {
-                    return Some(());
-                }
-            }
-            if self.inst_head(&mut left) || self.inst_head(&mut right) {
-                self.stack.push((left, right));
-                continue;
-            }
-            // then each of the heads can be a local, a const, or an mvar
-            if let Term::Mvar(right_head) = right.head() {
-                let right_head = *right_head;
-                self.inst_arg_heads(&mut right);
-                if let Some(args) = right.is_pattern() {
-                    // TODO: avoid full instantiation
-                    if self.inst(&mut left, right_head) {
-                        let args = args
-                            .into_iter()
-                            .map(|n| (n, n, mk_fresh_type_mvar()))
-                            .collect::<Vec<_>>();
-                        if left.abs(&args, false) {
-                            self.add_subst(right_head, left.clone());
-                            if let Some(constraints) = self.watch_list.get(&right_head) {
-                                for c in constraints.iter().rev() {
-                                    if c.left.head() == &Term::Mvar(right_head) {
-                                        if let Term::Mvar(right_head) = c.right.head() {
-                                            if self.subst_map.contains_key(right_head) {
-                                                continue;
-                                            }
-                                        }
-                                    } else if let Term::Mvar(left_head) = c.left.head() {
-                                        if self.subst_map.contains_key(left_head) {
+        }
+        if self.inst_head(&mut left) || self.inst_head(&mut right) {
+            self.stack.push((left, right));
+            return None;
+        }
+        // then each of the heads can be a local, a const, or an mvar
+        if let Term::Mvar(right_head) = right.head() {
+            let right_head = *right_head;
+            self.inst_arg_heads(&mut right);
+            if let Some(args) = right.is_pattern() {
+                // TODO: avoid full instantiation
+                if self.inst(&mut left, right_head) {
+                    let args = args
+                        .into_iter()
+                        // TODO determine types from local_env
+                        .map(|n| (n, n, mk_fresh_type_mvar()))
+                        .collect::<Vec<_>>();
+                    if left.abs(&args, false) {
+                        self.add_subst(right_head, left.clone());
+                        if let Some(constraints) = self.watch_list.get(&right_head) {
+                            for c in constraints.iter().rev() {
+                                if c.left.head() == &Term::Mvar(right_head) {
+                                    if let Term::Mvar(right_head) = c.right.head() {
+                                        if self.subst_map.contains_key(right_head) {
                                             continue;
                                         }
                                     }
-                                    let mut c = (**c).clone();
-                                    let subst = [(right_head, &left)];
-                                    c.left.inst_mvar(&subst);
-                                    c.right.inst_mvar(&subst);
-                                    self.stack.push((c.left, c.right));
+                                } else if let Term::Mvar(left_head) = c.left.head() {
+                                    if self.subst_map.contains_key(left_head) {
+                                        continue;
+                                    }
                                 }
+                                let mut c = (**c).clone();
+                                let subst = [(right_head, &left)];
+                                c.left.inst_mvar(&subst);
+                                c.right.inst_mvar(&subst);
+                                self.stack.push((c.left, c.right));
                             }
-                            continue;
                         }
+                        return None;
                     }
                 }
             }
-            if let Term::Mvar(left_head) = left.head() {
-                let left_head = *left_head;
-                self.inst_arg_heads(&mut left);
-                if let Some(args) = left.is_pattern() {
-                    if self.inst(&mut right, left_head) {
-                        let args = args
-                            .into_iter()
-                            .map(|n| (n, n, mk_fresh_type_mvar()))
-                            .collect::<Vec<_>>();
-                        if right.abs(&args, false) {
-                            self.add_subst(left_head, right.clone());
-                            if let Some(constraints) = self.watch_list.get(&left_head) {
-                                for c in constraints.iter().rev() {
-                                    if c.left.head() == &Term::Mvar(left_head) {
-                                        if let Term::Mvar(right_head) = c.right.head() {
-                                            if self.subst_map.contains_key(right_head) {
-                                                continue;
-                                            }
-                                        }
-                                    } else if let Term::Mvar(left_head) = c.left.head() {
-                                        if self.subst_map.contains_key(left_head) {
+        }
+        if let Term::Mvar(left_head) = left.head() {
+            let left_head = *left_head;
+            self.inst_arg_heads(&mut left);
+            if let Some(args) = left.is_pattern() {
+                if self.inst(&mut right, left_head) {
+                    let args = args
+                        .into_iter()
+                        // TODO determine types from local_env
+                        .map(|n| (n, n, mk_fresh_type_mvar()))
+                        .collect::<Vec<_>>();
+                    if right.abs(&args, false) {
+                        self.add_subst(left_head, right.clone());
+                        if let Some(constraints) = self.watch_list.get(&left_head) {
+                            for c in constraints.iter().rev() {
+                                if c.left.head() == &Term::Mvar(left_head) {
+                                    if let Term::Mvar(right_head) = c.right.head() {
+                                        if self.subst_map.contains_key(right_head) {
                                             continue;
                                         }
                                     }
-                                    let mut c = (**c).clone();
-                                    let subst = [(left_head, &right)];
-                                    c.left.inst_mvar(&subst);
-                                    c.right.inst_mvar(&subst);
-                                    self.stack.push((c.left, c.right));
+                                } else if let Term::Mvar(left_head) = c.left.head() {
+                                    if self.subst_map.contains_key(left_head) {
+                                        continue;
+                                    }
                                 }
+                                let mut c = (**c).clone();
+                                let subst = [(left_head, &right)];
+                                c.left.inst_mvar(&subst);
+                                c.right.inst_mvar(&subst);
+                                self.stack.push((c.left, c.right));
                             }
-                            continue;
                         }
+                        return None;
                     }
                 }
             }
-            if right.head().is_mvar() || left.head().is_mvar() {
-                self.add_derived_constraint(left, right, false);
-                continue;
-            }
-            // then each of the heads can be a local or a const.
-            if right.head().is_const() {
-                mem::swap(&mut left, &mut right);
-            }
-            match (left.head(), right.head()) {
-                (Term::Const(left_head), Term::Const(right_head)) => {
-                    if left_head.name != right_head.name {
-                        let left_hint = self.tt_env.def_hint(left_head.name).unwrap_or(0);
-                        let right_hint = self.tt_env.def_hint(right_head.name).unwrap_or(0);
-                        match left_hint.cmp(&right_hint) {
-                            std::cmp::Ordering::Greater => {
-                                self.tt_env.unfold_head(&mut left).unwrap();
-                                self.stack.push((left, right));
-                                continue;
+        }
+        if right.head().is_mvar() || left.head().is_mvar() {
+            self.add_derived_constraint(left, right, false);
+            return None;
+        }
+        // then each of the heads can be a local or a const.
+        if right.head().is_const() {
+            mem::swap(&mut left, &mut right);
+        }
+        match (left.head(), right.head()) {
+            (Term::Const(left_head), Term::Const(right_head)) => {
+                if left_head.name != right_head.name {
+                    let left_hint = self.tt_env.def_hint(left_head.name).unwrap_or(0);
+                    let right_hint = self.tt_env.def_hint(right_head.name).unwrap_or(0);
+                    match left_hint.cmp(&right_hint) {
+                        std::cmp::Ordering::Greater => {
+                            self.tt_env.unfold_head(&mut left).unwrap();
+                            self.stack.push((left, right));
+                            return None;
+                        }
+                        std::cmp::Ordering::Less => {
+                            self.tt_env.unfold_head(&mut right).unwrap();
+                            self.stack.push((left, right));
+                            return None;
+                        }
+                        std::cmp::Ordering::Equal => {
+                            if left_hint == 0 {
+                                // (f t₁ ⋯ tₙ) ≈ (g s₁ ⋯ sₘ) where f and g are both irreducible.
+                                return Some(());
                             }
-                            std::cmp::Ordering::Less => {
-                                self.tt_env.unfold_head(&mut right).unwrap();
-                                self.stack.push((left, right));
-                                continue;
-                            }
-                            std::cmp::Ordering::Equal => {
-                                if left_hint == 0 {
-                                    // (f t₁ ⋯ tₙ) ≈ (g s₁ ⋯ sₘ) where f and g are both irreducible.
-                                    return Some(());
-                                }
-                                self.tt_env.unfold_head(&mut left).unwrap();
-                                self.tt_env.unfold_head(&mut right).unwrap();
-                                self.stack.push((left, right));
-                                continue;
-                            }
+                            self.tt_env.unfold_head(&mut left).unwrap();
+                            self.tt_env.unfold_head(&mut right).unwrap();
+                            self.stack.push((left, right));
+                            return None;
                         }
                     }
-                    // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ)
-                    if self.tt_env.def_hint(left_head.name).is_none() {
-                        let left_args = left.unapply();
-                        let right_args = right.unapply();
-                        if left_args.len() != right_args.len() {
-                            return Some(());
-                        }
-                        for (left_arg, right_arg) in
-                            left_args.into_iter().zip(right_args.into_iter()).rev()
-                        {
-                            self.stack.push((left_arg, right_arg));
-                        }
-                        continue;
-                    }
-                    // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where any of t or s contains an mvar.
-                    self.add_derived_constraint(left, right, true);
-                    continue;
                 }
-                (Term::Const(left_head), Term::Local(right_head)) => {
-                    // yuichi: perhaps we can simply give up on this case, when completeness is not important.
-                    if self.tt_env.def_hint(left_head.name).is_none() {
-                        return Some(());
-                    }
-                    left.close(*right_head);
-                    if left.is_lclosed() {
-                        return Some(());
-                    }
-                    left.open(&mk_local(*right_head));
-                    self.tt_env.unfold_head(&mut left).unwrap();
-                    self.stack.push((left, right));
-                    continue;
+                // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ)
+                for (t1, t2) in left_head.ty_args.iter().zip(right_head.ty_args.iter()) {
+                    self.add_type_constraint(t1.clone(), t2.clone());
                 }
-                (Term::Local(left_head), Term::Local(right_head)) => {
-                    if left_head != right_head {
-                        return Some(());
-                    }
+                if self.tt_env.def_hint(left_head.name).is_none() {
                     let left_args = left.unapply();
                     let right_args = right.unapply();
                     if left_args.len() != right_args.len() {
@@ -1292,9 +1259,59 @@ impl<'a> Unifier<'a> {
                     {
                         self.stack.push((left_arg, right_arg));
                     }
-                    continue;
+                    return None;
                 }
-                _ => unreachable!(),
+                // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where any of t or s contains an mvar.
+                self.add_derived_constraint(left, right, true);
+                return None;
+            }
+            (Term::Const(left_head), Term::Local(right_head)) => {
+                // yuichi: perhaps we can simply give up on this case, when completeness is not important.
+                if self.tt_env.def_hint(left_head.name).is_none() {
+                    return Some(());
+                }
+                left.close(*right_head);
+                if left.is_lclosed() {
+                    return Some(());
+                }
+                left.open(&mk_local(*right_head));
+                self.tt_env.unfold_head(&mut left).unwrap();
+                self.stack.push((left, right));
+                return None;
+            }
+            (Term::Local(left_head), Term::Local(right_head)) => {
+                if left_head != right_head {
+                    return Some(());
+                }
+                let left_args = left.unapply();
+                let right_args = right.unapply();
+                if left_args.len() != right_args.len() {
+                    return Some(());
+                }
+                for (left_arg, right_arg) in left_args.into_iter().zip(right_args.into_iter()).rev()
+                {
+                    self.stack.push((left_arg, right_arg));
+                }
+                return None;
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn find_conflict(&mut self) -> Option<()> {
+        if self.debug {
+            self.print_state();
+        }
+        while !self.type_constraints.is_empty() || !self.stack.is_empty() {
+            if let Some((t1, t2)) = self.type_constraints.pop() {
+                if self.find_conflict_in_types(t1, t2).is_some() {
+                    return Some(());
+                }
+            }
+            if let Some((m1, m2)) = self.stack.pop() {
+                if self.find_conflict_in_terms(m1, m2).is_some() {
+                    return Some(());
+                }
             }
         }
         None
@@ -1304,6 +1321,8 @@ impl<'a> Unifier<'a> {
         Snapshot {
             subst_len: self.subst.len(),
             trail_len: self.trail.len(),
+            type_constraints_len: self.type_constraints.len(),
+            type_subst_len: self.type_subst.len(),
         }
     }
 
@@ -1333,6 +1352,14 @@ impl<'a> Unifier<'a> {
             self.unwatch(&c.clone());
         }
         self.trail.truncate(snapshot.trail_len);
+        for i in snapshot.type_subst_len..self.type_subst.len() {
+            let name = self.type_subst[i].0;
+            self.type_subst_map.remove(&name);
+        }
+        self.type_subst.truncate(snapshot.type_subst_len);
+        self.type_constraints
+            .truncate(snapshot.type_constraints_len);
+        self.type_constraints_index = snapshot.type_constraints_len;
     }
 
     fn push_branch(
@@ -1592,7 +1619,7 @@ impl<'a> Unifier<'a> {
         true
     }
 
-    fn solve(mut self) -> Option<Vec<(Name, Term)>> {
+    fn solve(mut self) -> Option<(Vec<(Name, Term)>, Vec<(Name, Type)>)> {
         loop {
             while let Some(()) = self.find_conflict() {
                 if self.debug {
@@ -1604,7 +1631,7 @@ impl<'a> Unifier<'a> {
                 }
             }
             if !self.decide() {
-                return Some(self.subst);
+                return Some((self.subst, self.type_subst));
             }
         }
     }
