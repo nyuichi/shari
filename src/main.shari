@@ -8,6 +8,8 @@ prefix ¬ : 40 := not
 infix ↔ : 20 := iff
 infix ≠ : 50 := ne
 
+type variable u v
+
 -- Leibniz equality
 def eq.{u} (x : u) (y : u) : Prop := ∀ P, P x → P y
 

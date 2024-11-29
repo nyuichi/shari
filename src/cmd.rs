@@ -39,6 +39,7 @@ pub enum Cmd {
     Lemma(CmdLemma),
     Const(CmdConst),
     TypeConst(CmdTypeConst),
+    TypeVariable(CmdTypeVariable),
     // MetaDef(CmdMetaDef),
 }
 
@@ -79,7 +80,7 @@ pub struct CmdNofix {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CmdDef {
     pub name: Name,
-    pub local_types: Vec<Name>,
+    pub local_types: Option<Vec<Name>>,
     pub ty: Type,
     pub target: Term,
 }
@@ -87,14 +88,14 @@ pub struct CmdDef {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CmdAxiom {
     pub name: Name,
-    pub local_types: Vec<Name>,
+    pub local_types: Option<Vec<Name>>,
     pub target: Term,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CmdLemma {
     pub name: Name,
-    pub local_types: Vec<Name>,
+    pub local_types: Option<Vec<Name>>,
     pub target: Term,
     pub holes: Vec<(Name, Type)>,
     pub expr: Expr,
@@ -103,7 +104,7 @@ pub struct CmdLemma {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CmdConst {
     pub name: Name,
-    pub local_types: Vec<Name>,
+    pub local_types: Option<Vec<Name>>,
     pub ty: Type,
 }
 
@@ -113,12 +114,18 @@ pub struct CmdTypeConst {
     pub kind: Kind,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CmdTypeVariable {
+    pub variables: Vec<Name>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Eval {
     pub proof_env: proof::Env,
     pub tt: TokenTable,
     pub ns: Nasmespace,
     pub pp: OpTable,
+    pub tv: Vec<Name>,
 }
 
 impl Eval {
@@ -138,6 +145,7 @@ impl Eval {
             ns,
             tt: Default::default(),
             pp: Default::default(),
+            tv: Default::default(),
         }
     }
 
@@ -212,21 +220,34 @@ impl Eval {
                     mut ty,
                     mut target,
                 } = inner;
-                for i in 0..local_types.len() {
-                    for j in i + 1..local_types.len() {
-                        if local_types[i] == local_types[j] {
-                            bail!("duplicate type variables");
+                let need_shrink = local_types.is_none();
+                if let Some(local_types) = &local_types {
+                    for i in 0..local_types.len() {
+                        for j in i + 1..local_types.len() {
+                            if local_types[i] == local_types[j] {
+                                bail!("duplicate type variables");
+                            }
                         }
                     }
                 }
                 let mut local_env = LocalEnv {
-                    local_types,
+                    local_types: local_types.unwrap_or_else(|| self.tv.clone()),
                     locals: vec![],
                     holes: vec![],
                 };
                 self.proof_env
                     .tt_env
                     .check_type(&mut local_env, &mut target, &mut ty)?;
+                if need_shrink {
+                    let mut shrinked_local_types = vec![];
+                    for t in local_env.local_types {
+                        if !ty.contains_local(&t) {
+                            continue;
+                        }
+                        shrinked_local_types.push(t);
+                    }
+                    local_env.local_types = shrinked_local_types;
+                }
                 if self.proof_env.tt_env.consts.contains_key(&name) {
                     bail!("already defined");
                 }
@@ -252,15 +273,18 @@ impl Eval {
                     local_types,
                     mut target,
                 } = inner;
-                for i in 0..local_types.len() {
-                    for j in i + 1..local_types.len() {
-                        if local_types[i] == local_types[j] {
-                            bail!("duplicate type variables");
+                let need_shrink = local_types.is_none();
+                if let Some(local_types) = &local_types {
+                    for i in 0..local_types.len() {
+                        for j in i + 1..local_types.len() {
+                            if local_types[i] == local_types[j] {
+                                bail!("duplicate type variables");
+                            }
                         }
                     }
                 }
                 let mut local_env = LocalEnv {
-                    local_types,
+                    local_types: local_types.unwrap_or_else(|| self.tv.clone()),
                     locals: vec![],
                     holes: vec![],
                 };
@@ -269,6 +293,16 @@ impl Eval {
                     &mut target,
                     &mut mk_type_prop(),
                 )?;
+                if need_shrink {
+                    let mut shrinked_local_types = vec![];
+                    for t in local_env.local_types {
+                        if !target.contains_local_type(&t) {
+                            continue;
+                        }
+                        shrinked_local_types.push(t);
+                    }
+                    local_env.local_types = shrinked_local_types;
+                }
                 if self.proof_env.facts.contains_key(&name) {
                     bail!("already defined");
                 }
@@ -286,15 +320,18 @@ impl Eval {
                     holes,
                     expr,
                 } = inner;
-                for i in 0..local_types.len() {
-                    for j in i + 1..local_types.len() {
-                        if local_types[i] == local_types[j] {
-                            bail!("duplicate type variables");
+                let need_shrink = local_types.is_none();
+                if let Some(local_types) = &local_types {
+                    for i in 0..local_types.len() {
+                        for j in i + 1..local_types.len() {
+                            if local_types[i] == local_types[j] {
+                                bail!("duplicate type variables");
+                            }
                         }
                     }
                 }
                 let mut local_env = LocalEnv {
-                    local_types,
+                    local_types: local_types.unwrap_or_else(|| self.tv.clone()),
                     locals: vec![],
                     holes,
                 };
@@ -303,6 +340,16 @@ impl Eval {
                     &mut target,
                     &mut mk_type_prop(),
                 )?;
+                if need_shrink {
+                    let mut shrinked_local_types = vec![];
+                    for t in local_env.local_types {
+                        if !target.contains_local_type(&t) {
+                            continue;
+                        }
+                        shrinked_local_types.push(t);
+                    }
+                    local_env.local_types = shrinked_local_types;
+                }
                 // auto insert 'change'
                 let mut expr = mk_expr_app(
                     mk_expr_assume(target.clone(), mk_expr_assump(target.clone())),
@@ -336,21 +383,34 @@ impl Eval {
                     local_types,
                     ty,
                 } = inner;
-                for i in 0..local_types.len() {
-                    for j in i + 1..local_types.len() {
-                        if local_types[i] == local_types[j] {
-                            bail!("duplicate type variables");
+                let need_shrink = local_types.is_none();
+                if let Some(local_types) = &local_types {
+                    for i in 0..local_types.len() {
+                        for j in i + 1..local_types.len() {
+                            if local_types[i] == local_types[j] {
+                                bail!("duplicate type variables");
+                            }
                         }
                     }
                 }
-                let local_env = LocalEnv {
-                    local_types,
+                let mut local_env = LocalEnv {
+                    local_types: local_types.unwrap_or_else(|| self.tv.clone()),
                     locals: vec![],
                     holes: vec![],
                 };
                 self.proof_env
                     .tt_env
                     .check_kind(&local_env, &ty, &Kind::base())?;
+                if need_shrink {
+                    let mut shrinked_local_types = vec![];
+                    for t in local_env.local_types {
+                        if !ty.contains_local(&t) {
+                            continue;
+                        }
+                        shrinked_local_types.push(t);
+                    }
+                    local_env.local_types = shrinked_local_types;
+                }
                 if self.proof_env.tt_env.consts.contains_key(&name) {
                     bail!("already defined");
                 }
@@ -368,6 +428,23 @@ impl Eval {
                 }
                 self.ns.type_consts.insert(name);
                 self.proof_env.tt_env.type_consts.insert(name, kind);
+                Ok(())
+            }
+            Cmd::TypeVariable(inner) => {
+                let CmdTypeVariable { variables } = inner;
+                for i in 0..variables.len() {
+                    for j in i + 1..variables.len() {
+                        if variables[i] == variables[j] {
+                            bail!("duplicate type variables");
+                        }
+                    }
+                }
+                for v in &variables {
+                    if self.tv.contains(v) {
+                        bail!("type variable already defined");
+                    }
+                }
+                self.tv.extend(variables);
                 Ok(())
             }
         }

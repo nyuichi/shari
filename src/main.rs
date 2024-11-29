@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
     let mut lex = Lex::new(input);
 
     loop {
-        let cmd = match Parser::new(&mut lex, &state.tt, &state.ns).cmd() {
+        let cmd = match Parser::new(&mut lex, &state.tt, &state.ns, state.tv.clone()).cmd() {
             Ok(cmd) => cmd,
             Err(ParseError::Eof { .. }) => {
                 break;
