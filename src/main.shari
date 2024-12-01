@@ -27,8 +27,9 @@ def iff (φ : Prop) (ψ : Prop) : Prop := (φ → ψ) ∧ (ψ → φ)
 def uexists.{u} (P : u → Prop) : Prop := ∃ x, P x ∧ (∀ y, P y → x = y)
 def ne.{u} (x : u) (y : u) : Prop := ¬x = y
 
--- Axioms of topos (cf. [Introduction to CATEGORY THEORY and CATEGORICAL LOGIC, T. Streicher, '03])
+-- Three axioms of topos (cf. [Introduction to CATEGORY THEORY and CATEGORICAL LOGIC, T. Streicher, '03])
 axiom prop_ext (φ ψ : Prop) : (φ ↔ ψ) → φ = ψ
+-- The fact that this axiom holds means every topos is always internally well-pointed.
 axiom fun_ext.{u, v} (f₁ f₂ : u → v) : (∀ x, f₁ x = f₂ x) → f₁ = f₂
 axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) → ∃! f, ∀ x, R x (f x)
 
@@ -136,6 +137,8 @@ lemma not.elim (φ : Prop) : ¬φ → φ → ⊥ :=
 assume ¬φ,
 ⟪¬φ⟫
 
+-- Internal version of nondegeneracy of topos.
+-- Of course, this lemma holds in any (possibly degenerate) topos.
 lemma top_ne_bot : ⊤ ≠ ⊥ :=
 assume ⊤ = ⊥,
 eq.conv[_, _] ⟪⊤ = ⊥⟫ top.intro
@@ -323,6 +326,14 @@ iff.right[_, _] rep.iff_char[d, y]
 
 lemma char.rep.{v, u} (d : comprehension v u) (x : u) : char d (rep d x) :=
 rep.char[d, rep d x] (uexists.intro[λ z, rep d x = rep d z] (exists.intro[(λ z, rep d x = rep d z), x] eq.refl[rep d x]) rep.unique[d, rep d x])
+
+/-
+-- transpose of (f : w → v) s.t. P ∘ f = ⊤
+def mk (y : w) : { x | P x } := abstract f y, { /- proof obligation: P (f y) -/ }
+
+-- automatically generated
+axiom mk.spec (y : w) : rep (mk y) = f y
+-/
 
 /-
  - bool
@@ -662,6 +673,10 @@ const support.join.{u} : support (support u) → support u
 -- which would imply axiom of choice.
 -- In (dependent) type theory, this operator corresponds via the propositions-as-types paradigm
 -- to the law of double negation.
+--
+-- One can interpret this function in Kripke-Joyal semantics as follows:
+-- whenever one proves ⊢ ∃ (x : u), ⊤, hence ⊩ ∃ (x : u), ⊤, which in general
+-- means there exist an object V, V → 1 epi and V → u, one can safely assume V was 1.
 const epsilon.{u} : support u → u
 
 /-
@@ -708,6 +723,9 @@ ac[_]
 -- Diaconescu's argument: ac + prop_ext + fun_ext → em
 --
 -- The bool type having a choice function is in fact equivalent to em.
+-- While em implies (using prop_ext) Prop is _internally two-valued_ i.e.
+-- ∀ φ, φ = ⊤ ∨ φ = ⊥, the ambient topos may not be (externally) two-valued;
+-- it only implies the topos is boolean.
 lemma em (φ : Prop) : φ ∨ ¬φ :=
 have ∃ b, φ ∨ b = tt := exists.intro[_, _] (or.right[_, _] eq.refl[tt]),
 have ∃ b, φ ∨ b = ff := exists.intro[_, _] (or.right[_, _] eq.refl[ff]),
