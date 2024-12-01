@@ -612,6 +612,11 @@ impl<'a> Env<'a> {
             e.inst_type_mvar(&subst);
         }
 
+        #[cfg(debug_assertions)]
+        {
+            println!("elaborated:\n{e}");
+        }
+
         let h = Eval {
             facts: self.facts,
             tt_env: self.tt_env,
@@ -760,7 +765,6 @@ struct Branch<'a> {
 }
 
 struct Unifier<'a> {
-    debug: bool,
     tt_env: &'a tt::Env,
     queue_delta: VecDeque<Rc<Constraint>>,
     queue_qp: VecDeque<Rc<Constraint>>,
@@ -788,7 +792,6 @@ impl<'a> Unifier<'a> {
         type_constraints: Vec<(Type, Type)>,
     ) -> Self {
         let mut solver = Self {
-            debug: false,
             tt_env,
             queue_delta: Default::default(),
             queue_qp: Default::default(),
@@ -811,7 +814,7 @@ impl<'a> Unifier<'a> {
         solver
     }
 
-    #[allow(unused)]
+    #[cfg(debug_assertions)]
     fn print_state(&self) {
         let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
         println!("{sp}+current state");
@@ -991,7 +994,8 @@ impl<'a> Unifier<'a> {
             }
         }
 
-        if self.debug {
+        #[cfg(debug_assertions)]
+        {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
             println!(
                 "{sp}new constraint ({kind:#?}):\n{sp}- {}\n{sp}  {}",
@@ -1028,7 +1032,8 @@ impl<'a> Unifier<'a> {
     }
 
     fn add_subst(&mut self, name: Name, m: Term) {
-        if self.debug {
+        #[cfg(debug_assertions)]
+        {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
             println!("{sp}new subst {name} := {m}");
         }
@@ -1042,7 +1047,8 @@ impl<'a> Unifier<'a> {
     }
 
     fn add_type_subst(&mut self, name: Name, ty: Type) {
-        if self.debug {
+        #[cfg(debug_assertions)]
+        {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
             println!("{sp}new type subst {name} := {ty}");
         }
@@ -1299,7 +1305,8 @@ impl<'a> Unifier<'a> {
     }
 
     fn find_conflict(&mut self) -> Option<()> {
-        if self.debug {
+        #[cfg(debug_assertions)]
+        {
             self.print_state();
         }
         while !self.type_constraints.is_empty() || !self.stack.is_empty() {
@@ -1596,7 +1603,8 @@ impl<'a> Unifier<'a> {
             ConstraintKind::FlexFlex => unreachable!(),
         };
 
-        if self.debug {
+        #[cfg(debug_assertions)]
+        {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
             println!(
                 "{sp}decision is made for ({:?}):\n{sp}- {}\n{sp}  {}",
@@ -1622,7 +1630,8 @@ impl<'a> Unifier<'a> {
     fn solve(mut self) -> Option<(Vec<(Name, Term)>, Vec<(Name, Type)>)> {
         loop {
             while let Some(()) = self.find_conflict() {
-                if self.debug {
+                #[cfg(debug_assertions)]
+                {
                     let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
                     println!("{sp}conflict found!");
                 }
