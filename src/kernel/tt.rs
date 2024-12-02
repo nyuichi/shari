@@ -103,7 +103,7 @@ pub enum Type {
     Arrow(Arc<TypeArrow>),
     App(Arc<TypeApp>),
     Local(Name),
-    Mvar(Name),
+    Hole(Name),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -120,7 +120,7 @@ pub struct TypeApp {
 
 impl Default for Type {
     fn default() -> Self {
-        Type::Mvar(Default::default())
+        Type::Hole(Default::default())
     }
 }
 
@@ -139,7 +139,7 @@ impl Display for Type {
             Type::Local(inner) => {
                 write!(f, "(local {inner})")
             }
-            Type::Mvar(inner) => {
+            Type::Hole(inner) => {
                 write!(f, "?{inner}")
             }
         }
@@ -151,8 +151,8 @@ pub fn mk_type_arrow(dom: Type, mut cod: Type) -> Type {
     cod
 }
 
-pub fn mk_fresh_type_mvar() -> Type {
-    Type::Mvar(Name::fresh())
+pub fn mk_fresh_type_hole() -> Type {
+    Type::Hole(Name::fresh())
 }
 
 pub fn mk_type_local(name: Name) -> Type {
@@ -207,7 +207,7 @@ impl Type {
                     *self = t.clone();
                 }
             }
-            Self::Mvar(_) => {}
+            Self::Hole(_) => {}
             Self::Arrow(inner) => {
                 let inner = Arc::make_mut(inner);
                 inner.dom.subst(subst);
@@ -221,21 +221,21 @@ impl Type {
         }
     }
 
-    pub fn inst_mvar(&mut self, subst: &[(Name, &Type)]) {
+    pub fn inst_hole(&mut self, subst: &[(Name, &Type)]) {
         match self {
             Type::Const(_) => {}
             Type::Arrow(inner) => {
                 let inner = Arc::make_mut(inner);
-                inner.dom.inst_mvar(subst);
-                inner.cod.inst_mvar(subst);
+                inner.dom.inst_hole(subst);
+                inner.cod.inst_hole(subst);
             }
             Type::App(inner) => {
                 let inner = Arc::make_mut(inner);
-                inner.fun.inst_mvar(subst);
-                inner.arg.inst_mvar(subst);
+                inner.fun.inst_hole(subst);
+                inner.arg.inst_hole(subst);
             }
             Type::Local(_) => {}
-            Type::Mvar(name) => {
+            Type::Hole(name) => {
                 if let Some((_, ty)) = subst.iter().find(|(x, _)| x == name) {
                     *self = (*ty).clone();
                 };
@@ -250,7 +250,7 @@ impl Type {
             Type::Arrow(inner) => inner.dom.is_ground() && inner.cod.is_ground(),
             Type::App(inner) => inner.fun.is_ground() && inner.arg.is_ground(),
             Type::Local(_) => true,
-            Type::Mvar(_) => false,
+            Type::Hole(_) => false,
         }
     }
 
@@ -260,7 +260,7 @@ impl Type {
             Type::Arrow(t) => t.dom.contains_local(name) || t.cod.contains_local(name),
             Type::App(t) => t.fun.contains_local(name) || t.arg.contains_local(name),
             Type::Local(t) => t == name,
-            Type::Mvar(_) => false,
+            Type::Hole(_) => false,
         }
     }
 }
@@ -273,7 +273,7 @@ pub enum Term {
     App(Arc<TermApp>),
     Local(Name),
     Const(Arc<TermConst>),
-    Mvar(Name),
+    Hole(Name),
 }
 
 #[derive(Clone, Debug, Eq, Default, Ord, PartialOrd)]
@@ -346,8 +346,8 @@ impl Display for Term {
                 }
                 Ok(())
             }
-            Term::Mvar(name) => {
-                write!(f, "(mvar {})", name)
+            Term::Hole(name) => {
+                write!(f, "(hole {})", name)
             }
         }
     }
@@ -377,8 +377,8 @@ pub fn mk_var(i: usize) -> Term {
     Term::Var(i)
 }
 
-pub fn mk_fresh_mvar() -> Term {
-    Term::Mvar(Name::fresh())
+pub fn mk_fresh_hole() -> Term {
+    Term::Hole(Name::fresh())
 }
 
 #[derive(Debug, Clone)]
@@ -402,7 +402,7 @@ impl TryFrom<Term> for Ctor {
                 ctor.args.push(value.arg);
                 Ok(ctor)
             }
-            Term::Var(_) | Term::Abs(_) | Term::Local(_) | Term::Mvar(_) => Err(()),
+            Term::Var(_) | Term::Abs(_) | Term::Local(_) | Term::Hole(_) => Err(()),
         }
     }
 }
@@ -430,7 +430,7 @@ impl Term {
                 inner.arg.open_at(x, level);
             }
             Self::Const(_) => {}
-            Self::Mvar(_) => {}
+            Self::Hole(_) => {}
         }
     }
 
@@ -457,7 +457,7 @@ impl Term {
                 inner.arg.close_at(name, level);
             }
             Self::Const(_) => {}
-            Self::Mvar(_) => {}
+            Self::Hole(_) => {}
         }
     }
 
@@ -469,7 +469,7 @@ impl Term {
             Self::Abs(inner) => inner.body.is_fresh(free_list),
             Self::App(inner) => inner.fun.is_fresh(free_list) && inner.arg.is_fresh(free_list),
             Self::Const(_) => true,
-            Self::Mvar(_) => true,
+            Self::Hole(_) => true,
         }
     }
 
@@ -483,7 +483,7 @@ impl Term {
                 inner.fun.is_closed_in(free_list) && inner.arg.is_closed_in(free_list)
             }
             Self::Const(_) => true,
-            Self::Mvar(_) => true,
+            Self::Hole(_) => true,
         }
     }
 
@@ -494,7 +494,7 @@ impl Term {
             Self::Abs(inner) => inner.body.is_closed(),
             Self::App(inner) => inner.fun.is_closed() && inner.arg.is_closed(),
             Self::Const(_) => true,
-            Self::Mvar(_) => true,
+            Self::Hole(_) => true,
         }
     }
 
@@ -509,7 +509,7 @@ impl Term {
             Self::Abs(inner) => inner.body.is_lclosed_at(level + 1),
             Self::App(inner) => inner.fun.is_lclosed_at(level) && inner.arg.is_lclosed_at(level),
             Self::Const(_) => true,
-            Self::Mvar(_) => true,
+            Self::Hole(_) => true,
         }
     }
 
@@ -524,7 +524,7 @@ impl Term {
             Term::App(inner) => inner.fun.has_var(i) || inner.arg.has_var(i),
             Term::Local(_) => false,
             Term::Const(_) => false,
-            Term::Mvar(_) => false,
+            Term::Hole(_) => false,
         }
     }
 
@@ -586,9 +586,9 @@ impl Term {
         }
     }
 
-    pub fn is_mvar(&self) -> bool {
+    pub fn is_hole(&self) -> bool {
         match self {
-            Term::Mvar(_) => true,
+            Term::Hole(_) => true,
             _ => false,
         }
     }
@@ -603,7 +603,7 @@ impl Term {
     /// Checks if self ≡ (?M l₁ ⋯ lₙ) where l₁ ⋯ lₙ are pairwise distinct locals.
     pub fn is_pattern(&self) -> Option<Vec<Name>> {
         let mut arg_locals = vec![];
-        if !self.head().is_mvar() {
+        if !self.head().is_hole() {
             return None;
         }
         for arg in self.args() {
@@ -621,7 +621,7 @@ impl Term {
     }
 
     pub fn is_quasi_pattern(&self) -> bool {
-        if !self.head().is_mvar() {
+        if !self.head().is_hole() {
             return false;
         }
         for arg in self.args() {
@@ -639,7 +639,7 @@ impl Term {
             Term::App(m) => m.fun.contains_local_type(name) || m.arg.contains_local_type(name),
             Term::Local(_) => false,
             Term::Const(m) => m.ty_args.iter().any(|t| t.contains_local(name)),
-            Term::Mvar(_) => false,
+            Term::Hole(_) => false,
         }
     }
 
@@ -707,7 +707,7 @@ impl Term {
                 inner.arg.unabs_help(xs, level);
             }
             Self::Const(_) => {}
-            Self::Mvar(_) => {}
+            Self::Hole(_) => {}
         }
     }
 
@@ -754,28 +754,28 @@ impl Term {
                     && inner.arg.abs_help(xs, level, allow_free)
             }
             Self::Const(_) => true,
-            Self::Mvar(_) => true,
+            Self::Hole(_) => true,
         }
     }
 
-    pub fn inst_mvar(&mut self, subst: &[(Name, &Term)]) {
+    pub fn inst_hole(&mut self, subst: &[(Name, &Term)]) {
         match self {
             Term::Var(_) => {}
             Term::Local(_) => {}
             Term::Const(_) => {}
-            Term::Mvar(x) => {
+            Term::Hole(x) => {
                 if let Some((_, m)) = subst.iter().copied().find(|(y, _)| y == x) {
                     *self = m.clone();
                 }
             }
             Term::Abs(inner) => {
                 let inner = Arc::make_mut(inner);
-                inner.body.inst_mvar(subst);
+                inner.body.inst_hole(subst);
             }
             Term::App(inner) => {
                 let inner = Arc::make_mut(inner);
-                inner.fun.inst_mvar(subst);
-                inner.arg.inst_mvar(subst);
+                inner.fun.inst_hole(subst);
+                inner.arg.inst_hole(subst);
             }
         }
     }
@@ -799,30 +799,30 @@ impl Term {
                     s.subst(subst);
                 }
             }
-            Term::Mvar(_) => {}
+            Term::Hole(_) => {}
         }
     }
 
-    pub fn inst_type_mvar(&mut self, subst: &[(Name, &Type)]) {
+    pub fn inst_type_hole(&mut self, subst: &[(Name, &Type)]) {
         match self {
             Term::Var(_) => {}
             Term::Abs(inner) => {
                 let inner = Arc::make_mut(inner);
-                inner.binder_type.inst_mvar(subst);
-                inner.body.inst_type_mvar(subst);
+                inner.binder_type.inst_hole(subst);
+                inner.body.inst_type_hole(subst);
             }
             Term::App(inner) => {
                 let inner = Arc::make_mut(inner);
-                inner.fun.inst_type_mvar(subst);
-                inner.arg.inst_type_mvar(subst);
+                inner.fun.inst_type_hole(subst);
+                inner.arg.inst_type_hole(subst);
             }
             Term::Local(_) => {}
             Term::Const(inner) => {
                 for s in &mut Arc::make_mut(inner).ty_args {
-                    s.inst_mvar(subst);
+                    s.inst_hole(subst);
                 }
             }
-            Term::Mvar(_) => {}
+            Term::Hole(_) => {}
         }
     }
 
@@ -834,7 +834,7 @@ impl Term {
             Term::App(m) => m.fun.is_ground() && m.arg.is_ground(),
             Term::Local(_) => true,
             Term::Const(_) => true,
-            Term::Mvar(_) => false,
+            Term::Hole(_) => false,
         }
     }
 
@@ -847,7 +847,7 @@ impl Term {
             }
             (Term::Local(name1), Term::Local(name2)) => name1 == name2,
             (Term::Const(inner1), Term::Const(inner2)) => inner1.name == inner2.name,
-            (Term::Mvar(name1), Term::Mvar(name2)) => name1 == name2,
+            (Term::Hole(name1), Term::Hole(name2)) => name1 == name2,
             _ => false,
         }
     }
@@ -874,7 +874,7 @@ impl Term {
 
     pub fn whnf(&mut self) -> Option<Path> {
         match self {
-            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Mvar(_) | Term::Abs(_) => None,
+            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) | Term::Abs(_) => None,
             Term::App(inner) => {
                 let inner = Arc::make_mut(inner);
                 let p;
@@ -894,7 +894,7 @@ impl Term {
 
     pub fn hnf(&mut self) -> Path {
         match self {
-            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Mvar(_) => {
+            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) => {
                 mk_path_refl(self.clone())
             }
             Term::Abs(_) => {
@@ -924,7 +924,7 @@ impl Term {
 
     pub fn normalize(&mut self) -> Path {
         match self {
-            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Mvar(_) => {
+            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) => {
                 mk_path_refl(self.clone())
             }
             Term::Abs(_) => {
@@ -1137,7 +1137,7 @@ impl Env {
                 bail!("unbound local type");
             }
             // no higher-kinded polymorphism
-            Type::Mvar(_) => Ok(Kind::base()),
+            Type::Hole(_) => Ok(Kind::base()),
         }
     }
 
@@ -1151,7 +1151,7 @@ impl Env {
     }
 
     pub fn infer_type(&self, local_env: &mut LocalEnv, m: &mut Term) -> anyhow::Result<Type> {
-        let mut target = mk_fresh_type_mvar();
+        let mut target = mk_fresh_type_hole();
         self.check_type(local_env, m, &mut target)?;
         Ok(target)
     }
@@ -1309,7 +1309,7 @@ impl Env {
 
     pub fn unfold_head(&self, m: &mut Term) -> Option<Path> {
         match m {
-            Term::Var(_) | Term::Local(_) | Term::Abs(_) | Term::Mvar(_) => None,
+            Term::Var(_) | Term::Local(_) | Term::Abs(_) | Term::Hole(_) => None,
             Term::Const(_) => self.delta_reduce(m),
             Term::App(inner) => {
                 let TermApp { fun, arg } = Arc::make_mut(inner);
@@ -1469,7 +1469,7 @@ impl<'a> Infer<'a> {
                 }
                 bail!("unknown local variable");
             }
-            Term::Mvar(name) => {
+            Term::Hole(name) => {
                 for (local, ty) in &self.local_env.holes {
                     if local == name {
                         self.eq_set.unify(ty.clone(), target.clone());
@@ -1489,7 +1489,7 @@ impl<'a> Infer<'a> {
                 let t = inner.binder_type.clone();
                 self.local_env.locals.push((x, t));
                 inner.body.open(&mk_local(x));
-                let body_ty = mk_fresh_type_mvar();
+                let body_ty = mk_fresh_type_hole();
                 self.check_type_help(&mut inner.body, &body_ty)?;
                 inner.body.close(x);
                 self.local_env.locals.pop();
@@ -1500,9 +1500,9 @@ impl<'a> Infer<'a> {
             }
             Term::App(inner) => {
                 let inner = Arc::make_mut(inner);
-                let fun_ty = mk_fresh_type_mvar();
+                let fun_ty = mk_fresh_type_hole();
                 self.check_type_help(&mut inner.fun, &fun_ty)?;
-                let arg_ty = mk_fresh_type_mvar();
+                let arg_ty = mk_fresh_type_hole();
                 self.check_type_help(&mut inner.arg, &arg_ty)?;
                 self.eq_set
                     .unify(fun_ty, mk_type_arrow(arg_ty, target.clone()));
@@ -1538,7 +1538,7 @@ impl EqSet {
     }
 
     fn find(&mut self, ty: Type) -> Type {
-        let Type::Mvar(name) = ty else {
+        let Type::Hole(name) = ty else {
             return ty;
         };
         let Some(ty) = self.parents.get(&name).cloned() else {
@@ -1566,7 +1566,7 @@ impl EqSet {
                     self.unify(inner1.cod, inner2.cod);
                 }
                 (Type::App(inner1), Type::App(inner2)) => {
-                    // Since we have no higher-kinded polymorphism, mvars will only be typed as `Type`,
+                    // Since we have no higher-kinded polymorphism, holes will only be typed as `Type`,
                     // it is illegal to match the following two types:
                     //  ?M₁ t =?= ?M₂ t₁ t₂
                     // But such a case is checked and ruled out in the kind checking phase that runs before
@@ -1576,7 +1576,7 @@ impl EqSet {
                     self.unify(inner1.fun, inner2.fun);
                     self.unify(inner1.arg, inner2.arg);
                 }
-                (Type::Mvar(name), t) | (t, Type::Mvar(name)) => {
+                (Type::Hole(name), t) | (t, Type::Hole(name)) => {
                     self.parents.insert(name, t);
                 }
                 (t1, t2) => {
@@ -1605,7 +1605,7 @@ impl TypeUnifier {
                 self.apply_type(&mut inner.arg)?;
             }
             Type::Local(_) => {}
-            Type::Mvar(name) => {
+            Type::Hole(name) => {
                 let Some(ty) = self.0.get(name) else {
                     bail!("uninstantiated meta type variable");
                 };
@@ -1629,7 +1629,7 @@ impl TypeUnifier {
                 self.apply_term(&mut inner.fun)?;
                 self.apply_term(&mut inner.arg)?;
             }
-            Term::Local(_) | Term::Mvar(_) => {}
+            Term::Local(_) | Term::Hole(_) => {}
             Term::Const(inner) => {
                 let inner = Arc::make_mut(inner);
                 for ty_arg in &mut inner.ty_args {

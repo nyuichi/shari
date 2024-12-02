@@ -14,7 +14,7 @@ use crate::kernel::{
         mk_proof_imp_elim, mk_proof_imp_intro, mk_proof_ref, mk_type_prop, Forall, Imp, Proof,
     },
     tt::{
-        self, mk_fresh_mvar, mk_fresh_type_mvar, mk_local, mk_type_arrow, mk_var, Kind, Name, Term,
+        self, mk_fresh_hole, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_var, Kind, Name, Term,
         TermAbs, TermApp, Type, TypeApp, TypeArrow,
     },
 };
@@ -166,16 +166,16 @@ impl std::fmt::Display for Expr {
 }
 
 impl Expr {
-    fn inst_type_mvar(&mut self, subst: &[(Name, &Type)]) {
+    fn inst_type_hole(&mut self, subst: &[(Name, &Type)]) {
         match self {
             Expr::Assump(e) => {
                 let ExprAssump { target } = Arc::make_mut(e);
-                target.inst_type_mvar(subst)
+                target.inst_type_hole(subst)
             }
             Expr::Assume(e) => {
                 let ExprAssume { target, expr } = Arc::make_mut(e);
-                target.inst_type_mvar(subst);
-                expr.inst_type_mvar(subst);
+                target.inst_type_hole(subst);
+                expr.inst_type_hole(subst);
             }
             Expr::App(e) => {
                 let ExprApp {
@@ -183,14 +183,14 @@ impl Expr {
                     expr2,
                     target,
                 } = Arc::make_mut(e);
-                expr1.inst_type_mvar(subst);
-                expr2.inst_type_mvar(subst);
-                target.inst_type_mvar(subst);
+                expr1.inst_type_hole(subst);
+                expr2.inst_type_hole(subst);
+                target.inst_type_hole(subst);
             }
             Expr::Take(e) => {
                 let ExprTake { name: _, ty, expr } = Arc::make_mut(e);
-                ty.inst_mvar(subst);
-                expr.inst_type_mvar(subst);
+                ty.inst_hole(subst);
+                expr.inst_type_hole(subst);
             }
             Expr::Inst(e) => {
                 let ExprInst {
@@ -198,29 +198,29 @@ impl Expr {
                     arg,
                     predicate,
                 } = Arc::make_mut(e);
-                expr.inst_type_mvar(subst);
-                arg.inst_type_mvar(subst);
-                predicate.inst_type_mvar(subst);
+                expr.inst_type_hole(subst);
+                arg.inst_type_hole(subst);
+                predicate.inst_type_hole(subst);
             }
             Expr::Const(e) => {
                 let ExprConst { name: _, ty_args } = Arc::make_mut(e);
                 for ty_arg in ty_args {
-                    ty_arg.inst_mvar(subst);
+                    ty_arg.inst_hole(subst);
                 }
             }
         }
     }
 
-    fn inst_mvar(&mut self, subst: &[(Name, &Term)]) {
+    fn inst_hole(&mut self, subst: &[(Name, &Term)]) {
         match self {
             Expr::Assump(e) => {
                 let ExprAssump { target } = Arc::make_mut(e);
-                target.inst_mvar(subst)
+                target.inst_hole(subst)
             }
             Expr::Assume(e) => {
                 let ExprAssume { target, expr } = Arc::make_mut(e);
-                target.inst_mvar(subst);
-                expr.inst_mvar(subst);
+                target.inst_hole(subst);
+                expr.inst_hole(subst);
             }
             Expr::App(e) => {
                 let ExprApp {
@@ -228,13 +228,13 @@ impl Expr {
                     expr2,
                     target,
                 } = Arc::make_mut(e);
-                expr1.inst_mvar(subst);
-                expr2.inst_mvar(subst);
-                target.inst_mvar(subst);
+                expr1.inst_hole(subst);
+                expr2.inst_hole(subst);
+                target.inst_hole(subst);
             }
             Expr::Take(e) => {
                 let ExprTake { name: _, ty, expr } = Arc::make_mut(e);
-                expr.inst_mvar(subst);
+                expr.inst_hole(subst);
             }
             Expr::Inst(e) => {
                 let ExprInst {
@@ -242,9 +242,9 @@ impl Expr {
                     arg,
                     predicate,
                 } = Arc::make_mut(e);
-                expr.inst_mvar(subst);
-                arg.inst_mvar(subst);
-                predicate.inst_mvar(subst);
+                expr.inst_hole(subst);
+                arg.inst_hole(subst);
+                predicate.inst_hole(subst);
             }
             Expr::Const(_) => {}
         }
@@ -369,7 +369,7 @@ impl<'a> Env<'a> {
                 }
                 bail!("unbound local type: {t}");
             }
-            Type::Mvar(_) => Ok(Kind::base()),
+            Type::Hole(_) => Ok(Kind::base()),
         }
     }
 
@@ -383,7 +383,7 @@ impl<'a> Env<'a> {
                 }
                 bail!("unknown local variable: {m}");
             }
-            Term::Mvar(m) => {
+            Term::Hole(m) => {
                 for (local, ty) in &self.tt_local_env.holes {
                     if *local == m {
                         return Ok(ty.clone());
@@ -419,7 +419,7 @@ impl<'a> Env<'a> {
 
                 let fun_ty = self.visit_term(fun)?;
                 let arg_ty = self.visit_term(arg)?;
-                let ret_ty = mk_fresh_type_mvar();
+                let ret_ty = mk_fresh_type_hole();
 
                 self.add_type_constraint(fun_ty, mk_type_arrow(arg_ty, ret_ty.clone()));
 
@@ -590,26 +590,26 @@ impl<'a> Env<'a> {
             let (first, last) = subst.split_at_mut(i);
             let (name, m) = first.last().unwrap();
             for (_, n) in last {
-                n.inst_mvar(&[(*name, m)]);
+                n.inst_hole(&[(*name, m)]);
             }
         }
         for i in 1..type_subst.len() {
             let (first, last) = type_subst.split_at_mut(i);
             let (name, m) = first.last().unwrap();
             for (_, n) in last {
-                n.inst_mvar(&[(*name, m)]);
+                n.inst_hole(&[(*name, m)]);
             }
         }
 
         for (name, m) in subst {
             let subst = [(name, &m)];
-            e.inst_mvar(&subst);
+            e.inst_hole(&subst);
         }
         e.normalize();
 
         for (name, ty) in type_subst {
             let subst = [(name, &ty)];
-            e.inst_type_mvar(&subst);
+            e.inst_type_hole(&subst);
         }
 
         #[cfg(debug_assertions)]
@@ -858,7 +858,7 @@ impl<'a> Unifier<'a> {
 
     fn watch(&mut self, c: Rc<Constraint>) {
         if c.kind != ConstraintKind::Delta {
-            if let &Term::Mvar(left_head) = c.left.head() {
+            if let &Term::Hole(left_head) = c.left.head() {
                 match self.watch_list.get_mut(&left_head) {
                     Some(watch_list) => {
                         watch_list.push(c.clone());
@@ -868,7 +868,7 @@ impl<'a> Unifier<'a> {
                     }
                 }
             }
-            if let &Term::Mvar(right_head) = c.right.head() {
+            if let &Term::Hole(right_head) = c.right.head() {
                 match self.watch_list.get_mut(&right_head) {
                     Some(watch_list) => {
                         watch_list.push(c);
@@ -883,7 +883,7 @@ impl<'a> Unifier<'a> {
 
     fn unwatch(&mut self, c: &Rc<Constraint>) {
         if c.kind != ConstraintKind::Delta {
-            if let &Term::Mvar(left_head) = c.left.head() {
+            if let &Term::Hole(left_head) = c.left.head() {
                 let watch_list = self.watch_list.get_mut(&left_head).unwrap();
                 let mut index = 0;
                 for i in (0..watch_list.len()).rev() {
@@ -894,7 +894,7 @@ impl<'a> Unifier<'a> {
                 }
                 watch_list.swap_remove(index);
             }
-            if let &Term::Mvar(right_head) = c.right.head() {
+            if let &Term::Hole(right_head) = c.right.head() {
                 let watch_list = self.watch_list.get_mut(&right_head).unwrap();
                 let mut index = 0;
                 for i in (0..watch_list.len()).rev() {
@@ -910,10 +910,10 @@ impl<'a> Unifier<'a> {
 
     // Note that the result term may contain redex in head
     fn inst_head(&self, m: &mut Term) -> bool {
-        if let &Term::Mvar(m_head) = m.head() {
+        if let &Term::Hole(m_head) = m.head() {
             if let Some(a) = self.subst_map.get(&m_head) {
                 let subst = [(m_head, a)];
-                m.head_mut().inst_mvar(&subst);
+                m.head_mut().inst_hole(&subst);
                 return true;
             }
         }
@@ -948,7 +948,7 @@ impl<'a> Unifier<'a> {
             }
             Term::Local(_) => true,
             Term::Const(_) => true,
-            Term::Mvar(name) => {
+            Term::Hole(name) => {
                 if *name == occur_check {
                     return false;
                 }
@@ -968,7 +968,7 @@ impl<'a> Unifier<'a> {
             Term::App(m) => self.is_fully_inst(&m.fun) && self.is_fully_inst(&m.arg),
             Term::Local(_) => true,
             Term::Const(_) => true,
-            Term::Mvar(name) => !self.subst_map.contains_key(name),
+            Term::Hole(name) => !self.subst_map.contains_key(name),
         }
     }
 
@@ -984,9 +984,9 @@ impl<'a> Unifier<'a> {
             } else if right.is_quasi_pattern() {
                 mem::swap(&mut left, &mut right);
                 kind = ConstraintKind::QuasiPattern;
-            } else if left.head().is_mvar() && right.head().is_mvar() {
+            } else if left.head().is_hole() && right.head().is_hole() {
                 kind = ConstraintKind::FlexFlex;
-            } else if left.head().is_mvar() {
+            } else if left.head().is_hole() {
                 kind = ConstraintKind::FlexRigid;
             } else {
                 mem::swap(&mut left, &mut right);
@@ -1058,7 +1058,7 @@ impl<'a> Unifier<'a> {
     }
 
     fn inst_type_head(&mut self, ty: Type) -> Type {
-        let Type::Mvar(name) = ty else {
+        let Type::Hole(name) = ty else {
             return ty;
         };
         let Some(ty) = self.type_subst_map.get(&name).cloned() else {
@@ -1081,7 +1081,7 @@ impl<'a> Unifier<'a> {
                 self.add_type_constraint(inner1.cod, inner2.cod);
             }
             (Type::App(inner1), Type::App(inner2)) => {
-                // Since we have no higher-kinded polymorphism, mvars will only be typed as `Type`,
+                // Since we have no higher-kinded polymorphism, holes will only be typed as `Type`,
                 // it is illegal to match the following two types:
                 //  ?M₁ t =?= ?M₂ t₁ t₂
                 // But such a case is checked and ruled out in the kind checking phase that runs before
@@ -1091,7 +1091,7 @@ impl<'a> Unifier<'a> {
                 self.add_type_constraint(inner1.fun, inner2.fun);
                 self.add_type_constraint(inner1.arg, inner2.arg);
             }
-            (Type::Mvar(name), t) | (t, Type::Mvar(name)) => {
+            (Type::Hole(name), t) | (t, Type::Hole(name)) => {
                 self.add_type_subst(name, t);
             }
             (_, _) => {
@@ -1125,7 +1125,7 @@ impl<'a> Unifier<'a> {
         }
         if right.is_abs() {
             // L ≡ (?M t₁ ⋯ tₙ)
-            if left.head().is_mvar() {
+            if left.head().is_hole() {
                 // this case is handled later.
             } else if self.tt_env.unfold_head(&mut left).is_some() {
                 self.stack.push((left, right));
@@ -1138,8 +1138,8 @@ impl<'a> Unifier<'a> {
             self.stack.push((left, right));
             return None;
         }
-        // then each of the heads can be a local, a const, or an mvar
-        if let Term::Mvar(right_head) = right.head() {
+        // then each of the heads can be a local, a const, or a hole
+        if let Term::Hole(right_head) = right.head() {
             let right_head = *right_head;
             self.inst_arg_heads(&mut right);
             if let Some(args) = right.is_pattern() {
@@ -1148,27 +1148,27 @@ impl<'a> Unifier<'a> {
                     let args = args
                         .into_iter()
                         // TODO determine types from local_env
-                        .map(|n| (n, n, mk_fresh_type_mvar()))
+                        .map(|n| (n, n, mk_fresh_type_hole()))
                         .collect::<Vec<_>>();
                     if left.abs(&args, false) {
                         self.add_subst(right_head, left.clone());
                         if let Some(constraints) = self.watch_list.get(&right_head) {
                             for c in constraints.iter().rev() {
-                                if c.left.head() == &Term::Mvar(right_head) {
-                                    if let Term::Mvar(right_head) = c.right.head() {
+                                if c.left.head() == &Term::Hole(right_head) {
+                                    if let Term::Hole(right_head) = c.right.head() {
                                         if self.subst_map.contains_key(right_head) {
                                             continue;
                                         }
                                     }
-                                } else if let Term::Mvar(left_head) = c.left.head() {
+                                } else if let Term::Hole(left_head) = c.left.head() {
                                     if self.subst_map.contains_key(left_head) {
                                         continue;
                                     }
                                 }
                                 let mut c = (**c).clone();
                                 let subst = [(right_head, &left)];
-                                c.left.inst_mvar(&subst);
-                                c.right.inst_mvar(&subst);
+                                c.left.inst_hole(&subst);
+                                c.right.inst_hole(&subst);
                                 self.stack.push((c.left, c.right));
                             }
                         }
@@ -1177,7 +1177,7 @@ impl<'a> Unifier<'a> {
                 }
             }
         }
-        if let Term::Mvar(left_head) = left.head() {
+        if let Term::Hole(left_head) = left.head() {
             let left_head = *left_head;
             self.inst_arg_heads(&mut left);
             if let Some(args) = left.is_pattern() {
@@ -1185,27 +1185,27 @@ impl<'a> Unifier<'a> {
                     let args = args
                         .into_iter()
                         // TODO determine types from local_env
-                        .map(|n| (n, n, mk_fresh_type_mvar()))
+                        .map(|n| (n, n, mk_fresh_type_hole()))
                         .collect::<Vec<_>>();
                     if right.abs(&args, false) {
                         self.add_subst(left_head, right.clone());
                         if let Some(constraints) = self.watch_list.get(&left_head) {
                             for c in constraints.iter().rev() {
-                                if c.left.head() == &Term::Mvar(left_head) {
-                                    if let Term::Mvar(right_head) = c.right.head() {
+                                if c.left.head() == &Term::Hole(left_head) {
+                                    if let Term::Hole(right_head) = c.right.head() {
                                         if self.subst_map.contains_key(right_head) {
                                             continue;
                                         }
                                     }
-                                } else if let Term::Mvar(left_head) = c.left.head() {
+                                } else if let Term::Hole(left_head) = c.left.head() {
                                     if self.subst_map.contains_key(left_head) {
                                         continue;
                                     }
                                 }
                                 let mut c = (**c).clone();
                                 let subst = [(left_head, &right)];
-                                c.left.inst_mvar(&subst);
-                                c.right.inst_mvar(&subst);
+                                c.left.inst_hole(&subst);
+                                c.right.inst_hole(&subst);
                                 self.stack.push((c.left, c.right));
                             }
                         }
@@ -1214,7 +1214,7 @@ impl<'a> Unifier<'a> {
                 }
             }
         }
-        if right.head().is_mvar() || left.head().is_mvar() {
+        if right.head().is_hole() || left.head().is_hole() {
             self.add_derived_constraint(left, right, false);
             return None;
         }
@@ -1267,7 +1267,7 @@ impl<'a> Unifier<'a> {
                     }
                     return None;
                 }
-                // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where any of t or s contains an mvar.
+                // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where any of t or s contains a hole.
                 self.add_derived_constraint(left, right, true);
                 return None;
             }
@@ -1456,7 +1456,7 @@ impl<'a> Unifier<'a> {
                 .map(|_| {
                     let name = Name::fresh();
                     // TODO: determine the types of new binders from t[1]..t[p].
-                    (name, name, mk_fresh_type_mvar())
+                    (name, name, mk_fresh_type_hole())
                 })
                 .chain(right_binders.iter().cloned())
                 .collect::<Vec<_>>();
@@ -1464,7 +1464,7 @@ impl<'a> Unifier<'a> {
             // (Y[1] z[1] .. z[p] x[1] .. x[m]) .. (Y[q] z[1] .. z[p] x[1] .. x[m])
             let new_args = (0..right_args.len())
                 .map(|_| {
-                    let mut arg = mk_fresh_mvar();
+                    let mut arg = mk_fresh_hole();
                     for &(name, _, _) in &new_binders {
                         arg.apply([mk_local(name)]);
                     }
@@ -1522,14 +1522,14 @@ impl<'a> Unifier<'a> {
                     .map(|_| {
                         let name = Name::fresh();
                         // TODO: determine the types of new binders from t[1]..t[p].
-                        (name, name, mk_fresh_type_mvar())
+                        (name, name, mk_fresh_type_hole())
                     })
                     .collect::<Vec<_>>();
 
                 // (Y[1] z[1] .. z[p-k]) .. (Y[q-k] z[1] .. z[p-k])
                 let new_args = (0..right_args.len() - k)
                     .map(|_| {
-                        let mut arg = mk_fresh_mvar();
+                        let mut arg = mk_fresh_hole();
                         for i in 0..left_args.len() - k {
                             arg.apply([mk_local(new_binders[i].0)]);
                         }
@@ -1563,12 +1563,12 @@ impl<'a> Unifier<'a> {
     }
 
     fn is_resolved_constraint(&self, c: &Constraint) -> bool {
-        if let &Term::Mvar(right_head) = c.right.head() {
+        if let &Term::Hole(right_head) = c.right.head() {
             if self.subst_map.contains_key(&right_head) {
                 return true;
             }
         }
-        if let &Term::Mvar(left_head) = c.left.head() {
+        if let &Term::Hole(left_head) = c.left.head() {
             if self.subst_map.contains_key(&left_head) {
                 return true;
             }

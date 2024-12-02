@@ -10,7 +10,7 @@ use crate::kernel::proof::{
     mk_proof_imp_intro, mk_proof_ref, mk_type_prop, Proof,
 };
 use crate::kernel::tt::{
-    mk_app, mk_const, mk_fresh_mvar, mk_fresh_type_mvar, mk_local, mk_type_arrow, mk_type_const,
+    mk_app, mk_const, mk_fresh_hole, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const,
     mk_type_local, Kind, Name, Path, Term, Type,
 };
 
@@ -432,7 +432,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         for (name, ty) in params {
             let ty = match ty {
                 Some(ty) => ty,
-                None => mk_fresh_type_mvar(),
+                None => mk_fresh_type_hole(),
             };
             binders.push((name, ty));
         }
@@ -458,7 +458,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             .unwrap_or_else(|| panic!("unknown constant: {name}"));
         let mut ty_args = vec![];
         for _ in 0..ty_arity {
-            ty_args.push(mk_fresh_type_mvar());
+            ty_args.push(mk_fresh_type_hole());
         }
         mk_const(Name::try_from(name).expect("invalid name"), ty_args)
     }
@@ -473,7 +473,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         for (name, ty) in params {
             let ty = match ty {
                 Some(ty) => ty,
-                None => mk_fresh_type_mvar(),
+                None => mk_fresh_type_hole(),
             };
             binders.push((name, ty));
         }
@@ -499,7 +499,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         if let Some(_token) = self.expect_symbol_opt(":") {
             t = self.ty()?;
         } else {
-            t = mk_fresh_type_mvar();
+            t = mk_fresh_type_hole();
         }
         self.expect_symbol("|")?;
         self.locals.push(name);
@@ -541,7 +541,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             }
         } else {
             for _ in 0..ty_arity {
-                ty_args.push(mk_fresh_type_mvar());
+                ty_args.push(mk_fresh_type_hole());
             }
         }
         Ok(mk_const(name, ty_args))
@@ -730,7 +730,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             }
         } else {
             for _ in 0..ty_arity {
-                ty_args.push(mk_fresh_type_mvar());
+                ty_args.push(mk_fresh_type_hole());
             }
         }
         Ok(mk_proof_ref(name, ty_args))
@@ -738,11 +738,11 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     // Returns (?M l₁ ⋯ lₙ) where ?M is fresh and l₁ ⋯ lₙ are the context in place.
     fn mk_term_hole(&mut self) -> Term {
-        let mut hole = mk_fresh_mvar();
-        let Term::Mvar(name) = &hole else {
+        let mut hole = mk_fresh_hole();
+        let Term::Hole(name) = &hole else {
             unreachable!()
         };
-        self.holes.push((*name, mk_fresh_type_mvar()));
+        self.holes.push((*name, mk_fresh_type_hole()));
         hole.apply(self.locals.iter().map(|name| mk_local(*name)));
 
         hole
@@ -872,7 +872,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                         }
                     } else {
                         for _ in 0..ty_arity {
-                            ty_args.push(mk_fresh_type_mvar());
+                            ty_args.push(mk_fresh_type_hole());
                         }
                     }
                     mk_expr_const(name, ty_args)

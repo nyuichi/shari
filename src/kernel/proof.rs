@@ -370,7 +370,7 @@ impl Env {
 
 #[cfg(test)]
 mod tests {
-    use super::tt::{mk_abs, mk_app, mk_fresh_type_mvar, mk_local, mk_var};
+    use super::tt::{mk_abs, mk_app, mk_fresh_type_hole, mk_local, mk_var};
     use super::*;
 
     static P: LazyLock<Name> = LazyLock::new(|| Name::intern("p").unwrap());
@@ -408,10 +408,10 @@ mod tests {
         // terms may contain type variables
         // ∀ x, x ⇒ x
         let p = mk_app(
-            mk_const(*FORALL, vec![mk_fresh_type_mvar()]),
+            mk_const(*FORALL, vec![mk_fresh_type_hole()]),
             mk_abs(
                 *X,
-                mk_fresh_type_mvar(),
+                mk_fresh_type_hole(),
                 mk_app(mk_app(mk_const(*IMP, vec![]), mk_var(0)), mk_var(0)),
             ),
         );

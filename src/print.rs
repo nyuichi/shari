@@ -231,7 +231,7 @@ impl<'a> Printer<'a> {
             Term::Local(name) => {
                 write!(f, "{name}")
             }
-            Term::Mvar(name) => {
+            Term::Hole(name) => {
                 write!(f, "?{name}")
             }
             Term::Const(inner) => {
@@ -331,7 +331,7 @@ impl<'a> Printer<'a> {
                 }
                 Ok(())
             }
-            Type::Mvar(name) => write!(f, "{name}"),
+            Type::Hole(name) => write!(f, "{name}"),
             Type::Local(name) => write!(f, "{name}"),
         }
     }
