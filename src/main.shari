@@ -307,6 +307,7 @@ mt[_, _] lawvere_fixpoint (
 type const comprehension : Type → Type → Type
 const char.{v, u} : comprehension v u → v → Prop
 const rep.{v, u} : comprehension v u → u → v
+-- this alone is insufficient as this only asserts existence but does not give the concrete term.
 axiom rep.spec.{v, u} (d : comprehension v u) : injective (rep d) ∧ (∀ y, char d y ↔ ∃! x, y = rep d x)
 
 lemma rep.injective.{v, u} (d : comprehension v u) : injective (rep d) :=
@@ -328,11 +329,90 @@ lemma char.rep.{v, u} (d : comprehension v u) (x : u) : char d (rep d x) :=
 rep.char[d, rep d x] (uexists.intro[λ z, rep d x = rep d z] (exists.intro[(λ z, rep d x = rep d z), x] eq.refl[rep d x]) rep.unique[d, rep d x])
 
 /-
+-- How to enable to obtain the mediating arrow.
+
+-- # Candidate 1: ``abstract'' syntax
+
 -- transpose of (f : w → v) s.t. P ∘ f = ⊤
 def mk (y : w) : { x | P x } := abstract f y, { /- proof obligation: P (f y) -/ }
 
+def mk.{v, u, w} (d : comprehension v u) (y : w) : u := abstract f y, { /- proof obligation: P (f y) -/ }
+
 -- automatically generated
 axiom mk.spec (y : w) : rep (mk y) = f y
+
+
+-- # Candidate 2: Use truncation
+
+class singleton u extends comprehension u :=
+(pt : base u)
+(assume unique : ∀ (x : u), pt = rep x)
+
+-- Hypothetical type definition:
+-- 
+--   type def el φ := { h : unit | φ }
+--
+-- Recall in dependent type theory Tarski universes have the following rules:
+--
+--   Γ ⊢ A type
+--   ------------------------------
+--   Γ ⊢ toProp : isProp(A) → Prop
+--
+--   Γ ⊢ p : Prop
+--   -------------
+--   Γ ⊢ El(p) type
+--
+--   Γ ⊢ p : Prop
+--   --------------------------------
+--   Γ ⊢ proptrunc(p) : isProp(El(p))
+--
+-- In our logic we have a restricted form of them:
+--
+--   ⊢ p : Prop
+--   -------------
+--   ⊢ el p type
+--
+--   -------------------------------------------
+--   ⊢ el.prop_trunc : ∀ (h₁ h₂ : el p), h₁ = h₂
+--
+
+-- to avoid dependent types, we seemingly must implement type classes with monomorphization.
+def abs.{base, u, v} [comprehension base u] [singleton base v] : el(char.{base, u} pt.{base, v}) → u
+
+-- This also creates a term `foo.{base, u, v}` of type `el(char.{u} pt.{base, v})`
+lemma foo.{base, u, v} [comprehension base u] [singleton base v] : char.{base, u} pt.{base, v} :=
+...
+
+-- setup
+--
+--  class singleton u extends comprehension u :=
+--  (pt : base u)
+--  (assume unique : ∀ (x : u), pt = rep x)
+--
+type const singleton : Type → Type → Type
+const singleton_extends_comprehension.{base, u} : singleton base u → comprehension base u
+const pt.{base, u} : singleton base u → base
+axiom unique.{base, u} (d : singleton base u) : ∀ (x : u), pt.{base, u} d = rep.{base, u} (singleton_extends_comprehension.{base, u} d) x
+
+-- introduction of singleton type.
+-- notation is borrowed from 1-tuple.
+--
+--   type def top := ⟨⊤⟩
+--
+-- the followings are auto-generated.
+type const top : Type
+const top.singleton : singleton Prop top
+def top.singleton.pt : Prop := ⊤
+axiom top.singleton.spec : top.singleton.pt = pt.{Prop, top} top.singleton
+
+lemma char_top : char.{Prop, bool} bool.comprehension (pt.{Prop, top} top.singleton) :=
+sorry
+
+-- then we have:
+const char_top : el(char.{Prop, bool} bool.comprehension (pt.{Prop, top} top.singleton))
+-- This is called ``propositions as codes for subsingletons'' in the literature.
+
+def tt : bool := abs.{Prop, bool, top} char_top
 -/
 
 /-
@@ -611,7 +691,9 @@ pair.rep.injective[_, _]
  - support
  -/
 
--- a.k.a. the bracket type, or the propositional truncation
+-- A type operator sending an inhabited type to its propositional truncation.
+-- Support type is also known as bracket type and propositional truncation.
+--
 -- type support u := { x : unit | ∃ (a : u), ⊤ }
 type const support : Type → Type
 const support.comprehension.{u} : comprehension unit (support u)
@@ -671,8 +753,11 @@ const support.join.{u} : support (support u) → support u
 -- Introducing this constant restricts the class of models to toposes whose supports split.
 -- Note we do not have an object-level function assigning for each type u the choice function,
 -- which would imply axiom of choice.
--- In (dependent) type theory, this operator corresponds via the propositions-as-types paradigm
--- to the law of double negation.
+-- In the presence of dependent products, this operator corresponds to the law of double negation:
+--
+--   support u ≅ Π (p : Prop), (u → El(p)) → El(p)
+--
+-- where we assume Prop is a Tarski universe.
 --
 -- One can interpret this function in Kripke-Joyal semantics as follows:
 -- whenever one proves ⊢ ∃ (x : u), ⊤, hence ⊩ ∃ (x : u), ⊤, which in general
