@@ -105,11 +105,11 @@ assume φ ∧ ψ,
 
 lemma and.left (φ ψ : Prop) : φ ∧ ψ → φ :=
 assume φ ∧ ψ,
-(and.elim ⟪φ ∧ ψ⟫) (assume φ, assume ψ, ⟪φ⟫)
+and.elim ⟪φ ∧ ψ⟫ (assume φ, assume ψ, ⟪φ⟫)
 
 lemma and.right (φ ψ : Prop) : φ ∧ ψ → ψ :=
 assume φ ∧ ψ,
-(and.elim ⟪φ ∧ ψ⟫) (assume φ, assume ψ, ⟪ψ⟫)
+and.elim ⟪φ ∧ ψ⟫ (assume φ, assume ψ, ⟪ψ⟫)
 
 lemma or.left (φ ψ : Prop) : φ → φ ∨ ψ :=
 assume φ,
