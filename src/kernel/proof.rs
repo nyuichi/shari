@@ -340,7 +340,7 @@ impl Env {
                 };
                 self.tt_env.check_type(local_env, m, &mut ty)?;
                 let mut target = body;
-                target.open(&m);
+                target.open(m);
                 Ok(target)
             }
             Proof::Conv(inner) => {
@@ -351,7 +351,7 @@ impl Env {
             }
             Proof::Ref(inner) => {
                 let (name, ty_args) = Arc::make_mut(inner);
-                let Some((tv, mut target)) = self.facts.get(&name).cloned() else {
+                let Some((tv, mut target)) = self.facts.get(name).cloned() else {
                     bail!("proposition not found");
                 };
                 if ty_args.len() != tv.len() {

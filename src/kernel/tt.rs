@@ -580,24 +580,15 @@ impl Term {
     }
 
     pub fn is_abs(&self) -> bool {
-        match self {
-            Term::Abs(_) => true,
-            _ => false,
-        }
+        matches!(self, Term::Abs(_))
     }
 
     pub fn is_hole(&self) -> bool {
-        match self {
-            Term::Hole(_) => true,
-            _ => false,
-        }
+        matches!(self, Term::Hole(_))
     }
 
     pub fn is_const(&self) -> bool {
-        match self {
-            Term::Const(_) => true,
-            _ => false,
-        }
+        matches!(self, Term::Const(_))
     }
 
     /// Checks if self ≡ (?M l₁ ⋯ lₙ) where l₁ ⋯ lₙ are pairwise distinct locals.
@@ -866,7 +857,7 @@ impl Term {
             binder_name: _,
             body,
         } = Arc::make_mut(inner);
-        body.open(&arg);
+        body.open(arg);
         *self = mem::take(body);
         assert!(self.is_lclosed());
         Some(path)
@@ -885,8 +876,8 @@ impl Term {
                     p = self.beta_reduce()?;
                 }
                 match self.whnf() {
-                    Some(p_next) => return Some(mk_path_trans(p, p_next)),
-                    None => return Some(p),
+                    Some(p_next) => Some(mk_path_trans(p, p_next)),
+                    None => Some(p),
                 }
             }
         }
@@ -1254,7 +1245,7 @@ impl Env {
             }
             Path::Delta(inner) => {
                 let (name, ty_args) = Arc::make_mut(inner);
-                let Some(def) = self.defs.get(&name).cloned() else {
+                let Some(def) = self.defs.get(name).cloned() else {
                     bail!("definition not found: {name}");
                 };
                 let Def {
@@ -1449,8 +1440,7 @@ struct Infer<'a> {
 
 impl<'a> Infer<'a> {
     fn check_type(mut self, m: &mut Term, target: &mut Type) -> anyhow::Result<()> {
-        self.env
-            .check_kind(&self.local_env, target, &Kind::base())?;
+        self.env.check_kind(self.local_env, target, &Kind::base())?;
         self.check_type_help(m, target)?;
         let unifier = self.eq_set.solve()?;
         unifier.apply_term(m)?;
@@ -1484,7 +1474,7 @@ impl<'a> Infer<'a> {
             Term::Abs(inner) => {
                 let inner = Arc::make_mut(inner);
                 self.env
-                    .check_kind(&self.local_env, &inner.binder_type, &Kind::base())?;
+                    .check_kind(self.local_env, &inner.binder_type, &Kind::base())?;
                 let x = Name::fresh();
                 let t = inner.binder_type.clone();
                 self.local_env.locals.push((x, t));
@@ -1515,7 +1505,7 @@ impl<'a> Infer<'a> {
                     bail!("number of type variables mismatch");
                 }
                 for t in &inner.ty_args {
-                    self.env.check_kind(&self.local_env, t, &Kind::base())?;
+                    self.env.check_kind(self.local_env, t, &Kind::base())?;
                 }
                 let mut ty = ty.clone();
                 ty.subst(&std::iter::zip(tv.iter().copied(), &inner.ty_args).collect::<Vec<_>>());

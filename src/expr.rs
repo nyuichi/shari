@@ -233,7 +233,11 @@ impl Expr {
                 target.inst_hole(subst);
             }
             Expr::Take(e) => {
-                let ExprTake { name: _, ty, expr } = Arc::make_mut(e);
+                let ExprTake {
+                    name: _,
+                    ty: _,
+                    expr,
+                } = Arc::make_mut(e);
                 expr.inst_hole(subst);
             }
             Expr::Inst(e) => {
@@ -1274,7 +1278,7 @@ impl<'a> Unifier<'a> {
                 }
                 // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where any of t or s contains a hole.
                 self.add_derived_constraint(left, right, true);
-                return None;
+                None
             }
             (Term::Const(left_head), Term::Local(right_head)) => {
                 // yuichi: perhaps we can simply give up on this case, when completeness is not important.
@@ -1288,7 +1292,7 @@ impl<'a> Unifier<'a> {
                 left.open(&mk_local(*right_head));
                 self.tt_env.unfold_head(&mut left).unwrap();
                 self.stack.push((left, right));
-                return None;
+                None
             }
             (Term::Local(left_head), Term::Local(right_head)) => {
                 if left_head != right_head {
@@ -1303,7 +1307,7 @@ impl<'a> Unifier<'a> {
                 {
                     self.stack.push((left_arg, right_arg));
                 }
-                return None;
+                None
             }
             _ => unreachable!(),
         }
