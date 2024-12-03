@@ -1154,12 +1154,12 @@ impl<'a> Unifier<'a> {
             if let Some(args) = right.is_pattern() {
                 // TODO: avoid full instantiation
                 if self.inst(&mut left, right_head) {
-                    let args = args
+                    let binders = args
                         .into_iter()
                         // TODO determine types from local_env
                         .map(|n| (n, n, mk_fresh_type_hole()))
                         .collect::<Vec<_>>();
-                    if left.abs(&args, false) {
+                    if left.abs(&binders, false) {
                         self.add_subst(right_head, left.clone());
                         if let Some(constraints) = self.watch_list.get(&right_head) {
                             for c in constraints.iter().rev() {
@@ -1191,12 +1191,12 @@ impl<'a> Unifier<'a> {
             self.inst_arg_heads(&mut left);
             if let Some(args) = left.is_pattern() {
                 if self.inst(&mut right, left_head) {
-                    let args = args
+                    let binders = args
                         .into_iter()
                         // TODO determine types from local_env
                         .map(|n| (n, n, mk_fresh_type_hole()))
                         .collect::<Vec<_>>();
-                    if right.abs(&args, false) {
+                    if right.abs(&binders, false) {
                         self.add_subst(left_head, right.clone());
                         if let Some(constraints) = self.watch_list.get(&left_head) {
                             for c in constraints.iter().rev() {
