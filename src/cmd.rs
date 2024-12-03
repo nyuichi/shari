@@ -1,12 +1,12 @@
 use anyhow::bail;
 
 use crate::{
-    expr::{self, mk_expr_app, mk_expr_assume, mk_expr_assump, Expr},
+    expr::{self, mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_take, Expr},
     kernel::{
         proof::{self, mk_type_prop},
-        tt::{Def, Kind, LocalEnv, Name, Term, Type},
+        tt::{mk_app, mk_const, mk_type_arrow, Def, Kind, LocalEnv, Name, Term, Type},
     },
-    parse::{Nasmespace, TokenTable},
+    parse::{FactInfo, Nasmespace, TokenTable},
     print::OpTable,
 };
 
@@ -81,6 +81,7 @@ pub struct CmdNofix {
 pub struct CmdDef {
     pub name: Name,
     pub local_types: Option<Vec<Name>>,
+    pub params: Vec<(Name, Type)>,
     pub ty: Type,
     pub target: Term,
 }
@@ -89,6 +90,7 @@ pub struct CmdDef {
 pub struct CmdAxiom {
     pub name: Name,
     pub local_types: Option<Vec<Name>>,
+    pub params: Vec<(Name, Type)>,
     pub target: Term,
 }
 
@@ -96,6 +98,7 @@ pub struct CmdAxiom {
 pub struct CmdLemma {
     pub name: Name,
     pub local_types: Option<Vec<Name>>,
+    pub params: Vec<(Name, Type)>,
     pub target: Term,
     pub holes: Vec<(Name, Type)>,
     pub expr: Expr,
@@ -217,6 +220,7 @@ impl Eval {
                 let CmdDef {
                     name,
                     local_types,
+                    params,
                     mut ty,
                     mut target,
                 } = inner;
@@ -235,6 +239,10 @@ impl Eval {
                     locals: vec![],
                     holes: vec![],
                 };
+                for (var, t) in params.iter().rev() {
+                    target.abs(&[(*var, *var, t.clone())], true);
+                    ty = mk_type_arrow(t.clone(), ty);
+                }
                 self.proof_env
                     .tt_env
                     .check_type(&mut local_env, &mut target, &mut ty)?;
@@ -271,6 +279,7 @@ impl Eval {
                 let CmdAxiom {
                     name,
                     local_types,
+                    params,
                     mut target,
                 } = inner;
                 let need_shrink = local_types.is_none();
@@ -288,6 +297,13 @@ impl Eval {
                     locals: vec![],
                     holes: vec![],
                 };
+                for (var, ty) in params.iter().rev() {
+                    target.abs(&[(*var, *var, ty.clone())], true);
+                    target = mk_app(
+                        mk_const(Name::try_from("forall").unwrap(), vec![ty.clone()]),
+                        target,
+                    );
+                }
                 self.proof_env.tt_env.check_type(
                     &mut local_env,
                     &mut target,
@@ -306,7 +322,13 @@ impl Eval {
                 if self.proof_env.facts.contains_key(&name) {
                     bail!("already defined");
                 }
-                self.ns.facts.insert(name, local_env.local_types.len());
+                self.ns.facts.insert(
+                    name,
+                    FactInfo {
+                        type_arity: local_env.local_types.len(),
+                        num_params: params.len(),
+                    },
+                );
                 self.proof_env
                     .facts
                     .insert(name, (local_env.local_types, target));
@@ -316,9 +338,10 @@ impl Eval {
                 let CmdLemma {
                     name,
                     local_types,
+                    params,
                     mut target,
                     holes,
-                    expr,
+                    mut expr,
                 } = inner;
                 let need_shrink = local_types.is_none();
                 if let Some(local_types) = &local_types {
@@ -335,6 +358,14 @@ impl Eval {
                     locals: vec![],
                     holes,
                 };
+                for (var, ty) in params.iter().rev() {
+                    target.abs(&[(*var, *var, ty.clone())], true);
+                    target = mk_app(
+                        mk_const(Name::try_from("forall").unwrap(), vec![ty.clone()]),
+                        target,
+                    );
+                    expr = mk_expr_take(*var, ty.clone(), expr);
+                }
                 self.proof_env.tt_env.check_type(
                     &mut local_env,
                     &mut target,
@@ -371,7 +402,13 @@ impl Eval {
                 if self.proof_env.facts.contains_key(&name) {
                     bail!("already defined");
                 }
-                self.ns.facts.insert(name, local_env.local_types.len());
+                self.ns.facts.insert(
+                    name,
+                    FactInfo {
+                        type_arity: local_env.local_types.len(),
+                        num_params: params.len(),
+                    },
+                );
                 self.proof_env
                     .facts
                     .insert(name, (local_env.local_types, target));

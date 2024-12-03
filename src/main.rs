@@ -11,12 +11,12 @@ mod print;
 fn main() -> anyhow::Result<()> {
     let input = include_str!("main.shari");
 
-    let mut state = cmd::Eval::new();
+    let mut eval = cmd::Eval::new();
 
     let mut lex = Lex::new(input);
 
     loop {
-        let cmd = match Parser::new(&mut lex, &state.tt, &state.ns, state.tv.clone()).cmd() {
+        let cmd = match Parser::new(&mut lex, &eval.tt, &eval.ns, eval.tv.clone()).cmd() {
             Ok(cmd) => cmd,
             Err(ParseError::Eof { .. }) => {
                 break;
@@ -26,7 +26,7 @@ fn main() -> anyhow::Result<()> {
                 break;
             }
         };
-        state.run_cmd(cmd.clone())?;
+        eval.run_cmd(cmd.clone())?;
         match cmd {
             cmd::Cmd::Def(cmd) => {
                 println!("defined {}", cmd.name);

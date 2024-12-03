@@ -579,6 +579,11 @@ impl<'a> Env<'a> {
     }
 
     pub fn elaborate(mut self, e: &mut Expr) -> anyhow::Result<Proof> {
+        #[cfg(debug_assertions)]
+        {
+            println!("elaborating:\n{e}");
+        }
+
         self.visit_expr(e)?;
 
         let (mut subst, mut type_subst) =
@@ -1445,6 +1450,9 @@ impl<'a> Unifier<'a> {
             //
             // X ↦ λ z[1] .. z[p] x[1] .. x[m], ? (Y[1] z[1] .. z[p] x[1] .. x[m]) .. (Y[q] z[1] .. z[p] x[1] .. x[m])
 
+            // TODO: remove this and check if the hole is used only once
+            right.hnf();
+
             let left_head = left.head();
             let left_args = left.args();
             let right_binders = right.unabs();
@@ -1555,7 +1563,7 @@ impl<'a> Unifier<'a> {
                         choice.push(vec![(left_head.clone(), cand)]);
                     }
                     Term::Local(_) => {}
-                    _ => unreachable!(),
+                    _ => unreachable!("{right_head}"),
                 };
             }
         }
@@ -1596,21 +1604,20 @@ impl<'a> Unifier<'a> {
             }
             return false;
         };
+        #[cfg(debug_assertions)]
+        {
+            let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
+            println!(
+                "{sp}making a decision ({:?}):\n{sp}- {}\n{sp}  {}",
+                c.kind, c.left, c.right
+            );
+        }
         let choice = match c.kind {
             ConstraintKind::Delta => self.choice_delta(&c),
             ConstraintKind::QuasiPattern => self.choice_fr(&c),
             ConstraintKind::FlexRigid => self.choice_fr(&c),
             ConstraintKind::FlexFlex => unreachable!(),
         };
-
-        #[cfg(debug_assertions)]
-        {
-            let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
-            println!(
-                "{sp}decision is made for ({:?}):\n{sp}- {}\n{sp}  {}",
-                c.kind, c.left, c.right
-            );
-        }
 
         self.push_branch(trail_len, Box::new(choice.into_iter()));
         self.next();

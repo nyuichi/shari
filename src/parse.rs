@@ -10,7 +10,7 @@ use crate::kernel::proof::{
     mk_proof_imp_intro, mk_proof_ref, mk_type_prop, Proof,
 };
 use crate::kernel::tt::{
-    mk_app, mk_const, mk_fresh_hole, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const,
+    mk_const, mk_fresh_hole, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const,
     mk_type_local, Kind, Name, Path, Term, Type,
 };
 
@@ -136,6 +136,12 @@ pub enum ParseError {
 }
 
 #[derive(Debug, Default, Clone)]
+pub struct FactInfo {
+    pub type_arity: usize,
+    pub num_params: usize,
+}
+
+#[derive(Debug, Default, Clone)]
 pub struct Nasmespace {
     pub type_consts: HashSet<Name>,
     // mapping name to type arity
@@ -144,7 +150,7 @@ pub struct Nasmespace {
     // mapping name to type arity
     pub locals: Vec<Name>,
     // mapping name to type arity
-    pub facts: HashMap<Name, usize>,
+    pub facts: HashMap<Name, FactInfo>,
 }
 
 pub struct Parser<'a, 'b> {
@@ -714,7 +720,7 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     fn proof_ref(&mut self, token: Token<'a>) -> Result<Proof, ParseError> {
         let name = Name::try_from(token.as_str()).unwrap();
-        let Some(ty_arity) = self.ns.facts.get(&name).copied() else {
+        let Some(fact_info) = self.ns.facts.get(&name).cloned() else {
             return Self::fail(token, "unknown proposition");
         };
         let mut ty_args = vec![];
@@ -729,7 +735,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                 self.expect_symbol("}")?;
             }
         } else {
-            for _ in 0..ty_arity {
+            for _ in 0..fact_info.type_arity {
                 ty_args.push(mk_fresh_type_hole());
             }
         }
@@ -779,6 +785,36 @@ impl<'a, 'b> Parser<'a, 'b> {
     //     Ok(expr)
     // }
 
+    fn expr_const(&mut self, token: Token<'a>, auto_inst: bool) -> Result<Expr, ParseError> {
+        let name = Name::try_from(token.as_str()).unwrap();
+        let Some(fact_info) = self.ns.facts.get(&name).cloned() else {
+            return Self::fail(token, "unknown variable");
+        };
+        let mut ty_args = vec![];
+        if let Some(_token) = self.expect_symbol_opt(".{") {
+            if self.expect_symbol_opt("}").is_none() {
+                loop {
+                    ty_args.push(self.ty()?);
+                    if self.expect_symbol_opt(",").is_none() {
+                        break;
+                    }
+                }
+                self.expect_symbol("}")?;
+            }
+        } else {
+            for _ in 0..fact_info.type_arity {
+                ty_args.push(mk_fresh_type_hole());
+            }
+        }
+        let mut expr = mk_expr_const(name, ty_args);
+        if auto_inst {
+            for _ in 0..fact_info.num_params {
+                expr = mk_expr_inst(expr, self.mk_term_hole(), self.mk_term_hole());
+            }
+        }
+        Ok(expr)
+    }
+
     fn subexpr(&mut self, rbp: usize) -> Result<Expr, ParseError> {
         // nud
         let mut left = 'left: {
@@ -791,6 +827,11 @@ impl<'a, 'b> Parser<'a, 'b> {
                 let prop = self.term()?;
                 self.expect_symbol("⟫")?;
                 break 'left mk_expr_assump(prop);
+            }
+            if let Some(_token) = self.expect_symbol_opt("@") {
+                let token = self.ident()?;
+                let expr = self.expr_const(token, false)?;
+                break 'left expr;
             }
             let token = self.ident()?;
             match token.as_str() {
@@ -854,29 +895,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let e_body = mk_expr_take(name, ty, e_body);
                     mk_expr_app(e, e_body, self.mk_term_hole())
                 }
-                _ => {
-                    let name = Name::try_from(token.as_str()).unwrap();
-                    let Some(ty_arity) = self.ns.facts.get(&name).copied() else {
-                        return Self::fail(token, "unknown variable");
-                    };
-                    let mut ty_args = vec![];
-                    if let Some(_token) = self.expect_symbol_opt(".{") {
-                        if self.expect_symbol_opt("}").is_none() {
-                            loop {
-                                ty_args.push(self.ty()?);
-                                if self.expect_symbol_opt(",").is_none() {
-                                    break;
-                                }
-                            }
-                            self.expect_symbol("}")?;
-                        }
-                    } else {
-                        for _ in 0..ty_arity {
-                            ty_args.push(mk_fresh_type_hole());
-                        }
-                    }
-                    mk_expr_const(name, ty_args)
-                }
+                _ => self.expr_const(token, true)?,
             }
         };
         while let Some(token) = self.peek_opt() {
@@ -887,7 +906,11 @@ impl<'a, 'b> Parser<'a, 'b> {
             let (led, prec) = {
                 if token.as_str() == "[" {
                     (ExprLed::Inst, 1025)
-                } else if token.as_str() == "(" || token.as_str() == "⟪" || token.is_ident() {
+                } else if token.as_str() == "("
+                    || token.as_str() == "⟪"
+                    || token.as_str() == "@"
+                    || token.is_ident()
+                {
                     (ExprLed::App, 1024)
                 } else {
                     break;
@@ -1179,9 +1202,9 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.push(*x);
         }
         self.expect_symbol(":")?;
-        let mut t = self.ty()?;
+        let t = self.ty()?;
         self.expect_symbol(":=")?;
-        let mut m = self.term()?;
+        let m = self.term()?;
         // Parsing finished. We can now safaly tear off.
         self.locals.truncate(params.len());
         match &local_types {
@@ -1192,13 +1215,10 @@ impl<'a, 'b> Parser<'a, 'b> {
                 self.type_locals.truncate(self.type_variables.len());
             }
         }
-        for (var, ty) in params.into_iter().rev() {
-            m.abs(&[(var, var, ty.clone())], true);
-            t = mk_type_arrow(ty, t);
-        }
         Ok(CmdDef {
             name,
             local_types,
+            params,
             ty: t,
             target: m,
         })
@@ -1230,7 +1250,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.push(*x);
         }
         self.expect_symbol(":")?;
-        let mut p = self.term()?;
+        let target = self.term()?;
         // Parsing finished. We can now safaly tear off.
         self.locals.truncate(params.len());
         match &local_types {
@@ -1241,14 +1261,11 @@ impl<'a, 'b> Parser<'a, 'b> {
                 self.type_locals.truncate(self.type_variables.len());
             }
         }
-        for (var, ty) in params.into_iter().rev() {
-            p.abs(&[(var, var, ty.clone())], true);
-            p = mk_app(mk_const(Name::try_from("forall").unwrap(), vec![ty]), p);
-        }
         Ok(CmdAxiom {
             name,
             local_types,
-            target: p,
+            params,
+            target,
         })
     }
 
@@ -1278,9 +1295,9 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.push(*x);
         }
         self.expect_symbol(":")?;
-        let mut p = self.term()?;
+        let p = self.term()?;
         self.expect_symbol(":=")?;
-        let mut e = self.expr()?;
+        let e = self.expr()?;
         // Parsing finished. We can now safaly tear off.
         self.locals.truncate(params.len());
         match &local_types {
@@ -1291,18 +1308,11 @@ impl<'a, 'b> Parser<'a, 'b> {
                 self.type_locals.truncate(self.type_variables.len());
             }
         }
-        for (var, ty) in params.into_iter().rev() {
-            p.abs(&[(var, var, ty.clone())], true);
-            p = mk_app(
-                mk_const(Name::try_from("forall").unwrap(), vec![ty.clone()]),
-                p,
-            );
-            e = mk_expr_take(var, ty, e);
-        }
         let holes = self.holes.drain(..).collect();
         Ok(CmdLemma {
             name,
             local_types,
+            params,
             target: p,
             holes,
             expr: e,
