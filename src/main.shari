@@ -370,16 +370,16 @@ class singleton u extends comprehension u :=
 --
 --   ⊢ p : Prop
 --   -------------
---   ⊢ el p type
+--   ⊢ el[p] type
 --
 --   -------------------------------------------
---   ⊢ el.prop_trunc : ∀ (h₁ h₂ : el p), h₁ = h₂
+--   ⊢ el.prop_trunc : ∀ (h₁ h₂ : el[p]), h₁ = h₂
 --
 
 -- to avoid dependent types, we seemingly must implement type classes with monomorphization.
-def abs.{base, u, v} [comprehension base u] [singleton base v] : el(char.{base, u} pt.{base, v}) → u
+def abs.{base, u, v} [comprehension base u] [singleton base v] : el[char.{base, u} pt.{base, v}] → u
 
--- This also creates a term `foo.{base, u, v}` of type `el(char.{u} pt.{base, v})`
+-- This also creates a term `foo.{base, u, v}` of type `el[char.{u} pt.{base, v}]`
 lemma foo.{base, u, v} [comprehension base u] [singleton base v] : char.{base, u} pt.{base, v} :=
 ...
 
@@ -409,7 +409,7 @@ lemma char_top : char.{Prop, bool} bool.comprehension (pt.{Prop, top} top.single
 sorry
 
 -- then we have:
-const char_top : el(char.{Prop, bool} bool.comprehension (pt.{Prop, top} top.singleton))
+const char_top : el[char.{Prop, bool} bool.comprehension (pt.{Prop, top} top.singleton)]
 -- This is called ``propositions as codes for subsingletons'' in the literature.
 
 def tt : bool := abs.{Prop, bool, top} char_top
