@@ -35,11 +35,11 @@ axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) → ∃! f, ∀
 
 /-
  - TODO:
- - * stronger type inference. (propagate constraints among exprs)
- - * automatic insertion of forall_elim using higher-order unification
- - * field access notation (ad hoc overload)
- - * coersion (especially automatic insertion of rep)
- - * type class
+ - [x] stronger type inference. (propagate constraints among exprs)
+ - [x] automatic insertion of forall_elim using higher-order unification
+ - [ ] field access notation (ad hoc overload)
+ - [ ] coersion (especially automatic insertion of rep)
+ - [ ] type class
  -/
 lemma tautology : ∀ φ, φ → φ := take (φ : Prop), assume φ, ⟪φ⟫
 lemma top.intro : ⊤ := tautology
