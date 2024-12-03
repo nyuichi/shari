@@ -767,37 +767,39 @@ const epsilon.{u} : support u → u
  - choice
  -/
 
--- type inhabited_subset u := { s : u → Prop | ∃ x, x ∈ s }
-type const inhabited_subset : Type → Type
-const inhabited_subset.comprehension.{u} : comprehension (u → Prop) (inhabited_subset u)
-def inhabited_subset.char.{u} : (u → Prop) → Prop := λ s, ∃ x, x ∈ s
-axiom inhabited_subset.spec.{u} : inhabited_subset.char.{u} = char inhabited_subset.comprehension.{u}
-lemma inhabited_subset.char.unfold.{u} (s : u → Prop) : inhabited_subset.char s → char inhabited_subset.comprehension s := assume inhabited_subset.char s, eq.conv (eq.congr_fun inhabited_subset.spec) ⟪inhabited_subset.char s⟫
-lemma inhabited_subset.char.fold.{u} (s : u → Prop) : char inhabited_subset.comprehension s → inhabited_subset.char s := assume char inhabited_subset.comprehension s, eq.conv (eq.congr_fun (eq.symm inhabited_subset.spec)) ⟪char inhabited_subset.comprehension s⟫
-def inhabited_subset.rep.{u} : inhabited_subset u → u → Prop := rep inhabited_subset.comprehension.{u}
-lemma inhabited_subset.char.abs.{u} (s : u → Prop) : inhabited_subset.char s → ∃! h, s = inhabited_subset.rep h := assume inhabited_subset.char s, char.abs (inhabited_subset.char.unfold ⟪inhabited_subset.char s⟫)
-lemma inhabited_subset.rep.char.{u} (s : u → Prop) : (∃! h, s = inhabited_subset.rep h) → inhabited_subset.char s := assume ∃! h, s = inhabited_subset.rep h, inhabited_subset.char.fold (rep.char ⟪∃! h, s = inhabited_subset.rep h⟫)
-lemma inhabited_subset.char.rep.{u} (h : inhabited_subset u) : inhabited_subset.char (inhabited_subset.rep h) := inhabited_subset.char.fold char.rep
-lemma inhabited_subset.rep.injective.{u} : injective inhabited_subset.rep.{u} := rep.injective
+-- The type of inhabited subsets.
+-- TODO: better name?
+-- type power1 u := { s : u → Prop | ∃ x, x ∈ s }
+type const power1 : Type → Type
+const power1.comprehension.{u} : comprehension (u → Prop) (power1 u)
+def power1.char.{u} : (u → Prop) → Prop := λ s, ∃ x, x ∈ s
+axiom power1.spec.{u} : power1.char.{u} = char power1.comprehension.{u}
+lemma power1.char.unfold.{u} (s : u → Prop) : power1.char s → char power1.comprehension s := assume power1.char s, eq.conv (eq.congr_fun power1.spec) ⟪power1.char s⟫
+lemma power1.char.fold.{u} (s : u → Prop) : char power1.comprehension s → power1.char s := assume char power1.comprehension s, eq.conv (eq.congr_fun (eq.symm power1.spec)) ⟪char power1.comprehension s⟫
+def power1.rep.{u} : power1 u → u → Prop := rep power1.comprehension.{u}
+lemma power1.char.abs.{u} (s : u → Prop) : power1.char s → ∃! h, s = power1.rep h := assume power1.char s, char.abs (power1.char.unfold ⟪power1.char s⟫)
+lemma power1.rep.char.{u} (s : u → Prop) : (∃! h, s = power1.rep h) → power1.char s := assume ∃! h, s = power1.rep h, power1.char.fold (rep.char ⟪∃! h, s = power1.rep h⟫)
+lemma power1.char.rep.{u} (h : power1 u) : power1.char (power1.rep h) := power1.char.fold char.rep
+lemma power1.rep.injective.{u} : injective power1.rep.{u} := rep.injective
 
 -- The exisistence of the constant and the axiom state that every type u is a choice type.
-const choice.{u} : inhabited_subset u → u
-axiom choice.spec.{u} (x : inhabited_subset u) : choice x ∈ inhabited_subset.rep x
+const choice.{u} : power1 u → u
+axiom choice.spec.{u} (x : power1 u) : choice x ∈ power1.rep x
 
 lemma ac.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ (f : u → v), ∀ x, R x (f x) :=
 assume ∀ x, ∃ y, R x y,
-have ∀ x, ∃! (h : inhabited_subset v), R x = inhabited_subset.rep h :=
+have ∀ x, ∃! (h : power1 v), R x = power1.rep h :=
   take (x : u),
-  @inhabited_subset.char.abs[R x] ⟪∀ x, ∃ y, R x y⟫[x],
-have ∃! (f : u → inhabited_subset v), ∀ x, R x = inhabited_subset.rep (f x) :=
-  auc ⟪∀ x, ∃! (h : inhabited_subset v), R x = inhabited_subset.rep h⟫,
-obtain (f : u → inhabited_subset v), ∀ x, R x = inhabited_subset.rep (f x) :=
-  uexists.exists ⟪∃! (f : u → inhabited_subset v), ∀ x, R x = inhabited_subset.rep (f x)⟫,
+  @power1.char.abs[R x] ⟪∀ x, ∃ y, R x y⟫[x],
+have ∃! (f : u → power1 v), ∀ x, R x = power1.rep (f x) :=
+  auc ⟪∀ x, ∃! (h : power1 v), R x = power1.rep h⟫,
+obtain (f : u → power1 v), ∀ x, R x = power1.rep (f x) :=
+  uexists.exists ⟪∃! (f : u → power1 v), ∀ x, R x = power1.rep (f x)⟫,
 exists.intro
   (take (x : u),
-   have inhabited_subset.rep (f x) (choice (f x)) :=
+   have power1.rep (f x) (choice (f x)) :=
      choice.spec,
-   eq.conv (eq.symm (eq.congr_fun ⟪∀ x, R x = inhabited_subset.rep (f x)⟫[x])) ⟪inhabited_subset.rep (f x) (choice (f x))⟫)
+   eq.conv (eq.symm (eq.congr_fun ⟪∀ x, R x = power1.rep (f x)⟫[x])) ⟪power1.rep (f x) (choice (f x))⟫)
 
 def split.{u, v} (f : u → v) : Prop := ∃ g, ∀ y, y = f (g y)
 
@@ -813,12 +815,12 @@ ac
 lemma em (φ : Prop) : φ ∨ ¬φ :=
 have ∃ b, φ ∨ b = tt := exists.intro (or.right eq.refl),
 have ∃ b, φ ∨ b = ff := exists.intro (or.right eq.refl),
-obtain (h₁ : inhabited_subset bool), (λ b, φ ∨ b = tt) = inhabited_subset.rep h₁ :=
+obtain (h₁ : power1 bool), (λ b, φ ∨ b = tt) = power1.rep h₁ :=
   uexists.exists
-    (inhabited_subset.char.abs ⟪∃ b, φ ∨ b = tt⟫),
-obtain (h₂ : inhabited_subset bool), (λ b, φ ∨ b = ff) = inhabited_subset.rep h₂ :=
+    (power1.char.abs ⟪∃ b, φ ∨ b = tt⟫),
+obtain (h₂ : power1 bool), (λ b, φ ∨ b = ff) = power1.rep h₂ :=
   uexists.exists
-    (inhabited_subset.char.abs ⟪∃ b, φ ∨ b = ff⟫),
+    (power1.char.abs ⟪∃ b, φ ∨ b = ff⟫),
 have φ → choice h₁ = choice h₂ :=
   assume φ,
   have (λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff) := fun_ext (
@@ -827,15 +829,15 @@ have φ → choice h₁ = choice h₂ :=
     have φ ∨ b = ff := or.left ⟪φ⟫,
     prop_ext (iff.intro (assume φ ∨ b = tt, ⟪φ ∨ b = ff⟫) (assume φ ∨ b = ff, ⟪φ ∨ b = tt⟫))
   ),
-  have inhabited_subset.rep h₁ = inhabited_subset.rep h₂ :=
-    eq.trans (eq.symm ⟪(λ b, φ ∨ b = tt) = inhabited_subset.rep h₁⟫) (eq.trans ⟪(λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff)⟫ ⟪(λ b, φ ∨ b = ff) = inhabited_subset.rep h₂⟫),
+  have power1.rep h₁ = power1.rep h₂ :=
+    eq.trans (eq.symm ⟪(λ b, φ ∨ b = tt) = power1.rep h₁⟫) (eq.trans ⟪(λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff)⟫ ⟪(λ b, φ ∨ b = ff) = power1.rep h₂⟫),
   have h₁ = h₂ :=
-    inhabited_subset.rep.injective[_, _] ⟪inhabited_subset.rep h₁ = inhabited_subset.rep h₂⟫,
+    power1.rep.injective[_, _] ⟪power1.rep h₁ = power1.rep h₂⟫,
   eq.congr_arg ⟪h₁ = h₂⟫,
 have φ ∨ choice h₁ = tt :=
-  eq.conv (eq.symm (eq.congr_fun ⟪(λ b, φ ∨ b = tt) = inhabited_subset.rep h₁⟫)) choice.spec,
+  eq.conv (eq.symm (eq.congr_fun ⟪(λ b, φ ∨ b = tt) = power1.rep h₁⟫)) choice.spec,
 have φ ∨ choice h₂ = ff :=
-  eq.conv (eq.symm (eq.congr_fun ⟪(λ b, φ ∨ b = ff) = inhabited_subset.rep h₂⟫)) choice.spec,
+  eq.conv (eq.symm (eq.congr_fun ⟪(λ b, φ ∨ b = ff) = power1.rep h₂⟫)) choice.spec,
 have φ ∨ choice h₁ ≠ choice h₂ :=
   or.elim ⟪φ ∨ choice h₁ = tt⟫
     (assume φ, or.left ⟪φ⟫)
