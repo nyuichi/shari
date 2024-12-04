@@ -253,17 +253,15 @@ lemma eta_expand.{u, v} (f : u → v) : f = λ x, f x :=
 def injective.{u, v} (f : u → v) : Prop := ∀ x y, f x = f y → x = y
 def surjective.{u, v} (f : u → v) : Prop := ∀ y, ∃ x, y = f x
 
-lemma lawvere_fixpoint.{u, v} : (∃ (e : u → u → v), surjective e) → ∀ (f : v → v), ∃ y, y = f y :=
+lemma lawvere_fixpoint.{u, v} (f : v → v) : (∃ (e : u → u → v), surjective e) → ∃ y, y = f y :=
 assume ∃ (e : u → u → v), surjective e,
-take (f : v → v),
 obtain (e : u → u → v), surjective e := ⟪∃ (e : u → u → v), surjective e⟫,
 obtain (x : u), (λ x, f (e x x)) = e x := ⟪surjective e⟫[λ x, f (e x x)],
 have f (e x x) = e x x := eq.congr_fun ⟪(λ x, f (e x x)) = e x⟫,
 exists.intro (eq.symm ⟪f (e x x) = e x x⟫)
 
-lemma injective.unique.{u, v} (f : u → v) : injective f → ∀ y, unique (λ x, y = f x) :=
+lemma injective.unique.{u, v} (f : u → v) (y : v) : injective f → unique (λ x, y = f x) :=
 assume injective f,
-take (y : v),
 take (x₁ : u),
 take (x₂ : u),
 assume y = f x₁,
@@ -300,16 +298,18 @@ def im.{u, v} (f : u → v) (s : set u) : set v := { y | ∃ x, x ∈ s ∧ y = 
 
 lemma cantor.{u} : ¬(∃ (e : u → set u), surjective e) :=
 mt lawvere_fixpoint (
-  assume ∀ (f : Prop → Prop), ∃ y, y = f y,
-  obtain (y : Prop), y = ¬y := ⟪∀ (f : Prop → Prop), ∃ y, y = f y⟫[not],
-  contradiction ⟪y = ¬y⟫ not.fixed_point_free)
+  assume ∃ φ, φ = ¬φ,
+  obtain (φ : Prop), φ = ¬φ := ⟪∃ φ, φ = ¬φ⟫,
+  contradiction ⟪φ = ¬φ⟫ not.fixed_point_free)
+
+def preimage.{u, v} (f : u → v) (t : set v) : set u := { x | t (f x) }
 
 /-
 /-
  - gadgets for type class
  -/
 
-def is_prop.{u} := ∀ (x₁ x₂ : u), x₁ = x₂
+def is_prop.{u} : Prop := ∀ (x₁ x₂ : u), x₁ = x₂
 
 type const is_class : Type → Type
 axiom is_class.is_prop.{u} (h : is_class u) : is_prop.{u}
@@ -374,40 +374,26 @@ def hoge.bar.{u} : baz.{u} := ...
 
 -- compiles to
 def hoge.foo.{u} : foo (hoge u) := { bar := hoge.bar.{u} }
-
-class comprehension base u :=
-(char : base → Prop)
-
-namespace comprehension {
-  const rep.{u} [comprehension u] : u → base u
-  axiom rep.spec.{u} [comprehension u] : injective rep ∧ (∀ y, (∃! x, y = rep x) ↔ char y)
-}
 -/
 
 -- e.g. type def bool := { x : Prop | x = ⊤ ∨ x = ⊥ } yields comprehension.{Prop, bool}
 type const comprehension : Type → Type → Type
+
 const char.{base, u} : comprehension base u → base → Prop
+
 const rep.{base, u} : comprehension base u → u → base
+
+-- NB: `char (rep x) = ⊤` is stronger thant `char (rep x)` (without prop_ext). Should we use that?
+axiom rep.char.{base, u} (d : comprehension base u) (x : u) : char d (rep d x)
+
 -- this alone is insufficient as this only asserts the (unique) existence but does not give the concrete term.
-axiom rep.spec.{base, u} (d : comprehension base u) : injective (rep d) ∧ (∀ y, char d y ↔ ∃! x, y = rep d x)
+axiom char.abs.{base, u} (d : comprehension base u) (y : base) : char d y → ∃! x, y = rep d x
 
 lemma rep.injective.{base, u} (d : comprehension base u) : injective (rep d) :=
-and.left rep.spec
+take (x₁ : u),
+take (x₂ : u),
+(uexists.unique (char.abs rep.char))[_, _] eq.refl
 
-lemma rep.unique.{base, u} (d : comprehension base u) (y : base) : unique (λ x, y = rep d x) :=
-(injective.unique rep.injective)[y]
-
-lemma rep.iff_char.{base, u} (d : comprehension base u) (y : base) : char d y ↔ ∃! x, y = rep d x :=
-(and.right rep.spec)[y]
-
-lemma rep.char.{base, u} (d : comprehension base u) (y : base) : (∃! x, y = rep d x) → char d y :=
-iff.left rep.iff_char
-
-lemma char.abs.{base, u} (d : comprehension base u) (y : base) : char d y → ∃! x, y = rep d x :=
-iff.right rep.iff_char
-
-lemma char.rep.{base, u} (d : comprehension base u) (x : u) : char d (rep d x) :=
-rep.char (uexists.intro (exists.intro eq.refl) rep.unique)
 
 /-
 -- How to enable to obtain the mediating arrow.
@@ -522,8 +508,7 @@ lemma bool.char.unfold (φ : Prop) : bool.char φ → char bool.comprehension φ
 lemma bool.char.fold (φ : Prop) : char bool.comprehension φ → bool.char φ := assume char bool.comprehension φ, eq.conv (eq.congr_fun (eq.symm bool.spec)) ⟪char bool.comprehension φ⟫
 def bool.rep : bool → Prop := rep bool.comprehension
 lemma bool.char.abs (φ : Prop) : bool.char φ → ∃! x, φ = bool.rep x := assume bool.char φ, char.abs (bool.char.unfold ⟪bool.char φ⟫)
-lemma bool.rep.char (φ : Prop) : (∃! x, φ = bool.rep x) → bool.char φ := assume ∃! x, φ = bool.rep x, bool.char.fold (rep.char ⟪∃! x, φ = bool.rep x⟫)
-lemma bool.char.rep (x : bool) : bool.char (bool.rep x) := bool.char.fold char.rep
+lemma bool.rep.char (x : bool) : bool.char (bool.rep x) := bool.char.fold rep.char
 lemma bool.rep.injective : injective bool.rep := rep.injective
 
 lemma bool.tt_uexists : ∃! (tt : bool), ⊤ = bool.rep tt :=
@@ -542,7 +527,7 @@ axiom ff.spec : ⊥ = bool.rep ff
 lemma bool.ind (b : bool) (P : bool → Prop) : P tt → P ff → P b :=
 assume P tt,
 assume P ff,
-or.elim bool.char.rep
+or.elim bool.rep.char
   (assume bool.rep b = ⊤,
     have bool.rep b = bool.rep tt := eq.trans ⟪bool.rep b = ⊤⟫ tt.spec,
     have b = tt := bool.rep.injective[b, tt] ⟪bool.rep b = bool.rep tt⟫,
@@ -610,8 +595,7 @@ lemma unit.char.unfold (φ : Prop) : unit.char φ → char unit.comprehension φ
 lemma unit.char.fold (φ : Prop) : char unit.comprehension φ → unit.char φ := assume char unit.comprehension φ, eq.conv (eq.congr_fun (eq.symm unit.spec)) ⟪char unit.comprehension φ⟫
 def unit.rep : unit → Prop := rep unit.comprehension
 lemma unit.char.abs (φ : Prop) : unit.char φ → ∃! x, φ = unit.rep x := assume unit.char φ, char.abs (unit.char.unfold ⟪unit.char φ⟫)
-lemma unit.rep.char (φ : Prop) : (∃! x, φ = unit.rep x) → unit.char φ := assume ∃! x, φ = unit.rep x, unit.char.fold (rep.char ⟪∃! x, φ = unit.rep x⟫)
-lemma unit.char.rep (x : unit) : unit.char (unit.rep x) := unit.char.fold char.rep
+lemma unit.rep.char (x : unit) : unit.char (unit.rep x) := unit.char.fold rep.char
 lemma unit.rep.injective : injective unit.rep := rep.injective
 
 lemma unit.star_uexists : ∃! (star : unit), ⊤ = unit.rep star :=
@@ -622,7 +606,7 @@ const star : unit
 axiom star.spec : ⊤ = unit.rep star
 
 lemma unit.unique (x y : unit) : x = y :=
-have unit.rep x = unit.rep y := eq.trans (eq.symm unit.char.rep) unit.char.rep,
+have unit.rep x = unit.rep y := eq.trans (eq.symm unit.rep.char) unit.rep.char,
 unit.rep.injective[x, y] ⟪unit.rep x = unit.rep y⟫
 
 lemma unit.eta_expand (x : unit) : x = star :=
@@ -659,18 +643,14 @@ lemma pair.char.abs.{u, v} (e : u → v → Prop) : pair.char e → ∃! p, e = 
   assume pair.char e,
     char.abs (pair.char.unfold ⟪pair.char e⟫)
 
-lemma pair.rep.char.{u, v} (e : u → v → Prop) : (∃! p, e = pair.rep p) → pair.char e :=
-  assume ∃! p, e = pair.rep p,
-    pair.char.fold (rep.char ⟪∃! p, e = pair.rep p⟫)
-
-lemma pair.char.rep.{u, v} (p : pair u v) : pair.char (pair.rep p) :=
-  pair.char.fold char.rep
+lemma pair.rep.char.{u, v} (p : pair u v) : pair.char (pair.rep p) :=
+  pair.char.fold rep.char
 
 lemma pair.rep.injective.{u, v} : injective pair.rep.{u, v} :=
   rep.injective
 
 lemma fst_uexists.{u, v} (p : pair u v) : ∃! a, ∃! b, pair.rep p a b :=
-  obtain (a : u), ∃ b, pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁ := pair.char.rep,
+  obtain (a : u), ∃ b, pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁ := pair.rep.char,
   obtain (b : v), pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁ := ⟪∃ b, pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁⟫,
   have pair.rep p a b :=
     and.left ⟪pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁⟫,
@@ -738,7 +718,7 @@ lemma pair.beta.{u, v} (x : u) (y : v) : x = fst (pair.mk x y) ∧ y = snd (pair
 lemma pair.proj.unique.{u, v} (p : pair u v) (x₁ x₂ : u) (y₁ y₂ : v) : pair.rep p x₁ y₁ → pair.rep p x₂ y₂ → x₁ = x₂ ∧ y₁ = y₂ :=
 assume pair.rep p x₁ y₁,
 assume pair.rep p x₂ y₂,
-have ∃ a b, pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁ := pair.char.rep,
+have ∃ a b, pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁ := pair.rep.char,
 obtain (a : u), ∃ b, pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁ := ⟪∃ a b, pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁⟫,
 obtain (b : v), pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁ := ⟪∃ b, pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁⟫,
 have ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁ := and.right ⟪pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁⟫,
@@ -794,8 +774,7 @@ lemma support.char.unfold.{u} (x : unit) : support.char.{u} x → char support.c
 lemma support.char.fold.{u} (x : unit) : char support.comprehension.{u} x → support.char.{u} x := assume char support.comprehension x, eq.conv (eq.congr_fun (eq.symm support.spec)) ⟪char support.comprehension x⟫
 def support.rep.{u} : support u → unit := rep support.comprehension
 lemma support.char.abs.{u} (x : unit) : support.char.{u} x → ∃! h, x = support.rep.{u} h := assume support.char x, char.abs (support.char.unfold ⟪support.char x⟫)
-lemma support.rep.char.{u} (x : unit) : (∃! h, x = support.rep.{u} h) → support.char.{u} x := assume ∃! h, x = support.rep h, support.char.fold (rep.char ⟪∃! h, x = support.rep h⟫)
-lemma support.char.rep.{u} (h : support u) : support.char.{u} (support.rep h) := support.char.fold char.rep
+lemma support.rep.char.{u} (h : support u) : support.char.{u} (support.rep h) := support.char.fold rep.char
 lemma support.rep.injective.{u} : injective support.rep.{u} := rep.injective
 
 lemma support.char.unfold_.{u} : support.char.{u} star → char support.comprehension.{u} star := assume support.char star, eq.conv (eq.congr_fun support.spec) ⟪support.char star⟫
@@ -809,13 +788,7 @@ lemma support.char.help.{u} : (∃! (h : support u), ⊤) ↔ (∃! (h : support
       (assume star = support.rep h,
         top.intro))
 lemma support.char.abs_.{u} : support.char.{u} star → ∃! (h : support u), ⊤ := assume support.char star, iff.left support.char.help (support.char.abs ⟪support.char star⟫)
-lemma support.rep.char_.{u} : (∃! (h : support u), ⊤) → support.char.{u} star :=
-assume ∃! (h : support u), ⊤,
-have ∃! (h : support u), star = support.rep h :=
-  iff.right support.char.help ⟪∃! (h : support u), ⊤⟫,
-support.rep.char ⟪∃! (h : support u), star = support.rep h⟫
-
-lemma support.char.rep_.{u} (h : support u) : support.char.{u} star := @support.char.rep[h]
+lemma support.rep.char_.{u} (h : support u) : support.char.{u} star := @support.rep.char[h]
 
 lemma support.mk_uexists.{u} (x : u) : ∃! (mk : support u), ⊤ :=
 have ∃ (x : u), ⊤ :=
@@ -835,7 +808,7 @@ uexists.intro
   (take (h₁ : support u), take (h₂ : support u), assume P h₁, assume P h₂, support.unique)
 
 lemma support.join_uexists.{u} (h : support (support u)) : ∃! (h : support u), ⊤ :=
-@support.exists_imp_uexists[λ (h : support u), ⊤] @support.char.rep_[h]
+@support.exists_imp_uexists[λ (h : support u), ⊤] @support.rep.char_[h]
 
 -- def (support.join.{u} (h : support (support u)) : support u), ⊤ := support.join_uexists.{u}[h]
 const support.join.{u} : support (support u) → support u
@@ -871,8 +844,7 @@ lemma power1.char.unfold.{u} (s : u → Prop) : power1.char s → char power1.co
 lemma power1.char.fold.{u} (s : u → Prop) : char power1.comprehension s → power1.char s := assume char power1.comprehension s, eq.conv (eq.congr_fun (eq.symm power1.spec)) ⟪char power1.comprehension s⟫
 def power1.rep.{u} : power1 u → u → Prop := rep power1.comprehension.{u}
 lemma power1.char.abs.{u} (s : u → Prop) : power1.char s → ∃! h, s = power1.rep h := assume power1.char s, char.abs (power1.char.unfold ⟪power1.char s⟫)
-lemma power1.rep.char.{u} (s : u → Prop) : (∃! h, s = power1.rep h) → power1.char s := assume ∃! h, s = power1.rep h, power1.char.fold (rep.char ⟪∃! h, s = power1.rep h⟫)
-lemma power1.char.rep.{u} (h : power1 u) : power1.char (power1.rep h) := power1.char.fold char.rep
+lemma power1.rep.char.{u} (h : power1 u) : power1.char (power1.rep h) := power1.char.fold rep.char
 lemma power1.rep.injective.{u} : injective power1.rep.{u} := rep.injective
 
 -- The exisistence of the constant and the axiom state that every type u is a choice type.
