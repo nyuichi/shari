@@ -143,6 +143,11 @@ lemma top_ne_bot : ⊤ ≠ ⊥ :=
 assume ⊤ = ⊥,
 eq.conv ⟪⊤ = ⊥⟫ top.intro
 
+-- law of non-contradiction
+lemma nc (φ : Prop) : ¬(φ ∧ ¬φ) :=
+assume φ ∧ ¬φ,
+contradiction (and.left ⟪φ ∧ ¬φ⟫) (and.right ⟪φ ∧ ¬φ⟫)
+
 lemma eq.ap.{u, v} (m₁ m₂ : u) (f : u → v) : m₁ = m₂ → f m₁ = f m₂ :=
 assume m₁ = m₂,
 eq.transport ⟪m₁ = m₂⟫ @eq.refl[f m₁]
@@ -376,12 +381,22 @@ class singleton u extends comprehension u :=
 --   ⊢ el.prop_trunc : ∀ (h₁ h₂ : el[p]), h₁ = h₂
 --
 
+type def abs.witness.{base, u, v} := { _ : unit | ∀ (c : comprehension base u) (s : singleton base v), char c (pt s) }
+
 -- to avoid dependent types, we seemingly must implement type classes with monomorphization.
-def abs.{base, u, v} [comprehension base u] [singleton base v] : el[char.{base, u} pt.{base, v}] → u
+def abs.{base, u, v} : witness.{base, u, v} → u
 
 -- This also creates a term `foo.{base, u, v}` of type `el[char.{u} pt.{base, v}]`
 lemma foo.{base, u, v} [comprehension base u] [singleton base v] : char.{base, u} pt.{base, v} :=
 ...
+
+lemma witness.mk.{base, u, v} (c : comprehension base u) (s : singleton base v) : char d (pt s) → (∀ c s, char c (pt s)) :=
+assume char d (pt s),
+take c₁,
+take s₁,
+have c = c₁,
+have s = s₁,
+eq.transport ⟪c = c₁⟫ (eq.transport ⟪s = s₁⟫ ⟪char d (pt s)⟫)
 
 -- setup
 --
