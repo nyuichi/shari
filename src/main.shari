@@ -305,32 +305,108 @@ mt lawvere_fixpoint (
   contradiction ⟪y = ¬y⟫ not.fixed_point_free)
 
 /-
+/-
+ - gadgets for type class
+ -/
+
+def is_prop.{u} := ∀ (x₁ x₂ : u), x₁ = x₂
+
+type const is_class : Type → Type
+axiom is_class.is_prop.{u} (h : is_class u) : is_prop.{u}
+
+/-
+ - propositions as subsingletons
+ -/
+
+type const is_el : Type → Type
+const is_el.is_class.{u} : is_class.{is_el u}
+const is_el.char.{u} : is_el u → Prop
+axiom is_el.is_prop.{u} (h : is_el u) : is_prop.{u}
+
+-- type def foo u := el φ
+-- 
+-- introduces the following constants and axioms
+--
+-- const foo.is_el.{u} : is_el (foo u)
+-- def foo.is_el.char.{u} : Prop := φ
+-- axiom foo.is_el.spec.{u} : is_el.char.{foo u} foo.is_el.{u} = foo.is_el.char.{u}
+
+/-
+ - singleton types
+ -/
+
+def is_central.{u} (x : u) := ∀ y, y = x
+
+type const is_singleton : Type → Type → Type
+const is_singleton.is_class.{base, u} : is_class.{is_singleton base u}
+const is_singleton.pt.{base, u} : is_singleton base u → u
+axiom is_singleton.pt.is_central.{base, u} (d : is_singleton base u) : is_central (pt d)
+const is_singleton.rep.{base, u} : is_singleton base u → u → base
+-/
+
+/-
  - comprehension types
  -/
 
+-- Comprehension type is the only type in our language that allows users to
+-- define a type dependent on a predicate.
+-- To enable a constructing term of a comprehention type without assumption,
+-- we will make use of the el type which is a special case of a comprehention type.
+-- To this end, we need bootstrapping.
+
+/-
+-- In bootstrapping, we make use of the following (virtual) equivalence of types:
+-- (forall a. singleton A a → a × el (P pt.{A, a})) ~~ { x : A | P x }
+
+-- setup
+
+-- a class declaration
+type def foo u := { bar : baz u }  -- LHS can be any type. Records are the most useful, they are only available after bootstrapping.
+class is_foo u := foo u
+
+-- compiles to
+type const is_foo : Type → Type
+axiom foo.is_prop.{u} : is_prop.{foo u} -- instances are unique.
+
+-- and an instance declaration
+instance hoge.foo.{u} : foo (hoge u) := { bar := hoge.bar.{u} }
+def hoge.bar.{u} : baz.{u} := ...
+
+-- compiles to
+def hoge.foo.{u} : foo (hoge u) := { bar := hoge.bar.{u} }
+
+class comprehension base u :=
+(char : base → Prop)
+
+namespace comprehension {
+  const rep.{u} [comprehension u] : u → base u
+  axiom rep.spec.{u} [comprehension u] : injective rep ∧ (∀ y, (∃! x, y = rep x) ↔ char y)
+}
+-/
+
 -- e.g. type def bool := { x : Prop | x = ⊤ ∨ x = ⊥ } yields comprehension.{Prop, bool}
 type const comprehension : Type → Type → Type
-const char.{v, u} : comprehension v u → v → Prop
-const rep.{v, u} : comprehension v u → u → v
--- this alone is insufficient as this only asserts existence but does not give the concrete term.
-axiom rep.spec.{v, u} (d : comprehension v u) : injective (rep d) ∧ (∀ y, char d y ↔ ∃! x, y = rep d x)
+const char.{base, u} : comprehension base u → base → Prop
+const rep.{base, u} : comprehension base u → u → base
+-- this alone is insufficient as this only asserts the (unique) existence but does not give the concrete term.
+axiom rep.spec.{base, u} (d : comprehension base u) : injective (rep d) ∧ (∀ y, char d y ↔ ∃! x, y = rep d x)
 
-lemma rep.injective.{v, u} (d : comprehension v u) : injective (rep d) :=
+lemma rep.injective.{base, u} (d : comprehension base u) : injective (rep d) :=
 and.left rep.spec
 
-lemma rep.unique.{v, u} (d : comprehension v u) (y : v) : unique (λ x, y = rep d x) :=
+lemma rep.unique.{base, u} (d : comprehension base u) (y : base) : unique (λ x, y = rep d x) :=
 (injective.unique rep.injective)[y]
 
-lemma rep.iff_char.{v, u} (d : comprehension v u) (y : v) : char d y ↔ ∃! x, y = rep d x :=
+lemma rep.iff_char.{base, u} (d : comprehension base u) (y : base) : char d y ↔ ∃! x, y = rep d x :=
 (and.right rep.spec)[y]
 
-lemma rep.char.{v, u} (d : comprehension v u) (y : v) : (∃! x, y = rep d x) → char d y :=
+lemma rep.char.{base, u} (d : comprehension base u) (y : base) : (∃! x, y = rep d x) → char d y :=
 iff.left rep.iff_char
 
-lemma char.abs.{v, u} (d : comprehension v u) (y : v) : char d y → ∃! x, y = rep d x :=
+lemma char.abs.{base, u} (d : comprehension base u) (y : base) : char d y → ∃! x, y = rep d x :=
 iff.right rep.iff_char
 
-lemma char.rep.{v, u} (d : comprehension v u) (x : u) : char d (rep d x) :=
+lemma char.rep.{base, u} (d : comprehension base u) (x : u) : char d (rep d x) :=
 rep.char (uexists.intro (exists.intro eq.refl) rep.unique)
 
 /-
@@ -381,12 +457,14 @@ class singleton u extends comprehension u :=
 --   ⊢ el.prop_trunc : ∀ (h₁ h₂ : el[p]), h₁ = h₂
 --
 
-type def abs.witness.{base, u, v} := { _ : unit | ∀ (c : comprehension base u) (s : singleton base v), char c (pt s) }
+type def abs.witness base u v := { _ : unit | ∀ (c : comprehension base u) (s : singleton base v), char c (pt s) }
 
--- to avoid dependent types, we seemingly must implement type classes with monomorphization.
-def abs.{base, u, v} : witness.{base, u, v} → u
+def abs.{base, u, v} : witness base u v → u
+
+axiom abs_rep.{base, u, v} [comprehension base u] [singleton base v] (h : witness base u v) : rep (abs h) = pt
 
 -- This also creates a term `foo.{base, u, v}` of type `el[char.{u} pt.{base, v}]`
+@[obtain(abs.witness base u v)]
 lemma foo.{base, u, v} [comprehension base u] [singleton base v] : char.{base, u} pt.{base, v} :=
 ...
 
@@ -905,13 +983,4 @@ def proof.target : proof → Prop := proof.rep
 type def proof (φ : Prop) := { h : unit | φ }
 lemma to_proof (φ : Prop) : φ → ∃! (h : proof φ), ⊤
 lemma from_proof (φ : Prop) (h : proof φ) : φ
-
-class comprehension u :=
-  (type base : Type)
-  (char : base → Prop)
-
-namespace comprehension {
-  const rep.{u} [comprehension u] : u → base u
-  axiom rep.spec.{u} [comprehension u] : injective rep ∧ (∀ y, (∃! x, y = rep x) ↔ char y)
-}
 -/
