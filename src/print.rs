@@ -438,9 +438,21 @@ impl<'a, T> Pretty<'a, T> {
     }
 }
 
+impl Display for Pretty<'_, &Type> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        Printer::new(self.op_table).fmt_type(f, self.data)
+    }
+}
+
 impl Display for Pretty<'_, Type> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         Printer::new(self.op_table).fmt_type(f, &self.data)
+    }
+}
+
+impl Display for Pretty<'_, &Term> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        Printer::new(self.op_table).fmt_term(self.data, f)
     }
 }
 

@@ -1,5 +1,7 @@
+use kernel::tt::Name;
 use lex::Lex;
 use parse::{ParseError, Parser};
+use print::Pretty;
 
 mod cmd;
 mod expr;
@@ -36,6 +38,62 @@ fn main() -> anyhow::Result<()> {
             }
             cmd::Cmd::Axiom(cmd) => {
                 println!("postulated {}", cmd.name);
+            }
+            cmd::Cmd::Inductive(cmd) => {
+                println!("inductive {}", cmd.name);
+                for ctor in &cmd.ctors {
+                    let ctor_name = Name::intern(&format!("{}.{}", cmd.name, ctor.name)).unwrap();
+                    let (local_types, ty) = eval.proof_env.tt_env.consts.get(&ctor_name).unwrap();
+                    print!("  - const {}.{{", ctor_name);
+                    let mut first = true;
+                    for local_type in local_types {
+                        if !first {
+                            print!(", ");
+                        }
+                        print!("{}", local_type);
+                        first = false;
+                    }
+                    println!("}} : {}", Pretty::new(&eval.pp, ty));
+                }
+                let ind_name = Name::intern(&format!("{}.ind", cmd.name)).unwrap();
+                let (local_types, m) = eval.proof_env.facts.get(&ind_name).unwrap();
+                print!("  - axiom {}.{{", ind_name);
+                let mut first = true;
+                for local_type in local_types {
+                    if !first {
+                        print!(", ");
+                    }
+                    print!("{}", local_type);
+                    first = false;
+                }
+                println!("}} : {}", Pretty::new(&eval.pp, m));
+
+                let rec_name = Name::intern(&format!("{}.rec", cmd.name)).unwrap();
+                let (local_types, ty) = eval.proof_env.tt_env.consts.get(&rec_name).unwrap();
+                print!("  - const {}.{{", rec_name);
+                let mut first = true;
+                for local_type in local_types {
+                    if !first {
+                        print!(", ");
+                    }
+                    print!("{}", local_type);
+                    first = false;
+                }
+                println!("}} : {}", Pretty::new(&eval.pp, ty));
+
+                let rec_spec_name = Name::intern(&format!("{}.rec.spec", cmd.name)).unwrap();
+                if let Some((local_types, m)) = eval.proof_env.facts.get(&rec_spec_name) {
+                    print!("  - axiom {}.{{", rec_spec_name);
+                    let mut first = true;
+                    for local_type in local_types {
+                        if !first {
+                            print!(", ");
+                        }
+                        print!("{}", local_type);
+                        first = false;
+                    }
+                    println!("}} : {}", Pretty::new(&eval.pp, m));
+                }
             }
             _ => {}
         }
@@ -229,5 +287,18 @@ fn main() -> anyhow::Result<()> {
     //   let e x x = f (e x x) := ⟪∃ y, y = f y⟫.construction (e x x),
     //   ⟪(e x x) = f (e x x)⟫.symmetry := ⟪f (e x x) = e x x⟫
     // }
+
+    // lemma not.no_fixpoint (φ : Prop) : φ ≠ ¬φ :=
+    // assume φ = ¬φ, show ⊥, {
+    //   let φ, ¬φ := ⟪⊥⟫.contradiction φ,
+    //   let (¬φ) = φ, ¬φ := ⟪φ⟫.apply eq.conv[¬φ, φ],    -- yields ¬φ, which is automatically contracted with the one that comes from the contradiction tactic.
+    //   ⟪(¬φ) = φ⟫.symmetry := ⟪φ = ¬φ⟫,
+    //   ⟪¬φ⟫ := assume φ, show ⊥, {
+    //      let φ, ¬φ := ⟪⊥⟫.contradiction φ,
+    //      let φ := ⟪¬φ⟫.apply (eq.conv[φ, ¬φ] ⟪φ = ¬φ⟫),   -- φ is automatically contracted.
+    //      ⟪φ⟫ := ⟪φ⟫
+    //   }
+    // }
+
     Ok(())
 }

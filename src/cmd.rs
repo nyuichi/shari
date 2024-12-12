@@ -4,7 +4,10 @@ use crate::{
     expr::{self, mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_take, Expr},
     kernel::{
         proof::{self, mk_type_prop},
-        tt::{mk_app, mk_const, mk_type_arrow, Def, Kind, LocalEnv, Name, Term, Type},
+        tt::{
+            mk_app, mk_const, mk_local, mk_type_arrow, mk_type_const, mk_type_local, Def, Kind,
+            LocalEnv, Name, Term, Type,
+        },
     },
     parse::{FactInfo, Nasmespace, TokenTable},
     print::OpTable,
@@ -40,7 +43,7 @@ pub enum Cmd {
     Const(CmdConst),
     TypeConst(CmdTypeConst),
     TypeVariable(CmdTypeVariable),
-    // MetaDef(CmdMetaDef),
+    Inductive(CmdInductive),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -120,6 +123,19 @@ pub struct CmdTypeConst {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CmdTypeVariable {
     pub variables: Vec<Name>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CmdInductive {
+    pub name: Name,
+    pub local_types: Vec<Name>,
+    pub ctors: Vec<Constructor>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Constructor {
+    pub name: Name,
+    pub ty: Type,
 }
 
 #[derive(Debug, Clone)]
@@ -482,6 +498,354 @@ impl Eval {
                     }
                 }
                 self.tv.extend(variables);
+                Ok(())
+            }
+            Cmd::Inductive(inner) => {
+                let CmdInductive {
+                    name,
+                    local_types,
+                    ctors,
+                } = inner;
+                for i in 0..local_types.len() {
+                    for j in i + 1..local_types.len() {
+                        if local_types[i] == local_types[j] {
+                            bail!("duplicate type variables");
+                        }
+                    }
+                }
+                let mut local_env = LocalEnv {
+                    local_types: local_types.clone(),
+                    locals: vec![],
+                    holes: vec![],
+                };
+                local_env.local_types.insert(0, name);
+                for i in 0..ctors.len() {
+                    for j in i + 1..ctors.len() {
+                        if ctors[i].name == ctors[j].name {
+                            bail!("duplicate constructors");
+                        }
+                    }
+                }
+                for ctor in &ctors {
+                    self.proof_env
+                        .tt_env
+                        .check_kind(&local_env, &ctor.ty, &Kind::base())?;
+                    let mut t = ctor.ty.clone();
+                    let args = t.undischarge();
+                    if t != mk_type_local(name) {
+                        bail!("invalid constructor: {t}");
+                    }
+                    for mut a in args {
+                        let xs = a.undischarge();
+                        for x in &xs {
+                            if x.contains_local(&name) {
+                                bail!("constructor violates strict positivity");
+                            }
+                        }
+                        if a != mk_type_local(name) && a.contains_local(&name) {
+                            bail!("nested inductive type is unsupported");
+                        }
+                    }
+                }
+                if self.proof_env.tt_env.type_consts.contains_key(&name) {
+                    bail!("already defined");
+                }
+                // Foo u v
+                let target_ty = {
+                    let mut c = mk_type_const(name);
+                    c.apply(local_types.iter().map(|t| mk_type_local(*t)));
+                    c
+                };
+                // Foo ↦ Foo u v
+                let subst = [(name, &target_ty)];
+                let mut cs = vec![];
+                for ctor in &ctors {
+                    let name = Name::intern(&format!("{}.{}", name, ctor.name)).unwrap();
+                    if self.proof_env.tt_env.consts.contains_key(&name) {
+                        bail!("already defined");
+                    }
+                    let mut ty = ctor.ty.clone();
+                    ty.subst(&subst);
+                    cs.push((name, ty));
+                }
+                self.ns.type_consts.insert(name);
+                self.proof_env
+                    .tt_env
+                    .type_consts
+                    .insert(name, Kind(local_types.len()));
+                for (name, ty) in cs {
+                    self.ns.consts.insert(name, local_types.len());
+                    self.proof_env
+                        .tt_env
+                        .consts
+                        .insert(name, (local_types.clone(), ty));
+                }
+
+                // generate the induction principle
+                //
+                // For the following definition of the type of ordinal numbers,
+                //
+                //   inductive ord : Type
+                //   | limit : (ℕ → ord) → ord
+                //   | succ : ord → ord
+                //   | zero : ord
+                //
+                // the following induction principle is defined:
+                //
+                //   ind : ∀ ω P,
+                //           (∀ f, (∀ n, P (f n)) → P (limit f)) →
+                //           (∀ ω, P ω → P (succ ω)) →
+                //           P zero →
+                //           P ω
+                let pred = Name::fresh();
+                let mut cases = vec![];
+                for ctor in &ctors {
+                    let mut args = vec![];
+                    for arg in ctor.ty.clone().undischarge() {
+                        args.push((Name::fresh(), arg));
+                    }
+                    // induction hypotheses
+                    let mut ih_list = vec![];
+                    for (arg_name, arg_ty) in &args {
+                        let mut t = arg_ty.clone();
+                        let mut xs = vec![];
+                        for x in t.undischarge() {
+                            xs.push((Name::fresh(), x));
+                        }
+                        if t != mk_type_local(name) {
+                            continue;
+                        }
+                        // ∀ xs, P (a xs)
+                        let mut a = mk_local(*arg_name);
+                        a.apply(xs.iter().map(|(name, _)| mk_local(*name)));
+                        let mut h = mk_local(pred);
+                        h.apply([a]);
+                        for (name, ty) in xs.into_iter().rev() {
+                            h.abs(&[(name, name, ty.clone())], true);
+                            let mut m = mk_const(Name::intern("forall").unwrap(), vec![ty]);
+                            m.apply([h]);
+                            h = m;
+                        }
+                        ih_list.push(h);
+                    }
+                    // ∀ args, {IH} → P (C args)
+                    let ctor_name = Name::intern(&format!("{}.{}", name, ctor.name)).unwrap();
+                    let mut a = mk_const(
+                        ctor_name,
+                        local_types.iter().map(|t| mk_type_local(*t)).collect(),
+                    );
+                    a.apply(args.iter().map(|(name, _)| mk_local(*name)));
+                    let mut target = mk_local(pred);
+                    target.apply([a]);
+                    for ih in ih_list.into_iter().rev() {
+                        let mut m = mk_const(Name::intern("imp").unwrap(), vec![]);
+                        m.apply([ih, target]);
+                        target = m;
+                    }
+                    for (name, mut ty) in args.into_iter().rev() {
+                        ty.subst(&subst);
+                        target.abs(&[(name, name, ty.clone())], true);
+                        let mut m = mk_const(Name::intern("forall").unwrap(), vec![ty]);
+                        m.apply([target]);
+                        target = m;
+                    }
+                    cases.push(target);
+                }
+                // ∀ x P, {cases} → P x
+                let x = Name::fresh();
+                let mut target = mk_local(pred);
+                target.apply([mk_local(x)]);
+                for case in cases.into_iter().rev() {
+                    let mut m = mk_const(Name::intern("imp").unwrap(), vec![]);
+                    m.apply([case, target]);
+                    target = m;
+                }
+                for (name, nickname, ty) in [
+                    (
+                        pred,
+                        Name::intern("P").unwrap(),
+                        mk_type_arrow(target_ty.clone(), mk_type_prop()),
+                    ),
+                    (x, Name::intern("x").unwrap(), target_ty.clone()),
+                ] {
+                    target.abs(&[(name, nickname, ty.clone())], true);
+                    let mut m = mk_const(Name::intern("forall").unwrap(), vec![ty]);
+                    m.apply([target]);
+                    target = m;
+                }
+                let ind_name = Name::intern(&format!("{}.ind", name)).unwrap();
+                if self.proof_env.facts.contains_key(&ind_name) {
+                    bail!("already defined");
+                }
+                self.ns.facts.insert(
+                    ind_name,
+                    FactInfo {
+                        type_arity: local_types.len(),
+                        num_params: 2,
+                    },
+                );
+                self.proof_env
+                    .facts
+                    .insert(ind_name, (local_types.clone(), target));
+
+                // generate the recursion principle
+                //
+                // For ord, the following recursor is defined:
+                //
+                //   rec.{u} : ord → ((ℕ → ord) → (ℕ → u) → u) → (ord → u → u) → u → u
+                //
+                // together with the following rules:
+                //
+                //   rec (limit f) ≡ λ k₁ k₂ k₃, k₁ f (λ x, rec (f x) k₁ k₂ k₃)
+                //   rec (succ n) ≡ λ k₁ k₂ k₃, k₂ n (rec n k₁ k₂ k₃)
+                //   rec zero ≡ λ k₁ k₂ k₃, k₃
+                //
+                let rec_ty_var = Name::fresh();
+                let mut rec_local_types = local_types.clone();
+                rec_local_types.push(rec_ty_var);
+                let rec_name = Name::intern(&format!("{}.rec", name)).unwrap();
+                let mut ctor_params_list = vec![];
+                for ctor in &ctors {
+                    let mut ctor_params = vec![];
+                    let ctor_param_tys = ctor.ty.clone().undischarge();
+                    for mut ctor_param_ty in ctor_param_tys {
+                        ctor_param_ty.subst(&subst);
+                        ctor_params.push((Name::fresh(), ctor_param_ty));
+                    }
+                    ctor_params_list.push(ctor_params);
+                }
+                let mut cont_params = vec![];
+                for _ in &ctors {
+                    cont_params.push(Name::fresh());
+                }
+                let mut cont_param_tys = vec![];
+                let mut rhs_bodies = vec![];
+                for ((ctor, cont), ctor_params) in ctors
+                    .iter()
+                    .zip(cont_params.iter())
+                    .zip(ctor_params_list.iter())
+                {
+                    let mut cont_arg_tys = vec![];
+                    let mut target = mk_local(*cont);
+
+                    // pass the constructor arguments through
+                    for (param, param_ty) in ctor_params {
+                        cont_arg_tys.push(param_ty.clone());
+                        target.apply([mk_local(*param)]);
+                    }
+                    // stepping
+                    let ctor_arg_tys = ctor.ty.clone().undischarge();
+                    for (ctor_arg, (param, _)) in ctor_arg_tys.into_iter().zip(ctor_params.iter()) {
+                        let mut ctor_arg_target = ctor_arg.clone();
+                        let arg_tys = ctor_arg_target.undischarge();
+                        if ctor_arg_target != mk_type_local(name) {
+                            continue;
+                        }
+                        let mut t = ctor_arg.clone();
+                        t.subst(&[(name, &mk_type_local(rec_ty_var))]);
+                        cont_arg_tys.push(t);
+
+                        let binders: Vec<_> = arg_tys
+                            .into_iter()
+                            .map(|arg_ty| {
+                                let name = Name::fresh();
+                                (name, name, arg_ty)
+                            })
+                            .collect();
+                        let mut m = mk_const(
+                            rec_name,
+                            rec_local_types.iter().map(|t| mk_type_local(*t)).collect(),
+                        );
+                        let mut a = mk_local(*param);
+                        a.apply(binders.iter().map(|(x, _, _)| mk_local(*x)));
+                        m.apply([a]);
+                        m.apply(cont_params.iter().map(|k| mk_local(*k)));
+                        m.abs(&binders, true);
+                        target.apply([m]);
+                    }
+
+                    let mut cont_param_ty = mk_type_local(rec_ty_var);
+                    cont_param_ty.discharge(cont_arg_tys);
+                    cont_param_tys.push(cont_param_ty);
+
+                    rhs_bodies.push(target);
+                }
+                let mut rec_ty = mk_type_local(rec_ty_var);
+                rec_ty.discharge(cont_param_tys.clone());
+                rec_ty.discharge([target_ty]);
+
+                let rhs_binders = cont_params
+                    .into_iter()
+                    .zip(cont_param_tys)
+                    .map(|(x, t)| (x, x, t))
+                    .collect::<Vec<_>>();
+                let mut equations = vec![];
+                for ((rhs_body, ctor_params), ctor) in rhs_bodies
+                    .into_iter()
+                    .zip(ctor_params_list.into_iter())
+                    .zip(ctors.iter())
+                {
+                    let mut lhs = mk_const(
+                        rec_name,
+                        rec_local_types.iter().map(|t| mk_type_local(*t)).collect(),
+                    );
+                    let ctor_name = Name::intern(&format!("{}.{}", name, ctor.name)).unwrap();
+                    let mut lhs_arg = mk_const(
+                        ctor_name,
+                        local_types.iter().map(|t| mk_type_local(*t)).collect(),
+                    );
+                    lhs_arg.apply(ctor_params.iter().map(|(x, _)| mk_local(*x)));
+                    lhs.apply([lhs_arg]);
+
+                    let mut rhs = rhs_body;
+                    rhs.abs(&rhs_binders, true);
+
+                    let mut eq =
+                        mk_const(Name::intern("eq").unwrap(), vec![mk_type_local(rec_ty_var)]);
+                    eq.apply([lhs, rhs]);
+
+                    for (x, t) in ctor_params.into_iter().rev() {
+                        eq.abs(&[(x, x, t.clone())], true);
+                        let mut m = mk_const(Name::intern("forall").unwrap(), vec![t]);
+                        m.apply([eq]);
+                        eq = m;
+                    }
+
+                    equations.push(eq);
+                }
+                equations.reverse();
+                let mut spec = equations.pop();
+                for eq in equations.into_iter().rev() {
+                    let mut conj = mk_const(Name::intern("and").unwrap(), vec![]);
+                    conj.apply([spec.unwrap(), eq]);
+                    spec = Some(conj);
+                }
+
+                if self.proof_env.tt_env.consts.contains_key(&rec_name) {
+                    bail!("already defined");
+                }
+                self.ns.consts.insert(rec_name, rec_local_types.len());
+                self.proof_env
+                    .tt_env
+                    .consts
+                    .insert(rec_name, (rec_local_types.clone(), rec_ty));
+
+                if let Some(spec) = spec {
+                    let rec_spec_name = Name::intern(&format!("{}.rec.spec", name)).unwrap();
+                    if self.proof_env.facts.contains_key(&rec_spec_name) {
+                        bail!("already defined");
+                    }
+                    self.ns.facts.insert(
+                        rec_spec_name,
+                        FactInfo {
+                            type_arity: rec_local_types.len(),
+                            num_params: 0,
+                        },
+                    );
+                    self.proof_env
+                        .facts
+                        .insert(rec_spec_name, (rec_local_types, spec));
+                }
                 Ok(())
             }
         }

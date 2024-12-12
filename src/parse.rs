@@ -1,6 +1,6 @@
 use crate::cmd::{
-    Cmd, CmdAxiom, CmdConst, CmdDef, CmdInfix, CmdInfixl, CmdInfixr, CmdLemma, CmdNofix, CmdPrefix,
-    CmdTypeConst, CmdTypeVariable, Fixity, Operator,
+    Cmd, CmdAxiom, CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdLemma,
+    CmdNofix, CmdPrefix, CmdTypeConst, CmdTypeVariable, Constructor, Fixity, Operator,
 };
 use crate::expr::{
     mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_const, mk_expr_inst, mk_expr_take, Expr,
@@ -1078,19 +1078,10 @@ impl<'a, 'b> Parser<'a, 'b> {
                     }
                 }
             }
-            // "meta" => {
-            //     let keyword = self.ident()?;
-            //     let cmd = match keyword.as_str() {
-            //         "def" => {
-            //             let meta_def_cmd = self.meta_def_cmd(keyword)?;
-            //             Cmd::MetaDef(meta_def_cmd)
-            //         }
-            //         _ => {
-            //             return Self::fail(keyword, "expected meta command");
-            //         }
-            //     };
-            //     cmd
-            // }
+            "inductive" => {
+                let inductive_cmd = self.inductive_cmd(keyword)?;
+                Cmd::Inductive(inductive_cmd)
+            }
             _ => {
                 return Self::fail(keyword, "expected command");
             }
@@ -1367,12 +1358,46 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(CmdTypeVariable { variables })
     }
 
-    // fn meta_def_cmd(&mut self, _token: Token) -> Result<CmdMetaDef, ParseError> {
-    //     let name = self.name()?;
-    //     self.expect_symbol(":=")?;
-    //     let meta_expr = self.meta_expr()?;
-    //     Ok(CmdMetaDef { name, meta_expr })
-    // }
+    fn inductive_cmd(&mut self, _token: Token<'a>) -> Result<CmdInductive, ParseError> {
+        let name = self.name()?;
+        self.type_locals.push(name);
+
+        let mut local_types = vec![];
+        while let Some(token) = self.ident_opt() {
+            let tv = Name::intern(token.as_str()).unwrap();
+            for v in &local_types {
+                if &tv == v {
+                    return Self::fail(token, "duplicate type variable")?;
+                }
+            }
+            local_types.push(tv);
+            self.type_locals.push(tv);
+        }
+        let mut ctors: Vec<Constructor> = vec![];
+        while let Some(_token) = self.expect_symbol_opt("|") {
+            let token = self.ident()?;
+            let ctor_name = Name::intern(token.as_str()).unwrap();
+            for ctor in &ctors {
+                if ctor_name == ctor.name {
+                    return Self::fail(token, "duplicate constructor")?;
+                }
+            }
+            self.expect_symbol(":")?;
+            let ty = self.ty()?;
+            ctors.push(Constructor {
+                name: ctor_name,
+                ty,
+            })
+        }
+        // Parsing finished. We can now safaly tear off.
+        self.type_locals.truncate(local_types.len());
+        self.type_locals.pop();
+        Ok(CmdInductive {
+            name,
+            local_types,
+            ctors,
+        })
+    }
 }
 
 #[test]

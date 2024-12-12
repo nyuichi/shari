@@ -8,8 +8,6 @@ prefix ¬ : 40 := not
 infix ↔ : 20 := iff
 infix ≠ : 50 := ne
 
-type variable u v
-
 -- Leibniz equality
 def eq.{u} (x : u) (y : u) : Prop := ∀ P, P x → P y
 
@@ -40,6 +38,9 @@ axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) → ∃! f, ∀
  - [ ] field access notation (ad hoc overload)
  - [ ] coersion (especially automatic insertion of rep)
  - [ ] type class
+ - [ ] inductive types
+ - [ ] structures and instances
+ - [ ] calc environment
  -/
 lemma tautology : ∀ φ, φ → φ := take (φ : Prop), assume φ, ⟪φ⟫
 lemma top.intro : ⊤ := tautology
@@ -49,59 +50,38 @@ lemma eq.refl.{u} (m : u) : m = m := take (P : u → Prop), tautology[_]
 lemma eq.transport.{u} (m₁ m₂ : u) (P : u → Prop) : m₁ = m₂ → P m₁ → P m₂ := assume m₁ = m₂, ⟪m₁ = m₂⟫[P]
 lemma eq.symm.{u} (m₁ m₂ : u) : m₁ = m₂ → m₂ = m₁ := assume m₁ = m₂, eq.transport ⟪m₁ = m₂⟫ @eq.refl[m₁]
 lemma eq.trans.{u} (m₁ m₂ m₃ : u) : m₁ = m₂ → m₂ = m₃ → m₁ = m₃ := assume m₁ = m₂, assume m₂ = m₃, eq.transport ⟪m₂ = m₃⟫ ⟪m₁ = m₂⟫
-lemma and.intro (φ ψ : Prop) : φ → ψ → φ ∧ ψ := assume φ, assume ψ, take (ξ : Prop), assume φ → ψ → ξ, ⟪φ → ψ → ξ⟫ ⟪φ⟫ ⟪ψ⟫
 
--- modus ponens
-lemma mp (φ ψ : Prop) : φ → (φ → ψ) → ψ := assume φ, assume φ → ψ, ⟪φ → ψ⟫ ⟪φ⟫
-lemma imp.trans (φ ψ ξ : Prop) : (φ → ψ) → (ψ → ξ) → φ → ξ := assume φ → ψ, assume ψ → ξ, assume φ, ⟪ψ → ξ⟫ (⟪φ → ψ⟫ ⟪φ⟫)
--- modus tollens
-lemma mt (φ ψ : Prop) : (φ → ψ) → ¬ψ → ¬φ := imp.trans
-lemma contradiction (φ : Prop) : φ → ¬φ → ⊥ := mp
-lemma absurd (φ : Prop) : ⊥ → φ := assume ⊥, ⟪⊥⟫[φ]
+lemma eq.ap.{u, v} (m₁ m₂ : u) (C : u → v) : m₁ = m₂ → C m₁ = C m₂ :=
+assume m₁ = m₂,
+eq.transport ⟪m₁ = m₂⟫ @eq.refl[C m₁]
 
-lemma eq.conv (φ ψ : Prop) : (φ = ψ) → φ → ψ := assume φ = ψ, (@eq.transport[_, _, λ (ξ : Prop), ξ] ⟪φ = ψ⟫)
+lemma eq.congr_fun.{u, v} (f₁ f₂ : u → v) (x : u) : f₁ = f₂ → f₁ x = f₂ x :=
+@eq.ap[_, _, λ (f : u → v), f x]
+
+lemma eq.congr_arg.{u, v} (f : u → v) (x₁ x₂ : u) : x₁ = x₂ → f x₁ = f x₂ :=
+eq.ap
+
+-- TODO: remove this and replace with eq.ap
+lemma eq.conv (φ ψ : Prop) : (φ = ψ) → φ → ψ := @eq.transport[_, _, λ (ξ : Prop), ξ]
+
 -- material adequacy
 lemma ma (φ : Prop) : (⊤ = φ) → φ := assume ⊤ = φ, eq.conv ⟪⊤ = φ⟫ top.intro
 
-lemma not.fixed_point_free (φ : Prop) : φ ≠ ¬φ :=
-assume φ = ¬φ,
-have ¬φ := assume φ, contradiction ⟪φ⟫ (eq.conv ⟪φ = ¬φ⟫ ⟪φ⟫),
-have φ := eq.conv (eq.symm ⟪φ = ¬φ⟫) ⟪¬φ⟫,
-contradiction ⟪φ⟫ ⟪¬φ⟫
+-- modus ponens
+lemma mp (φ ψ : Prop) : φ → (φ → ψ) → ψ := assume φ, assume φ → ψ, ⟪φ → ψ⟫ ⟪φ⟫
 
-/-
-lemma not.fixed_point_free (φ : Prop) : φ ≠ ¬φ :=
-assume φ = ¬φ,
-have ¬φ := assume φ, contradiction ⟪φ⟫ (⟪φ = ¬φ⟫.conv ⟪φ⟫),
-have φ := ⟪φ = ¬φ⟫.symm.conv ⟪¬φ⟫,
-contradiction ⟪φ⟫ ⟪¬φ⟫
+lemma imp.trans (φ ψ ξ : Prop) : (φ → ψ) → (ψ → ξ) → φ → ξ := assume φ → ψ, assume ψ → ξ, assume φ, ⟪ψ → ξ⟫ (⟪φ → ψ⟫ ⟪φ⟫)
 
-lemma not.no_fixpoint (φ : Prop) : φ ≠ ¬φ :=
-assume φ = ¬φ, show ⊥, {
-  let φ, ¬φ := ⟪⊥⟫.contradiction φ,
-  let (¬φ) = φ, ¬φ := ⟪φ⟫.apply eq.conv[¬φ, φ],    -- yields ¬φ, which is automatically contracted with the one that comes from the contradiction tactic.
-  ⟪(¬φ) = φ⟫.symmetry := ⟪φ = ¬φ⟫,
-  ⟪¬φ⟫ := assume φ, show ⊥, {
-     let φ, ¬φ := ⟪⊥⟫.contradiction φ,
-     let φ := ⟪¬φ⟫.apply (eq.conv[φ, ¬φ] ⟪φ = ¬φ⟫),   -- φ is automatically contracted.
-     ⟪φ⟫ := ⟪φ⟫
-  }
-}
--/
-
-lemma exists.intro.{u} (P : u → Prop) (m : u) : P m → exists P :=
-assume P m,
+lemma and.intro (φ ψ : Prop) : φ → ψ → φ ∧ ψ :=
+assume φ,
+assume ψ,
 take (ξ : Prop),
-assume ∀ x, P x → ξ,
-⟪∀ x, P x → ξ⟫[m] ⟪P m⟫
-
-lemma exists.elim.{u} (P : u → Prop) (φ : Prop) : exists P → (∀ x, P x → φ) → φ :=
-assume exists P,
-(change ∀ ξ, (∀ x, P x → ξ) → ξ, ⟪exists P⟫)[φ]
+assume φ → ψ → ξ,
+⟪φ → ψ → ξ⟫ ⟪φ⟫ ⟪ψ⟫
 
 lemma and.elim (φ ψ ξ : Prop) : φ ∧ ψ → (φ → ψ → ξ) → ξ :=
 assume φ ∧ ψ,
-(change ∀ ξ, (φ → ψ → ξ) → ξ, ⟪φ ∧ ψ⟫)[ξ]
+⟪φ ∧ ψ⟫[ξ]
 
 lemma and.left (φ ψ : Prop) : φ ∧ ψ → φ :=
 assume φ ∧ ψ,
@@ -127,7 +107,17 @@ assume ψ → ξ,
 
 lemma or.elim (φ ψ ξ : Prop) : φ ∨ ψ → (φ → ξ) → (ψ → ξ) → ξ :=
 assume φ ∨ ψ,
-(change ∀ ξ, (φ → ξ) → (ψ → ξ) → ξ, ⟪φ ∨ ψ⟫)[ξ]
+⟪φ ∨ ψ⟫[ξ]
+
+lemma exists.intro.{u} (P : u → Prop) (m : u) : P m → exists P :=
+assume P m,
+take (ξ : Prop),
+assume ∀ x, P x → ξ,
+⟪∀ x, P x → ξ⟫[m] ⟪P m⟫
+
+lemma exists.elim.{u} (P : u → Prop) (φ : Prop) : exists P → (∀ x, P x → φ) → φ :=
+assume exists P,
+⟪exists P⟫[φ]
 
 lemma not.intro (φ : Prop) : (φ → ⊥) → ¬φ :=
 assume φ → ⊥,
@@ -136,6 +126,19 @@ assume φ → ⊥,
 lemma not.elim (φ : Prop) : ¬φ → φ → ⊥ :=
 assume ¬φ,
 ⟪¬φ⟫
+
+-- modus tollens
+lemma mt (φ ψ : Prop) : (φ → ψ) → ¬ψ → ¬φ := imp.trans
+
+lemma contradiction (φ : Prop) : φ → ¬φ → ⊥ := mp
+
+lemma absurd (φ : Prop) : ⊥ → φ := assume ⊥, ⟪⊥⟫[φ]
+
+lemma not.fixed_point_free (φ : Prop) : φ ≠ ¬φ :=
+assume φ = ¬φ,
+have ¬φ := assume φ, contradiction ⟪φ⟫ (eq.conv ⟪φ = ¬φ⟫ ⟪φ⟫),
+have φ := eq.conv (eq.symm ⟪φ = ¬φ⟫) ⟪¬φ⟫,
+contradiction ⟪φ⟫ ⟪¬φ⟫
 
 -- Internal version of nondegeneracy of topos.
 -- Of course, this lemma holds in any (possibly degenerate) topos.
@@ -148,18 +151,6 @@ lemma nc (φ : Prop) : ¬(φ ∧ ¬φ) :=
 assume φ ∧ ¬φ,
 contradiction (and.left ⟪φ ∧ ¬φ⟫) (and.right ⟪φ ∧ ¬φ⟫)
 
-lemma eq.ap.{u, v} (m₁ m₂ : u) (f : u → v) : m₁ = m₂ → f m₁ = f m₂ :=
-assume m₁ = m₂,
-eq.transport ⟪m₁ = m₂⟫ @eq.refl[f m₁]
-
-lemma eq.congr_fun.{u, v} (f₁ f₂ : u → v) (x : u) : f₁ = f₂ → f₁ x = f₂ x :=
-assume f₁ = f₂,
-eq.transport ⟪f₁ = f₂⟫ @eq.refl[f₁ x]
-
-lemma eq.congr_arg.{u, v} (f : u → v) (x₁ x₂ : u) : x₁ = x₂ → f x₁ = f x₂ :=
-assume x₁ = x₂,
-eq.transport ⟪x₁ = x₂⟫ @eq.refl[f x₁]
-
 -- subsingleton
 def unique.{u} (P : u → Prop) : Prop := ∀ (x₁ x₂ : u), P x₁ → P x₂ → x₁ = x₂
 
@@ -167,7 +158,7 @@ lemma uexists.intro.{u} (P : u → Prop) : exists P → unique P → uexists P :
 assume exists P,
 assume unique P,
 obtain (x : u), P x := ⟪exists P⟫,
-exists.intro (and.intro ⟪P x⟫ (take (y : u), assume P y, (change ∀ x₁ x₂, P x₁ → P x₂ → x₁ = x₂, ⟪unique P⟫)[x, y] ⟪P x⟫ ⟪P y⟫))
+exists.intro (and.intro ⟪P x⟫ (take (y : u), assume P y, ⟪unique P⟫[x, y] ⟪P x⟫ ⟪P y⟫))
 
 lemma uexists.exists.{u} (P : u → Prop) : uexists P → exists P :=
 assume uexists P,
@@ -268,6 +259,8 @@ assume y = f x₁,
 assume y = f x₂,
 (change ∀ x y, f x = f y → x = y, ⟪injective f⟫)[x₁, x₂] (eq.trans (eq.symm ⟪y = f x₁⟫) ⟪y = f x₂⟫)
 
+def split.{u, v} (f : u → v) : Prop := ∃ g, ∀ y, y = f (g y)
+
 /-
  - sets
  -/
@@ -305,529 +298,98 @@ mt lawvere_fixpoint (
 def preimage.{u, v} (f : u → v) (t : set v) : set u := { x | t (f x) }
 
 /-
-/-
- - gadgets for type class
+ - basic inductive types
  -/
 
-def is_prop.{u} : Prop := ∀ (x₁ x₂ : u), x₁ = x₂
+inductive bool
+| tt : bool
+| ff : bool
 
-type const is_class : Type → Type
-axiom is_class.is_prop.{u} (h : is_class u) : is_prop.{u}
+inductive prod u v
+| mk : u → v → prod
 
-/-
- - propositions as subsingletons
- -/
+inductive unit
+| star : unit
 
-type const is_el : Type → Type
-const is_el.is_class.{u} : is_class.{is_el u}
-const is_el.char.{u} : is_el u → Prop
-axiom is_el.is_prop.{u} (h : is_el u) : is_prop.{u}
+inductive sum u v
+| inl : u → sum
+| inr : v → sum
 
--- type def foo u := el φ
--- 
--- introduces the following constants and axioms
---
--- const foo.is_el.{u} : is_el (foo u)
--- def foo.is_el.char.{u} : Prop := φ
--- axiom foo.is_el.spec.{u} : is_el.char.{foo u} foo.is_el.{u} = foo.is_el.char.{u}
+inductive empty
 
-/-
- - singleton types
- -/
+inductive nat
+| zero : nat
+| succ : nat → nat
 
-def is_central.{u} (x : u) := ∀ y, y = x
+inductive list u
+| nil : list
+| cons : u → list → list
 
-type const is_singleton : Type → Type → Type
-const is_singleton.is_class.{base, u} : is_class.{is_singleton base u}
-const is_singleton.pt.{base, u} : is_singleton base u → u
-axiom is_singleton.pt.is_central.{base, u} (d : is_singleton base u) : is_central (pt d)
-const is_singleton.rep.{base, u} : is_singleton base u → u → base
--/
+inductive option u
+| none : option
+| some : u → option
 
-/-
- - comprehension types
- -/
+inductive ord
+| zero : ord
+| succ : ord → ord
+| limit : (nat → ord) → ord
 
--- Comprehension type is the only type in our language that allows users to
--- define a type dependent on a predicate.
--- To enable a constructing term of a comprehention type without assumption,
--- we will make use of the el type which is a special case of a comprehention type.
--- To this end, we need bootstrapping.
+inductive bin_tree u
+| empty : bin_tree
+| leaf : u → bin_tree
+| node : bin_tree → bin_tree → bin_tree
 
-/-
--- In bootstrapping, we make use of the following (virtual) equivalence of types:
--- (forall a. singleton A a → a × el (P pt.{A, a})) ~~ { x : A | P x }
+-- TODO: use namespace
+def tt : bool := bool.tt
+def ff : bool := bool.ff
+def star : unit := unit.star
 
--- setup
+lemma unit.eta_expand (x : unit) : x = star :=
+unit.ind eq.refl
 
--- a class declaration
-type def foo u := { bar : baz u }  -- LHS can be any type. Records are the most useful, they are only available after bootstrapping.
-class is_foo u := foo u
+lemma unit.eta_reduce (x : unit) : star = x :=
+unit.ind eq.refl
 
--- compiles to
-type const is_foo : Type → Type
-axiom foo.is_prop.{u} : is_prop.{foo u} -- instances are unique.
+lemma unit_ext (x₁ x₂ : unit) : x₁ = x₂ :=
+eq.trans unit.eta_expand unit.eta_reduce
 
--- and an instance declaration
-instance hoge.foo.{u} : foo (hoge u) := { bar := hoge.bar.{u} }
-def hoge.bar.{u} : baz.{u} := ...
+def prod.fst.{u, v} (p : prod u v) : u := prod.rec p (λ a b, a)
+def prod.snd.{u, v} (p : prod u v) : v := prod.rec p (λ a b, b)
 
--- compiles to
-def hoge.foo.{u} : foo (hoge u) := { bar := hoge.bar.{u} }
--/
+lemma prod_ext.{u, v} (p₁ p₂ : prod u v) : prod.fst p₁ = prod.fst p₂ → prod.snd p₁ = prod.snd p₂ → p₁ = p₂ :=
+prod.ind
+  (take (a₁ : u), take (b₁ : v),
+   prod.ind
+   (take (a₂ : u), take (b₂ : v),
+   assume prod.fst (prod.mk a₁ b₁) = prod.fst (prod.mk a₂ b₂),
+   assume prod.snd (prod.mk a₁ b₁) = prod.snd (prod.mk a₂ b₂),
+   calc a₁ = prod.fst (prod.mk a₁ b₁) := eq.refl
+       ... = prod.fst (prod.mk a₂ b₂) := ⟪prod.fst (prod.mk a₁ b₁) = prod.fst (prod.mk a₂ b₂)⟫
+       ... = a₂                       := eq.refl,
+   calc b₁ = prod.snd (prod.mk a₁ b₁) := eq.refl
+       ... = prod.snd (prod.mk a₂ b₂) := ⟪prod.snd (prod.mk a₁ b₁) = prod.snd (prod.mk a₂ b₂)⟫
+       ... = b₂                       := eq.refl,
+   calc prod.mk a₁ b₁ = prod.mk a₂ b₁ := eq.ap ⟪a₁ = a₂⟫
+                  ... = prod.mk a₂ b₂ := eq.ap ⟪b₁ = b₂⟫,
+   ⟪prod.mk a₁ b₁ = prod.mk a₂ b₂⟫))
 
--- e.g. type def bool := { x : Prop | x = ⊤ ∨ x = ⊥ } yields comprehension.{Prop, bool}
-type const comprehension : Type → Type → Type
+lemma prod.beta.{u, v} (x : u) (y : v) : x = fst (prod.mk x y) ∧ y = snd (prod.mk x y) :=
+and.intro eq.refl eq.refl
 
-const char.{base, u} : comprehension base u → base → Prop
-
-const rep.{base, u} : comprehension base u → u → base
-
--- NB: `char (rep x) = ⊤` is stronger thant `char (rep x)` (without prop_ext). Should we use that?
-axiom rep.char.{base, u} (d : comprehension base u) (x : u) : char d (rep d x)
-
--- this alone is insufficient as this only asserts the (unique) existence but does not give the concrete term.
-axiom char.abs.{base, u} (d : comprehension base u) (y : base) : char d y → ∃! x, y = rep d x
-
-lemma rep.injective.{base, u} (d : comprehension base u) : injective (rep d) :=
-take (x₁ : u),
-take (x₂ : u),
-(uexists.unique (char.abs rep.char))[_, _] eq.refl
-
-
-/-
--- How to enable to obtain the mediating arrow.
-
--- # Candidate 1: ``abstract'' syntax
-
--- transpose of (f : w → v) s.t. P ∘ f = ⊤
-def mk (y : w) : { x | P x } := abstract f y, { /- proof obligation: P (f y) -/ }
-
-def mk.{v, u, w} (d : comprehension v u) (y : w) : u := abstract f y, { /- proof obligation: P (f y) -/ }
-
--- automatically generated
-axiom mk.spec (y : w) : rep (mk y) = f y
-
-
--- # Candidate 2: Use truncation
-
-class singleton u extends comprehension u :=
-(pt : base u)
-(assume unique : ∀ (x : u), pt = rep x)
-
--- Hypothetical type definition:
--- 
---   type def el φ := { h : unit | φ }
---
--- Recall in dependent type theory Tarski universes have the following rules:
---
---   Γ ⊢ A type
---   ------------------------------
---   Γ ⊢ toProp : isProp(A) → Prop
---
---   Γ ⊢ p : Prop
---   -------------
---   Γ ⊢ El(p) type
---
---   Γ ⊢ p : Prop
---   --------------------------------
---   Γ ⊢ proptrunc(p) : isProp(El(p))
---
--- In our logic we have a restricted form of them:
---
---   ⊢ p : Prop
---   -------------
---   ⊢ el[p] type
---
---   -------------------------------------------
---   ⊢ el.prop_trunc : ∀ (h₁ h₂ : el[p]), h₁ = h₂
---
-
-type def abs.witness base u v := { _ : unit | ∀ (c : comprehension base u) (s : singleton base v), char c (pt s) }
-
-def abs.{base, u, v} : witness base u v → u
-
-axiom abs_rep.{base, u, v} [comprehension base u] [singleton base v] (h : witness base u v) : rep (abs h) = pt
-
--- This also creates a term `foo.{base, u, v}` of type `el[char.{u} pt.{base, v}]`
-@[obtain(abs.witness base u v)]
-lemma foo.{base, u, v} [comprehension base u] [singleton base v] : char.{base, u} pt.{base, v} :=
-...
-
-lemma witness.mk.{base, u, v} (c : comprehension base u) (s : singleton base v) : char d (pt s) → (∀ c s, char c (pt s)) :=
-assume char d (pt s),
-take c₁,
-take s₁,
-have c = c₁,
-have s = s₁,
-eq.transport ⟪c = c₁⟫ (eq.transport ⟪s = s₁⟫ ⟪char d (pt s)⟫)
-
--- setup
---
---  class singleton u extends comprehension u :=
---  (pt : base u)
---  (assume unique : ∀ (x : u), pt = rep x)
---
-type const singleton : Type → Type → Type
-const singleton_extends_comprehension.{base, u} : singleton base u → comprehension base u
-const pt.{base, u} : singleton base u → base
-axiom unique.{base, u} (d : singleton base u) : ∀ (x : u), pt.{base, u} d = rep.{base, u} (singleton_extends_comprehension.{base, u} d) x
-
--- introduction of singleton type.
--- notation is borrowed from 1-tuple.
---
---   type def top := ⟨⊤⟩
---
--- the followings are auto-generated.
-type const top : Type
-const top.singleton : singleton Prop top
-def top.singleton.pt : Prop := ⊤
-axiom top.singleton.spec : top.singleton.pt = pt.{Prop, top} top.singleton
-
-lemma char_top : char.{Prop, bool} bool.comprehension (pt.{Prop, top} top.singleton) :=
-sorry
-
--- then we have:
-const char_top : el[char.{Prop, bool} bool.comprehension (pt.{Prop, top} top.singleton)]
--- This is called ``propositions as codes for subsingletons'' in the literature.
-
-def tt : bool := abs.{Prop, bool, top} char_top
--/
-
-/-
- - bool
- -/
-
--- The type of decidable propositions.
--- type def bool := { φ : Prop | φ = ⊤ ∨ φ = ⊥ }
-type const bool : Type
-const bool.comprehension : comprehension Prop bool
-def bool.char : Prop → Prop := λ φ, φ = ⊤ ∨ φ = ⊥
-axiom bool.spec : bool.char = char bool.comprehension
-lemma bool.char.unfold (φ : Prop) : bool.char φ → char bool.comprehension φ := assume bool.char φ, eq.conv (eq.congr_fun bool.spec) ⟪bool.char φ⟫
-lemma bool.char.fold (φ : Prop) : char bool.comprehension φ → bool.char φ := assume char bool.comprehension φ, eq.conv (eq.congr_fun (eq.symm bool.spec)) ⟪char bool.comprehension φ⟫
-def bool.rep : bool → Prop := rep bool.comprehension
-lemma bool.char.abs (φ : Prop) : bool.char φ → ∃! x, φ = bool.rep x := assume bool.char φ, char.abs (bool.char.unfold ⟪bool.char φ⟫)
-lemma bool.rep.char (x : bool) : bool.char (bool.rep x) := bool.char.fold rep.char
-lemma bool.rep.injective : injective bool.rep := rep.injective
-
-lemma bool.tt_uexists : ∃! (tt : bool), ⊤ = bool.rep tt :=
-bool.char.abs (or.left eq.refl)
-
-lemma bool.ff_uexists : ∃! (ff : bool), ⊥ = bool.rep ff :=
-bool.char.abs (or.right eq.refl)
-
--- def (tt : bool), ⊤ = bool.rep tt := bool.tt.uexists
--- def (ff : bool), ⊥ = bool.rep ff := bool.ff.uexists
-const tt : bool
-axiom tt.spec : ⊤ = bool.rep tt
-const ff : bool
-axiom ff.spec : ⊥ = bool.rep ff
-
-lemma bool.ind (b : bool) (P : bool → Prop) : P tt → P ff → P b :=
-assume P tt,
-assume P ff,
-or.elim bool.rep.char
-  (assume bool.rep b = ⊤,
-    have bool.rep b = bool.rep tt := eq.trans ⟪bool.rep b = ⊤⟫ tt.spec,
-    have b = tt := bool.rep.injective[b, tt] ⟪bool.rep b = bool.rep tt⟫,
-    eq.transport (eq.symm ⟪b = tt⟫) ⟪P tt⟫)
-  (assume bool.rep b = ⊥,
-    have bool.rep b = bool.rep ff := eq.trans ⟪bool.rep b = ⊥⟫ ff.spec,
-    have b = ff := bool.rep.injective[b, ff] ⟪bool.rep b = bool.rep ff⟫,
-    eq.transport (eq.symm ⟪b = ff⟫) ⟪P ff⟫)
+lemma prod.eta.{u, v} (p : prod u v) : p = prod.mk (fst p) (snd p) :=
+prod_ext eq.refl eq.refl
 
 lemma bool.case (b : bool) : b = tt ∨ b = ff :=
 bool.ind (or.left eq.refl) (or.right eq.refl)
 
 lemma bool.tt_ne_ff : tt ≠ ff :=
 assume tt = ff,
-top_ne_bot (eq.trans tt.spec (eq.trans (eq.congr_arg ⟪tt = ff⟫) (eq.symm ff.spec)))
-
-lemma bool.rec_exists.{u} (on_tt : u) (on_ff : u) (b : bool) : ∃ (rec : u), (b = tt → rec = on_tt) ∧ (b = ff → rec = on_ff) :=
-or.elim bool.case
-  (assume b = tt,
-    exists.intro
-      (and.intro
-        (assume b = tt, eq.refl)
-        (assume b = ff, absurd (bool.tt_ne_ff (eq.trans (eq.symm ⟪b = tt⟫) ⟪b = ff⟫)))))
-  (assume b = ff,
-    exists.intro
-      (and.intro
-        (assume b = tt, absurd (bool.tt_ne_ff (eq.trans (eq.symm ⟪b = tt⟫) ⟪b = ff⟫)))
-        (assume b = ff, eq.refl)))
-
-lemma bool.rec_unique.{u} (on_tt : u) (on_ff : u) (b : bool) : unique λ (rec : u), (b = tt → rec = on_tt) ∧ (b = ff → rec = on_ff) :=
-take (r₁ : u),
-take (r₂ : u),
-assume (b = tt → r₁ = on_tt) ∧ (b = ff → r₁ = on_ff),
-assume (b = tt → r₂ = on_tt) ∧ (b = ff → r₂ = on_ff),
-or.elim bool.case
-  (assume b = tt,
-    have r₁ = on_tt := and.left ⟪(b = tt → r₁ = on_tt) ∧ (b = ff → r₁ = on_ff)⟫ ⟪b = tt⟫,
-    have r₂ = on_tt := and.left ⟪(b = tt → r₂ = on_tt) ∧ (b = ff → r₂ = on_ff)⟫ ⟪b = tt⟫,
-    eq.trans ⟪r₁ = on_tt⟫ (eq.symm ⟪r₂ = on_tt⟫))
-  (assume b = ff,
-    have r₁ = on_ff := and.right ⟪(b = tt → r₁ = on_tt) ∧ (b = ff → r₁ = on_ff)⟫ ⟪b = ff⟫,
-    have r₂ = on_ff := and.right ⟪(b = tt → r₂ = on_tt) ∧ (b = ff → r₂ = on_ff)⟫ ⟪b = ff⟫,
-    eq.trans ⟪r₁ = on_ff⟫ (eq.symm ⟪r₂ = on_ff⟫))
-
-lemma bool.rec_uexists.{u} (on_tt : u) (on_ff : u) (b : bool) : ∃! (rec : u), (b = tt → rec = on_tt) ∧ (b = ff → rec = on_ff) :=
-uexists.intro bool.rec_exists bool.rec_unique
-
--- def (rec.{u} (on_tt : u) (on_ff : u) (b : bool) : u), (b = tt → rec on_tt on_ff b = on_tt) ∧ (b = ff → rec on_tt on_ff b = on_ff) := bool.rec_uexists
-const bool.rec.{u} : u → u → bool → u
-axiom bool.rec.spec.{u} (on_tt : u) (on_ff : u) (b : bool) : (b = tt → bool.rec on_tt on_ff b = on_tt) ∧ (b = ff → bool.rec on_tt on_ff b = on_ff)
-
-def bool.cond.{u} (b : bool) (then : u) (else : u) : u := bool.rec then else b
-
-/-
- - unit
- -/
-
--- type def unit := { φ : Prop | ⊤ = φ }
--- We do not use { φ | φ } in the definition because prop_ext is necessary for unit to have only one element.
-type const unit : Type
-const unit.comprehension : comprehension Prop unit
-def unit.char : Prop → Prop := λ φ, ⊤ = φ
-axiom unit.spec : unit.char = char unit.comprehension
-lemma unit.char.unfold (φ : Prop) : unit.char φ → char unit.comprehension φ := assume unit.char φ, eq.conv (eq.congr_fun unit.spec) ⟪unit.char φ⟫
-lemma unit.char.fold (φ : Prop) : char unit.comprehension φ → unit.char φ := assume char unit.comprehension φ, eq.conv (eq.congr_fun (eq.symm unit.spec)) ⟪char unit.comprehension φ⟫
-def unit.rep : unit → Prop := rep unit.comprehension
-lemma unit.char.abs (φ : Prop) : unit.char φ → ∃! x, φ = unit.rep x := assume unit.char φ, char.abs (unit.char.unfold ⟪unit.char φ⟫)
-lemma unit.rep.char (x : unit) : unit.char (unit.rep x) := unit.char.fold rep.char
-lemma unit.rep.injective : injective unit.rep := rep.injective
-
-lemma unit.star_uexists : ∃! (star : unit), ⊤ = unit.rep star :=
-unit.char.abs eq.refl
-
--- def (star : unit), ⊤ = unit.rep star := unit.star_uexists
-const star : unit
-axiom star.spec : ⊤ = unit.rep star
-
-lemma unit.unique (x y : unit) : x = y :=
-have unit.rep x = unit.rep y := eq.trans (eq.symm unit.rep.char) unit.rep.char,
-unit.rep.injective[x, y] ⟪unit.rep x = unit.rep y⟫
-
-lemma unit.eta_expand (x : unit) : x = star :=
-unit.unique
-
-lemma unit.eta_reduce (x : unit) : star = x :=
-unit.unique
-
-lemma unit.ind (x : unit) (P : unit → Prop) : P star → P x :=
-assume P star,
-eq.transport unit.eta_reduce ⟪P star⟫
-
-/-
- - pair
- -/
-
--- type def pair u v := { e : u → v → Prop | ∃ a b, e a b ∧ ∀ a₁ b₁, e a₁ b₁ → a = a₁ ∧ b = b₁ }
-type const pair : Type → Type → Type
-const pair.comprehension.{u, v} : comprehension (u → v → Prop) (pair u v)
-def pair.char.{u, v} (e : u → v → Prop) : Prop := ∃ a b, e a b ∧ ∀ a₁ b₁, e a₁ b₁ → a = a₁ ∧ b = b₁
-axiom pair.spec.{u, v} : pair.char.{u, v} = char pair.comprehension.{u, v}
-
-lemma pair.char.unfold.{u, v} (e : u → v → Prop) : pair.char e → char pair.comprehension e :=
-  assume pair.char e,
-    eq.conv (eq.congr_fun pair.spec) ⟪pair.char e⟫
-
-lemma pair.char.fold.{u, v} (e : u → v → Prop) : char pair.comprehension e → pair.char e :=
-  assume char pair.comprehension e,
-    eq.conv (eq.congr_fun (eq.symm pair.spec)) ⟪char pair.comprehension e⟫
-
-def pair.rep.{u, v} : pair u v → u → v → Prop := rep pair.comprehension
-
-lemma pair.char.abs.{u, v} (e : u → v → Prop) : pair.char e → ∃! p, e = pair.rep p :=
-  assume pair.char e,
-    char.abs (pair.char.unfold ⟪pair.char e⟫)
-
-lemma pair.rep.char.{u, v} (p : pair u v) : pair.char (pair.rep p) :=
-  pair.char.fold rep.char
-
-lemma pair.rep.injective.{u, v} : injective pair.rep.{u, v} :=
-  rep.injective
-
-lemma fst_uexists.{u, v} (p : pair u v) : ∃! a, ∃! b, pair.rep p a b :=
-  obtain (a : u), ∃ b, pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁ := pair.rep.char,
-  obtain (b : v), pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁ := ⟪∃ b, pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁⟫,
-  have pair.rep p a b :=
-    and.left ⟪pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁⟫,
-  have ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁ :=
-    and.right ⟪pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁⟫,
-  uexists.intro
-    (exists.intro
-      (uexists.intro
-        (exists.intro ⟪pair.rep p a b⟫)
-        (take (b₁ : v),
-         take (b₂ : v),
-         assume pair.rep p a b₁,
-         assume pair.rep p a b₂,
-         have b = b₁ := and.right (⟪∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁⟫[a, b₁] ⟪pair.rep p a b₁⟫),
-         have b = b₂ := and.right (⟪∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁⟫[a, b₂] ⟪pair.rep p a b₂⟫),
-         eq.trans (eq.symm ⟪b = b₁⟫) ⟪b = b₂⟫)))
-    (take (a₁ : u),
-     take (a₂ : u),
-     assume ∃! b, pair.rep p a₁ b,
-     assume ∃! b, pair.rep p a₂ b,
-     obtain (b₁ : v), pair.rep p a₁ b₁ := uexists.exists ⟪∃! b, pair.rep p a₁ b⟫,
-     obtain (b₂ : v), pair.rep p a₂ b₂ := uexists.exists ⟪∃! b, pair.rep p a₂ b⟫,
-     have a = a₁ := and.left (⟪∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁⟫[a₁, b₁] ⟪pair.rep p a₁ b₁⟫),
-     have a = a₂ := and.left (⟪∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁⟫[a₂, b₂] ⟪pair.rep p a₂ b₂⟫),
-     eq.trans (eq.symm ⟪a = a₁⟫) ⟪a = a₂⟫)
-
--- def (fst.{u, v} (p : pair u v) : u), ∃! b, pair.rep p (fst p) b := fst_uexists.{u, v}[p]
-const fst.{u, v} : pair u v → u
-axiom fst.spec.{u, v} (p : pair u v) : ∃! b, pair.rep p (fst p) b
-
--- def (snd.{u, v} (p : pair u v) : v), pair.rep p (fst p) (snd p) := fst.spec.{u, v}[p]
-const snd.{u, v} : pair u v → v
-axiom snd.spec.{u, v} (p : pair u v) : pair.rep p (fst p) (snd p)
-
-lemma pair.proj.spec.{u, v} (p : pair u v) : pair.rep p (fst p) (snd p) := snd.spec
-
-def pair.mk_rep.{u, v} (x : u) (y : v) : u → v → Prop := λ a b, x = a ∧ y = b
-
-lemma pair.mk_rep.char.{u, v} (x : u) (y : v) : pair.char (pair.mk_rep x y) :=
-  exists.intro
-  (exists.intro
-    (and.intro
-      (and.intro eq.refl eq.refl)
-      (take (x₁ : u),
-      take (y₁ : v),
-      assume pair.mk_rep x y x₁ y₁,
-      ⟪pair.mk_rep x y x₁ y₁⟫)))
-
-lemma pair.mk_uexists.{u, v} (x : u) (y : v) : ∃! p, pair.mk_rep x y = pair.rep p :=
-  pair.char.abs pair.mk_rep.char
-
--- def (pair.mk.{u, v} (x : u) (y : v) : pair u v), pair.mk_rep x y = pair.rep (pair.mk x y) := pair.mk_uexists.{u, v}[x, y]
-const pair.mk.{u, v} : u → v → pair u v
-axiom pair.mk.spec.{u, v} (x : u) (y : v) : pair.mk_rep x y = pair.rep (pair.mk x y)
-
-lemma pair.beta.{u, v} (x : u) (y : v) : x = fst (pair.mk x y) ∧ y = snd (pair.mk x y) :=
-  have pair.rep (pair.mk x y) (fst (pair.mk x y)) (snd (pair.mk x y)) := pair.proj.spec,
-  eq.conv
-    (eq.congr_fun
-      (eq.congr_fun
-        (eq.symm
-          pair.mk.spec)))
-    ⟪pair.rep (pair.mk x y) (fst (pair.mk x y)) (snd (pair.mk x y))⟫
-
-lemma pair.proj.unique.{u, v} (p : pair u v) (x₁ x₂ : u) (y₁ y₂ : v) : pair.rep p x₁ y₁ → pair.rep p x₂ y₂ → x₁ = x₂ ∧ y₁ = y₂ :=
-assume pair.rep p x₁ y₁,
-assume pair.rep p x₂ y₂,
-have ∃ a b, pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁ := pair.rep.char,
-obtain (a : u), ∃ b, pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁ := ⟪∃ a b, pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁⟫,
-obtain (b : v), pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁ := ⟪∃ b, pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁⟫,
-have ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁ := and.right ⟪pair.rep p a b ∧ ∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁⟫,
-have a = x₁ ∧ b = y₁ := ⟪∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁⟫[x₁, y₁] ⟪pair.rep p x₁ y₁⟫,
-have a = x₂ ∧ b = y₂ := ⟪∀ a₁ b₁, pair.rep p a₁ b₁ → a = a₁ ∧ b = b₁⟫[x₂, y₂] ⟪pair.rep p x₂ y₂⟫,
-and.intro
-  (eq.trans (eq.symm (and.left ⟪a = x₁ ∧ b = y₁⟫)) (and.left ⟪a = x₂ ∧ b = y₂⟫))
-  (eq.trans (eq.symm (and.right ⟪a = x₁ ∧ b = y₁⟫)) (and.right ⟪a = x₂ ∧ b = y₂⟫))
-
-lemma pair.eta.help₁.{u, v} (p : pair u v) (x : u) (y : v) : pair.rep p x y ↔ x = fst p ∧ y = snd p :=
-iff.intro
-  (assume pair.rep p x y,
-   pair.proj.unique ⟪pair.rep p x y⟫ pair.proj.spec)
-  (assume x = fst p ∧ y = snd p,
-   have x = fst p := and.left ⟪x = fst p ∧ y = snd p⟫,
-   have y = snd p := and.right ⟪x = fst p ∧ y = snd p⟫,
-   eq.conv (eq.trans (@eq.congr_fun[_, _, snd p] (@eq.congr_arg[pair.rep p, _, _] (eq.symm ⟪x = fst p⟫))) (@eq.congr_arg[pair.rep p x, _, _] (eq.symm ⟪y = snd p⟫))) pair.proj.spec)
-
-lemma pair.eta.help₂.{u, v} (p : pair u v) (x : u) (y : v) : (x = fst p ∧ y = snd p) ↔ pair.rep (pair.mk (fst p) (snd p)) x y :=
-have (fst p = x ∧ snd p = y) = pair.rep (pair.mk (fst p) (snd p)) x y :=
-  eq.congr_fun (eq.congr_fun pair.mk.spec),
-iff.intro
-  (assume x = fst p ∧ y = snd p,
-   have fst p = x := eq.symm (and.left ⟪x = fst p ∧ y = snd p⟫),
-   have snd p = y := eq.symm (and.right ⟪x = fst p ∧ y = snd p⟫),
-   eq.conv ⟪(fst p = x ∧ snd p = y) = pair.rep (pair.mk (fst p) (snd p)) x y⟫ (and.intro ⟪fst p = x⟫ ⟪snd p = y⟫))
-  (assume pair.rep (pair.mk (fst p) (snd p)) x y,
-   have fst p = x ∧ snd p = y := eq.conv (eq.symm ⟪(fst p = x ∧ snd p = y) = pair.rep (pair.mk (fst p) (snd p)) x y⟫) ⟪pair.rep (pair.mk (fst p) (snd p)) x y⟫,
-   have x = fst p := eq.symm (and.left ⟪fst p = x ∧ snd p = y⟫),
-   have y = snd p := eq.symm (and.right ⟪fst p = x ∧ snd p = y⟫),
-   and.intro ⟪x = fst p⟫ ⟪y = snd p⟫)
-
-lemma pair.eta.{u, v} (p : pair u v) : p = pair.mk (fst p) (snd p) :=
-pair.rep.injective[_, _]
-  (fun_ext
-    (take (x : u),
-      fun_ext
-        (take (y : v), prop_ext (iff.trans pair.eta.help₁ pair.eta.help₂))))
-
-/-
- - support
- -/
-
--- A type operator sending an inhabited type to its propositional truncation.
--- Support type is also known as bracket type and propositional truncation.
---
--- type support u := { x : unit | ∃ (a : u), ⊤ }
-type const support : Type → Type
-const support.comprehension.{u} : comprehension unit (support u)
-def support.char.{u} : unit → Prop := λ x, ∃ (a : u), ⊤
-axiom support.spec.{u} : support.char.{u} = char support.comprehension.{u}
-lemma support.char.unfold.{u} (x : unit) : support.char.{u} x → char support.comprehension.{u} x := assume support.char x, eq.conv (eq.congr_fun support.spec) ⟪support.char x⟫
-lemma support.char.fold.{u} (x : unit) : char support.comprehension.{u} x → support.char.{u} x := assume char support.comprehension x, eq.conv (eq.congr_fun (eq.symm support.spec)) ⟪char support.comprehension x⟫
-def support.rep.{u} : support u → unit := rep support.comprehension
-lemma support.char.abs.{u} (x : unit) : support.char.{u} x → ∃! h, x = support.rep.{u} h := assume support.char x, char.abs (support.char.unfold ⟪support.char x⟫)
-lemma support.rep.char.{u} (h : support u) : support.char.{u} (support.rep h) := support.char.fold rep.char
-lemma support.rep.injective.{u} : injective support.rep.{u} := rep.injective
-
-lemma support.char.unfold_.{u} : support.char.{u} star → char support.comprehension.{u} star := assume support.char star, eq.conv (eq.congr_fun support.spec) ⟪support.char star⟫
-lemma support.char.fold_.{u} : char support.comprehension.{u} star → support.char.{u} star := assume char support.comprehension star, eq.conv (eq.congr_fun (eq.symm support.spec)) ⟪char support.comprehension star⟫
-lemma support.char.help.{u} : (∃! (h : support u), ⊤) ↔ (∃! (h : support u), star = support.rep h) :=
-@uexists.congr[λ (h : support u), ⊤, _]
-  (take (h : support u),
-    iff.intro
-      (assume ⊤,
-        unit.eta_reduce)
-      (assume star = support.rep h,
-        top.intro))
-lemma support.char.abs_.{u} : support.char.{u} star → ∃! (h : support u), ⊤ := assume support.char star, iff.left support.char.help (support.char.abs ⟪support.char star⟫)
-lemma support.rep.char_.{u} (h : support u) : support.char.{u} star := @support.rep.char[h]
-
-lemma support.mk_uexists.{u} (x : u) : ∃! (mk : support u), ⊤ :=
-have ∃ (x : u), ⊤ :=
-  @exists.intro[λ (x : u), ⊤, x] top.intro,
-support.char.abs_ ⟪∃ (x : u), ⊤⟫
-
--- def (support.mk.{u} (x : u) : support u), ⊤ := support.mk_uexists.{u}[x]
-const support.mk.{u} : u → support u
-
-lemma support.unique.{u} (h₁ h₂ : support u) : h₁ = h₂ :=
-(change ∀ h₁ h₂, support.rep h₁ = support.rep h₂ → h₁ = h₂, support.rep.injective)[h₁, h₂] unit.unique
-
-lemma support.exists_imp_uexists.{u} (P : support u → Prop) : (∃ h, P h) → ∃! h, P h :=
-assume ∃ h, P h,
-uexists.intro
-  ⟪∃ h, P h⟫
-  (take (h₁ : support u), take (h₂ : support u), assume P h₁, assume P h₂, support.unique)
-
-lemma support.join_uexists.{u} (h : support (support u)) : ∃! (h : support u), ⊤ :=
-@support.exists_imp_uexists[λ (h : support u), ⊤] @support.rep.char_[h]
-
--- def (support.join.{u} (h : support (support u)) : support u), ⊤ := support.join_uexists.{u}[h]
-const support.join.{u} : support (support u) → support u
-
--- internal global choice operator
--- 
--- Introducing this constant restricts the class of models to toposes whose supports split.
--- Note we do not have an object-level function assigning for each type u the choice function,
--- which would imply axiom of choice.
--- In the presence of dependent products, this operator corresponds to the law of double negation:
---
---   support u ≅ Π (p : Prop), (u → El(p)) → El(p)
---
--- where we assume Prop is a Tarski universe.
---
--- One can interpret this function in Kripke-Joyal semantics as follows:
--- whenever one proves ⊢ ∃ (x : u), ⊤, hence ⊩ ∃ (x : u), ⊤, which in general
--- means there exist an object V, V → 1 epi and V → u, one can safely assume V was 1.
-const epsilon.{u} : support u → u
+calc ⊤ = (λ x y, x) ⊤ ⊥  := eq.refl
+   ... = bool.rec tt ⊤ ⊥ := eq.ap (eq.symm (and.left bool.rec.spec))
+   ... = bool.rec ff ⊤ ⊥ := eq.ap ⟪tt = ff⟫
+   ... = (λ x y, y) ⊤ ⊥  := eq.ap (and.right bool.rec.spec)
+   ... = ⊥               := eq.refl,
+contradiction ⟪⊤ = ⊥⟫ top_ne_bot
 
 /-
  - choice
@@ -835,17 +397,26 @@ const epsilon.{u} : support u → u
 
 -- The type of inhabited subsets.
 -- TODO: better name?
--- type power1 u := { s : u → Prop | ∃ x, x ∈ s }
-type const power1 : Type → Type
-const power1.comprehension.{u} : comprehension (u → Prop) (power1 u)
-def power1.char.{u} : (u → Prop) → Prop := λ s, ∃ x, x ∈ s
-axiom power1.spec.{u} : power1.char.{u} = char power1.comprehension.{u}
-lemma power1.char.unfold.{u} (s : u → Prop) : power1.char s → char power1.comprehension s := assume power1.char s, eq.conv (eq.congr_fun power1.spec) ⟪power1.char s⟫
-lemma power1.char.fold.{u} (s : u → Prop) : char power1.comprehension s → power1.char s := assume char power1.comprehension s, eq.conv (eq.congr_fun (eq.symm power1.spec)) ⟪char power1.comprehension s⟫
-def power1.rep.{u} : power1 u → u → Prop := rep power1.comprehension.{u}
-lemma power1.char.abs.{u} (s : u → Prop) : power1.char s → ∃! h, s = power1.rep h := assume power1.char s, char.abs (power1.char.unfold ⟪power1.char s⟫)
-lemma power1.rep.char.{u} (h : power1 u) : power1.char (power1.rep h) := power1.char.fold rep.char
-lemma power1.rep.injective.{u} : injective power1.rep.{u} := rep.injective
+structure power1 u := {
+  const rep : set u
+  axiom inhabited : ∃ x, x ∈ rep
+}
+
+-- TODO: automatically derive these
+axiom power1_abs.{u} (s : set u) : (∃ x, x ∈ s) → (∃ c, s = power1.rep c)
+axiom power1_ext.{u} (x₁ x₂ : power1 u) : power1.rep x₁ = power1.rep x₂ → x₁ = x₂
+
+lemma power1_uabs.{u} (s : set u) : (∃ x, x ∈ s) → (∃! c, s = power1.rep c) :=
+assume ∃ x, x ∈ s,
+obtain (c : power1 u), s = power1.rep c := power1_abs ⟪∃ x, x ∈ s⟫,
+uexists.intro
+  ⟪s = power1.rep c⟫
+  (take (s₁ : power1 v),
+   take (s₂ : power1 v),
+   assume s = power1.rep s₁,
+   assume s = power1.rep s₂,
+   have power1.rep s₁ = power1.rep s₂ := eq.trans (eq.symm ⟪s = power1.rep s₁⟫) ⟪s = power1.rep s₂⟫,
+   power1_ext ⟪power1.rep s₁ = power1.rep s₂⟫)
 
 -- The exisistence of the constant and the axiom state that every type u is a choice type.
 const choice.{u} : power1 u → u
@@ -855,7 +426,7 @@ lemma ac.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ (f : u �
 assume ∀ x, ∃ y, R x y,
 have ∀ x, ∃! (h : power1 v), R x = power1.rep h :=
   take (x : u),
-  @power1.char.abs[R x] ⟪∀ x, ∃ y, R x y⟫[x],
+  @power1_uabs[R x] ⟪∀ x, ∃ y, R x y⟫[x],
 have ∃! (f : u → power1 v), ∀ x, R x = power1.rep (f x) :=
   auc ⟪∀ x, ∃! (h : power1 v), R x = power1.rep h⟫,
 obtain (f : u → power1 v), ∀ x, R x = power1.rep (f x) :=
@@ -865,8 +436,6 @@ exists.intro
    have power1.rep (f x) (choice (f x)) :=
      choice.spec,
    eq.conv (eq.symm (eq.congr_fun ⟪∀ x, R x = power1.rep (f x)⟫[x])) ⟪power1.rep (f x) (choice (f x))⟫)
-
-def split.{u, v} (f : u → v) : Prop := ∃ g, ∀ y, y = f (g y)
 
 lemma surjective.split.{u, v} (f : u → v) : surjective f → split f :=
 ac
@@ -880,12 +449,8 @@ ac
 lemma em (φ : Prop) : φ ∨ ¬φ :=
 have ∃ b, φ ∨ b = tt := exists.intro (or.right eq.refl),
 have ∃ b, φ ∨ b = ff := exists.intro (or.right eq.refl),
-obtain (h₁ : power1 bool), (λ b, φ ∨ b = tt) = power1.rep h₁ :=
-  uexists.exists
-    (power1.char.abs ⟪∃ b, φ ∨ b = tt⟫),
-obtain (h₂ : power1 bool), (λ b, φ ∨ b = ff) = power1.rep h₂ :=
-  uexists.exists
-    (power1.char.abs ⟪∃ b, φ ∨ b = ff⟫),
+obtain (h₁ : power1 bool), (λ b, φ ∨ b = tt) = power1.rep h₁ := power1_abs ⟪∃ b, φ ∨ b = tt⟫,
+obtain (h₂ : power1 bool), (λ b, φ ∨ b = ff) = power1.rep h₂ := power1_abs ⟪∃ b, φ ∨ b = ff⟫,
 have φ → choice h₁ = choice h₂ :=
   assume φ,
   have (λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff) := fun_ext (
@@ -897,7 +462,7 @@ have φ → choice h₁ = choice h₂ :=
   have power1.rep h₁ = power1.rep h₂ :=
     eq.trans (eq.symm ⟪(λ b, φ ∨ b = tt) = power1.rep h₁⟫) (eq.trans ⟪(λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff)⟫ ⟪(λ b, φ ∨ b = ff) = power1.rep h₂⟫),
   have h₁ = h₂ :=
-    power1.rep.injective[_, _] ⟪power1.rep h₁ = power1.rep h₂⟫,
+    power1_ext ⟪power1.rep h₁ = power1.rep h₂⟫,
   eq.congr_arg ⟪h₁ = h₂⟫,
 have φ ∨ choice h₁ = tt :=
   eq.conv (eq.symm (eq.congr_fun ⟪(λ b, φ ∨ b = tt) = power1.rep h₁⟫)) choice.spec,
@@ -918,15 +483,44 @@ or.elim ⟪φ ∨ choice h₁ ≠ choice h₂⟫
     or.right (mt ⟪φ → choice h₁ = choice h₂⟫ ⟪choice h₁ ≠ choice h₂⟫))
 
 /-
- - natural numbers
+ - support
  -/
 
-type const ℕ : Type
-const zero : ℕ
-const succ : ℕ → ℕ
-axiom ind : ∀ n, ∀ P, P zero ∧ (∀ n, P n → P (succ n)) → P n
-const rec.{u} : ℕ → u → (u → u) → u
-axiom rec.spec.{u} : ∀ (d₁ : u) (d₂ : u → u), rec zero d₁ d₂ = d₁ ∧ (∀ n, rec (succ n) d₁ d₂ = d₂ (rec n d₁ d₂))
+-- A type operator sending an inhabited type to its propositional truncation.
+-- This type has several names in the literature, such as support type, bracket type, or propositional truncation.
+structure is_inhabited u := {
+  axiom inhabited : ∃ (a : u), ⊤
+}
+
+axiom is_inhabited_ext.{u} (h₁ h₂ : is_inhabited u) : h₁ = h₂
+
+instance is_inhabited.mk.{u} (x : u) : is_inhabited u := {
+  lemma inhabited := exists.intro top.intro
+}
+
+instance is_inhabited.join.{u} (h : is_inhabited (is_inhabited u)) : is_inhabited u := {
+  lemma inhabited : ∃ (a : is_inhabited u), ⊤ := @is_inhabited.inhabited[h]
+}
+
+-- internal global choice operator
+-- 
+-- Introducing this constant restricts the class of models to toposes whose supports split.
+-- Note we do not have an object-level function assigning for each type u the choice function,
+-- which would imply axiom of choice.
+-- In the presence of dependent products, this operator corresponds to the law of double negation:
+--
+--   is_inhabited u ≅ Π (p : Prop), (u → El(p)) → El(p)
+--
+-- where we assume Prop is a Tarski universe.
+--
+-- One can interpret this function in Kripke-Joyal semantics as follows:
+-- whenever one proves ⊢ ∃ (x : u), ⊤, hence ⊩ ∃ (x : u), ⊤, which in general
+-- means there exist an object V, V → 1 epi and V → u, one can safely assume V was 1.
+const epsilon.{u} : is_inhabited u → u
+
+/-
+ - natural numbers
+ -/
 
 infixl + : 65 := add
 infixl - : 65 := sub
@@ -945,14 +539,177 @@ def mul (n m : ℕ) : ℕ := rec n zero (add m)
 def bit0 (n : ℕ) : ℕ := n + n
 def bit1 (n : ℕ) : ℕ := succ (bit0 n)
 
-------------------------------------------------------------
+/-
+ - (some) algebras
+ -/
+
+structure monoid u := {
+  const mult : u → u → u
+  const unit : u
+  axiom assoc (x₁ x₂ x₃ : u) : mult (mult x₁ x₂) x₃ = mult x₁ (mult x₂ x₃)
+  axiom left_unit (x : u) : mult unit x = x
+  axiom right_unit (x : u) : mult x unit = x
+}
+
+instance Prop_conj_monoid : monoid Prop := {
+  def mult := and
+  def unit := ⊤
+  lemma assoc := and.assoc
+  lemma left_unit := top_and
+  lemma right_unit := and_top
+}
+
+instance Prop_disj_monoid : monoid Prop := {
+  def mult := or
+  def unit := ⊥
+  lemma assoc := or.assoc
+  lemma left_unit := bot_or
+  lemma right_unit := or_bot
+}
+
+instance power_monoid.{u, v} (m : monoid u) : monoid (v → u) := {
+  def mult (f g : v → u) := λ x, mult m (f x) (g x)
+  def unit := λ x, unit m
+  lemma assoc := sorry
+  lemma left_unit := sorry
+  lemma right_unit := sorry
+}
+
+structure pointed u := {
+  const pt : u
+}
+
+structure is_prop u := {
+  axiom spec (x₁ x₂ : u) : x₁ = x₂
+}
+
+structure C := {
+  const x : u
+  axiom spec : P x
+}
+
+def rep := C.x
+lemma rep.char := C.spec
+
+axiom C.abs : ∀ x, spec x → (∃ c, x = rep c)
+
+axiom C.ind (P : C → Prop) (c : C) : (∀ x, spec x → (∃! c, x = rep c) → ∃ c, x = rep c ∧ P c) → P c
+
+(∀ x, spec x → ∃ c, x = rep c ∧ P c) → P c₁
+
+structure comprehension base u := {
+  -- the characteristic
+  const char : base → Prop
+
+  const rep : u → base
+
+  -- NB: `char (rep x) = ⊤` is stronger thant `char (rep x)` (without prop_ext). Should we use that?
+  axiom rep.char (x : u) : char (rep x)
+
+  -- this alone is insufficient as this only asserts the (unique) existence but does not give the concrete term.
+  axiom char.abs (y : base) : char y → ∃! x, y = rep x
+}
+
+lemma rep.injective.{base, u} (d : comprehension base u) : injective (rep d) :=
+take (x₁ : u),
+take (x₂ : u),
+(uexists.unique (char.abs rep.char))[_, _] eq.refl
+
+-- structure group u :=
+-- (mul : u → u → u)
+-- (one : u)
+-- (inv : u → u)
+-- (assume assoc : ∀ x₁ x₂ x₃, mul (mul x₁ x₂) x₃ = mul x₁ (mul x₂ x₃))
+-- (assume left_unit : ∀ x, mul one x = x)
+-- (assume right_unit : ∀ x, mul x one = x)
+-- (assume left_inv : ∀ x, mul (inv x) x = one)
+-- (assume right_inv : ∀ x, mul x (inv x) = one)
+
+type const monoid : Type → Type
+const mult.{u} : monoid u → u → u → u
+const unit.{u} : monoid u → u
+axiom assoc.{u} (m : monoid u) (x₁ x₂ x₃ : u) : mult m (mult m x₁ x₂) x₃ = mult m x₁ (mult m x₂ x₃)
+axiom left_unit.{u} (m : monoid u) (x : u) : mult m (unit m) x = x
+axiom right_unit.{u} (m : monoid u) (x : u) : mult m x (unit m) = x
+
+type variable u
+
+def interchange (m₁ m₂ : monoid u) : Prop := ∀ a b c d, mult m₁ (mult m₂ a b) (mult m₂ c d) = mult m₂ (mult m₁ a c) (mult m₁ b d)
 
 /-
-type def proof := { φ : Prop | φ }
-def proof.target : proof → Prop := proof.rep
-
--- hypothetical lemma (using type dependency)
-type def proof (φ : Prop) := { h : unit | φ }
-lemma to_proof (φ : Prop) : φ → ∃! (h : proof φ), ⊤
-lemma from_proof (φ : Prop) (h : proof φ) : φ
+lemma interchange.units_are_equal (m₁ m₂ : monoid u) : interchange m₁ m₂ → unit m₁ = mult m₂ (mult m₁ (unit m₁) (unit m₂)) (mult m₁ (unit m₂) (unit m₁)) :=
+assume interchange m₁ m₂,
+have unit m₁ = mult m₁ (unit m₁) (unit m₁) := eq.symm left_unit,
+have mult m₁ (unit m₁) (unit m₁) = mult m₁ (mult m₂ (unit m₁) (unit m₂)) (unit m₁) := @eq.ap[_, _, λ x, mult m₁ x (unit m₁)] (eq.symm @right_unit[m₂, unit m₁]),
+have mult m₁ (mult m₂ (unit m₁) (unit m₂)) (unit m₁) = mult m₁ (mult m₂ (unit m₁) (unit m₂)) (mult m₂ (unit m₂) (unit m₁)) := @eq.ap[_, _, λ x, mult m₁ (mult m₂ (unit m₁) (unit m₂)) x] (eq.symm left_unit),
+have mult m₁ (mult m₂ (unit m₁) (unit m₂)) (mult m₂ (unit m₂) (unit m₁)) = mult m₂ (mult m₁ (unit m₁) (unit m₂)) (mult m₁ (unit m₂) (unit m₁)) := ⟪interchange m₁ m₂⟫[unit m₁, unit m₂, unit m₂, unit m₁],
+eq.trans
+  ⟪unit m₁ = mult m₁ (unit m₁) (unit m₁)⟫
+  (eq.trans
+    ⟪mult m₁ (unit m₁) (unit m₁) = mult m₁ (mult m₂ (unit m₁) (unit m₂)) (unit m₁)⟫
+    (eq.trans
+      ⟪mult m₁ (mult m₂ (unit m₁) (unit m₂)) (unit m₁) = mult m₁ (mult m₂ (unit m₁) (unit m₂)) (mult m₂ (unit m₂) (unit m₁))⟫)
+      ⟪mult m₁ (mult m₂ (unit m₁) (unit m₂)) (mult m₂ (unit m₂) (unit m₁)) = mult m₂ (mult m₁ (unit m₁) (unit m₂)) (mult m₁ (unit m₂) (unit m₁))⟫)
+-- have unit m₁ = mult m₂ (unit m₂) (mult m₁ (unit m₂) (unit m₁)) := eq.trans ⟪unit m₁ = mult m₂ (mult m₁ (unit m₁) (unit m₂)) (mult m₁ (unit m₂) (unit m₁))⟫ (eq.ap left_unit),
+-- have unit m₁ = mult m₂ (unit m₂) (unit m₂) := eq.trans ⟪unit m₁ = mult m₂ (unit m₂) (mult m₁ (unit m₂) (unit m₁))⟫ (eq.ap right_unit),
+-- have unit m₁ = unit m₂ := eq.trans ⟪unit m₁ = mult m₂ (unit m₂) (unit m₂)⟫ left_unit,
+-- ⟪unit m₁ = unit m₂⟫
 -/
+
+type const group : Type → Type
+const group.monoid.{u} : group u → monoid u
+const inv.{u} : group u → u → u
+axiom left_inv.{u} (g : group u) (x : u) : mult (group.monoid g) (inv g x) x = unit (group.monoid g)
+axiom right_inv.{u} (g : group u) (x : u) : mult (group.monoid g) x (inv g x) = unit (group.monoid g)
+
+
+
+const abs.{P, u, a} : is_predicate P u → is_singleton u a → apply u P a → comprehension u P
+
+structure is_comprehension base u := {
+  const char : base → Prop
+  const rep : u → base
+  axiom ext : ∀ x₁ x₂, rep x₁ = rep x₂ → x₁ = x₂
+  axiom spec : ∀ m, char (rep m)
+  axiom abs : ∀ x, char x → ∃ m, x = rep m
+}
+
+structure is_singleton u a := {
+  const is_comprehension : is_comprehension u a
+  const pt : a
+  axiom is_contractible : ∀ x, x = pt
+}
+
+structure is_predicate u P := {
+  const is_singleton : is_singleton (u → Prop) P
+}
+
+structure apply u P x := {
+  const P_is_predicate : is_predicate u P
+  const a_is_singleton : is_singleton u a
+  axiom spec : rep (pt P_is_predicate) (rep (pt a_is_singleton))
+}
+
+structure comprehension u P := {
+
+}
+
+1 ⊨ ∀ y, P y → ∃ x, y = rep x
+===================================
+for any a : U → Y, U ⊨ P a → ∃ x, a = rep x
+===============================
+for any a : U → Y, h : V → U, (V ⊨ P (a h)) ⇒ (V ⊨ ∃ x, (a h) = rep x)
+====================
+for any b : V → Y, (V ⊨ P b) ⇒ (V ⊨ ∃ x, b = rep x)
+===========
+for any b : V → Y, (V ⊨ P b) ⇒ (∃ f : W → V epi, s : W → X, W ⊨ (b f) = rep s)
+===========
+for any b : V → Y, (V ⊨ P b) ⇒ (∃ f : W → V epi, s : W → X, b f = rep s)
+
+    s
+W -----> X
+|        v
+v f      | rep
+v        v
+V -----> Y
+    b

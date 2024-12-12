@@ -189,6 +189,20 @@ impl Type {
         }
     }
 
+    /// assert_eq!(t, "t1 → t2 → t");
+    /// assert_eq!(t.undischarge(), [t1, t2]);
+    pub fn undischarge(&mut self) -> Vec<Type> {
+        let mut ts = vec![];
+        let mut t = &mut *self;
+        while let Type::Arrow(inner) = t {
+            let TypeArrow { dom, cod } = Arc::make_mut(inner);
+            ts.push(mem::take(dom));
+            t = cod;
+        }
+        *self = mem::take(t);
+        ts
+    }
+
     pub fn apply(&mut self, args: impl IntoIterator<Item = Type>) {
         for arg in args {
             *self = Type::App(Arc::new(TypeApp {
