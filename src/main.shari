@@ -339,10 +339,29 @@ inductive bin_tree u
 | leaf : u → bin_tree
 | node : bin_tree → bin_tree → bin_tree
 
+-- type infixr × : 35
+
+def prod.fst.{u, v} (p : u × v) : u := prod.rec p (λ a b, a)
+def prod.snd.{u, v} (p : u × v) : v := prod.rec p (λ a b, b)
+
+def pair.{u, v} : u → v → u × v := prod.mk
+
+type variable u v
+
 -- TODO: use namespace
 def tt : bool := bool.tt
 def ff : bool := bool.ff
+def fst : u × v → u := prod.fst
+def snd : u × v → u := prod.fst
 def star : unit := unit.star
+def inl : u → sum u v := sum.inl
+def inr : v → sum u v := sum.inr
+def zero : nat := nat.zero
+def succ : nat → nat := nat.succ
+def nil : list u := list.nil
+def cons : u → list u → list u := list.cons
+def none : option u := option.none
+def some : u → option u := option.some
 
 lemma unit.eta_expand (x : unit) : x = star :=
 unit.ind eq.refl
@@ -353,10 +372,7 @@ unit.ind eq.refl
 lemma unit_ext (x₁ x₂ : unit) : x₁ = x₂ :=
 eq.trans unit.eta_expand unit.eta_reduce
 
-def prod.fst.{u, v} (p : prod u v) : u := prod.rec p (λ a b, a)
-def prod.snd.{u, v} (p : prod u v) : v := prod.rec p (λ a b, b)
-
-lemma prod_ext.{u, v} (p₁ p₂ : prod u v) : prod.fst p₁ = prod.fst p₂ → prod.snd p₁ = prod.snd p₂ → p₁ = p₂ :=
+lemma prod_ext.{u, v} (p₁ p₂ : u × v) : prod.fst p₁ = prod.fst p₂ → prod.snd p₁ = prod.snd p₂ → p₁ = p₂ :=
 prod.ind
   (take (a₁ : u), take (b₁ : v),
    prod.ind

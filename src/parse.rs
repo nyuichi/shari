@@ -369,11 +369,22 @@ impl<'a, 'b> Parser<'a, 'b> {
         let mut t = self.type_primary()?;
         while let Some(token) = self.peek_opt() {
             if token.is_symbol() && token.as_str() == "→" {
+                // type infixr → : 25
                 if rbp >= 25 {
                     break;
                 }
                 self.advance();
                 t = mk_type_arrow(t, self.subty(24)?);
+            } else if token.is_symbol() && token.as_str() == "×" {
+                // type infixr × : 35
+                if rbp >= 35 {
+                    break;
+                }
+                self.advance();
+                let s = self.subty(34)?;
+                let mut prod = mk_type_const(Name::intern("prod").unwrap());
+                prod.apply([t, s]);
+                t = prod;
             } else if token.is_ident()
                 || (token.is_symbol() && token.as_str() == "(")
                 || (token.is_symbol() && token.as_str() == "${")
