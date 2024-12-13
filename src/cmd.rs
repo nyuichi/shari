@@ -592,11 +592,11 @@ impl Eval {
                 //
                 // the following induction principle is defined:
                 //
-                //   ind : ∀ ω P,
+                //   ind : ∀ α P,
                 //           (∀ f, (∀ n, P (f n)) → P (limit f)) →
-                //           (∀ ω, P ω → P (succ ω)) →
+                //           (∀ α, P α → P (succ α)) →
                 //           P zero →
-                //           P ω
+                //           P α
                 let pred = Name::fresh();
                 let mut cases = vec![];
                 for ctor in &ctors {
@@ -697,7 +697,7 @@ impl Eval {
                 // together with the following rules:
                 //
                 //   rec (limit f) ≡ λ k₁ k₂ k₃, k₁ f (λ x, rec (f x) k₁ k₂ k₃)
-                //   rec (succ n) ≡ λ k₁ k₂ k₃, k₂ n (rec n k₁ k₂ k₃)
+                //   rec (succ α) ≡ λ k₁ k₂ k₃, k₂ α (rec α k₁ k₂ k₃)
                 //   rec zero ≡ λ k₁ k₂ k₃, k₃
                 //
                 let rec_ty_var = Name::fresh();

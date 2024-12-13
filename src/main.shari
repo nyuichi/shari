@@ -38,7 +38,7 @@ axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) → ∃! f, ∀
  - [ ] field access notation (ad hoc overload)
  - [ ] coersion (especially automatic insertion of rep)
  - [ ] type class
- - [ ] inductive types
+ - [x] inductive types
  - [ ] structures and instances
  - [ ] calc environment
  -/
