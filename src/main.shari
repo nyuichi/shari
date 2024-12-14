@@ -404,11 +404,11 @@ bool.ind (or.left eq.refl) (or.right eq.refl)
 
 lemma bool.tt_ne_ff : tt ≠ ff :=
 assume tt = ff,
-calc ⊤ = (λ x y, x) ⊤ ⊥  := eq.refl
-   ... = bool.rec tt ⊤ ⊥ := eq.ap (eq.symm (and.left bool.rec.spec))
-   ... = bool.rec ff ⊤ ⊥ := eq.ap ⟪tt = ff⟫
-   ... = (λ x y, y) ⊤ ⊥  := eq.ap (and.right bool.rec.spec)
-   ... = ⊥               := eq.refl,
+have ⊤ = ⊥ :=
+  have ⊤ = bool.rec tt ⊤ ⊥ := eq.refl,
+  have bool.rec tt ⊤ ⊥ = bool.rec ff ⊤ ⊥ := eq.ap ⟪tt = ff⟫,
+  have bool.rec ff ⊤ ⊥ = ⊥ := eq.refl,
+  eq.trans ⟪⊤ = bool.rec tt ⊤ ⊥⟫ (eq.trans ⟪bool.rec tt ⊤ ⊥ = bool.rec ff ⊤ ⊥⟫ ⟪bool.rec ff ⊤ ⊥ = ⊥⟫),
 contradiction ⟪⊤ = ⊥⟫ top_ne_bot
 
 /-
