@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
-    iter::repeat_n,
+    iter::{repeat_n, zip},
     mem,
     rc::Rc,
     sync::Arc,
@@ -767,10 +767,16 @@ struct Snapshot {
     type_subst_len: usize,
 }
 
+#[derive(Debug, Default)]
+struct Node {
+    type_constraints: Vec<(Type, Type)>,
+    term_constraints: Vec<(Term, Term)>,
+}
+
 struct Branch<'a> {
     trail_len: usize,
     snapshot: Snapshot,
-    choice: Box<dyn Iterator<Item = Vec<(Term, Term)>> + 'a>,
+    nodes: Box<dyn Iterator<Item = Node> + 'a>,
 }
 
 struct Unifier<'a> {
@@ -929,11 +935,46 @@ impl<'a> Unifier<'a> {
         false
     }
 
-    fn inst_arg_heads(&self, m: &mut Term) {
+    // Note that the result term may contain redex in head
+    fn inst_stuck(&self, m: &mut Term) -> bool {
+        if self.inst_head(m) {
+            return true;
+        }
+        let Term::Const(m_head) = m.head() else {
+            return false;
+        };
+        if self.tt_env.get_iota_reductions(m_head.name).is_none() {
+            return false;
+        };
+        let mut args = m.args_mut();
+        if args.is_empty() {
+            return false;
+        }
+        self.inst_stuck(&mut *args[0])
+    }
+
+    fn unfold_stuck(&self, m: &mut Term) -> bool {
+        if self.tt_env.unfold_head(m).is_some() {
+            return true;
+        }
+        let Term::Const(m_head) = m.head() else {
+            return false;
+        };
+        if self.tt_env.get_iota_reductions(m_head.name).is_none() {
+            return false;
+        };
+        let mut args = m.args_mut();
+        if args.is_empty() {
+            return false;
+        }
+        self.unfold_stuck(&mut *args[0])
+    }
+
+    fn inst_arg_stuck(&self, m: &mut Term) {
         for arg in &mut m.args_mut() {
-            arg.whnf();
-            while self.inst_head(arg) {
-                if arg.whnf().is_none() {
+            self.tt_env.weak_reduce(arg);
+            while self.inst_stuck(arg) {
+                if self.tt_env.weak_reduce(arg).is_none() {
                     break;
                 }
             }
@@ -986,8 +1027,8 @@ impl<'a> Unifier<'a> {
         if is_delta {
             kind = ConstraintKind::Delta;
         } else {
-            self.inst_arg_heads(&mut left);
-            self.inst_arg_heads(&mut right);
+            self.inst_arg_stuck(&mut left);
+            self.inst_arg_stuck(&mut right);
             if left.is_quasi_pattern() {
                 kind = ConstraintKind::QuasiPattern;
             } else if right.is_quasi_pattern() {
@@ -1125,7 +1166,9 @@ impl<'a> Unifier<'a> {
             self.stack.push((left, right));
             return None;
         }
-        if left.whnf().is_some() || right.whnf().is_some() {
+        if self.tt_env.weak_reduce(&mut left).is_some()
+            || self.tt_env.weak_reduce(&mut right).is_some()
+        {
             self.stack.push((left, right));
             return None;
         }
@@ -1133,24 +1176,31 @@ impl<'a> Unifier<'a> {
             mem::swap(&mut left, &mut right);
         }
         if right.is_abs() {
-            // L ≡ (?M t₁ ⋯ tₙ)
-            if left.head().is_hole() {
-                // this case is handled later.
-            } else if self.tt_env.unfold_head(&mut left).is_some() {
+            // solvable only when
+            // 1. the head of L is an unassigned hole
+            // 2. the head of L is an assigned hole
+            // 3. L is a stuck recursor with an unassigned hole
+            // 4. L is a stuck recursor that can be instantiated
+            // 5. L is stuck by a unfoldable constant
+            if self.unfold_stuck(&mut left) || self.inst_stuck(&mut left) {
+                // case 1, 3, or 5
                 self.stack.push((left, right));
                 return None;
+            } else if left.head().is_hole() {
+                // this case is handled later.
             } else {
+                // we give up for case 4
                 return Some(());
             }
         }
-        if self.inst_head(&mut left) || self.inst_head(&mut right) {
+        if self.inst_stuck(&mut left) || self.inst_stuck(&mut right) {
             self.stack.push((left, right));
             return None;
         }
         // then each of the heads can be a local, a const, or a hole
         if let Term::Hole(right_head) = right.head() {
             let right_head = *right_head;
-            self.inst_arg_heads(&mut right);
+            self.inst_arg_stuck(&mut right);
             if let Some(args) = right.is_pattern() {
                 // TODO: avoid full instantiation
                 if self.inst(&mut left, right_head) {
@@ -1188,7 +1238,7 @@ impl<'a> Unifier<'a> {
         }
         if let Term::Hole(left_head) = left.head() {
             let left_head = *left_head;
-            self.inst_arg_heads(&mut left);
+            self.inst_arg_stuck(&mut left);
             if let Some(args) = left.is_pattern() {
                 if self.inst(&mut right, left_head) {
                     let binders = args
@@ -1233,6 +1283,10 @@ impl<'a> Unifier<'a> {
         }
         match (left.head(), right.head()) {
             (Term::Const(left_head), Term::Const(right_head)) => {
+                // For a recursor, its main premise is any of the following forms:
+                // 1. f a₁ ⋯ aₙ    stuck can be resolved by δ-reduction
+                // 2. ?M a₁ ⋯ aₙ   stuck can be resolved by instantiation
+                // 3. l a₁ ⋯ aₙ
                 if left_head.name != right_head.name {
                     let left_hint = self.tt_env.def_hint(left_head.name).unwrap_or(0);
                     let right_hint = self.tt_env.def_hint(right_head.name).unwrap_or(0);
@@ -1249,7 +1303,16 @@ impl<'a> Unifier<'a> {
                         }
                         std::cmp::Ordering::Equal => {
                             if left_hint == 0 {
-                                // (f t₁ ⋯ tₙ) ≈ (g s₁ ⋯ sₘ) where f and g are both irreducible.
+                                if self.unfold_stuck(&mut left) || self.unfold_stuck(&mut right) {
+                                    self.stack.push((left, right));
+                                    return None;
+                                }
+                                // Two possibilities
+                                // 1. (f t₁ ⋯ tₙ) ≈ (g s₁ ⋯ sₘ) where f and g are both irreducible.
+                                // 2. (rec₁ t₁ ⋯ tₙ) ≈ (rec₂ s₁ ⋯ sₘ) where rec₁ and rec₂ are different resursors and
+                                //    both are stuck by some holes.
+                                // Case 2 can be possibly resolved by appropriate instantiation but in this implementation
+                                // we simply give up.
                                 return Some(());
                             }
                             self.tt_env.unfold_head(&mut left).unwrap();
@@ -1260,10 +1323,25 @@ impl<'a> Unifier<'a> {
                     }
                 }
                 // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ)
-                for (t1, t2) in left_head.ty_args.iter().zip(right_head.ty_args.iter()) {
-                    self.add_type_constraint(t1.clone(), t2.clone());
-                }
                 if self.tt_env.def_hint(left_head.name).is_none() {
+                    if self.unfold_stuck(&mut left) || self.unfold_stuck(&mut right) {
+                        self.stack.push((left, right));
+                        return None;
+                    }
+                    // rebind left_head and right_head because their lifetimes are over.
+                    let (Term::Const(left_head), Term::Const(right_head)) =
+                        (left.head(), right.head())
+                    else {
+                        unreachable!();
+                    };
+                    // Three possibilities
+                    // 1. (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where f is irreducible
+                    // 2. (rec t₁ ⋯ tₙ) ≈ (rec s₁ ⋯ sₘ) where both sides are stuck by some holes.
+                    // 3. (rec₁ t₁ ⋯ tₙ) ≈ (rec₂ s₁ ⋯ sₘ) where rec₁ and rec₂ are different resursors and both are stuck by some holes.
+                    // We ignore case 3, and do only unify as if rec is a regular opaque constant for case 2.
+                    for (t1, t2) in left_head.ty_args.iter().zip(right_head.ty_args.iter()) {
+                        self.add_type_constraint(t1.clone(), t2.clone());
+                    }
                     let left_args = left.unapply();
                     let right_args = right.unapply();
                     if left_args.len() != right_args.len() {
@@ -1276,13 +1354,18 @@ impl<'a> Unifier<'a> {
                     }
                     return None;
                 }
-                // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where any of t or s contains a hole.
+                // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where f is unfoldable and any of t or s contains a hole.
                 self.add_derived_constraint(left, right, true);
                 None
             }
             (Term::Const(left_head), Term::Local(right_head)) => {
-                // yuichi: perhaps we can simply give up on this case, when completeness is not important.
+                // TODO: perhaps we can simply give up on this case, when completeness is not important.
                 if self.tt_env.def_hint(left_head.name).is_none() {
+                    if self.unfold_stuck(&mut left) {
+                        self.stack.push((left, right));
+                        return None;
+                    }
+                    // we give up find a solution for a stuck recursor.
                     return Some(());
                 }
                 left.close(*right_head);
@@ -1378,16 +1461,12 @@ impl<'a> Unifier<'a> {
         self.type_constraints_index = snapshot.type_constraints_len;
     }
 
-    fn push_branch(
-        &mut self,
-        trail_len: usize,
-        choice: Box<dyn Iterator<Item = Vec<(Term, Term)>> + 'a>,
-    ) {
+    fn push_branch(&mut self, trail_len: usize, nodes: Box<dyn Iterator<Item = Node> + 'a>) {
         let snapshot = self.save();
         self.decisions.push(Branch {
             trail_len,
             snapshot,
-            choice,
+            nodes,
         });
     }
 
@@ -1408,43 +1487,57 @@ impl<'a> Unifier<'a> {
         let Some(br) = self.decisions.last_mut() else {
             return false;
         };
-        let Some(constraints) = br.choice.next() else {
+        let Some(node) = br.nodes.next() else {
             return false;
         };
         let snapshot = br.snapshot.clone();
         self.restore(&snapshot);
-        for (left, right) in constraints.into_iter().rev() {
+        for (left, right) in node.type_constraints.into_iter().rev() {
+            self.type_constraints.push((left, right));
+        }
+        for (left, right) in node.term_constraints.into_iter().rev() {
             self.stack.push((left, right));
         }
         true
     }
 
-    fn choice_delta(&self, c: &Constraint) -> Vec<Vec<(Term, Term)>> {
+    fn choice_delta(&self, c: &Constraint) -> Vec<Node> {
         // suppose (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₙ)
+        let Term::Const(left_head) = c.left.head() else {
+            unreachable!();
+        };
+        let Term::Const(right_head) = c.right.head() else {
+            unreachable!();
+        };
         let left_args = c.left.args();
         let right_args = c.right.args();
         // Try first (t₁ ≈ s₁) ∧ ⋯ ∧ (tₙ ≈ sₙ)
-        let mut a1 = vec![];
+        let mut node1 = Node::default();
+        for (t1, t2) in zip(&left_head.ty_args, &right_head.ty_args) {
+            node1.type_constraints.push((t1.clone(), t2.clone()));
+        }
         for (&left_arg, &right_arg) in left_args.iter().zip(right_args.iter()) {
-            a1.push((left_arg.clone(), right_arg.clone()));
+            node1
+                .term_constraints
+                .push((left_arg.clone(), right_arg.clone()));
         }
         // Try second ((unfold f) t₁ ⋯ tₙ ≈ (unfold f) s₁ ⋯ sₙ)
-        let mut a2 = vec![];
+        let mut node2 = Node::default();
         {
             let mut left = c.left.clone();
             let mut right = c.right.clone();
             self.tt_env.unfold_head(&mut left).unwrap();
             self.tt_env.unfold_head(&mut right).unwrap();
-            a2.push((left, right));
+            node2.term_constraints.push((left, right));
         }
-        vec![a1, a2]
+        vec![node1, node2]
     }
 
-    fn choice_fr(&self, c: &Constraint) -> Vec<Vec<(Term, Term)>> {
+    fn choice_fr(&self, c: &Constraint) -> Vec<Node> {
         let left = &c.left;
         let mut right = c.right.clone();
 
-        let mut choice = vec![];
+        let mut nodes = vec![];
 
         if right.is_abs() {
             // f ≡                 ?M t[1] .. t[p]
@@ -1455,6 +1548,7 @@ impl<'a> Unifier<'a> {
             // X ↦ λ z[1] .. z[p] x[1] .. x[m], ? (Y[1] z[1] .. z[p] x[1] .. x[m]) .. (Y[q] z[1] .. z[p] x[1] .. x[m])
 
             // TODO: remove this and check if the hole is used only once
+            // FIXME: hnf does not respect ι-reductions
             right.hnf();
 
             let left_head = left.head();
@@ -1490,7 +1584,10 @@ impl<'a> Unifier<'a> {
                 let mut cand = mk_local(*x);
                 cand.apply(new_args.clone());
                 cand.abs(&new_binders, true);
-                choice.push(vec![(left_head.clone(), cand)]);
+                nodes.push(Node {
+                    type_constraints: vec![],
+                    term_constraints: vec![(left_head.clone(), cand)],
+                });
             }
 
             // imitation
@@ -1499,7 +1596,10 @@ impl<'a> Unifier<'a> {
                     let mut cand = right_head.clone();
                     cand.apply(new_args.clone());
                     cand.abs(&new_binders, true);
-                    choice.push(vec![(left_head.clone(), cand)]);
+                    nodes.push(Node {
+                        type_constraints: vec![],
+                        term_constraints: vec![(left_head.clone(), cand)],
+                    });
                 }
                 Term::Local(name) => {
                     // @ ∈ { x[1], .., x[m] }
@@ -1507,7 +1607,10 @@ impl<'a> Unifier<'a> {
                         let mut cand = right_head.clone();
                         cand.apply(new_args.clone());
                         cand.abs(&new_binders, true);
-                        choice.push(vec![(left_head.clone(), cand)]);
+                        nodes.push(Node {
+                            type_constraints: vec![],
+                            term_constraints: vec![(left_head.clone(), cand)],
+                        });
                     }
                 }
                 _ => unreachable!(),
@@ -1555,7 +1658,10 @@ impl<'a> Unifier<'a> {
                     let mut cand = mk_local(*x);
                     cand.apply(new_args.clone());
                     cand.abs(&new_binders, true);
-                    choice.push(vec![(left_head.clone(), cand)]);
+                    nodes.push(Node {
+                        type_constraints: vec![],
+                        term_constraints: vec![(left_head.clone(), cand)],
+                    });
                 }
 
                 // imitation
@@ -1564,14 +1670,17 @@ impl<'a> Unifier<'a> {
                         let mut cand = right_head.clone();
                         cand.apply(new_args.clone());
                         cand.abs(&new_binders, true);
-                        choice.push(vec![(left_head.clone(), cand)]);
+                        nodes.push(Node {
+                            type_constraints: vec![],
+                            term_constraints: vec![(left_head.clone(), cand)],
+                        });
                     }
                     Term::Local(_) => {}
                     _ => unreachable!("{right_head}"),
                 };
             }
         }
-        choice
+        nodes
     }
 
     fn is_resolved_constraint(&self, c: &Constraint) -> bool {
@@ -1616,14 +1725,14 @@ impl<'a> Unifier<'a> {
                 c.kind, c.left, c.right
             );
         }
-        let choice = match c.kind {
+        let nodes = match c.kind {
             ConstraintKind::Delta => self.choice_delta(&c),
             ConstraintKind::QuasiPattern => self.choice_fr(&c),
             ConstraintKind::FlexRigid => self.choice_fr(&c),
             ConstraintKind::FlexFlex => unreachable!(),
         };
 
-        self.push_branch(trail_len, Box::new(choice.into_iter()));
+        self.push_branch(trail_len, Box::new(nodes.into_iter()));
         self.next();
         true
     }

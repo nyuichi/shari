@@ -352,7 +352,7 @@ type variable u v
 def tt : bool := bool.tt
 def ff : bool := bool.ff
 def fst : u × v → u := prod.fst
-def snd : u × v → u := prod.fst
+def snd : u × v → v := prod.snd
 def star : unit := unit.star
 def inl : u → sum u v := sum.inl
 def inr : v → sum u v := sum.inr
@@ -367,33 +367,37 @@ lemma unit.eta_expand (x : unit) : x = star :=
 unit.ind eq.refl
 
 lemma unit.eta_reduce (x : unit) : star = x :=
-unit.ind eq.refl
+eq.symm unit.eta_expand
 
 lemma unit_ext (x₁ x₂ : unit) : x₁ = x₂ :=
 eq.trans unit.eta_expand unit.eta_reduce
 
-lemma prod_ext.{u, v} (p₁ p₂ : u × v) : prod.fst p₁ = prod.fst p₂ → prod.snd p₁ = prod.snd p₂ → p₁ = p₂ :=
-prod.ind
-  (take (a₁ : u), take (b₁ : v),
-   prod.ind
-   (take (a₂ : u), take (b₂ : v),
-   assume prod.fst (prod.mk a₁ b₁) = prod.fst (prod.mk a₂ b₂),
-   assume prod.snd (prod.mk a₁ b₁) = prod.snd (prod.mk a₂ b₂),
-   calc a₁ = prod.fst (prod.mk a₁ b₁) := eq.refl
-       ... = prod.fst (prod.mk a₂ b₂) := ⟪prod.fst (prod.mk a₁ b₁) = prod.fst (prod.mk a₂ b₂)⟫
-       ... = a₂                       := eq.refl,
-   calc b₁ = prod.snd (prod.mk a₁ b₁) := eq.refl
-       ... = prod.snd (prod.mk a₂ b₂) := ⟪prod.snd (prod.mk a₁ b₁) = prod.snd (prod.mk a₂ b₂)⟫
-       ... = b₂                       := eq.refl,
-   calc prod.mk a₁ b₁ = prod.mk a₂ b₁ := eq.ap ⟪a₁ = a₂⟫
-                  ... = prod.mk a₂ b₂ := eq.ap ⟪b₁ = b₂⟫,
-   ⟪prod.mk a₁ b₁ = prod.mk a₂ b₂⟫))
-
 lemma prod.beta.{u, v} (x : u) (y : v) : x = fst (prod.mk x y) ∧ y = snd (prod.mk x y) :=
 and.intro eq.refl eq.refl
 
+/-
+lemma prod_ext.{u, v} (p₁ p₂ : u × v) : fst p₁ = fst p₂ → snd p₁ = snd p₂ → p₁ = p₂ :=
+prod.ind
+  take (a₁ : u), take (b₁ : v),
+  prod.ind
+  take (a₂ : u), take (b₂ : v),
+    assume fst ⟨a₁, b₁⟩ = fst ⟨a₂, b₂⟩,
+    assume snd ⟨a₁, b₁⟩ = snd ⟨a₂, b₂⟩,
+    have a₁ = a₂ :=
+      have a₁ = fst ⟨a₁, b₁⟩ := eq.refl,
+      have fst ⟨a₂, b₂⟩ = a₂ := eq.refl,
+      eq.trans ⟪a₁ = fst ⟨a₁, b₁⟩⟫ (eq.trans ⟪fst ⟨a₁, b₁⟩ = fst ⟨a₂, b₂⟩⟫ ⟪fst ⟨a₂, b₂⟩ = a₂⟫),
+    have b₁ = b₂ :=
+      have b₁ = snd ⟨a₁, b₁⟩ := eq.refl,
+      have snd ⟨a₂, b₂⟩ = b₂ := eq.refl,
+      eq.trans ⟪b₁ = snd ⟨a₁, b₁⟩⟫ (eq.trans ⟪snd ⟨a₁, b₁⟩ = snd ⟨a₂, b₂⟩⟫ ⟪snd ⟨a₂, b₂⟩ = b₂⟫),
+    have ⟨a₁, b₁⟩ = ⟨a₂, b₁⟩ := eq.ap ⟪a₁ = a₂⟫,
+    have ⟨a₂, b₁⟩ = ⟨a₂, b₂⟩ := eq.ap ⟪b₁ = b₂⟫,
+    eq.trans ⟪⟨a₁, b₁⟩ = ⟨a₂, b₁⟩⟫ ⟪⟨a₂, b₁⟩ = ⟨a₂, b₂⟩⟫
+
 lemma prod.eta.{u, v} (p : prod u v) : p = prod.mk (fst p) (snd p) :=
 prod_ext eq.refl eq.refl
+-/
 
 lemma bool.case (b : bool) : b = tt ∨ b = ff :=
 bool.ind (or.left eq.refl) (or.right eq.refl)

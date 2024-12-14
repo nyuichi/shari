@@ -6,7 +6,7 @@ use crate::{
         proof::{self, mk_type_prop},
         tt::{
             mk_app, mk_const, mk_local, mk_type_arrow, mk_type_const, mk_type_local, Def, Kind,
-            LocalEnv, Name, Term, Type,
+            LocalEnv, Name, Rec, Term, Type,
         },
     },
     parse::{FactInfo, Nasmespace, TokenTable},
@@ -284,7 +284,6 @@ impl Eval {
                     name,
                     Def {
                         local_types: local_env.local_types,
-                        ty,
                         target,
                         hint: self.proof_env.tt_env.defs.len(),
                     },
@@ -779,6 +778,7 @@ impl Eval {
                     .zip(cont_param_tys)
                     .map(|(x, t)| (x, x, t))
                     .collect::<Vec<_>>();
+                let mut recursors = vec![];
                 let mut equations = vec![];
                 for ((rhs_body, ctor_params), ctor) in rhs_bodies
                     .into_iter()
@@ -799,6 +799,15 @@ impl Eval {
 
                     let mut rhs = rhs_body;
                     rhs.abs(&rhs_binders, true);
+
+                    recursors.push((
+                        ctor_name,
+                        Rec {
+                            local_types: rec_local_types.clone(),
+                            params: ctor_params.iter().map(|(x, _)| *x).collect(),
+                            target: rhs.clone(),
+                        },
+                    ));
 
                     let mut eq =
                         mk_const(Name::intern("eq").unwrap(), vec![mk_type_local(rec_ty_var)]);
@@ -829,6 +838,7 @@ impl Eval {
                     .tt_env
                     .consts
                     .insert(rec_name, (rec_local_types.clone(), rec_ty));
+                self.proof_env.tt_env.recursors.insert(rec_name, recursors);
 
                 if let Some(spec) = spec {
                     let rec_spec_name = Name::intern(&format!("{}.rec.spec", name)).unwrap();
