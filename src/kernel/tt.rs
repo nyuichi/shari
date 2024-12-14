@@ -1505,6 +1505,33 @@ impl Env {
         }
     }
 
+    fn is_recursor(&self, name: Name) -> bool {
+        self.get_iota_reductions(name).is_some()
+    }
+
+    fn unfold_stuck(&self, m: &mut Term) -> Option<Path> {
+        match m {
+            Term::Var(_) | Term::Local(_) | Term::Abs(_) | Term::Hole(_) => None,
+            Term::Const(_) => self.delta_reduce(m),
+            Term::App(m) => {
+                let TermApp { fun, arg } = Arc::make_mut(m);
+                if let Some(h_fun) = self.unfold_stuck(fun) {
+                    let h_arg = mk_path_refl(arg.clone());
+                    return Some(mk_path_congr_app(h_fun, h_arg));
+                }
+                let Term::Const(fun) = fun else {
+                    return None;
+                };
+                if !self.is_recursor(fun.name) {
+                    return None;
+                }
+                let h_arg = self.unfold_stuck(arg)?;
+                let h_fun = mk_path_refl(Term::Const(fun.clone()));
+                Some(mk_path_congr_app(h_fun, h_arg))
+            }
+        }
+    }
+
     pub fn def_hint(&self, name: Name) -> Option<usize> {
         let def = self.defs.get(&name)?;
         Some(def.hint + 1)
@@ -1554,20 +1581,52 @@ impl Env {
         }
         if let Term::Abs(_) = m2 {
             // m1 must be unfoldable
-            let h = self.unfold_head(m1)?;
+            let h = self.unfold_stuck(m1)?;
             let h1 = mk_path_trans(h1, h);
             let h = self.equiv_help(m1, m2)?;
             return Some(mk_path_trans(h1, mk_path_trans(h, h2)));
         }
         let head1 = m1.head();
         let head2 = m2.head();
+        if let (Term::Local(head1), Term::Local(head2)) = (head1, head2) {
+            if head1 != head2 {
+                return None;
+            }
+            let args1 = m1.args();
+            let args2 = m2.args();
+            if args1.len() != args2.len() {
+                return None;
+            }
+            let mut h = mk_path_refl(Term::Local(*head1));
+            for (a1, a2) in std::iter::zip(args1, args2) {
+                let mut a1 = a1.clone();
+                let mut a2 = a2.clone();
+                let h_arg = self.equiv_help(&mut a1, &mut a2)?;
+                h = mk_path_congr_app(h, h_arg);
+            }
+            return Some(mk_path_trans(h1, mk_path_trans(h, h2)));
+        }
+        if let Term::Local(_) = head1 {
+            let h = self.equiv_help(m2, m1)?;
+            return Some(mk_path_trans(h1, mk_path_trans(mk_path_symm(h), h2)));
+        }
+        if let Term::Local(_) = head2 {
+            // m1 must be unfoldable
+            let h = self.unfold_stuck(m1)?;
+            let h1 = mk_path_trans(h1, h);
+            let h = self.equiv_help(m1, m2)?;
+            return Some(mk_path_trans(h1, mk_path_trans(h, h2)));
+        }
+        let (Term::Const(head1), Term::Const(head2)) = (head1, head2) else {
+            panic!("holes found");
+        };
         // optimization
-        if head1.untyped_eq(head2) {
+        if head1 == head2 {
             let args1 = m1.args();
             let args2 = m2.args();
             if args1.len() == args2.len() {
                 'args_eq: {
-                    let mut h = mk_path_refl(head1.clone());
+                    let mut h = mk_path_refl(Term::Const(head1.clone()));
                     for (a1, a2) in std::iter::zip(args1, args2) {
                         let mut a1 = a1.clone();
                         let mut a2 = a2.clone();
@@ -1580,16 +1639,8 @@ impl Env {
                 }
             }
         }
-        let def1 = if let Term::Const(inner) = head1 {
-            self.def_hint(inner.name)
-        } else {
-            None
-        };
-        let def2 = if let Term::Const(inner) = head2 {
-            self.def_hint(inner.name)
-        } else {
-            None
-        };
+        let def1 = self.def_hint(head1.name);
+        let def2 = self.def_hint(head2.name);
         if def1.is_some() || def2.is_some() {
             let height1 = def1.unwrap_or(0);
             let height2 = def2.unwrap_or(0);
@@ -1600,9 +1651,6 @@ impl Env {
                     return Some(mk_path_trans(h1, mk_path_trans(h4, mk_path_trans(h3, h2))));
                 }
                 std::cmp::Ordering::Equal => {
-                    if height1 == 0 {
-                        return None;
-                    }
                     let h3 = self.unfold_head(m1).unwrap();
                     let h4 = mk_path_symm(self.unfold_head(m2).unwrap());
                     let h5 = self.equiv_help(m1, m2)?;
@@ -1618,9 +1666,24 @@ impl Env {
                 }
             }
         }
+        if let Some(h_stuck) = self.unfold_stuck(m1) {
+            let h = self.equiv_help(m1, m2)?;
+            return Some(mk_path_trans(
+                h1,
+                mk_path_trans(h_stuck, mk_path_trans(h, h2)),
+            ));
+        }
+        if let Some(h_stuck) = self.unfold_stuck(m2) {
+            let h = self.equiv_help(m1, m2)?;
+            return Some(mk_path_trans(
+                h1,
+                mk_path_trans(h, mk_path_trans(mk_path_symm(h_stuck), h2)),
+            ));
+        }
         None
     }
 
+    // Both terms must be ground
     pub fn equiv(&self, m1: &Term, m2: &Term) -> Option<Path> {
         let mut m1 = m1.clone();
         let mut m2 = m2.clone();

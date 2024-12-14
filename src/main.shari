@@ -406,7 +406,7 @@ lemma bool.tt_ne_ff : tt ≠ ff :=
 assume tt = ff,
 have ⊤ = ⊥ :=
   have ⊤ = bool.rec tt ⊤ ⊥ := eq.refl,
-  have bool.rec tt ⊤ ⊥ = bool.rec ff ⊤ ⊥ := eq.ap ⟪tt = ff⟫,
+  have bool.rec tt ⊤ ⊥ = bool.rec ff ⊤ ⊥ := @eq.ap[_, _, λ b, bool.rec b ⊤ ⊥] ⟪tt = ff⟫,
   have bool.rec ff ⊤ ⊥ = ⊥ := eq.refl,
   eq.trans ⟪⊤ = bool.rec tt ⊤ ⊥⟫ (eq.trans ⟪bool.rec tt ⊤ ⊥ = bool.rec ff ⊤ ⊥⟫ ⟪bool.rec ff ⊤ ⊥ = ⊥⟫),
 contradiction ⟪⊤ = ⊥⟫ top_ne_bot
