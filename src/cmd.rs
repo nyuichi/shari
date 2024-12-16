@@ -138,7 +138,7 @@ pub struct Constructor {
     pub ty: Type,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Eval {
     pub proof_env: proof::Env,
     pub tt: TokenTable,
@@ -148,26 +148,6 @@ pub struct Eval {
 }
 
 impl Eval {
-    pub fn new() -> Eval {
-        let proof_env = proof::Env::new_kernel();
-
-        let mut ns = Nasmespace::default();
-        for &x in proof_env.tt_env.type_consts.keys() {
-            ns.type_consts.insert(x);
-        }
-        for (&x, (local_types, _)) in &proof_env.tt_env.consts {
-            ns.consts.insert(x, local_types.len());
-        }
-
-        Eval {
-            proof_env,
-            ns,
-            tt: Default::default(),
-            pp: Default::default(),
-            tv: Default::default(),
-        }
-    }
-
     pub fn run_cmd(&mut self, cmd: Cmd) -> anyhow::Result<()> {
         match cmd {
             Cmd::Infix(inner) => {

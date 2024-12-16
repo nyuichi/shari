@@ -13,7 +13,7 @@ mod print;
 fn main() -> anyhow::Result<()> {
     let input = include_str!("main.shari");
 
-    let mut eval = cmd::Eval::new();
+    let mut eval = cmd::Eval::default();
 
     let mut lex = Lex::new(input);
 

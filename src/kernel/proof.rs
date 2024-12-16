@@ -211,7 +211,7 @@ impl From<Forall> for Term {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Env {
     pub tt_env: tt::Env,
     // Proved or postulated facts
@@ -224,41 +224,6 @@ pub struct Context {
 }
 
 impl Env {
-    pub fn new_kernel() -> Env {
-        let mut tt_env = tt::Env::default();
-
-        // type Prop
-        tt_env.type_consts.insert(*PROP, Kind::base());
-        // const imp : Prop → Prop → Prop
-        tt_env.consts.insert(
-            *IMP,
-            (
-                vec![],
-                mk_type_arrow(
-                    mk_type_prop(),
-                    mk_type_arrow(mk_type_prop(), mk_type_prop()),
-                ),
-            ),
-        );
-        // const forall.{u} : (u → Prop) → Prop
-        let u = Name::intern("u").unwrap();
-        tt_env.consts.insert(
-            *FORALL,
-            (
-                vec![u],
-                mk_type_arrow(
-                    mk_type_arrow(mk_type_local(u), mk_type_prop()),
-                    mk_type_prop(),
-                ),
-            ),
-        );
-
-        Env {
-            tt_env,
-            facts: Default::default(),
-        }
-    }
-
     /// prop must be certified.
     pub fn check_prop(
         &self,
@@ -379,15 +344,50 @@ mod tests {
     static X: LazyLock<Name> = LazyLock::new(|| Name::intern("x").unwrap());
     static Y: LazyLock<Name> = LazyLock::new(|| Name::intern("y").unwrap());
 
+    fn new_kernel() -> Env {
+        let mut tt_env = tt::Env::default();
+
+        // type Prop
+        tt_env.type_consts.insert(*PROP, Kind::base());
+        // const imp : Prop → Prop → Prop
+        tt_env.consts.insert(
+            *IMP,
+            (
+                vec![],
+                mk_type_arrow(
+                    mk_type_prop(),
+                    mk_type_arrow(mk_type_prop(), mk_type_prop()),
+                ),
+            ),
+        );
+        // const forall.{u} : (u → Prop) → Prop
+        let u = Name::intern("u").unwrap();
+        tt_env.consts.insert(
+            *FORALL,
+            (
+                vec![u],
+                mk_type_arrow(
+                    mk_type_arrow(mk_type_local(u), mk_type_prop()),
+                    mk_type_prop(),
+                ),
+            ),
+        );
+
+        Env {
+            tt_env,
+            facts: Default::default(),
+        }
+    }
+
     fn infer(m: &mut Term) {
-        let env = Env::new_kernel();
+        let env = new_kernel();
         let mut local_env = LocalEnv::default();
         env.tt_env.infer_type(&mut local_env, m).unwrap();
     }
 
     // Check if (p : Prop) | hs ⊢ h : ?
     fn check(hs: impl IntoIterator<Item = Term>, mut h: Proof) -> Term {
-        let env = Env::new_kernel();
+        let env = new_kernel();
         let mut local_env = LocalEnv::default();
         local_env
             .locals
@@ -517,7 +517,7 @@ mod tests {
 
     #[test]
     fn test_infer_prop() {
-        let proof_env = crate::kernel::proof::Env::new_kernel();
+        let proof_env = new_kernel();
         let p = mk_local(Name::intern("p").unwrap());
 
         /*
