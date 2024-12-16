@@ -423,10 +423,10 @@ structure power1 u := {
 }
 
 -- TODO: automatically derive these
-axiom power1_abs.{u} (s : set u) : (∃ x, x ∈ s) → (∃ c, s = power1.rep c)
+axiom power1_abs.{u} (s : set u) : (∃ x, x ∈ s) → ∃ c, s = power1.rep c
 axiom power1_ext.{u} (x₁ x₂ : power1 u) : power1.rep x₁ = power1.rep x₂ → x₁ = x₂
 
-lemma power1_uabs.{u} (s : set u) : (∃ x, x ∈ s) → (∃! c, s = power1.rep c) :=
+lemma power1_uabs.{u} (s : set u) : (∃ x, x ∈ s) → ∃! c, s = power1.rep c :=
 assume ∃ x, x ∈ s,
 obtain (c : power1 u), s = power1.rep c := power1_abs ⟪∃ x, x ∈ s⟫,
 uexists.intro
