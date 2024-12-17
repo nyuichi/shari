@@ -266,6 +266,7 @@ def bigcup.{u} (a : set (set u)) : set u := { x | ∃ s, s ∈ a ∧ x ∈ s }
 def power.{u} (s : set u) : set (set u) := { t | t ⊆ s }
 def setminus.{u} (s : set u) (t : set u) : set u := { x | x ∈ s ∧ x ∉ t }
 def im.{u, v} (f : u → v) (s : set u) : set v := { y | ∃ x, x ∈ s ∧ y = f x }
+def insert.{u} (a : u) (s : set u) : set u := { x | x = a ∨ x ∈ s }
 
 lemma cantor.{u} : ¬(∃ (e : u → set u), surjective e) :=
 mt lawvere_fixpoint (
@@ -274,6 +275,10 @@ mt lawvere_fixpoint (
   contradiction ⟪φ = ¬φ⟫ not.fixed_point_free)
 
 def preimage.{u, v} (f : u → v) (t : set v) : set u := { x | t (f x) }
+
+inductive fin.{u} : set u → Prop
+| empty : fin empty
+| insert (a : u) (s : set u) : fin s → fin (insert a s)
 
 /-
  - well-founded
