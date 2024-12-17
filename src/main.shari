@@ -410,18 +410,22 @@ contradiction ⟪⊤ = ⊥⟫ true_ne_false
  -/
 
 -- The type of inhabited subsets.
+-- The command is desugared into the following set of declarations.
+--
+--   type const inhab : Type → Type
+--   const inhab.rep.{u} : inhab u → set u
+--   axiom inhab.inhabited.{u} (d : inhab u) : ∃ x, x ∈ inhab.rep d
+--   axiom inhab.abs.{u} (s : set u) : (∃ x, x ∈ s) → ∃ d, s = inhab.rep d
+--   axiom inhab.ext.{u} (d₁ d₂ : inhab u) : inhab.rep d₁ = inhab.rep d₂ → d₁ = d₂
+--
 structure inhab u := {
   const rep : set u
   axiom inhabited : ∃ x, x ∈ rep
 }
 
--- TODO: automatically derive these
-axiom inhab_abs.{u} (s : set u) : (∃ x, x ∈ s) → ∃ c, s = inhab.rep c
-axiom inhab_ext.{u} (x₁ x₂ : inhab u) : inhab.rep x₁ = inhab.rep x₂ → x₁ = x₂
-
-lemma inhab_uabs.{u} (s : set u) : (∃ x, x ∈ s) → ∃! c, s = inhab.rep c :=
+lemma inhab.uabs.{u} (s : set u) : (∃ x, x ∈ s) → ∃! c, s = inhab.rep c :=
 assume ∃ x, x ∈ s,
-obtain (c : inhab u), s = inhab.rep c := inhab_abs ⟪∃ x, x ∈ s⟫,
+obtain (c : inhab u), s = inhab.rep c := inhab.abs ⟪∃ x, x ∈ s⟫,
 uexists.intro
   ⟪s = inhab.rep c⟫
   (take (s₁ : inhab v),
@@ -429,7 +433,7 @@ uexists.intro
    assume s = inhab.rep s₁,
    assume s = inhab.rep s₂,
    have inhab.rep s₁ = inhab.rep s₂ := eq.trans (eq.symm ⟪s = inhab.rep s₁⟫) ⟪s = inhab.rep s₂⟫,
-   inhab_ext ⟪inhab.rep s₁ = inhab.rep s₂⟫)
+   inhab.ext ⟪inhab.rep s₁ = inhab.rep s₂⟫)
 
 -- The exisistence of the constant and the axiom state that every type u is a choice type.
 const choice.{u} : inhab u → u
@@ -439,7 +443,7 @@ lemma ac.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x,
 assume ∀ x, ∃ y, R x y,
 have ∀ x, ∃! (h : inhab v), R x = inhab.rep h :=
   take (x : u),
-  @inhab_uabs[R x] ⟪∀ x, ∃ y, R x y⟫[x],
+  @inhab.uabs[R x] ⟪∀ x, ∃ y, R x y⟫[x],
 have ∃! (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
   auc ⟪∀ x, ∃! (h : inhab v), R x = inhab.rep h⟫,
 obtain (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
@@ -462,8 +466,8 @@ ac
 lemma em (φ : Prop) : φ ∨ ¬φ :=
 have ∃ b, φ ∨ b = tt := exists.intro (or.right eq.refl),
 have ∃ b, φ ∨ b = ff := exists.intro (or.right eq.refl),
-obtain (h₁ : inhab bool), (λ b, φ ∨ b = tt) = inhab.rep h₁ := inhab_abs ⟪∃ b, φ ∨ b = tt⟫,
-obtain (h₂ : inhab bool), (λ b, φ ∨ b = ff) = inhab.rep h₂ := inhab_abs ⟪∃ b, φ ∨ b = ff⟫,
+obtain (h₁ : inhab bool), (λ b, φ ∨ b = tt) = inhab.rep h₁ := inhab.abs ⟪∃ b, φ ∨ b = tt⟫,
+obtain (h₂ : inhab bool), (λ b, φ ∨ b = ff) = inhab.rep h₂ := inhab.abs ⟪∃ b, φ ∨ b = ff⟫,
 have φ → choice h₁ = choice h₂ :=
   assume φ,
   have (λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff) := fun_ext (
