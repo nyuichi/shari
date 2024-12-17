@@ -293,6 +293,12 @@ type inductive bool
 | tt : bool
 | ff : bool
 
+-- TODO
+-- one may write like
+--
+--  type inductive prod (u v : Type) : Type
+--  | mk (fst : u) (snd : v) : prod
+--
 type inductive prod u v
 | mk : u → v → prod
 
@@ -363,7 +369,7 @@ eq.trans unit.eta_expand unit.eta_reduce
 lemma prod.beta.{u, v} (x : u) (y : v) : x = fst (prod.mk x y) ∧ y = snd (prod.mk x y) :=
 and.intro eq.refl eq.refl
 
-/-
+/- FIXME
 lemma prod_ext.{u, v} (p₁ p₂ : u × v) : fst p₁ = fst p₂ → snd p₁ = snd p₂ → p₁ = p₂ :=
 prod.ind
   take (a₁ : u), take (b₁ : v),
