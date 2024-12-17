@@ -1,6 +1,7 @@
 use crate::cmd::{
     Cmd, CmdAxiom, CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdLemma,
-    CmdNofix, CmdPrefix, CmdTypeConst, CmdTypeVariable, Constructor, Fixity, Operator,
+    CmdNofix, CmdPrefix, CmdTypeConst, CmdTypeInductive, CmdTypeVariable, Constructor, Fixity,
+    Operator, PredConstructor,
 };
 use crate::expr::{
     mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_const, mk_expr_inst, mk_expr_take, Expr,
@@ -895,11 +896,9 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let e2 = self.expr()?;
                     self.locals.pop();
 
-                    // Expand[obtain (x : τ), p := e1, e2] := exists.elim.{τ}[(λ (x : τ), p), _] e1 (take (x : τ), assume p, e2)
-                    let e = mk_expr_const(Name::intern("exists.elim").unwrap(), vec![ty.clone()]);
-                    let mut pred = p.clone();
-                    pred.abs(&[(name, name, ty.clone())], true);
-                    let e = mk_expr_inst(e, pred, self.mk_term_hole());
+                    // Expand[obtain (x : τ), p := e1, e2] := exists.ind.{τ}[_, _] e1 (take (x : τ), assume p, e2)
+                    let e = mk_expr_const(Name::intern("exists.ind").unwrap(), vec![ty.clone()]);
+                    let e = mk_expr_inst(e, self.mk_term_hole(), self.mk_term_hole());
                     let e = mk_expr_inst(e, self.mk_term_hole(), self.mk_term_hole());
                     let e = mk_expr_app(e, e1, self.mk_term_hole());
                     let e_body = mk_expr_assume(p, e2);
@@ -1083,6 +1082,10 @@ impl<'a, 'b> Parser<'a, 'b> {
                     "variable" => {
                         let type_variable_cmd = self.type_variable_cmd(keyword)?;
                         Cmd::TypeVariable(type_variable_cmd)
+                    }
+                    "inductive" => {
+                        let type_inductive_cmd = self.type_inductive_cmd(keyword)?;
+                        Cmd::TypeInductive(type_inductive_cmd)
                     }
                     _ => {
                         return Self::fail(keyword, "unknown command");
@@ -1369,7 +1372,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(CmdTypeVariable { variables })
     }
 
-    fn inductive_cmd(&mut self, _token: Token<'a>) -> Result<CmdInductive, ParseError> {
+    fn type_inductive_cmd(&mut self, _token: Token<'a>) -> Result<CmdTypeInductive, ParseError> {
         let name = self.name()?;
         self.type_locals.push(name);
 
@@ -1403,10 +1406,86 @@ impl<'a, 'b> Parser<'a, 'b> {
         // Parsing finished. We can now safaly tear off.
         self.type_locals.truncate(local_types.len());
         self.type_locals.pop();
+        Ok(CmdTypeInductive {
+            name,
+            local_types,
+            ctors,
+        })
+    }
+
+    fn inductive_cmd(&mut self, _token: Token<'a>) -> Result<CmdInductive, ParseError> {
+        let name = self.name()?;
+        self.locals.push(name);
+        let local_types = self.local_type_binder()?;
+        match &local_types {
+            Some(local_types) => {
+                for ty in local_types {
+                    self.type_locals.push(*ty);
+                }
+            }
+            None => {
+                for ty in &self.type_variables {
+                    self.type_locals.push(*ty);
+                }
+            }
+        }
+        let mut params = vec![];
+        while let Some(token) = self.expect_symbol_opt("(") {
+            let (names, t) = self.parameter(token)?;
+            for name in names {
+                params.push((name, t.clone()));
+            }
+        }
+        for (x, _) in &params {
+            self.locals.push(*x);
+        }
+        self.expect_symbol(":")?;
+        let target_ty = self.ty()?;
+        let mut ctors: Vec<PredConstructor> = vec![];
+        while let Some(_token) = self.expect_symbol_opt("|") {
+            let token = self.ident()?;
+            let ctor_name = Name::intern(token.as_str()).unwrap();
+            for ctor in &ctors {
+                if ctor_name == ctor.name {
+                    return Self::fail(token, "duplicate constructor")?;
+                }
+            }
+            let mut ctor_params = vec![];
+            while let Some(token) = self.expect_symbol_opt("(") {
+                let (names, t) = self.parameter(token)?;
+                for name in names {
+                    ctor_params.push((name, t.clone()));
+                }
+            }
+            for (x, _) in &ctor_params {
+                self.locals.push(*x);
+            }
+            self.expect_symbol(":")?;
+            let target = self.term()?;
+            self.locals.truncate(self.locals.len() - ctor_params.len());
+            ctors.push(PredConstructor {
+                name: ctor_name,
+                params: ctor_params,
+                target,
+            })
+        }
+        // Parsing finished. We can now safaly tear off.
+        self.locals.truncate(params.len());
+        self.locals.pop();
+        match &local_types {
+            Some(local_types) => {
+                self.type_locals.truncate(local_types.len());
+            }
+            None => {
+                self.type_locals.truncate(self.type_variables.len());
+            }
+        }
         Ok(CmdInductive {
             name,
             local_types,
             ctors,
+            params,
+            target_ty,
         })
     }
 }

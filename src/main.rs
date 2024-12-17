@@ -10,6 +10,34 @@ mod lex;
 mod parse;
 mod print;
 
+fn print_const(eval: &cmd::Eval, name: Name) {
+    let (local_types, ty) = eval.proof_env.tt_env.consts.get(&name).unwrap();
+    print!("const {}.{{", name);
+    let mut first = true;
+    for local_type in local_types {
+        if !first {
+            print!(", ");
+        }
+        print!("{}", local_type);
+        first = false;
+    }
+    println!("}} : {}", Pretty::new(&eval.pp, ty));
+}
+
+fn print_axiom(eval: &cmd::Eval, name: Name) {
+    let (local_types, m) = eval.proof_env.facts.get(&name).unwrap();
+    print!("axiom {}.{{", name);
+    let mut first = true;
+    for local_type in local_types {
+        if !first {
+            print!(", ");
+        }
+        print!("{}", local_type);
+        first = false;
+    }
+    println!("}} : {}", Pretty::new(&eval.pp, m));
+}
+
 fn main() -> anyhow::Result<()> {
     let input = include_str!("main.shari");
 
@@ -31,69 +59,43 @@ fn main() -> anyhow::Result<()> {
         eval.run_cmd(cmd.clone())?;
         match cmd {
             cmd::Cmd::Def(cmd) => {
-                println!("defined {}", cmd.name);
+                println!("def {}", cmd.name);
+                print_const(&eval, cmd.name);
             }
             cmd::Cmd::Lemma(cmd) => {
-                println!("proved {}", cmd.name);
+                println!("lemma {}", cmd.name);
+                print_axiom(&eval, cmd.name);
             }
             cmd::Cmd::Axiom(cmd) => {
-                println!("postulated {}", cmd.name);
+                println!("axiom {}", cmd.name);
+                print_axiom(&eval, cmd.name);
+            }
+            cmd::Cmd::TypeInductive(cmd) => {
+                println!("type inductive {}", cmd.name);
+                for ctor in &cmd.ctors {
+                    let ctor_name = Name::intern(&format!("{}.{}", cmd.name, ctor.name)).unwrap();
+                    print_const(&eval, ctor_name);
+                }
+                let ind_name = Name::intern(&format!("{}.ind", cmd.name)).unwrap();
+                print_axiom(&eval, ind_name);
+
+                let rec_name = Name::intern(&format!("{}.rec", cmd.name)).unwrap();
+                print_const(&eval, rec_name);
+
+                if !cmd.ctors.is_empty() {
+                    let rec_spec_name = Name::intern(&format!("{}.rec.spec", cmd.name)).unwrap();
+                    print_axiom(&eval, rec_spec_name);
+                }
             }
             cmd::Cmd::Inductive(cmd) => {
                 println!("inductive {}", cmd.name);
+                print_const(&eval, cmd.name);
                 for ctor in &cmd.ctors {
                     let ctor_name = Name::intern(&format!("{}.{}", cmd.name, ctor.name)).unwrap();
-                    let (local_types, ty) = eval.proof_env.tt_env.consts.get(&ctor_name).unwrap();
-                    print!("  - const {}.{{", ctor_name);
-                    let mut first = true;
-                    for local_type in local_types {
-                        if !first {
-                            print!(", ");
-                        }
-                        print!("{}", local_type);
-                        first = false;
-                    }
-                    println!("}} : {}", Pretty::new(&eval.pp, ty));
+                    print_axiom(&eval, ctor_name);
                 }
                 let ind_name = Name::intern(&format!("{}.ind", cmd.name)).unwrap();
-                let (local_types, m) = eval.proof_env.facts.get(&ind_name).unwrap();
-                print!("  - axiom {}.{{", ind_name);
-                let mut first = true;
-                for local_type in local_types {
-                    if !first {
-                        print!(", ");
-                    }
-                    print!("{}", local_type);
-                    first = false;
-                }
-                println!("}} : {}", Pretty::new(&eval.pp, m));
-
-                let rec_name = Name::intern(&format!("{}.rec", cmd.name)).unwrap();
-                let (local_types, ty) = eval.proof_env.tt_env.consts.get(&rec_name).unwrap();
-                print!("  - const {}.{{", rec_name);
-                let mut first = true;
-                for local_type in local_types {
-                    if !first {
-                        print!(", ");
-                    }
-                    print!("{}", local_type);
-                    first = false;
-                }
-                println!("}} : {}", Pretty::new(&eval.pp, ty));
-
-                let rec_spec_name = Name::intern(&format!("{}.rec.spec", cmd.name)).unwrap();
-                if let Some((local_types, m)) = eval.proof_env.facts.get(&rec_spec_name) {
-                    print!("  - axiom {}.{{", rec_spec_name);
-                    let mut first = true;
-                    for local_type in local_types {
-                        if !first {
-                            print!(", ");
-                        }
-                        print!("{}", local_type);
-                        first = false;
-                    }
-                    println!("}} : {}", Pretty::new(&eval.pp, m));
-                }
+                print_axiom(&eval, ind_name);
             }
             _ => {}
         }

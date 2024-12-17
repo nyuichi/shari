@@ -1404,11 +1404,23 @@ impl<'a> Unifier<'a> {
         while !self.type_constraints.is_empty() || !self.stack.is_empty() {
             if let Some((t1, t2)) = self.type_constraints.pop() {
                 if self.find_conflict_in_types(t1, t2).is_some() {
+                    #[cfg(debug_assertions)]
+                    {
+                        println!("conflict in types");
+                    }
                     return Some(());
                 }
             }
             if let Some((m1, m2)) = self.stack.pop() {
+                #[cfg(debug_assertions)]
+                {
+                    println!("find conflict in {m1} =?= {m2}");
+                }
                 if self.find_conflict_in_terms(m1, m2).is_some() {
+                    #[cfg(debug_assertions)]
+                    {
+                        println!("conflict in terms");
+                    }
                     return Some(());
                 }
             }

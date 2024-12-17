@@ -278,6 +278,14 @@ impl Type {
             Type::Hole(_) => false,
         }
     }
+
+    pub fn target(&self) -> &Type {
+        let mut t = self;
+        while let Type::Arrow(inner) = t {
+            t = &inner.cod;
+        }
+        t
+    }
 }
 
 /// Locally nameless representation. See [Charguéraud, 2012].
@@ -980,6 +988,17 @@ impl Term {
                 let h_next = self.normalize();
                 mk_path_trans(h, h_next)
             }
+        }
+    }
+
+    pub fn contains_local(&self, name: &Name) -> bool {
+        match self {
+            Term::Var(_) => false,
+            Term::Abs(m) => m.body.contains_local(name),
+            Term::App(m) => m.fun.contains_local(name) || m.arg.contains_local(name),
+            Term::Local(m) => m == name,
+            Term::Const(_) => false,
+            Term::Hole(_) => false,
         }
     }
 }

@@ -1,29 +1,58 @@
+/-
+ - TODO:
+ - [x] stronger type inference. (propagate constraints among exprs)
+ - [x] automatic insertion of forall_elim using higher-order unification
+ - [ ] field access notation (ad hoc overload)
+ - [ ] coersion (especially automatic insertion of rep)
+ - [ ] type class
+ - [x] inductive types
+ - [x] inductive predicates
+ - [ ] structures and instances
+ - [ ] calc environment
+ -/
+
 type const Prop : Type
 const imp : Prop → Prop → Prop
 const forall.{u} : (u → Prop) → Prop
 
 infixr → : 25 := imp
 infix = : 50 := eq
-nofix ⊤ := top
+nofix ⊤ := true
 infixl ∧ : 35 := and
-nofix ⊥ := bot
+nofix ⊥ := false
 infixl ∨ : 30 := or
 prefix ¬ : 40 := not
 infix ↔ : 20 := iff
 infix ≠ : 50 := ne
 
--- Leibniz equality
-def eq.{u} (x : u) (y : u) : Prop := ∀ P, P x → P y
+-- A predicative version of Leibniz equality (attributed to Paulin).
+-- The following set of declarations are generated.
+-- (Notice that the order of arguments in eq.ind is slightly modified from [Dybjer, '97].)
+--
+--   const eq.{u} : u → u → Prop
+--   axiom eq.refl.{u} (x : u) : x = x
+--   axiom eq.ind.{u} (x : u) (y : u) (P : u → Prop) : x = y → P x → P y
+--
+-- This definition might look magical at first glance but is preferred to the ordinary definition by
+-- least reflexive relation à la Martin-Löf because this induces a much simpler elimination rule.
+inductive eq.{u} (x : u) : u → Prop
+| refl : eq x
 
-def top : Prop := ∀ φ, φ → φ
-def and (φ : Prop) (ψ : Prop) : Prop := ∀ ξ, (φ → ψ → ξ) → ξ
+inductive true : Prop
+| intro : true
 
--- The following definitions are due to Prawitz and Russell.
-def bot : Prop := ∀ ξ, ξ
-def or (φ : Prop) (ψ : Prop) : Prop := ∀ ξ, (φ → ξ) → (ψ → ξ) → ξ
-def exists.{u} (P : u → Prop) : Prop := ∀ ξ, (∀ x, P x → ξ) → ξ
+inductive and (φ ψ : Prop) : Prop
+| intro : φ → ψ → and
 
--- Other connectives
+inductive false : Prop
+
+inductive or (φ ψ : Prop) : Prop
+| left : φ → or
+| right : ψ → or
+
+inductive exists.{u} (P : u → Prop) : Prop
+| intro (t : u) : P t → exists
+
 def not (φ : Prop) : Prop := φ → ⊥
 def iff (φ : Prop) (ψ : Prop) : Prop := (φ → ψ) ∧ (ψ → φ)
 def uexists.{u} (P : u → Prop) : Prop := ∃ x, P x ∧ (∀ y, P y → x = y)
@@ -35,23 +64,7 @@ axiom prop_ext (φ ψ : Prop) : (φ ↔ ψ) → φ = ψ
 axiom fun_ext.{u, v} (f₁ f₂ : u → v) : (∀ x, f₁ x = f₂ x) → f₁ = f₂
 axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) → ∃! f, ∀ x, R x (f x)
 
-/-
- - TODO:
- - [x] stronger type inference. (propagate constraints among exprs)
- - [x] automatic insertion of forall_elim using higher-order unification
- - [ ] field access notation (ad hoc overload)
- - [ ] coersion (especially automatic insertion of rep)
- - [ ] type class
- - [x] inductive types
- - [ ] structures and instances
- - [ ] calc environment
- -/
-lemma tautology : ∀ φ, φ → φ := take (φ : Prop), assume φ, ⟪φ⟫
-lemma top.intro : ⊤ := tautology
-
-lemma eq.refl.{u} (m : u) : m = m := take (P : u → Prop), tautology[_]
-
-lemma eq.transport.{u} (m₁ m₂ : u) (P : u → Prop) : m₁ = m₂ → P m₁ → P m₂ := assume m₁ = m₂, ⟪m₁ = m₂⟫[P]
+lemma eq.transport.{u} (m₁ m₂ : u) (P : u → Prop) : m₁ = m₂ → P m₁ → P m₂ := eq.ind
 lemma eq.symm.{u} (m₁ m₂ : u) : m₁ = m₂ → m₂ = m₁ := assume m₁ = m₂, eq.transport ⟪m₁ = m₂⟫ @eq.refl[m₁]
 lemma eq.trans.{u} (m₁ m₂ m₃ : u) : m₁ = m₂ → m₂ = m₃ → m₁ = m₃ := assume m₁ = m₂, assume m₂ = m₃, eq.transport ⟪m₂ = m₃⟫ ⟪m₁ = m₂⟫
 
@@ -69,59 +82,20 @@ eq.ap
 lemma eq.conv (φ ψ : Prop) : (φ = ψ) → φ → ψ := @eq.transport[_, _, λ (ξ : Prop), ξ]
 
 -- material adequacy
-lemma ma (φ : Prop) : (⊤ = φ) → φ := assume ⊤ = φ, eq.conv ⟪⊤ = φ⟫ top.intro
+lemma ma (φ : Prop) : (⊤ = φ) → φ := assume ⊤ = φ, eq.conv ⟪⊤ = φ⟫ true.intro
 
 -- modus ponens
 lemma mp (φ ψ : Prop) : φ → (φ → ψ) → ψ := assume φ, assume φ → ψ, ⟪φ → ψ⟫ ⟪φ⟫
 
 lemma imp.trans (φ ψ ξ : Prop) : (φ → ψ) → (ψ → ξ) → φ → ξ := assume φ → ψ, assume ψ → ξ, assume φ, ⟪ψ → ξ⟫ (⟪φ → ψ⟫ ⟪φ⟫)
 
-lemma and.intro (φ ψ : Prop) : φ → ψ → φ ∧ ψ :=
-assume φ,
-assume ψ,
-take (ξ : Prop),
-assume φ → ψ → ξ,
-⟪φ → ψ → ξ⟫ ⟪φ⟫ ⟪ψ⟫
-
-lemma and.elim (φ ψ ξ : Prop) : φ ∧ ψ → (φ → ψ → ξ) → ξ :=
-assume φ ∧ ψ,
-⟪φ ∧ ψ⟫[ξ]
-
 lemma and.left (φ ψ : Prop) : φ ∧ ψ → φ :=
 assume φ ∧ ψ,
-and.elim ⟪φ ∧ ψ⟫ (assume φ, assume ψ, ⟪φ⟫)
+and.ind ⟪φ ∧ ψ⟫ (assume φ, assume ψ, ⟪φ⟫)
 
 lemma and.right (φ ψ : Prop) : φ ∧ ψ → ψ :=
 assume φ ∧ ψ,
-and.elim ⟪φ ∧ ψ⟫ (assume φ, assume ψ, ⟪ψ⟫)
-
-lemma or.left (φ ψ : Prop) : φ → φ ∨ ψ :=
-assume φ,
-take (ξ : Prop),
-assume φ → ξ,
-assume ψ → ξ,
-⟪φ → ξ⟫ ⟪φ⟫
-
-lemma or.right (φ ψ : Prop) : ψ → φ ∨ ψ :=
-assume ψ,
-take (ξ : Prop),
-assume φ → ξ,
-assume ψ → ξ,
-⟪ψ → ξ⟫ ⟪ψ⟫
-
-lemma or.elim (φ ψ ξ : Prop) : φ ∨ ψ → (φ → ξ) → (ψ → ξ) → ξ :=
-assume φ ∨ ψ,
-⟪φ ∨ ψ⟫[ξ]
-
-lemma exists.intro.{u} (P : u → Prop) (m : u) : P m → exists P :=
-assume P m,
-take (ξ : Prop),
-assume ∀ x, P x → ξ,
-⟪∀ x, P x → ξ⟫[m] ⟪P m⟫
-
-lemma exists.elim.{u} (P : u → Prop) (φ : Prop) : exists P → (∀ x, P x → φ) → φ :=
-assume exists P,
-⟪exists P⟫[φ]
+and.ind ⟪φ ∧ ψ⟫ (assume φ, assume ψ, ⟪ψ⟫)
 
 lemma not.intro (φ : Prop) : (φ → ⊥) → ¬φ :=
 assume φ → ⊥,
@@ -136,7 +110,7 @@ lemma mt (φ ψ : Prop) : (φ → ψ) → ¬ψ → ¬φ := imp.trans
 
 lemma contradiction (φ : Prop) : φ → ¬φ → ⊥ := mp
 
-lemma absurd (φ : Prop) : ⊥ → φ := assume ⊥, ⟪⊥⟫[φ]
+lemma absurd (φ : Prop) : ⊥ → φ := false.ind
 
 lemma not.fixed_point_free (φ : Prop) : φ ≠ ¬φ :=
 assume φ = ¬φ,
@@ -146,9 +120,9 @@ contradiction ⟪φ⟫ ⟪¬φ⟫
 
 -- Internal version of nondegeneracy of topos.
 -- Of course, this lemma holds in any (possibly degenerate) topos.
-lemma top_ne_bot : ⊤ ≠ ⊥ :=
+lemma true_ne_false : ⊤ ≠ ⊥ :=
 assume ⊤ = ⊥,
-eq.conv ⟪⊤ = ⊥⟫ top.intro
+eq.conv ⟪⊤ = ⊥⟫ true.intro
 
 -- law of non-contradiction
 lemma nc (φ : Prop) : ¬(φ ∧ ¬φ) :=
@@ -302,43 +276,53 @@ mt lawvere_fixpoint (
 def preimage.{u, v} (f : u → v) (t : set v) : set u := { x | t (f x) }
 
 /-
+ - well-founded
+ -/
+
+-- acc R x :↔ x is in the well-founded part of R
+inductive acc.{u} (R : u → u → Prop) : u → Prop
+| intro (x : u) : (∀ y, R y x → acc y) → acc x
+
+def well_founded.{u} (R : u → u → Prop) : Prop := ∀ x, acc R x
+
+/-
  - basic inductive types
  -/
 
-inductive bool
+type inductive bool
 | tt : bool
 | ff : bool
 
-inductive prod u v
+type inductive prod u v
 | mk : u → v → prod
 
-inductive unit
+type inductive unit
 | star : unit
 
-inductive sum u v
+type inductive sum u v
 | inl : u → sum
 | inr : v → sum
 
-inductive empty
+type inductive empty
 
-inductive nat
+type inductive nat
 | zero : nat
 | succ : nat → nat
 
-inductive list u
+type inductive list u
 | nil : list
 | cons : u → list → list
 
-inductive option u
+type inductive option u
 | none : option
 | some : u → option
 
-inductive ord
+type inductive ord
 | zero : ord
 | succ : ord → ord
 | limit : (nat → ord) → ord
 
-inductive bin_tree u
+type inductive bin_tree u
 | empty : bin_tree
 | leaf : u → bin_tree
 | node : bin_tree → bin_tree → bin_tree
@@ -413,7 +397,7 @@ have ⊤ = ⊥ :=
   have bool.rec tt ⊤ ⊥ = bool.rec ff ⊤ ⊥ := @eq.ap[_, _, λ b, bool.rec b ⊤ ⊥] ⟪tt = ff⟫,
   have bool.rec ff ⊤ ⊥ = ⊥ := eq.refl,
   eq.trans ⟪⊤ = bool.rec tt ⊤ ⊥⟫ (eq.trans ⟪bool.rec tt ⊤ ⊥ = bool.rec ff ⊤ ⊥⟫ ⟪bool.rec ff ⊤ ⊥ = ⊥⟫),
-contradiction ⟪⊤ = ⊥⟫ top_ne_bot
+contradiction ⟪⊤ = ⊥⟫ true_ne_false
 
 /-
  - choice
@@ -446,7 +430,7 @@ uexists.intro
 const choice.{u} : power1 u → u
 axiom choice.spec.{u} (x : power1 u) : choice x ∈ power1.rep x
 
-lemma ac.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ (f : u → v), ∀ x, R x (f x) :=
+lemma ac.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) :=
 assume ∀ x, ∃ y, R x y,
 have ∀ x, ∃! (h : power1 v), R x = power1.rep h :=
   take (x : u),
@@ -493,14 +477,14 @@ have φ ∨ choice h₁ = tt :=
 have φ ∨ choice h₂ = ff :=
   eq.conv (eq.symm (eq.congr_fun ⟪(λ b, φ ∨ b = ff) = power1.rep h₂⟫)) choice.spec,
 have φ ∨ choice h₁ ≠ choice h₂ :=
-  or.elim ⟪φ ∨ choice h₁ = tt⟫
+  or.ind ⟪φ ∨ choice h₁ = tt⟫
     (assume φ, or.left ⟪φ⟫)
     (assume choice h₁ = tt,
-      or.elim ⟪φ ∨ choice h₂ = ff⟫
+      or.ind ⟪φ ∨ choice h₂ = ff⟫
         (assume φ, or.left ⟪φ⟫)
         (assume choice h₂ = ff,
           or.right (eq.transport (eq.symm ⟪choice h₂ = ff⟫) (eq.transport (eq.symm ⟪choice h₁ = tt⟫) bool.tt_ne_ff)))),
-or.elim ⟪φ ∨ choice h₁ ≠ choice h₂⟫
+or.ind ⟪φ ∨ choice h₁ ≠ choice h₂⟫
   (assume φ,
     or.left ⟪φ⟫)
   (assume choice h₁ ≠ choice h₂,
@@ -519,7 +503,7 @@ structure is_inhabited u := {
 axiom is_inhabited_ext.{u} (h₁ h₂ : is_inhabited u) : h₁ = h₂
 
 instance is_inhabited.mk.{u} (x : u) : is_inhabited u := {
-  lemma inhabited := exists.intro top.intro
+  lemma inhabited := exists.intro true.intro
 }
 
 instance is_inhabited.join.{u} (h : is_inhabited (is_inhabited u)) : is_inhabited u := {
@@ -579,16 +563,16 @@ instance Prop_conj_monoid : monoid Prop := {
   def mult := and
   def unit := ⊤
   lemma assoc := and.assoc
-  lemma left_unit := top_and
-  lemma right_unit := and_top
+  lemma left_unit := true_and
+  lemma right_unit := and_true
 }
 
 instance Prop_disj_monoid : monoid Prop := {
   def mult := or
   def unit := ⊥
   lemma assoc := or.assoc
-  lemma left_unit := bot_or
-  lemma right_unit := or_bot
+  lemma left_unit := false_or
+  lemma right_unit := or_false
 }
 
 instance power_monoid.{u, v} (m : monoid u) : monoid (v → u) := {

@@ -1,9 +1,11 @@
+use std::iter::zip;
+
 use anyhow::bail;
 
 use crate::{
     expr::{self, mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_take, Expr},
     kernel::{
-        proof::{self, mk_type_prop},
+        proof::{self, mk_type_prop, Forall, Imp},
         tt::{
             mk_app, mk_const, mk_local, mk_type_arrow, mk_type_const, mk_type_local, Def, Kind,
             LocalEnv, Name, Rec, Term, Type,
@@ -43,6 +45,7 @@ pub enum Cmd {
     Const(CmdConst),
     TypeConst(CmdTypeConst),
     TypeVariable(CmdTypeVariable),
+    TypeInductive(CmdTypeInductive),
     Inductive(CmdInductive),
 }
 
@@ -126,7 +129,7 @@ pub struct CmdTypeVariable {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CmdInductive {
+pub struct CmdTypeInductive {
     pub name: Name,
     pub local_types: Vec<Name>,
     pub ctors: Vec<Constructor>,
@@ -136,6 +139,22 @@ pub struct CmdInductive {
 pub struct Constructor {
     pub name: Name,
     pub ty: Type,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CmdInductive {
+    pub name: Name,
+    pub local_types: Option<Vec<Name>>,
+    pub params: Vec<(Name, Type)>,
+    pub target_ty: Type,
+    pub ctors: Vec<PredConstructor>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PredConstructor {
+    pub name: Name,
+    pub params: Vec<(Name, Type)>,
+    pub target: Term,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -479,8 +498,8 @@ impl Eval {
                 self.tv.extend(variables);
                 Ok(())
             }
-            Cmd::Inductive(inner) => {
-                let CmdInductive {
+            Cmd::TypeInductive(inner) => {
+                let CmdTypeInductive {
                     name,
                     local_types,
                     ctors,
@@ -576,7 +595,7 @@ impl Eval {
                 //           (∀ α, P α → P (succ α)) →
                 //           P zero →
                 //           P α
-                let pred = Name::fresh();
+                let motive = Name::fresh();
                 let mut cases = vec![];
                 for ctor in &ctors {
                     let mut args = vec![];
@@ -597,7 +616,7 @@ impl Eval {
                         // ∀ xs, P (a xs)
                         let mut a = mk_local(*arg_name);
                         a.apply(xs.iter().map(|(name, _)| mk_local(*name)));
-                        let mut h = mk_local(pred);
+                        let mut h = mk_local(motive);
                         h.apply([a]);
                         for (name, ty) in xs.into_iter().rev() {
                             h.abs(&[(name, name, ty.clone())], true);
@@ -614,7 +633,7 @@ impl Eval {
                         local_types.iter().map(|t| mk_type_local(*t)).collect(),
                     );
                     a.apply(args.iter().map(|(name, _)| mk_local(*name)));
-                    let mut target = mk_local(pred);
+                    let mut target = mk_local(motive);
                     target.apply([a]);
                     for ih in ih_list.into_iter().rev() {
                         let mut m = mk_const(Name::intern("imp").unwrap(), vec![]);
@@ -632,7 +651,7 @@ impl Eval {
                 }
                 // ∀ x P, {cases} → P x
                 let x = Name::fresh();
-                let mut target = mk_local(pred);
+                let mut target = mk_local(motive);
                 target.apply([mk_local(x)]);
                 for case in cases.into_iter().rev() {
                     let mut m = mk_const(Name::intern("imp").unwrap(), vec![]);
@@ -641,7 +660,7 @@ impl Eval {
                 }
                 for (name, nickname, ty) in [
                     (
-                        pred,
+                        motive,
                         Name::intern("P").unwrap(),
                         mk_type_arrow(target_ty.clone(), mk_type_prop()),
                     ),
@@ -836,6 +855,364 @@ impl Eval {
                         .facts
                         .insert(rec_spec_name, (rec_local_types, spec));
                 }
+                Ok(())
+            }
+            Cmd::Inductive(inner) => {
+                // Given the following inductive predicate:
+                //
+                //   inductive P.{u} (x : τ) : σ → Prop
+                //   | intro : ∀ y, φ → (∀ z, ψ → P M) → P N
+                //
+                // the following set of delcarations is generated:
+                //
+                //  const P.{u} : τ → σ → Prop
+                //  axiom P.intro.{u} (x : τ) : ∀ y, φ → (∀ z, ψ → P.{u} x M) → P.{u} x N
+                //  axiom P.ind.{u} (x : τ) (w : σ) (C : σ → Prop)
+                //  : P x w → (∀ y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N) → C w
+                //
+                let CmdInductive {
+                    name,
+                    local_types,
+                    params,
+                    target_ty,
+                    mut ctors,
+                } = inner;
+                let need_shrink = local_types.is_none();
+                if let Some(local_types) = &local_types {
+                    for i in 0..local_types.len() {
+                        for j in i + 1..local_types.len() {
+                            if local_types[i] == local_types[j] {
+                                bail!("duplicate type variables");
+                            }
+                        }
+                    }
+                }
+                let mut local_env = LocalEnv {
+                    local_types: local_types.unwrap_or_else(|| self.tv.clone()),
+                    locals: vec![],
+                    holes: vec![],
+                };
+                for i in 0..params.len() {
+                    for j in i + 1..params.len() {
+                        if params[i].0 == params[j].0 {
+                            bail!("duplicate parameters");
+                        }
+                    }
+                    self.proof_env
+                        .tt_env
+                        .check_kind(&local_env, &params[i].1, &Kind::base())?;
+                    local_env.locals.push((params[i].0, params[i].1.clone()));
+                }
+                self.proof_env
+                    .tt_env
+                    .check_kind(&local_env, &target_ty, &Kind::base())?;
+                if target_ty.target() != &mk_type_prop() {
+                    bail!("the target type of an inductive predicate must be Prop");
+                }
+                for i in 0..ctors.len() {
+                    for j in i + 1..ctors.len() {
+                        if ctors[i].name == ctors[j].name {
+                            bail!("duplicate constructors");
+                        }
+                    }
+                }
+                local_env.locals.insert(0, (name, target_ty.clone()));
+                let mut ctor_args_list = vec![];
+                let mut ctor_target_list = vec![];
+                let mut ctor_ind_args_list = vec![];
+                for ctor in &mut ctors {
+                    for i in 0..ctor.params.len() {
+                        for j in i + 1..ctor.params.len() {
+                            if ctor.params[i].0 == ctor.params[j].0 {
+                                bail!("duplicate parameters");
+                            }
+                        }
+                        self.proof_env.tt_env.check_kind(
+                            &local_env,
+                            &ctor.params[i].1,
+                            &Kind::base(),
+                        )?;
+                        local_env
+                            .locals
+                            .push((ctor.params[i].0, ctor.params[i].1.clone()));
+                    }
+                    self.proof_env.tt_env.check_type(
+                        &mut local_env,
+                        &mut ctor.target,
+                        &mut mk_type_prop(),
+                    )?;
+                    local_env
+                        .locals
+                        .truncate(local_env.locals.len() - ctor.params.len());
+
+                    let mut m = ctor.target.clone();
+                    let mut ctor_args = vec![];
+                    while let Ok(imp) = Imp::try_from(m.clone()) {
+                        ctor_args.push(imp.lhs);
+                        m = imp.rhs;
+                    }
+                    ctor_args_list.push(ctor_args.clone());
+                    if m.head() != &mk_local(name) {
+                        if Forall::try_from(m.clone()).is_ok() {
+                            bail!("currently only universal quantification in the left most is supported");
+                        }
+                        bail!("invalid constructor: {m}");
+                    }
+                    for a in m.args() {
+                        if a.contains_local(&name) {
+                            bail!("invalid target");
+                        }
+                    }
+                    ctor_target_list.push(m);
+                    let mut ctor_ind_args = vec![];
+                    for ctor_arg in &ctor_args {
+                        let mut m = ctor_arg.clone();
+                        loop {
+                            if let Ok(forall) = Forall::try_from(m.clone()) {
+                                let name = Name::fresh();
+                                m = forall.body;
+                                m.open(&mk_local(name));
+                            } else if let Ok(imp) = Imp::try_from(m.clone()) {
+                                if imp.lhs.contains_local(&name) {
+                                    bail!("constructor violates strict positivity");
+                                }
+                                m = imp.rhs;
+                            } else {
+                                break;
+                            }
+                        }
+                        if m.contains_local(&name) {
+                            if m.head() != &mk_local(name) {
+                                bail!("invalid target");
+                            }
+                            for a in m.args() {
+                                if a.contains_local(&name) {
+                                    bail!("invalid target");
+                                }
+                            }
+                            ctor_ind_args.push(ctor_arg.clone());
+                        }
+                    }
+                    ctor_ind_args_list.push(ctor_ind_args);
+                }
+                // well-formedness check is completed.
+                local_env.locals.remove(0);
+                if need_shrink {
+                    let mut shrinked_local_types = vec![];
+                    for t in local_env.local_types {
+                        if params.iter().any(|(_, ty)| ty.contains_local(&t))
+                            || target_ty.contains_local(&t)
+                            || ctors.iter().any(|ctor| {
+                                ctor.params.iter().any(|(_, ty)| ty.contains_local(&t))
+                                    || ctor.target.contains_local_type(&t)
+                            })
+                        {
+                            shrinked_local_types.push(t);
+                            continue;
+                        }
+                    }
+                    local_env.local_types = shrinked_local_types;
+                }
+                if self.proof_env.tt_env.consts.contains_key(&name) {
+                    bail!("already defined");
+                }
+                // inductive P.{u} (x : τ) : σ → Prop
+                // ↦ const P.{u} : τ → σ → Prop
+                let mut pred_ty = target_ty.clone();
+                let mut param_types = vec![];
+                for (_, t) in &params {
+                    param_types.push(t.clone());
+                }
+                pred_ty.discharge(param_types);
+                self.ns.consts.insert(name, local_env.local_types.len());
+                self.proof_env
+                    .tt_env
+                    .consts
+                    .insert(name, (local_env.local_types.clone(), pred_ty));
+
+                // inductive P.{u} (x : τ) : σ → Prop
+                // | intro : ∀ y, φ → (∀ z, ψ → P M) → P N
+                // ↦ axiom P.intro.{u} (x : τ) : ∀ y, φ → (∀ z, ψ → P.{u} x M) → P.{u} x N
+                for ctor in &ctors {
+                    let ctor_name = Name::intern(&format!("{}.{}", name, ctor.name)).unwrap();
+                    if self.proof_env.facts.contains_key(&ctor_name) {
+                        bail!("already defined");
+                    }
+                    let mut target = ctor.target.clone();
+                    // P.{u} x
+                    let mut stash = mk_const(
+                        name,
+                        local_env
+                            .local_types
+                            .iter()
+                            .map(|name| mk_type_local(*name))
+                            .collect(),
+                    );
+                    stash.apply(params.iter().map(|(name, _)| mk_local(*name)));
+                    let subst = [(name, &stash)];
+                    target.subst(&subst);
+                    for (name, ty) in ctor.params.iter().rev() {
+                        target.close(*name);
+                        target = Forall {
+                            name: *name,
+                            ty: ty.clone(),
+                            body: target,
+                        }
+                        .into();
+                    }
+                    for (name, ty) in params.iter().rev() {
+                        target.close(*name);
+                        target = Forall {
+                            name: *name,
+                            ty: ty.clone(),
+                            body: target,
+                        }
+                        .into();
+                    }
+                    self.ns.facts.insert(
+                        ctor_name,
+                        FactInfo {
+                            type_arity: local_env.local_types.len(),
+                            num_params: params.len() + ctor.params.len(),
+                        },
+                    );
+                    self.proof_env
+                        .facts
+                        .insert(ctor_name, (local_env.local_types.clone(), target));
+                }
+
+                // inductive P.{u} (x : τ) : σ → Prop
+                // | intro : ∀ y, φ → (∀ z, ψ → P M) → P N
+                // ↦ axiom P.ind.{u} (x : τ) (w : σ) (C : σ → Prop)
+                //  : P x w → (∀ y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N) → C w
+                let indexes = target_ty
+                    .clone()
+                    .undischarge()
+                    .into_iter()
+                    .map(|t| (Name::fresh(), t))
+                    .collect::<Vec<_>>();
+                let motive = Name::fresh();
+                // C w
+                let mut target = mk_local(motive);
+                target.apply(indexes.iter().map(|(x, _)| mk_local(*x)));
+                // (∀ y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N) → C w
+                for (ctor, (ctor_args, (mut ctor_target, ctor_ind_args))) in zip(
+                    ctors,
+                    zip(ctor_args_list, zip(ctor_target_list, ctor_ind_args_list)),
+                ) {
+                    // P ↦ C
+                    let subst_with_motive = [(name, &mk_local(motive))];
+
+                    // C N
+                    ctor_target.subst(&subst_with_motive);
+
+                    // (∀ z, ψ → C M) → C N
+                    for mut ctor_ind_arg in ctor_ind_args.into_iter().rev() {
+                        ctor_ind_arg.subst(&subst_with_motive);
+                        ctor_target = Imp {
+                            lhs: ctor_ind_arg,
+                            rhs: ctor_target,
+                        }
+                        .into();
+                    }
+
+                    // P ↦ P.{u} x
+                    let mut stash = mk_const(
+                        name,
+                        local_env
+                            .local_types
+                            .iter()
+                            .map(|name| mk_type_local(*name))
+                            .collect(),
+                    );
+                    stash.apply(params.iter().map(|(name, _)| mk_local(*name)));
+                    let subst = [(name, &stash)];
+
+                    // φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
+                    for mut ctor_arg in ctor_args.into_iter().rev() {
+                        ctor_arg.subst(&subst);
+                        ctor_target = Imp {
+                            lhs: ctor_arg,
+                            rhs: ctor_target,
+                        }
+                        .into();
+                    }
+
+                    // ∀ y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
+                    for (x, t) in ctor.params.into_iter().rev() {
+                        ctor_target.close(x);
+                        ctor_target = Forall {
+                            name: x,
+                            ty: t,
+                            body: ctor_target,
+                        }
+                        .into();
+                    }
+
+                    target = Imp {
+                        lhs: ctor_target,
+                        rhs: target,
+                    }
+                    .into();
+                }
+                let mut p = mk_const(
+                    name,
+                    local_env
+                        .local_types
+                        .iter()
+                        .map(|name| mk_type_local(*name))
+                        .collect(),
+                );
+                p.apply(params.iter().map(|(name, _)| mk_local(*name)));
+                p.apply(indexes.iter().map(|(x, _)| mk_local(*x)));
+                target = Imp {
+                    lhs: p,
+                    rhs: target,
+                }
+                .into();
+
+                // ∀ (C : σ → Prop), P x w → (∀ y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N) → C w
+                target.close(motive);
+                target = Forall {
+                    name: Name::intern("motive").unwrap(),
+                    ty: target_ty.clone(),
+                    body: target,
+                }
+                .into();
+                // ∀ w y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
+                for (x, t) in indexes.iter().rev() {
+                    target.close(*x);
+                    target = Forall {
+                        name: *x,
+                        ty: t.clone(),
+                        body: target,
+                    }
+                    .into();
+                }
+                // ∀ x w y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
+                for (x, t) in params.iter().rev() {
+                    target.close(*x);
+                    target = Forall {
+                        name: *x,
+                        ty: t.clone(),
+                        body: target,
+                    }
+                    .into();
+                }
+                let ind_name = Name::intern(&format!("{}.ind", name)).unwrap();
+                if self.proof_env.facts.contains_key(&ind_name) {
+                    bail!("already defined");
+                }
+                self.ns.facts.insert(
+                    ind_name,
+                    FactInfo {
+                        type_arity: local_env.local_types.len(),
+                        num_params: params.len() + indexes.len() + 1,
+                    },
+                );
+                self.proof_env
+                    .facts
+                    .insert(ind_name, (local_env.local_types, target));
                 Ok(())
             }
         }
