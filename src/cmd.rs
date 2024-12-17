@@ -132,11 +132,11 @@ pub struct CmdTypeVariable {
 pub struct CmdTypeInductive {
     pub name: Name,
     pub local_types: Vec<Name>,
-    pub ctors: Vec<Constructor>,
+    pub ctors: Vec<DataConstructor>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Constructor {
+pub struct DataConstructor {
     pub name: Name,
     pub ty: Type,
 }
@@ -147,11 +147,11 @@ pub struct CmdInductive {
     pub local_types: Option<Vec<Name>>,
     pub params: Vec<(Name, Type)>,
     pub target_ty: Type,
-    pub ctors: Vec<PredConstructor>,
+    pub ctors: Vec<Constructor>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PredConstructor {
+pub struct Constructor {
     pub name: Name,
     pub params: Vec<(Name, Type)>,
     pub target: Term,

@@ -1,7 +1,7 @@
 use crate::cmd::{
     Cmd, CmdAxiom, CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdLemma,
-    CmdNofix, CmdPrefix, CmdTypeConst, CmdTypeInductive, CmdTypeVariable, Constructor, Fixity,
-    Operator, PredConstructor,
+    CmdNofix, CmdPrefix, CmdTypeConst, CmdTypeInductive, CmdTypeVariable, Constructor,
+    DataConstructor, Fixity, Operator,
 };
 use crate::expr::{
     mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_const, mk_expr_inst, mk_expr_take, Expr,
@@ -1387,7 +1387,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             local_types.push(tv);
             self.type_locals.push(tv);
         }
-        let mut ctors: Vec<Constructor> = vec![];
+        let mut ctors: Vec<DataConstructor> = vec![];
         while let Some(_token) = self.expect_symbol_opt("|") {
             let token = self.ident()?;
             let ctor_name = Name::intern(token.as_str()).unwrap();
@@ -1398,7 +1398,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             }
             self.expect_symbol(":")?;
             let ty = self.ty()?;
-            ctors.push(Constructor {
+            ctors.push(DataConstructor {
                 name: ctor_name,
                 ty,
             })
@@ -1441,7 +1441,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         }
         self.expect_symbol(":")?;
         let target_ty = self.ty()?;
-        let mut ctors: Vec<PredConstructor> = vec![];
+        let mut ctors: Vec<Constructor> = vec![];
         while let Some(_token) = self.expect_symbol_opt("|") {
             let token = self.ident()?;
             let ctor_name = Name::intern(token.as_str()).unwrap();
@@ -1463,7 +1463,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.expect_symbol(":")?;
             let target = self.term()?;
             self.locals.truncate(self.locals.len() - ctor_params.len());
-            ctors.push(PredConstructor {
+            ctors.push(Constructor {
                 name: ctor_name,
                 params: ctor_params,
                 target,
