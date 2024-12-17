@@ -404,46 +404,45 @@ contradiction ⟪⊤ = ⊥⟫ true_ne_false
  -/
 
 -- The type of inhabited subsets.
--- TODO: better name?
-structure power1 u := {
+structure inhab u := {
   const rep : set u
   axiom inhabited : ∃ x, x ∈ rep
 }
 
 -- TODO: automatically derive these
-axiom power1_abs.{u} (s : set u) : (∃ x, x ∈ s) → ∃ c, s = power1.rep c
-axiom power1_ext.{u} (x₁ x₂ : power1 u) : power1.rep x₁ = power1.rep x₂ → x₁ = x₂
+axiom inhab_abs.{u} (s : set u) : (∃ x, x ∈ s) → ∃ c, s = inhab.rep c
+axiom inhab_ext.{u} (x₁ x₂ : inhab u) : inhab.rep x₁ = inhab.rep x₂ → x₁ = x₂
 
-lemma power1_uabs.{u} (s : set u) : (∃ x, x ∈ s) → ∃! c, s = power1.rep c :=
+lemma inhab_uabs.{u} (s : set u) : (∃ x, x ∈ s) → ∃! c, s = inhab.rep c :=
 assume ∃ x, x ∈ s,
-obtain (c : power1 u), s = power1.rep c := power1_abs ⟪∃ x, x ∈ s⟫,
+obtain (c : inhab u), s = inhab.rep c := inhab_abs ⟪∃ x, x ∈ s⟫,
 uexists.intro
-  ⟪s = power1.rep c⟫
-  (take (s₁ : power1 v),
-   take (s₂ : power1 v),
-   assume s = power1.rep s₁,
-   assume s = power1.rep s₂,
-   have power1.rep s₁ = power1.rep s₂ := eq.trans (eq.symm ⟪s = power1.rep s₁⟫) ⟪s = power1.rep s₂⟫,
-   power1_ext ⟪power1.rep s₁ = power1.rep s₂⟫)
+  ⟪s = inhab.rep c⟫
+  (take (s₁ : inhab v),
+   take (s₂ : inhab v),
+   assume s = inhab.rep s₁,
+   assume s = inhab.rep s₂,
+   have inhab.rep s₁ = inhab.rep s₂ := eq.trans (eq.symm ⟪s = inhab.rep s₁⟫) ⟪s = inhab.rep s₂⟫,
+   inhab_ext ⟪inhab.rep s₁ = inhab.rep s₂⟫)
 
 -- The exisistence of the constant and the axiom state that every type u is a choice type.
-const choice.{u} : power1 u → u
-axiom choice.spec.{u} (x : power1 u) : choice x ∈ power1.rep x
+const choice.{u} : inhab u → u
+axiom choice.spec.{u} (x : inhab u) : choice x ∈ inhab.rep x
 
 lemma ac.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) :=
 assume ∀ x, ∃ y, R x y,
-have ∀ x, ∃! (h : power1 v), R x = power1.rep h :=
+have ∀ x, ∃! (h : inhab v), R x = inhab.rep h :=
   take (x : u),
-  @power1_uabs[R x] ⟪∀ x, ∃ y, R x y⟫[x],
-have ∃! (f : u → power1 v), ∀ x, R x = power1.rep (f x) :=
-  auc ⟪∀ x, ∃! (h : power1 v), R x = power1.rep h⟫,
-obtain (f : u → power1 v), ∀ x, R x = power1.rep (f x) :=
-  uexists.exists ⟪∃! (f : u → power1 v), ∀ x, R x = power1.rep (f x)⟫,
+  @inhab_uabs[R x] ⟪∀ x, ∃ y, R x y⟫[x],
+have ∃! (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
+  auc ⟪∀ x, ∃! (h : inhab v), R x = inhab.rep h⟫,
+obtain (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
+  uexists.exists ⟪∃! (f : u → inhab v), ∀ x, R x = inhab.rep (f x)⟫,
 exists.intro
   (take (x : u),
-   have power1.rep (f x) (choice (f x)) :=
+   have inhab.rep (f x) (choice (f x)) :=
      choice.spec,
-   eq.conv (eq.symm (eq.congr_fun ⟪∀ x, R x = power1.rep (f x)⟫[x])) ⟪power1.rep (f x) (choice (f x))⟫)
+   eq.conv (eq.symm (eq.congr_fun ⟪∀ x, R x = inhab.rep (f x)⟫[x])) ⟪inhab.rep (f x) (choice (f x))⟫)
 
 lemma surjective.split.{u, v} (f : u → v) : surjective f → split f :=
 ac
@@ -457,8 +456,8 @@ ac
 lemma em (φ : Prop) : φ ∨ ¬φ :=
 have ∃ b, φ ∨ b = tt := exists.intro (or.right eq.refl),
 have ∃ b, φ ∨ b = ff := exists.intro (or.right eq.refl),
-obtain (h₁ : power1 bool), (λ b, φ ∨ b = tt) = power1.rep h₁ := power1_abs ⟪∃ b, φ ∨ b = tt⟫,
-obtain (h₂ : power1 bool), (λ b, φ ∨ b = ff) = power1.rep h₂ := power1_abs ⟪∃ b, φ ∨ b = ff⟫,
+obtain (h₁ : inhab bool), (λ b, φ ∨ b = tt) = inhab.rep h₁ := inhab_abs ⟪∃ b, φ ∨ b = tt⟫,
+obtain (h₂ : inhab bool), (λ b, φ ∨ b = ff) = inhab.rep h₂ := inhab_abs ⟪∃ b, φ ∨ b = ff⟫,
 have φ → choice h₁ = choice h₂ :=
   assume φ,
   have (λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff) := fun_ext (
@@ -467,15 +466,15 @@ have φ → choice h₁ = choice h₂ :=
     have φ ∨ b = ff := or.left ⟪φ⟫,
     prop_ext (iff.intro (assume φ ∨ b = tt, ⟪φ ∨ b = ff⟫) (assume φ ∨ b = ff, ⟪φ ∨ b = tt⟫))
   ),
-  have power1.rep h₁ = power1.rep h₂ :=
-    eq.trans (eq.symm ⟪(λ b, φ ∨ b = tt) = power1.rep h₁⟫) (eq.trans ⟪(λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff)⟫ ⟪(λ b, φ ∨ b = ff) = power1.rep h₂⟫),
+  have inhab.rep h₁ = inhab.rep h₂ :=
+    eq.trans (eq.symm ⟪(λ b, φ ∨ b = tt) = inhab.rep h₁⟫) (eq.trans ⟪(λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff)⟫ ⟪(λ b, φ ∨ b = ff) = inhab.rep h₂⟫),
   have h₁ = h₂ :=
-    power1_ext ⟪power1.rep h₁ = power1.rep h₂⟫,
+    inhab_ext ⟪inhab.rep h₁ = inhab.rep h₂⟫,
   eq.congr_arg ⟪h₁ = h₂⟫,
 have φ ∨ choice h₁ = tt :=
-  eq.conv (eq.symm (eq.congr_fun ⟪(λ b, φ ∨ b = tt) = power1.rep h₁⟫)) choice.spec,
+  eq.conv (eq.symm (eq.congr_fun ⟪(λ b, φ ∨ b = tt) = inhab.rep h₁⟫)) choice.spec,
 have φ ∨ choice h₂ = ff :=
-  eq.conv (eq.symm (eq.congr_fun ⟪(λ b, φ ∨ b = ff) = power1.rep h₂⟫)) choice.spec,
+  eq.conv (eq.symm (eq.congr_fun ⟪(λ b, φ ∨ b = ff) = inhab.rep h₂⟫)) choice.spec,
 have φ ∨ choice h₁ ≠ choice h₂ :=
   or.ind ⟪φ ∨ choice h₁ = tt⟫
     (assume φ, or.left ⟪φ⟫)
