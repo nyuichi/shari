@@ -1106,23 +1106,26 @@ impl Eval {
         // C w
         let mut target = mk_local(motive);
         target.apply(indexes.iter().map(|(x, _)| mk_local(*x)));
+        let mut guards = vec![];
         // (∀ y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N) → C w
-        for (ctor, (ctor_args, (mut ctor_target, ctor_ind_args))) in zip(
+        for (ctor, (ctor_args, (ctor_target, ctor_ind_args))) in zip(
             ctors,
             zip(ctor_args_list, zip(ctor_target_list, ctor_ind_args_list)),
         ) {
             // P ↦ C
             let subst_with_motive = [(name, &mk_local(motive))];
 
+            let mut guard = ctor_target;
+
             // C N
-            ctor_target.subst(&subst_with_motive);
+            guard.subst(&subst_with_motive);
 
             // (∀ z, ψ → C M) → C N
             for mut ctor_ind_arg in ctor_ind_args.into_iter().rev() {
                 ctor_ind_arg.subst(&subst_with_motive);
-                ctor_target = Imp {
+                guard = Imp {
                     lhs: ctor_ind_arg,
-                    rhs: ctor_target,
+                    rhs: guard,
                 }
                 .into();
             }
@@ -1142,26 +1145,29 @@ impl Eval {
             // φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
             for mut ctor_arg in ctor_args.into_iter().rev() {
                 ctor_arg.subst(&subst);
-                ctor_target = Imp {
+                guard = Imp {
                     lhs: ctor_arg,
-                    rhs: ctor_target,
+                    rhs: guard,
                 }
                 .into();
             }
 
             // ∀ y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
             for (x, t) in ctor.params.into_iter().rev() {
-                ctor_target.close(x);
-                ctor_target = Forall {
+                guard.close(x);
+                guard = Forall {
                     name: x,
                     ty: t,
-                    body: ctor_target,
+                    body: guard,
                 }
                 .into();
             }
 
+            guards.push(guard);
+        }
+        for guard in guards.into_iter().rev() {
             target = Imp {
-                lhs: ctor_target,
+                lhs: guard,
                 rhs: target,
             }
             .into();
