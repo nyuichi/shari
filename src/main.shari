@@ -303,10 +303,10 @@ type inductive bool
 -- one may write like
 --
 --  type inductive prod (u v : Type) : Type
---  | mk (fst : u) (snd : v) : prod
+--  | pair (fst : u) (snd : v) : prod
 --
 type inductive prod u v
-| mk : u → v → prod
+| pair : u → v → prod
 
 type inductive unit
 | star : unit
@@ -344,8 +344,6 @@ type inductive bin_tree u
 def prod.fst.{u, v} (p : u × v) : u := prod.rec p (λ a b, a)
 def prod.snd.{u, v} (p : u × v) : v := prod.rec p (λ a b, b)
 
-def pair.{u, v} : u → v → u × v := prod.mk
-
 type variable u v
 
 -- TODO: use namespace
@@ -353,6 +351,7 @@ def tt : bool := bool.tt
 def ff : bool := bool.ff
 def fst : u × v → u := prod.fst
 def snd : u × v → v := prod.snd
+def pair.{u, v} : u → v → u × v := prod.pair
 def star : unit := unit.star
 def inl : u → sum u v := sum.inl
 def inr : v → sum u v := sum.inr
@@ -372,7 +371,7 @@ eq.symm unit.eta_expand
 lemma unit_ext (x₁ x₂ : unit) : x₁ = x₂ :=
 eq.trans unit.eta_expand unit.eta_reduce
 
-lemma prod.beta.{u, v} (x : u) (y : v) : x = fst (prod.mk x y) ∧ y = snd (prod.mk x y) :=
+lemma prod.beta.{u, v} (x : u) (y : v) : x = fst (pair x y) ∧ y = snd (pair x y) :=
 and.intro eq.refl eq.refl
 
 /- FIXME
@@ -395,7 +394,7 @@ prod.ind
     have ⟨a₂, b₁⟩ = ⟨a₂, b₂⟩ := eq.ap ⟪b₁ = b₂⟫,
     eq.trans ⟪⟨a₁, b₁⟩ = ⟨a₂, b₁⟩⟫ ⟪⟨a₂, b₁⟩ = ⟨a₂, b₂⟩⟫
 
-lemma prod.eta.{u, v} (p : prod u v) : p = prod.mk (fst p) (snd p) :=
+lemma prod.eta.{u, v} (p : prod u v) : p = pair (fst p) (snd p) :=
 prod_ext eq.refl eq.refl
 -/
 
