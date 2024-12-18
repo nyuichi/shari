@@ -1,7 +1,7 @@
 use crate::cmd::{
     Cmd, CmdAxiom, CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdLemma,
-    CmdNofix, CmdPrefix, CmdTypeConst, CmdTypeInductive, CmdTypeVariable, Constructor,
-    DataConstructor, Fixity, Operator,
+    CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive, CmdTypeVariable,
+    Constructor, DataConstructor, Fixity, Operator, StructureAxiom, StructureConst, StructureField,
 };
 use crate::expr::{
     mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_const, mk_expr_inst, mk_expr_take, Expr,
@@ -1096,6 +1096,10 @@ impl<'a, 'b> Parser<'a, 'b> {
                 let inductive_cmd = self.inductive_cmd(keyword)?;
                 Cmd::Inductive(inductive_cmd)
             }
+            "structure" => {
+                let structure_cmd = self.structure_cmd(keyword)?;
+                Cmd::Structure(structure_cmd)
+            }
             _ => {
                 return Self::fail(keyword, "expected command");
             }
@@ -1486,6 +1490,73 @@ impl<'a, 'b> Parser<'a, 'b> {
             ctors,
             params,
             target_ty,
+        })
+    }
+
+    fn structure_cmd(&mut self, _token: Token<'a>) -> Result<CmdStructure, ParseError> {
+        let name = self.name()?;
+        let mut local_types = vec![];
+        while let Some(token) = self.ident_opt() {
+            let tv = Name::intern(token.as_str()).unwrap();
+            for v in &local_types {
+                if &tv == v {
+                    return Self::fail(token, "duplicate type variable")?;
+                }
+            }
+            local_types.push(tv);
+            self.type_locals.push(tv);
+        }
+        self.expect_symbol(":=")?;
+        self.expect_symbol("{")?;
+        let mut fields: Vec<StructureField> = vec![];
+        let mut num_consts = 0;
+        while self.expect_symbol_opt("}").is_none() {
+            let keyword = self.keyword()?;
+            match keyword.as_str() {
+                "const" => {
+                    let field_name = self.name()?;
+                    self.expect_symbol(":")?;
+                    let field_ty = self.ty()?;
+                    fields.push(StructureField::Const(StructureConst {
+                        name: field_name,
+                        ty: field_ty,
+                    }));
+
+                    self.locals.push(field_name);
+                }
+                "axiom" => {
+                    let field_name = self.name()?;
+                    let mut params = vec![];
+                    while let Some(token) = self.expect_symbol_opt("(") {
+                        let (names, t) = self.parameter(token)?;
+                        for name in names {
+                            params.push((name, t.clone()));
+                        }
+                    }
+                    for (x, _) in &params {
+                        self.locals.push(*x);
+                    }
+                    self.expect_symbol(":")?;
+                    let target = self.term()?;
+                    self.locals.truncate(self.locals.len() - params.len());
+                    fields.push(StructureField::Axiom(StructureAxiom {
+                        name: field_name,
+                        params,
+                        target,
+                    }))
+                }
+                _ => {
+                    return Self::fail(keyword, "expected const or axiom");
+                }
+            }
+        }
+        self.locals.truncate(self.locals.len() - num_consts);
+        self.type_locals
+            .truncate(self.type_locals.len() - local_types.len());
+        Ok(CmdStructure {
+            name,
+            local_types,
+            fields,
         })
     }
 }

@@ -433,13 +433,13 @@ lemma inhab.uabs.{u} (s : set u) : (∃ x, x ∈ s) → ∃! c, s = inhab.rep c 
 assume ∃ x, x ∈ s,
 obtain (c : inhab u), s = inhab.rep c := inhab.abs ⟪∃ x, x ∈ s⟫,
 uexists.intro
-  ⟪s = inhab.rep c⟫
-  (take (s₁ : inhab v),
-   take (s₂ : inhab v),
-   assume s = inhab.rep s₁,
-   assume s = inhab.rep s₂,
-   have inhab.rep s₁ = inhab.rep s₂ := eq.trans (eq.symm ⟪s = inhab.rep s₁⟫) ⟪s = inhab.rep s₂⟫,
-   inhab.ext ⟪inhab.rep s₁ = inhab.rep s₂⟫)
+  (exists.intro ⟪s = inhab.rep c⟫)
+  (take (c₁ : inhab u),
+   take (c₂ : inhab u),
+   assume s = inhab.rep c₁,
+   assume s = inhab.rep c₂,
+   have inhab.rep c₁ = inhab.rep c₂ := eq.trans (eq.symm ⟪s = inhab.rep c₁⟫) ⟪s = inhab.rep c₂⟫,
+   inhab.ext ⟪inhab.rep c₁ = inhab.rep c₂⟫)
 
 -- The exisistence of the constant and the axiom state that every type u is a choice type.
 const choice.{u} : inhab u → u
@@ -485,7 +485,7 @@ have φ → choice h₁ = choice h₂ :=
   have inhab.rep h₁ = inhab.rep h₂ :=
     eq.trans (eq.symm ⟪(λ b, φ ∨ b = tt) = inhab.rep h₁⟫) (eq.trans ⟪(λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff)⟫ ⟪(λ b, φ ∨ b = ff) = inhab.rep h₂⟫),
   have h₁ = h₂ :=
-    inhab_ext ⟪inhab.rep h₁ = inhab.rep h₂⟫,
+    inhab.ext ⟪inhab.rep h₁ = inhab.rep h₂⟫,
   eq.congr_arg ⟪h₁ = h₂⟫,
 have φ ∨ choice h₁ = tt :=
   eq.conv (eq.symm (eq.congr_fun ⟪(λ b, φ ∨ b = tt) = inhab.rep h₁⟫)) choice.spec,
@@ -514,8 +514,6 @@ or.ind ⟪φ ∨ choice h₁ ≠ choice h₂⟫
 structure is_inhabited u := {
   axiom inhabited : ∃ (a : u), ⊤
 }
-
-axiom is_inhabited_ext.{u} (h₁ h₂ : is_inhabited u) : h₁ = h₂
 
 instance is_inhabited.mk.{u} (x : u) : is_inhabited u := {
   lemma inhabited := exists.intro true.intro
@@ -605,23 +603,6 @@ structure pointed u := {
 structure is_prop u := {
   axiom spec (x₁ x₂ : u) : x₁ = x₂
 }
-
--- structure group u :=
--- (mul : u → u → u)
--- (one : u)
--- (inv : u → u)
--- (assume assoc : ∀ x₁ x₂ x₃, mul (mul x₁ x₂) x₃ = mul x₁ (mul x₂ x₃))
--- (assume left_unit : ∀ x, mul one x = x)
--- (assume right_unit : ∀ x, mul x one = x)
--- (assume left_inv : ∀ x, mul (inv x) x = one)
--- (assume right_inv : ∀ x, mul x (inv x) = one)
-
-type const monoid : Type → Type
-const mult.{u} : monoid u → u → u → u
-const unit.{u} : monoid u → u
-axiom assoc.{u} (m : monoid u) (x₁ x₂ x₃ : u) : mult m (mult m x₁ x₂) x₃ = mult m x₁ (mult m x₂ x₃)
-axiom left_unit.{u} (m : monoid u) (x : u) : mult m (unit m) x = x
-axiom right_unit.{u} (m : monoid u) (x : u) : mult m x (unit m) = x
 
 type variable u
 

@@ -97,6 +97,27 @@ fn main() -> anyhow::Result<()> {
                 let ind_name = Name::intern(&format!("{}.ind", cmd.name)).unwrap();
                 print_axiom(&eval, ind_name);
             }
+            cmd::Cmd::Structure(cmd) => {
+                println!("structure {}", cmd.name);
+                for field in &cmd.fields {
+                    match field {
+                        cmd::StructureField::Const(field) => {
+                            let field_name =
+                                Name::intern(&format!("{}.{}", cmd.name, field.name)).unwrap();
+                            print_const(&eval, field_name);
+                        }
+                        cmd::StructureField::Axiom(field) => {
+                            let field_name =
+                                Name::intern(&format!("{}.{}", cmd.name, field.name)).unwrap();
+                            print_axiom(&eval, field_name);
+                        }
+                    }
+                }
+                let abs_name = Name::intern(&format!("{}.abs", cmd.name)).unwrap();
+                print_axiom(&eval, abs_name);
+                let ext_name = Name::intern(&format!("{}.ext", cmd.name)).unwrap();
+                print_axiom(&eval, ext_name);
+            }
             _ => {}
         }
     }
