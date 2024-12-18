@@ -12,6 +12,7 @@
  - [ ] namespace
  -/
 
+-- the very basic building blocks of our logic
 type const Prop : Type
 const imp : Prop → Prop → Prop
 const forall.{u} : (u → Prop) → Prop
@@ -36,6 +37,9 @@ infix ≠ : 50 := ne
 --
 -- This definition might look magical at first glance but is preferred to the ordinary definition by
 -- least reflexive relation à la Martin-Löf because this induces a much simpler elimination rule.
+--
+-- The existence of inductive (predicate) families follows from the fact that every topos
+-- validates the Knaster-Tarski fixedpoint theorem. [_citation needed_]
 inductive eq.{u} (x : u) : u → Prop
 | refl : eq x
 
@@ -252,7 +256,7 @@ infixl ∪ : 65 := cup
 infix ∖ : 70 := setminus
 nofix ∅ := empty
 
--- type set u := u → Prop
+-- TODO: type set u := u → Prop
 
 def in.{u} (x : u) (s : set u) : Prop := s x
 def notin.{u} (x : u) (s : set u) : Prop := ¬(x ∈ s)
@@ -280,6 +284,15 @@ def preimage.{u, v} (f : u → v) (t : set v) : set u := { x | t (f x) }
 inductive fin.{u} : set u → Prop
 | empty : fin empty
 | insert (a : u) (s : set u) : fin s → fin (insert a s)
+
+lemma empty_subseteq.{u} (s : set u) : ∅ ⊆ s :=
+take (a : u),
+assume a ∈ ∅,
+have ⊥ := ⟪a ∈ ∅⟫,
+absurd ⟪⊥⟫
+
+lemma empty_in_power.{u} (s : set u) : ∅ ∈ power s :=
+empty_subseteq
 
 /-
  - well-founded
@@ -440,6 +453,29 @@ uexists.intro
    have inhab.rep c₁ = inhab.rep c₂ := eq.trans (eq.symm ⟪s = inhab.rep c₁⟫) ⟪s = inhab.rep c₂⟫,
    inhab.ext ⟪inhab.rep c₁ = inhab.rep c₂⟫)
 
+/-
+-- This command introduces:
+--
+--   const power.inhab.{u} : set u → inhab (set u)
+--   def power.inhab.rep.{u} (A : set u) : set (set u) := power A
+--   axiom power.inhab.rep.spec.{u} (A : set u) : inhab.rep (power.inhab A) = power.inhab.rep A
+--   lemma power.inhab.inhabited.{u} : ∃ a, a ∈ power x := (..)
+--
+instance power.inhab.{u} (A : set u) : inhab (set u) := {
+  def rep := power A
+  lemma inhabited := exists.intro empty_in_power
+}
+
+instance cup.inhab.{u} (A B : inhab u) : inhab u := {
+  def rep : set u := inhab.rep A ∪ inhab.rep B
+
+  lemma inhabited : ∃ a, a ∈ inhab.rep A ∪ inhab.rep B :=
+  obtain (x : u), x ∈ inhab.rep A := inhab.inhabited,
+  have x ∈ inhab.rep A ∨ x ∈ inhab.rep B := or.left ⟪x ∈ inhab.rep A⟫,
+  exists.intro ⟪x ∈ inhab.rep A ∨ x ∈ inhab.rep B⟫
+}
+-/
+
 -- The exisistence of the constant and the axiom state that every type u is a choice type.
 const choice.{u} : inhab u → u
 axiom choice.spec.{u} (x : inhab u) : choice x ∈ inhab.rep x
@@ -514,6 +550,7 @@ structure is_inhabited u := {
   axiom inhabited : ∃ (a : u), ⊤
 }
 
+/-
 instance is_inhabited.mk.{u} (x : u) : is_inhabited u := {
   lemma inhabited := exists.intro true.intro
 }
@@ -521,6 +558,7 @@ instance is_inhabited.mk.{u} (x : u) : is_inhabited u := {
 instance is_inhabited.join.{u} (h : is_inhabited (is_inhabited u)) : is_inhabited u := {
   lemma inhabited : ∃ (a : is_inhabited u), ⊤ := @is_inhabited.inhabited[h]
 }
+-/
 
 -- internal global choice operator
 -- 
@@ -553,8 +591,10 @@ infix < : 50 := lt
 infix ≥ : 50 := ge
 infix > : 50 := gt
 
-def add (n m : ℕ) : ℕ := rec n m succ
-def mul (n m : ℕ) : ℕ := rec n zero (add m)
+-- TODO: type ℕ := nat
+
+def add (n m : ℕ) : ℕ := nat.rec n m (λ p, succ)
+def mul (n m : ℕ) : ℕ := nat.rec n zero (λ p, add m)
 
 def bit0 (n : ℕ) : ℕ := n + n
 def bit1 (n : ℕ) : ℕ := succ (bit0 n)
@@ -571,6 +611,7 @@ structure monoid u := {
   axiom right_unit (x : u) : mult x unit = x
 }
 
+/-
 instance Prop_conj_monoid : monoid Prop := {
   def mult := and
   def unit := ⊤
@@ -594,6 +635,7 @@ instance power_monoid.{u, v} (m : monoid u) : monoid (v → u) := {
   lemma left_unit := sorry
   lemma right_unit := sorry
 }
+-/
 
 structure pointed u := {
   const pt : u
@@ -603,9 +645,7 @@ structure is_prop u := {
   axiom spec (x₁ x₂ : u) : x₁ = x₂
 }
 
-type variable u
-
-def interchange (m₁ m₂ : monoid u) : Prop := ∀ a b c d, mult m₁ (mult m₂ a b) (mult m₂ c d) = mult m₂ (mult m₁ a c) (mult m₁ b d)
+-- def interchange (m₁ m₂ : monoid u) : Prop := ∀ a b c d, mult m₁ (mult m₂ a b) (mult m₂ c d) = mult m₂ (mult m₁ a c) (mult m₁ b d)
 
 /-
 lemma interchange.units_are_equal (m₁ m₂ : monoid u) : interchange m₁ m₂ → unit m₁ = mult m₂ (mult m₁ (unit m₁) (unit m₂)) (mult m₁ (unit m₂) (unit m₁)) :=

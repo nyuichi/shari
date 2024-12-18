@@ -350,6 +350,8 @@ impl<'a, 'b> Parser<'a, 'b> {
             } else if token.as_str() == "set" {
                 let t = self.subty(1024)?;
                 Ok(mk_type_arrow(t, mk_type_prop()))
+            } else if token.as_str() == "ℕ" {
+                Ok(mk_type_const(Name::intern("nat").unwrap()))
             } else {
                 Self::fail(token, "unknown type variable")
             }
