@@ -167,6 +167,39 @@ pub struct Eval {
 }
 
 impl Eval {
+    fn add_const(&mut self, name: Name, local_types: Vec<Name>, ty: Type) {
+        self.ns.consts.insert(name, local_types.len());
+        self.proof_env.tt_env.consts.insert(name, (local_types, ty));
+    }
+
+    fn add_axiom(&mut self, name: Name, local_types: Vec<Name>, num_params: usize, target: Term) {
+        self.ns.facts.insert(
+            name,
+            FactInfo {
+                type_arity: local_types.len(),
+                num_params,
+            },
+        );
+        self.proof_env.facts.insert(name, (local_types, target));
+    }
+
+    fn add_type_const(&mut self, name: Name, kind: Kind) {
+        self.ns.type_consts.insert(name);
+        self.proof_env.tt_env.type_consts.insert(name, kind);
+    }
+
+    fn has_const(&self, name: Name) -> bool {
+        self.proof_env.tt_env.consts.contains_key(&name)
+    }
+
+    fn has_axiom(&self, name: Name) -> bool {
+        self.proof_env.facts.contains_key(&name)
+    }
+
+    fn has_type_const(&self, name: Name) -> bool {
+        self.proof_env.tt_env.type_consts.contains_key(&name)
+    }
+
     pub fn run_cmd(&mut self, cmd: Cmd) -> anyhow::Result<()> {
         match cmd {
             Cmd::Infix(inner) => {
@@ -239,6 +272,9 @@ impl Eval {
                     mut ty,
                     mut target,
                 } = inner;
+                if self.has_const(name) {
+                    bail!("already defined");
+                }
                 let need_shrink = local_types.is_none();
                 if let Some(local_types) = &local_types {
                     for i in 0..local_types.len() {
@@ -271,14 +307,7 @@ impl Eval {
                     }
                     local_env.local_types = shrinked_local_types;
                 }
-                if self.proof_env.tt_env.consts.contains_key(&name) {
-                    bail!("already defined");
-                }
-                self.ns.consts.insert(name, local_env.local_types.len());
-                self.proof_env
-                    .tt_env
-                    .consts
-                    .insert(name, (local_env.local_types.clone(), ty.clone()));
+                self.add_const(name, local_env.local_types.clone(), ty.clone());
                 self.proof_env.tt_env.defs.insert(
                     name,
                     Def {
@@ -296,6 +325,9 @@ impl Eval {
                     params,
                     mut target,
                 } = inner;
+                if self.has_axiom(name) {
+                    bail!("already defined");
+                }
                 let need_shrink = local_types.is_none();
                 if let Some(local_types) = &local_types {
                     for i in 0..local_types.len() {
@@ -333,19 +365,7 @@ impl Eval {
                     }
                     local_env.local_types = shrinked_local_types;
                 }
-                if self.proof_env.facts.contains_key(&name) {
-                    bail!("already defined");
-                }
-                self.ns.facts.insert(
-                    name,
-                    FactInfo {
-                        type_arity: local_env.local_types.len(),
-                        num_params: params.len(),
-                    },
-                );
-                self.proof_env
-                    .facts
-                    .insert(name, (local_env.local_types, target));
+                self.add_axiom(name, local_env.local_types, params.len(), target);
                 Ok(())
             }
             Cmd::Lemma(inner) => {
@@ -357,6 +377,9 @@ impl Eval {
                     holes,
                     mut expr,
                 } = inner;
+                if self.has_axiom(name) {
+                    bail!("already defined");
+                }
                 let need_shrink = local_types.is_none();
                 if let Some(local_types) = &local_types {
                     for i in 0..local_types.len() {
@@ -413,19 +436,7 @@ impl Eval {
                     &mut h,
                     &target,
                 )?;
-                if self.proof_env.facts.contains_key(&name) {
-                    bail!("already defined");
-                }
-                self.ns.facts.insert(
-                    name,
-                    FactInfo {
-                        type_arity: local_env.local_types.len(),
-                        num_params: params.len(),
-                    },
-                );
-                self.proof_env
-                    .facts
-                    .insert(name, (local_env.local_types, target));
+                self.add_axiom(name, local_env.local_types, params.len(), target);
                 Ok(())
             }
             Cmd::Const(inner) => {
@@ -434,6 +445,9 @@ impl Eval {
                     local_types,
                     ty,
                 } = inner;
+                if self.has_const(name) {
+                    bail!("already defined");
+                }
                 let need_shrink = local_types.is_none();
                 if let Some(local_types) = &local_types {
                     for i in 0..local_types.len() {
@@ -462,23 +476,15 @@ impl Eval {
                     }
                     local_env.local_types = shrinked_local_types;
                 }
-                if self.proof_env.tt_env.consts.contains_key(&name) {
-                    bail!("already defined");
-                }
-                self.ns.consts.insert(name, local_env.local_types.len());
-                self.proof_env
-                    .tt_env
-                    .consts
-                    .insert(name, (local_env.local_types.clone(), ty.clone()));
+                self.add_const(name, local_env.local_types, ty);
                 Ok(())
             }
             Cmd::TypeConst(inner) => {
                 let CmdTypeConst { name, kind } = inner;
-                if self.proof_env.tt_env.type_consts.contains_key(&name) {
+                if self.has_type_const(name) {
                     bail!("already defined");
                 }
-                self.ns.type_consts.insert(name);
-                self.proof_env.tt_env.type_consts.insert(name, kind);
+                self.add_type_const(name, kind);
                 Ok(())
             }
             Cmd::TypeVariable(inner) => {
@@ -509,6 +515,9 @@ impl Eval {
             local_types,
             ctors,
         } = cmd;
+        if self.has_type_const(name) {
+            bail!("already defined");
+        }
         for i in 0..local_types.len() {
             for j in i + 1..local_types.len() {
                 if local_types[i] == local_types[j] {
@@ -530,6 +539,10 @@ impl Eval {
             }
         }
         for ctor in &ctors {
+            let ctor_name = Name::intern(&format!("{}.{}", name, ctor.name)).unwrap();
+            if self.has_const(ctor_name) {
+                bail!("already defined");
+            }
             self.proof_env
                 .tt_env
                 .check_kind(&local_env, &ctor.ty, &Kind::base())?;
@@ -550,11 +563,26 @@ impl Eval {
                 }
             }
         }
-        if self.proof_env.tt_env.type_consts.contains_key(&name) {
+        let ind_name = Name::intern(&format!("{}.ind", name)).unwrap();
+        if self.has_axiom(ind_name) {
             bail!("already defined");
         }
-        // Foo u v
+        let rec_name = Name::intern(&format!("{}.rec", name)).unwrap();
+        if self.has_const(rec_name) {
+            bail!("already defined");
+        }
+        let rec_spec_name = Name::intern(&format!("{}.rec.spec", name)).unwrap();
+        if !ctors.is_empty() && self.has_axiom(rec_spec_name) {
+            bail!("already defined");
+        }
+        // well-formedness check is completed.
+
+        // generate type constructor
+        self.add_type_const(name, Kind(local_types.len()));
+
+        // generate data constructors
         let target_ty = {
+            // Foo u v
             let mut c = mk_type_const(name);
             c.apply(local_types.iter().map(|t| mk_type_local(*t)));
             c
@@ -563,25 +591,13 @@ impl Eval {
         let subst = [(name, &target_ty)];
         let mut cs = vec![];
         for ctor in &ctors {
-            let name = Name::intern(&format!("{}.{}", name, ctor.name)).unwrap();
-            if self.proof_env.tt_env.consts.contains_key(&name) {
-                bail!("already defined");
-            }
+            let ctor_name = Name::intern(&format!("{}.{}", name, ctor.name)).unwrap();
             let mut ty = ctor.ty.clone();
             ty.subst(&subst);
-            cs.push((name, ty));
+            cs.push((ctor_name, ty));
         }
-        self.ns.type_consts.insert(name);
-        self.proof_env
-            .tt_env
-            .type_consts
-            .insert(name, Kind(local_types.len()));
         for (name, ty) in cs {
-            self.ns.consts.insert(name, local_types.len());
-            self.proof_env
-                .tt_env
-                .consts
-                .insert(name, (local_types.clone(), ty));
+            self.add_const(name, local_types.clone(), ty);
         }
 
         // generate the induction principle
@@ -676,20 +692,7 @@ impl Eval {
             m.apply([target]);
             target = m;
         }
-        let ind_name = Name::intern(&format!("{}.ind", name)).unwrap();
-        if self.proof_env.facts.contains_key(&ind_name) {
-            bail!("already defined");
-        }
-        self.ns.facts.insert(
-            ind_name,
-            FactInfo {
-                type_arity: local_types.len(),
-                num_params: 2,
-            },
-        );
-        self.proof_env
-            .facts
-            .insert(ind_name, (local_types.clone(), target));
+        self.add_axiom(ind_name, local_types.clone(), 2, target);
 
         // generate the recursion principle
         //
@@ -706,7 +709,6 @@ impl Eval {
         let rec_ty_var = Name::fresh();
         let mut rec_local_types = local_types.clone();
         rec_local_types.push(rec_ty_var);
-        let rec_name = Name::intern(&format!("{}.rec", name)).unwrap();
         let mut ctor_params_list = vec![];
         for ctor in &ctors {
             let mut ctor_params = vec![];
@@ -833,31 +835,11 @@ impl Eval {
             spec = Some(conj);
         }
 
-        if self.proof_env.tt_env.consts.contains_key(&rec_name) {
-            bail!("already defined");
-        }
-        self.ns.consts.insert(rec_name, rec_local_types.len());
-        self.proof_env
-            .tt_env
-            .consts
-            .insert(rec_name, (rec_local_types.clone(), rec_ty));
+        self.add_const(rec_name, rec_local_types.clone(), rec_ty);
         self.proof_env.tt_env.recursors.insert(rec_name, recursors);
 
         if let Some(spec) = spec {
-            let rec_spec_name = Name::intern(&format!("{}.rec.spec", name)).unwrap();
-            if self.proof_env.facts.contains_key(&rec_spec_name) {
-                bail!("already defined");
-            }
-            self.ns.facts.insert(
-                rec_spec_name,
-                FactInfo {
-                    type_arity: rec_local_types.len(),
-                    num_params: 0,
-                },
-            );
-            self.proof_env
-                .facts
-                .insert(rec_spec_name, (rec_local_types, spec));
+            self.add_axiom(rec_spec_name, rec_local_types, 0, spec);
         }
         Ok(())
     }
@@ -882,6 +864,9 @@ impl Eval {
             target_ty,
             mut ctors,
         } = cmd;
+        if self.has_const(name) {
+            bail!("already defined");
+        }
         let need_shrink = local_types.is_none();
         if let Some(local_types) = &local_types {
             for i in 0..local_types.len() {
@@ -926,6 +911,10 @@ impl Eval {
         let mut ctor_target_list = vec![];
         let mut ctor_ind_args_list = vec![];
         for ctor in &mut ctors {
+            let ctor_name = Name::intern(&format!("{}.{}", name, ctor.name)).unwrap();
+            if self.has_axiom(ctor_name) {
+                bail!("already defined");
+            }
             for i in 0..ctor.params.len() {
                 for j in i + 1..ctor.params.len() {
                     if ctor.params[i].0 == ctor.params[j].0 {
@@ -998,7 +987,6 @@ impl Eval {
             }
             ctor_ind_args_list.push(ctor_ind_args);
         }
-        // well-formedness check is completed.
         local_env.locals.remove(0);
         if need_shrink {
             let mut shrinked_local_types = vec![];
@@ -1016,9 +1004,12 @@ impl Eval {
             }
             local_env.local_types = shrinked_local_types;
         }
-        if self.proof_env.tt_env.consts.contains_key(&name) {
+        let ind_name = Name::intern(&format!("{}.ind", name)).unwrap();
+        if self.has_axiom(ind_name) {
             bail!("already defined");
         }
+        // well-formedness check is completed.
+
         // inductive P.{u} (x : τ) : σ → Prop
         // ↦ const P.{u} : τ → σ → Prop
         let mut pred_ty = target_ty.clone();
@@ -1027,20 +1018,13 @@ impl Eval {
             param_types.push(t.clone());
         }
         pred_ty.discharge(param_types);
-        self.ns.consts.insert(name, local_env.local_types.len());
-        self.proof_env
-            .tt_env
-            .consts
-            .insert(name, (local_env.local_types.clone(), pred_ty));
+        self.add_const(name, local_env.local_types.clone(), pred_ty);
 
         // inductive P.{u} (x : τ) : σ → Prop
         // | intro : ∀ y, φ → (∀ z, ψ → P M) → P N
         // ↦ axiom P.intro.{u} (x : τ) : ∀ y, φ → (∀ z, ψ → P.{u} x M) → P.{u} x N
         for ctor in &ctors {
             let ctor_name = Name::intern(&format!("{}.{}", name, ctor.name)).unwrap();
-            if self.proof_env.facts.contains_key(&ctor_name) {
-                bail!("already defined");
-            }
             let mut target = ctor.target.clone();
             // P.{u} x
             let mut stash = mk_const(
@@ -1072,16 +1056,12 @@ impl Eval {
                 }
                 .into();
             }
-            self.ns.facts.insert(
+            self.add_axiom(
                 ctor_name,
-                FactInfo {
-                    type_arity: local_env.local_types.len(),
-                    num_params: params.len() + ctor.params.len(),
-                },
+                local_env.local_types.clone(),
+                params.len() + ctor.params.len(),
+                target,
             );
-            self.proof_env
-                .facts
-                .insert(ctor_name, (local_env.local_types.clone(), target));
         }
 
         // inductive P.{u} (x : τ) : σ → Prop
@@ -1202,20 +1182,12 @@ impl Eval {
             }
             .into();
         }
-        let ind_name = Name::intern(&format!("{}.ind", name)).unwrap();
-        if self.proof_env.facts.contains_key(&ind_name) {
-            bail!("already defined");
-        }
-        self.ns.facts.insert(
+        self.add_axiom(
             ind_name,
-            FactInfo {
-                type_arity: local_env.local_types.len(),
-                num_params: params.len() + indexes.len() + 1,
-            },
+            local_env.local_types,
+            params.len() + indexes.len() + 1,
+            target,
         );
-        self.proof_env
-            .facts
-            .insert(ind_name, (local_env.local_types, target));
         Ok(())
     }
 }
