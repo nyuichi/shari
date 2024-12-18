@@ -27,11 +27,17 @@ impl OpTable {
 
 struct Printer<'a> {
     op_table: &'a OpTable,
+    print_type_args: bool,
+    print_binder_types: bool,
 }
 
 impl<'a> Printer<'a> {
     fn new(op_table: &'a OpTable) -> Self {
-        Printer { op_table }
+        Printer {
+            op_table,
+            print_type_args: false,
+            print_binder_types: false,
+        }
     }
 
     fn fmt_term(&self, m: &Term, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -133,7 +139,13 @@ impl<'a> Printer<'a> {
                                 }
                                 break;
                             }
-                            write!(f, "∀ ({} : {}), ", x, inner.binder_type)?;
+                            if self.print_binder_types {
+                                write!(f, "∀ ({} : ", x)?;
+                                self.fmt_type(f, &inner.binder_type)?;
+                                write!(f, "), ")?;
+                            } else {
+                                write!(f, "∀ {}, ", x)?;
+                            }
                             local_names.push(x);
                             self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
                             local_names.pop();
@@ -167,7 +179,13 @@ impl<'a> Printer<'a> {
                                 }
                                 break;
                             }
-                            write!(f, "∃ ({} : {}), ", x, inner.binder_type)?;
+                            if self.print_binder_types {
+                                write!(f, "∃ ({} : ", x)?;
+                                self.fmt_type(f, &inner.binder_type)?;
+                                write!(f, "), ")?;
+                            } else {
+                                write!(f, "∃ {}, ", x)?;
+                            }
                             local_names.push(x);
                             self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
                             local_names.pop();
@@ -201,7 +219,14 @@ impl<'a> Printer<'a> {
                                 }
                                 break;
                             }
-                            write!(f, "∃! ({} : {}), ", x, inner.binder_type)?;
+                            if self.print_binder_types {
+                                write!(f, "∃! ({} : ", x)?;
+                                self.fmt_type(f, &inner.binder_type)?;
+                                write!(f, "), ")?;
+                            } else {
+                                write!(f, "∃! {}, ", x)?;
+                            }
+
                             local_names.push(x);
                             self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
                             local_names.pop();
@@ -236,17 +261,17 @@ impl<'a> Printer<'a> {
             }
             Term::Const(inner) => {
                 write!(f, "{}", inner.name)?;
-                if !inner.ty_args.is_empty() {
-                    write!(
-                        f,
-                        ".{{{}}}",
-                        inner
-                            .ty_args
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )?;
+                if self.print_type_args && !inner.ty_args.is_empty() {
+                    write!(f, ".{{",)?;
+                    let mut first = true;
+                    for ty_arg in &inner.ty_args {
+                        if !first {
+                            write!(f, ", ")?;
+                        }
+                        first = false;
+                        self.fmt_type(f, ty_arg)?;
+                    }
+                    write!(f, "}}",)?;
                 }
                 Ok(())
             }
@@ -269,7 +294,13 @@ impl<'a> Printer<'a> {
                     }
                     break;
                 }
-                write!(f, "λ ({} : {}), ", x, inner.binder_type)?;
+                if self.print_binder_types {
+                    write!(f, "λ ({} : ", x)?;
+                    self.fmt_type(f, &inner.binder_type)?;
+                    write!(f, "), ")?;
+                } else {
+                    write!(f, "λ {}, ", x)?;
+                }
                 local_names.push(x);
                 self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
                 local_names.pop();
