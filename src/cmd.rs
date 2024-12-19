@@ -193,6 +193,7 @@ impl Eval {
     }
 
     fn add_axiom(&mut self, name: Name, local_types: Vec<Name>, target: Term) {
+        assert!(self.is_wff(&local_types, &target));
         let mut num_params = 0;
         {
             let mut target = target.clone();
@@ -226,6 +227,19 @@ impl Eval {
 
     fn has_type_const(&self, name: Name) -> bool {
         self.proof_env.tt_env.type_consts.contains_key(&name)
+    }
+
+    fn is_wff(&self, local_types: &[Name], target: &Term) -> bool {
+        let mut local_env = LocalEnv {
+            local_types: local_types.to_vec(),
+            locals: vec![],
+            holes: vec![],
+        };
+        let mut target = target.clone();
+        self.proof_env
+            .tt_env
+            .check_type(&mut local_env, &mut target, &mut mk_type_prop())
+            .is_ok()
     }
 
     pub fn run_cmd(&mut self, cmd: Cmd) -> anyhow::Result<()> {
@@ -782,8 +796,8 @@ impl Eval {
 
         let rhs_binders = cont_params
             .into_iter()
-            .zip(cont_param_tys)
-            .map(|(x, t)| (x, x, t))
+            .zip(&cont_param_tys)
+            .map(|(x, t)| (x, x, t.clone()))
             .collect::<Vec<_>>();
         for ((rhs_body, ctor_params), ctor) in rhs_bodies
             .into_iter()
@@ -805,7 +819,10 @@ impl Eval {
             let mut rhs = rhs_body;
             rhs.abs(&rhs_binders, true);
 
-            let mut spec = mk_const(Name::intern("eq").unwrap(), vec![mk_type_local(rec_ty_var)]);
+            let mut eq_ty = mk_type_local(rec_ty_var);
+            eq_ty.discharge(cont_param_tys.clone());
+
+            let mut spec = mk_const(Name::intern("eq").unwrap(), vec![eq_ty]);
             spec.apply([lhs, rhs]);
 
             for (x, t) in ctor_params.into_iter().rev() {

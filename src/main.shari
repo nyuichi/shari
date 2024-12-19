@@ -393,8 +393,11 @@ eq.symm unit.eta_expand
 lemma unit_ext (x₁ x₂ : unit) : x₁ = x₂ :=
 eq.trans unit.eta_expand unit.eta_reduce
 
-lemma prod.beta.{u, v} (x : u) (y : v) : x = fst (pair x y) ∧ y = snd (pair x y) :=
-and.intro eq.refl eq.refl
+lemma prod.fst.spec.{u, v} (x : u) (y : v) : fst (pair x y) = x :=
+eq.congr_fun prod.pair.spec
+
+lemma prod.snd.spec.{u, v} (x : u) (y : v) : snd (pair x y) = y :=
+eq.congr_fun prod.pair.spec
 
 /- FIXME
 lemma prod_ext.{u, v} (p₁ p₂ : u × v) : fst p₁ = fst p₂ → snd p₁ = snd p₂ → p₁ = p₂ :=
@@ -426,9 +429,9 @@ bool.ind (or.left eq.refl) (or.right eq.refl)
 lemma bool.tt_ne_ff : tt ≠ ff :=
 assume tt = ff,
 have ⊤ = ⊥ :=
-  have ⊤ = bool.rec tt ⊤ ⊥ := eq.refl,
-  have bool.rec tt ⊤ ⊥ = bool.rec ff ⊤ ⊥ := @eq.ap[_, _, λ b, bool.rec b ⊤ ⊥] ⟪tt = ff⟫,
-  have bool.rec ff ⊤ ⊥ = ⊥ := eq.refl,
+  have ⊤ = bool.rec tt ⊤ ⊥ := @eq.ap[_, _, λ f, f ⊤ ⊥] (eq.symm bool.tt.spec),
+  have bool.rec tt ⊤ ⊥ = bool.rec ff ⊤ ⊥ := eq.ap ⟪tt = ff⟫,
+  have bool.rec ff ⊤ ⊥ = ⊥ := @eq.ap[_, _, λ f, f ⊤ ⊥] bool.ff.spec,
   eq.trans ⟪⊤ = bool.rec tt ⊤ ⊥⟫ (eq.trans ⟪bool.rec tt ⊤ ⊥ = bool.rec ff ⊤ ⊥⟫ ⟪bool.rec ff ⊤ ⊥ = ⊥⟫),
 contradiction ⟪⊤ = ⊥⟫ true_ne_false
 
