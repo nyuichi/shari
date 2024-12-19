@@ -1,6 +1,6 @@
 use crate::cmd::{
     Cmd, CmdAxiom, CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdLemma,
-    CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive, CmdTypeVariable,
+    CmdLocalTypeConst, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive,
     Constructor, DataConstructor, Fixity, Operator, StructureAxiom, StructureConst, StructureField,
 };
 use crate::expr::{
@@ -1082,8 +1082,8 @@ impl<'a, 'b> Parser<'a, 'b> {
                         Cmd::TypeConst(type_const_cmd)
                     }
                     "variable" => {
-                        let type_variable_cmd = self.type_variable_cmd(keyword)?;
-                        Cmd::TypeVariable(type_variable_cmd)
+                        let local_type_const_cmd = self.local_type_const_cmd(keyword)?;
+                        Cmd::LocalTypeConst(local_type_const_cmd)
                     }
                     "inductive" => {
                         let type_inductive_cmd = self.type_inductive_cmd(keyword)?;
@@ -1101,6 +1101,26 @@ impl<'a, 'b> Parser<'a, 'b> {
             "structure" => {
                 let structure_cmd = self.structure_cmd(keyword)?;
                 Cmd::Structure(structure_cmd)
+            }
+            "local" => {
+                let keyword2 = self.keyword()?;
+                match keyword2.as_str() {
+                    "type" => {
+                        let keyword3 = self.keyword()?;
+                        match keyword3.as_str() {
+                            "const" => {
+                                let local_type_const_cmd = self.local_type_const_cmd(keyword)?;
+                                Cmd::LocalTypeConst(local_type_const_cmd)
+                            }
+                            _ => {
+                                return Self::fail(keyword, "unknown command");
+                            }
+                        }
+                    }
+                    _ => {
+                        return Self::fail(keyword, "unknown command");
+                    }
+                }
             }
             _ => {
                 return Self::fail(keyword, "expected command");
@@ -1370,12 +1390,12 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(CmdTypeConst { name, kind })
     }
 
-    fn type_variable_cmd(&mut self, _token: Token) -> Result<CmdTypeVariable, ParseError> {
+    fn local_type_const_cmd(&mut self, _token: Token) -> Result<CmdLocalTypeConst, ParseError> {
         let mut variables = vec![];
         while let Some(name) = self.name_opt() {
             variables.push(name);
         }
-        Ok(CmdTypeVariable { variables })
+        Ok(CmdLocalTypeConst { variables })
     }
 
     fn type_inductive_cmd(&mut self, _token: Token<'a>) -> Result<CmdTypeInductive, ParseError> {

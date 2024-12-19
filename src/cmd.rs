@@ -44,7 +44,7 @@ pub enum Cmd {
     Lemma(CmdLemma),
     Const(CmdConst),
     TypeConst(CmdTypeConst),
-    TypeVariable(CmdTypeVariable),
+    LocalTypeConst(CmdLocalTypeConst),
     TypeInductive(CmdTypeInductive),
     Inductive(CmdInductive),
     Structure(CmdStructure),
@@ -125,7 +125,7 @@ pub struct CmdTypeConst {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CmdTypeVariable {
+pub struct CmdLocalTypeConst {
     pub variables: Vec<Name>,
 }
 
@@ -522,8 +522,8 @@ impl Eval {
                 self.add_type_const(name, kind);
                 Ok(())
             }
-            Cmd::TypeVariable(inner) => {
-                let CmdTypeVariable { variables } = inner;
+            Cmd::LocalTypeConst(inner) => {
+                let CmdLocalTypeConst { variables } = inner;
                 for i in 0..variables.len() {
                     for j in i + 1..variables.len() {
                         if variables[i] == variables[j] {

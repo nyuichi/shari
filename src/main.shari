@@ -357,7 +357,7 @@ type inductive bin_tree u
 def prod.fst.{u, v} (p : u × v) : u := prod.rec p (λ a b, a)
 def prod.snd.{u, v} (p : u × v) : v := prod.rec p (λ a b, b)
 
-type variable u v
+local type const u v
 
 -- TODO: use namespace
 def tt : bool := bool.tt
