@@ -199,7 +199,15 @@ impl Eval {
         self.proof_env.tt_env.consts.insert(name, (local_types, ty));
     }
 
-    fn add_axiom(&mut self, name: Name, local_types: Vec<Name>, num_params: usize, target: Term) {
+    fn add_axiom(&mut self, name: Name, local_types: Vec<Name>, target: Term) {
+        let mut num_params = 0;
+        {
+            let mut target = target.clone();
+            while let Ok(forall) = Forall::try_from(target) {
+                num_params += 1;
+                target = forall.body;
+            }
+        }
         self.ns.facts.insert(
             name,
             FactInfo {
@@ -392,7 +400,7 @@ impl Eval {
                     }
                     local_env.local_types = shrinked_local_types;
                 }
-                self.add_axiom(name, local_env.local_types, params.len(), target);
+                self.add_axiom(name, local_env.local_types, target);
                 Ok(())
             }
             Cmd::Lemma(inner) => {
@@ -463,7 +471,7 @@ impl Eval {
                     &mut h,
                     &target,
                 )?;
-                self.add_axiom(name, local_env.local_types, params.len(), target);
+                self.add_axiom(name, local_env.local_types, target);
                 Ok(())
             }
             Cmd::Const(inner) => {
@@ -720,7 +728,7 @@ impl Eval {
             m.apply([target]);
             target = m;
         }
-        self.add_axiom(ind_name, local_types.clone(), 2, target);
+        self.add_axiom(ind_name, local_types.clone(), target);
 
         // generate the recursion principle
         //
@@ -867,7 +875,7 @@ impl Eval {
         self.proof_env.tt_env.recursors.insert(rec_name, recursors);
 
         if let Some(spec) = spec {
-            self.add_axiom(rec_spec_name, rec_local_types, 0, spec);
+            self.add_axiom(rec_spec_name, rec_local_types, spec);
         }
         Ok(())
     }
@@ -1084,12 +1092,7 @@ impl Eval {
                 }
                 .into();
             }
-            self.add_axiom(
-                ctor_name,
-                local_env.local_types.clone(),
-                params.len() + ctor.params.len(),
-                target,
-            );
+            self.add_axiom(ctor_name, local_env.local_types.clone(), target);
         }
 
         // inductive P.{u} (x : τ) : σ → Prop
@@ -1216,12 +1219,7 @@ impl Eval {
             }
             .into();
         }
-        self.add_axiom(
-            ind_name,
-            local_env.local_types,
-            params.len() + indexes.len() + 1,
-            target,
-        );
+        self.add_axiom(ind_name, local_env.local_types, target);
         Ok(())
     }
 
@@ -1369,12 +1367,7 @@ impl Eval {
                         target,
                     );
 
-                    self.add_axiom(
-                        fullname,
-                        local_types.clone(),
-                        field.params.len() + 1,
-                        target,
-                    );
+                    self.add_axiom(fullname, local_types.clone(), target);
                 }
             }
         }
@@ -1452,7 +1445,7 @@ impl Eval {
                 abs,
             );
         }
-        self.add_axiom(abs_name, local_types.clone(), params.len(), abs);
+        self.add_axiom(abs_name, local_types.clone(), abs);
 
         // generate extensionality
         // axiom inhab.ext.{u} (d₁ d₂ : inhab u) : inhab.rep d₁ = inhab.rep d₂ → d₁ = d₂
@@ -1504,7 +1497,7 @@ impl Eval {
             mk_const(Name::try_from("forall").unwrap(), vec![instance_ty.clone()]),
             target,
         );
-        self.add_axiom(ext_name, local_types.clone(), 2, target);
+        self.add_axiom(ext_name, local_types.clone(), target);
         Ok(())
     }
 }
