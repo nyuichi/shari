@@ -11,7 +11,7 @@ use crate::proof::{
     mk_proof_imp_intro, mk_proof_ref, mk_type_prop, Proof,
 };
 use crate::tt::{
-    mk_const, mk_fresh_hole, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const,
+    mk_app, mk_const, mk_fresh_hole, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const,
     mk_type_local, Kind, Name, Path, Term, Type,
 };
 
@@ -1233,11 +1233,15 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.push(*x);
         }
         self.expect_symbol(":")?;
-        let t = self.ty()?;
+        let mut t = self.ty()?;
         self.expect_symbol(":=")?;
-        let m = self.term()?;
-        // Parsing finished. We can now safaly tear off.
-        self.locals.truncate(params.len());
+        let mut m = self.term()?;
+        // Parsing finished.
+        self.locals.truncate(self.locals.len() - params.len());
+        for (x, ty) in params.into_iter().rev() {
+            t.discharge([ty.clone()]);
+            m.abs(&[(x, x, ty)], true);
+        }
         match &local_types {
             Some(local_types) => {
                 self.type_locals.truncate(local_types.len());
@@ -1249,7 +1253,6 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(CmdDef {
             name,
             local_types,
-            params,
             ty: t,
             target: m,
         })
@@ -1281,9 +1284,16 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.push(*x);
         }
         self.expect_symbol(":")?;
-        let target = self.term()?;
-        // Parsing finished. We can now safaly tear off.
-        self.locals.truncate(params.len());
+        let mut target = self.term()?;
+        // Parsing finished.
+        self.locals.truncate(self.locals.len() - params.len());
+        for (x, ty) in params.into_iter().rev() {
+            target.abs(&[(x, x, ty.clone())], true);
+            target = mk_app(
+                mk_const(Name::try_from("forall").unwrap(), vec![ty]),
+                target,
+            );
+        }
         match &local_types {
             Some(local_types) => {
                 self.type_locals.truncate(local_types.len());
@@ -1295,7 +1305,6 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(CmdAxiom {
             name,
             local_types,
-            params,
             target,
         })
     }
@@ -1326,11 +1335,19 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.push(*x);
         }
         self.expect_symbol(":")?;
-        let p = self.term()?;
+        let mut p = self.term()?;
         self.expect_symbol(":=")?;
-        let e = self.expr()?;
-        // Parsing finished. We can now safaly tear off.
-        self.locals.truncate(params.len());
+        let mut e = self.expr()?;
+        // Parsing finished.
+        self.locals.truncate(self.locals.len() - params.len());
+        for (x, ty) in params.into_iter().rev() {
+            p.abs(&[(x, x, ty.clone())], true);
+            p = mk_app(
+                mk_const(Name::try_from("forall").unwrap(), vec![ty.clone()]),
+                p,
+            );
+            e = mk_expr_take(x, ty, e);
+        }
         match &local_types {
             Some(local_types) => {
                 self.type_locals.truncate(local_types.len());
@@ -1343,7 +1360,6 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(CmdLemma {
             name,
             local_types,
-            params,
             target: p,
             holes,
             expr: e,
@@ -1487,11 +1503,17 @@ impl<'a, 'b> Parser<'a, 'b> {
                 self.locals.push(*x);
             }
             self.expect_symbol(":")?;
-            let target = self.term()?;
+            let mut target = self.term()?;
             self.locals.truncate(self.locals.len() - ctor_params.len());
+            for (x, ty) in ctor_params.into_iter().rev() {
+                target.abs(&[(x, x, ty.clone())], true);
+                target = mk_app(
+                    mk_const(Name::try_from("forall").unwrap(), vec![ty]),
+                    target,
+                );
+            }
             ctors.push(Constructor {
                 name: ctor_name,
-                params: ctor_params,
                 target,
             })
         }
@@ -1559,11 +1581,17 @@ impl<'a, 'b> Parser<'a, 'b> {
                         self.locals.push(*x);
                     }
                     self.expect_symbol(":")?;
-                    let target = self.term()?;
+                    let mut target = self.term()?;
                     self.locals.truncate(self.locals.len() - params.len());
+                    for (x, ty) in params.into_iter().rev() {
+                        target.abs(&[(x, x, ty.clone())], true);
+                        target = mk_app(
+                            mk_const(Name::try_from("forall").unwrap(), vec![ty]),
+                            target,
+                        );
+                    }
                     fields.push(StructureField::Axiom(StructureAxiom {
                         name: field_name,
-                        params,
                         target,
                     }))
                 }

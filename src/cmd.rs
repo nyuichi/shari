@@ -3,7 +3,7 @@ use std::iter::zip;
 use anyhow::bail;
 
 use crate::{
-    expr::{self, mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_take, Expr},
+    expr::{self, mk_expr_app, mk_expr_assume, mk_expr_assump, Expr},
     parse::{FactInfo, Nasmespace, TokenTable},
     print::OpTable,
     proof::{self, mk_type_prop, Forall, Imp},
@@ -86,7 +86,6 @@ pub struct CmdNofix {
 pub struct CmdDef {
     pub name: Name,
     pub local_types: Option<Vec<Name>>,
-    pub params: Vec<(Name, Type)>,
     pub ty: Type,
     pub target: Term,
 }
@@ -95,7 +94,6 @@ pub struct CmdDef {
 pub struct CmdAxiom {
     pub name: Name,
     pub local_types: Option<Vec<Name>>,
-    pub params: Vec<(Name, Type)>,
     pub target: Term,
 }
 
@@ -103,7 +101,6 @@ pub struct CmdAxiom {
 pub struct CmdLemma {
     pub name: Name,
     pub local_types: Option<Vec<Name>>,
-    pub params: Vec<(Name, Type)>,
     pub target: Term,
     pub holes: Vec<(Name, Type)>,
     pub expr: Expr,
@@ -152,7 +149,6 @@ pub struct CmdInductive {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Constructor {
     pub name: Name,
-    pub params: Vec<(Name, Type)>,
     pub target: Term,
 }
 
@@ -178,7 +174,6 @@ pub struct StructureConst {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StructureAxiom {
     pub name: Name,
-    pub params: Vec<(Name, Type)>,
     pub target: Term,
 }
 
@@ -301,7 +296,6 @@ impl Eval {
                 let CmdDef {
                     name,
                     local_types,
-                    params,
                     mut ty,
                     mut target,
                 } = inner;
@@ -323,10 +317,6 @@ impl Eval {
                     locals: vec![],
                     holes: vec![],
                 };
-                for (var, t) in params.iter().rev() {
-                    target.abs(&[(*var, *var, t.clone())], true);
-                    ty = mk_type_arrow(t.clone(), ty);
-                }
                 self.proof_env
                     .tt_env
                     .check_type(&mut local_env, &mut target, &mut ty)?;
@@ -355,7 +345,6 @@ impl Eval {
                 let CmdAxiom {
                     name,
                     local_types,
-                    params,
                     mut target,
                 } = inner;
                 if self.has_axiom(name) {
@@ -376,13 +365,6 @@ impl Eval {
                     locals: vec![],
                     holes: vec![],
                 };
-                for (var, ty) in params.iter().rev() {
-                    target.abs(&[(*var, *var, ty.clone())], true);
-                    target = mk_app(
-                        mk_const(Name::try_from("forall").unwrap(), vec![ty.clone()]),
-                        target,
-                    );
-                }
                 self.proof_env.tt_env.check_type(
                     &mut local_env,
                     &mut target,
@@ -405,10 +387,9 @@ impl Eval {
                 let CmdLemma {
                     name,
                     local_types,
-                    params,
                     mut target,
                     holes,
-                    mut expr,
+                    expr,
                 } = inner;
                 if self.has_axiom(name) {
                     bail!("already defined");
@@ -428,14 +409,6 @@ impl Eval {
                     locals: vec![],
                     holes,
                 };
-                for (var, ty) in params.iter().rev() {
-                    target.abs(&[(*var, *var, ty.clone())], true);
-                    target = mk_app(
-                        mk_const(Name::try_from("forall").unwrap(), vec![ty.clone()]),
-                        target,
-                    );
-                    expr = mk_expr_take(*var, ty.clone(), expr);
-                }
                 self.proof_env.tt_env.check_type(
                     &mut local_env,
                     &mut target,
@@ -941,6 +914,7 @@ impl Eval {
             }
         }
         local_env.locals.insert(0, (name, target_ty.clone()));
+        let mut ctor_params_list = vec![];
         let mut ctor_args_list = vec![];
         let mut ctor_target_list = vec![];
         let mut ctor_ind_args_list = vec![];
@@ -949,29 +923,21 @@ impl Eval {
             if self.has_axiom(ctor_name) {
                 bail!("already defined");
             }
-            for i in 0..ctor.params.len() {
-                for j in i + 1..ctor.params.len() {
-                    if ctor.params[i].0 == ctor.params[j].0 {
-                        bail!("duplicate parameters");
-                    }
-                }
-                self.proof_env
-                    .tt_env
-                    .check_kind(&local_env, &ctor.params[i].1, &Kind::base())?;
-                local_env
-                    .locals
-                    .push((ctor.params[i].0, ctor.params[i].1.clone()));
-            }
             self.proof_env.tt_env.check_type(
                 &mut local_env,
                 &mut ctor.target,
                 &mut mk_type_prop(),
             )?;
-            local_env
-                .locals
-                .truncate(local_env.locals.len() - ctor.params.len());
 
             let mut m = ctor.target.clone();
+            let mut ctor_params = vec![];
+            while let Ok(mut forall) = Forall::try_from(m.clone()) {
+                let fresh_name = Name::fresh();
+                ctor_params.push((fresh_name, forall.name, forall.ty));
+                forall.body.open(&mk_local(fresh_name));
+                m = forall.body;
+            }
+            ctor_params_list.push(ctor_params);
             let mut ctor_args = vec![];
             while let Ok(imp) = Imp::try_from(m.clone()) {
                 ctor_args.push(imp.lhs);
@@ -979,10 +945,7 @@ impl Eval {
             }
             ctor_args_list.push(ctor_args.clone());
             if m.head() != &mk_local(name) {
-                if Forall::try_from(m.clone()).is_ok() {
-                    bail!("currently only universal quantification in the left most is supported");
-                }
-                bail!("invalid constructor: {m}");
+                bail!("invalid constructor. Currently only Horn clauses are supported in inductive clauses: {m}");
             }
             for a in m.args() {
                 if a.contains_local(&name) {
@@ -1027,10 +990,7 @@ impl Eval {
             for t in local_env.local_types {
                 if params.iter().any(|(_, ty)| ty.contains_local(&t))
                     || target_ty.contains_local(&t)
-                    || ctors.iter().any(|ctor| {
-                        ctor.params.iter().any(|(_, ty)| ty.contains_local(&t))
-                            || ctor.target.contains_local_type(&t)
-                    })
+                    || ctors.iter().any(|ctor| ctor.target.contains_local_type(&t))
                 {
                     shrinked_local_types.push(t);
                     continue;
@@ -1072,15 +1032,6 @@ impl Eval {
             stash.apply(params.iter().map(|(name, _)| mk_local(*name)));
             let subst = [(name, &stash)];
             target.subst(&subst);
-            for (name, ty) in ctor.params.iter().rev() {
-                target.close(*name);
-                target = Forall {
-                    name: *name,
-                    ty: ty.clone(),
-                    body: target,
-                }
-                .into();
-            }
             for (name, ty) in params.iter().rev() {
                 target.close(*name);
                 target = Forall {
@@ -1109,8 +1060,8 @@ impl Eval {
         target.apply(indexes.iter().map(|(x, _)| mk_local(*x)));
         let mut guards = vec![];
         // (∀ y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N) → C w
-        for (ctor, (ctor_args, (ctor_target, ctor_ind_args))) in zip(
-            ctors,
+        for (ctor_params, (ctor_args, (ctor_target, ctor_ind_args))) in zip(
+            ctor_params_list,
             zip(ctor_args_list, zip(ctor_target_list, ctor_ind_args_list)),
         ) {
             // P ↦ C
@@ -1154,10 +1105,10 @@ impl Eval {
             }
 
             // ∀ y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
-            for (x, t) in ctor.params.into_iter().rev() {
+            for (x, nickname, t) in ctor_params.into_iter().rev() {
                 guard.close(x);
                 guard = Forall {
-                    name: x,
+                    name: nickname,
                     ty: t,
                     body: guard,
                 }
@@ -1273,7 +1224,6 @@ impl Eval {
                 StructureField::Axiom(field) => {
                     let StructureAxiom {
                         name: ref field_name,
-                        params: ref params,
                         target,
                     } = field;
                     let fullname = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
@@ -1284,27 +1234,11 @@ impl Eval {
                         bail!("duplicate axiom field");
                     }
                     axiom_field_names.push(field_name);
-                    for i in 0..params.len() {
-                        for j in i + 1..params.len() {
-                            if params[i].0 == params[j].0 {
-                                bail!("duplicate parameters");
-                            }
-                        }
-                        self.proof_env.tt_env.check_kind(
-                            &local_env,
-                            &params[i].1,
-                            &Kind::base(),
-                        )?;
-                        local_env.locals.push((params[i].0, params[i].1.clone()));
-                    }
                     self.proof_env.tt_env.check_type(
                         &mut local_env,
                         target,
                         &mut mk_type_prop(),
                     )?;
-                    local_env
-                        .locals
-                        .truncate(local_env.locals.len() - params.len());
                 }
             }
         }
@@ -1349,13 +1283,6 @@ impl Eval {
                     let mut target = field.target.clone();
                     target.subst(&subst.iter().map(|(x, m)| (*x, m)).collect::<Vec<_>>());
 
-                    for (var, ty) in field.params.iter().rev() {
-                        target.abs(&[(*var, *var, ty.clone())], true);
-                        target = mk_app(
-                            mk_const(Name::try_from("forall").unwrap(), vec![ty.clone()]),
-                            target,
-                        );
-                    }
                     target.abs(
                         &[(instance, "d".try_into().unwrap(), instance_ty.clone())],
                         true,
@@ -1400,13 +1327,6 @@ impl Eval {
                 }
                 StructureField::Axiom(field) => {
                     let mut target = field.target.clone();
-                    for (var, ty) in field.params.iter().rev() {
-                        target.abs(&[(*var, *var, ty.clone())], true);
-                        target = mk_app(
-                            mk_const(Name::try_from("forall").unwrap(), vec![ty.clone()]),
-                            target,
-                        );
-                    }
                     target.subst(&subst.iter().map(|(x, m)| (*x, m)).collect::<Vec<_>>());
 
                     guards.push(target);
