@@ -6,11 +6,11 @@ use crate::cmd::{
 use crate::expr::{
     mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_const, mk_expr_inst, mk_expr_take, Expr,
 };
-use crate::kernel::proof::{
+use crate::proof::{
     mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro, mk_proof_imp_elim,
     mk_proof_imp_intro, mk_proof_ref, mk_type_prop, Proof,
 };
-use crate::kernel::tt::{
+use crate::tt::{
     mk_const, mk_fresh_hole, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const,
     mk_type_local, Kind, Name, Path, Term, Type,
 };

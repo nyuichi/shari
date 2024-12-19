@@ -4,15 +4,13 @@ use anyhow::bail;
 
 use crate::{
     expr::{self, mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_take, Expr},
-    kernel::{
-        proof::{self, mk_type_prop, Forall, Imp},
-        tt::{
-            mk_app, mk_const, mk_local, mk_type_arrow, mk_type_const, mk_type_local, Def, Kind,
-            LocalEnv, Name, Rec, Term, Type,
-        },
-    },
     parse::{FactInfo, Nasmespace, TokenTable},
     print::OpTable,
+    proof::{self, mk_type_prop, Forall, Imp},
+    tt::{
+        mk_app, mk_const, mk_local, mk_type_arrow, mk_type_const, mk_type_local, Def, Kind,
+        LocalEnv, Name, Rec, Term, Type,
+    },
 };
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

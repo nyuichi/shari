@@ -1,6 +1,6 @@
 use crate::{
     cmd::{Fixity, Operator},
-    kernel::tt::{Ctor, Name, Term, Type},
+    tt::{Ctor, Name, Term, Type},
 };
 
 use anyhow::bail;

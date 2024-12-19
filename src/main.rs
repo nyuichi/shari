@@ -1,14 +1,15 @@
-use kernel::tt::Name;
 use lex::Lex;
 use parse::{ParseError, Parser};
 use print::Pretty;
+use tt::Name;
 
 mod cmd;
 mod expr;
-mod kernel;
 mod lex;
 mod parse;
 mod print;
+mod proof;
+mod tt;
 
 fn print_const(eval: &cmd::Eval, name: Name) {
     let (local_types, ty) = eval.proof_env.tt_env.consts.get(&name).unwrap();

@@ -8,15 +8,13 @@ use std::{
 
 use anyhow::{bail, Context};
 
-use crate::kernel::{
-    proof::{
-        mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro,
-        mk_proof_imp_elim, mk_proof_imp_intro, mk_proof_ref, mk_type_prop, Forall, Imp, Proof,
-    },
-    tt::{
-        self, mk_fresh_hole, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_var, Kind, Name, Term,
-        TermAbs, TermApp, Type, TypeApp, TypeArrow,
-    },
+use crate::proof::{
+    mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro, mk_proof_imp_elim,
+    mk_proof_imp_intro, mk_proof_ref, mk_type_prop, Forall, Imp, Proof,
+};
+use crate::tt::{
+    self, mk_fresh_hole, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_var, Kind, Name, Term,
+    TermAbs, TermApp, Type, TypeApp, TypeArrow,
 };
 
 /// p ::= ⟪φ⟫

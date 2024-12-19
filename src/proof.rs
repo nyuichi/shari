@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc, vec};
 use anyhow::bail;
 use std::sync::LazyLock;
 
-use super::tt::{
+use crate::tt::{
     self, mk_abs, mk_const, mk_type_arrow, mk_type_const, mk_type_local, Kind, LocalEnv, Name,
     Path, Term, TermAbs, Type,
 };
