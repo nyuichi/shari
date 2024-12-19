@@ -317,6 +317,9 @@ def well_founded.{u} (R : u → u → Prop) : Prop := ∀ x, acc R x
 -- axiom nat.zero.spec.{u} : nat.rec nat.zero = (λ x f, x)
 -- axiom nat.succ.spec.{u} : ∀ n, nat.rec (nat.succ n) = λ x f, f n (nat.rec n x f)
 --
+-- Note that iota equations (rules in the form of `rec (ctor ..) = ..`) only hold propositionally in our system.
+-- This is not a theoretical limination but to reduce the search space the higher-order unifier runs on.
+-- If this limitation is too restrictive, please report us.
 type inductive nat
 | zero : nat
 | succ : nat → nat
