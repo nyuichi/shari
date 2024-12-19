@@ -1257,7 +1257,8 @@ impl<'a, 'b> Parser<'a, 'b> {
             })
         }
         // Parsing finished. We can now safaly tear off.
-        self.type_locals.truncate(local_types.len());
+        self.type_locals
+            .truncate(self.type_locals.len() - local_types.len());
         self.type_locals.pop();
         Ok(CmdTypeInductive {
             name,
@@ -1319,8 +1320,8 @@ impl<'a, 'b> Parser<'a, 'b> {
                 target,
             })
         }
-        // Parsing finished. We can now safaly tear off.
-        self.locals.truncate(params.len());
+        // Parsing finished.
+        self.locals.truncate(self.locals.len() - params.len());
         self.locals.pop();
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
