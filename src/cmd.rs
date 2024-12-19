@@ -9,7 +9,7 @@ use crate::{
     proof::{self, mk_type_prop, Forall, Imp},
     tt::{
         mk_app, mk_const, mk_local, mk_type_arrow, mk_type_const, mk_type_local, Def, Kind,
-        LocalEnv, Name, Rec, Term, Type,
+        LocalEnv, Name, Term, Type,
     },
 };
 
@@ -333,6 +333,7 @@ impl Eval {
                     name,
                     Def {
                         local_types: local_env.local_types,
+                        ty,
                         target,
                         hint: self.proof_env.tt_env.defs.len(),
                     },
@@ -784,7 +785,6 @@ impl Eval {
             .zip(cont_param_tys)
             .map(|(x, t)| (x, x, t))
             .collect::<Vec<_>>();
-        let mut recursors = vec![];
         for ((rhs_body, ctor_params), ctor) in rhs_bodies
             .into_iter()
             .zip(ctor_params_list.into_iter())
@@ -805,15 +805,6 @@ impl Eval {
             let mut rhs = rhs_body;
             rhs.abs(&rhs_binders, true);
 
-            recursors.push((
-                ctor_name,
-                Rec {
-                    local_types: rec_local_types.clone(),
-                    params: ctor_params.iter().map(|(x, _)| *x).collect(),
-                    target: rhs.clone(),
-                },
-            ));
-
             let mut spec = mk_const(Name::intern("eq").unwrap(), vec![mk_type_local(rec_ty_var)]);
             spec.apply([lhs, rhs]);
 
@@ -827,7 +818,6 @@ impl Eval {
             let ctor_spec_name = Name::intern(&format!("{}.spec", ctor_name)).unwrap();
             self.add_axiom(ctor_spec_name, rec_local_types.clone(), spec);
         }
-        self.proof_env.tt_env.recursors.insert(rec_name, recursors);
         Ok(())
     }
 
