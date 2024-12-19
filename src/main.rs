@@ -84,9 +84,10 @@ fn main() -> anyhow::Result<()> {
                 let rec_name = Name::intern(&format!("{}.rec", cmd.name)).unwrap();
                 print_const(&eval, rec_name);
 
-                if !cmd.ctors.is_empty() {
-                    let rec_spec_name = Name::intern(&format!("{}.rec.spec", cmd.name)).unwrap();
-                    print_axiom(&eval, rec_spec_name);
+                for ctor in &cmd.ctors {
+                    let ctor_spec_name =
+                        Name::intern(&format!("{}.{}.spec", cmd.name, ctor.name)).unwrap();
+                    print_axiom(&eval, ctor_spec_name);
                 }
             }
             cmd::Cmd::Inductive(cmd) => {

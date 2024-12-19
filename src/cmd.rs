@@ -542,6 +542,10 @@ impl Eval {
             if self.has_const(ctor_name) {
                 bail!("already defined");
             }
+            let ctor_spec_name = Name::intern(&format!("{}.spec", ctor_name)).unwrap();
+            if self.has_const(ctor_spec_name) {
+                bail!("already defined");
+            }
             self.proof_env
                 .tt_env
                 .check_kind(&local_env, &ctor.ty, &Kind::base())?;
@@ -568,10 +572,6 @@ impl Eval {
         }
         let rec_name = Name::intern(&format!("{}.rec", name)).unwrap();
         if self.has_const(rec_name) {
-            bail!("already defined");
-        }
-        let rec_spec_name = Name::intern(&format!("{}.rec.spec", name)).unwrap();
-        if !ctors.is_empty() && self.has_axiom(rec_spec_name) {
             bail!("already defined");
         }
         // well-formedness check is completed.
@@ -777,6 +777,7 @@ impl Eval {
         let mut rec_ty = mk_type_local(rec_ty_var);
         rec_ty.discharge(cont_param_tys.clone());
         rec_ty.discharge([target_ty]);
+        self.add_const(rec_name, rec_local_types.clone(), rec_ty);
 
         let rhs_binders = cont_params
             .into_iter()
@@ -784,7 +785,6 @@ impl Eval {
             .map(|(x, t)| (x, x, t))
             .collect::<Vec<_>>();
         let mut recursors = vec![];
-        let mut equations = vec![];
         for ((rhs_body, ctor_params), ctor) in rhs_bodies
             .into_iter()
             .zip(ctor_params_list.into_iter())
@@ -814,32 +814,20 @@ impl Eval {
                 },
             ));
 
-            let mut eq = mk_const(Name::intern("eq").unwrap(), vec![mk_type_local(rec_ty_var)]);
-            eq.apply([lhs, rhs]);
+            let mut spec = mk_const(Name::intern("eq").unwrap(), vec![mk_type_local(rec_ty_var)]);
+            spec.apply([lhs, rhs]);
 
             for (x, t) in ctor_params.into_iter().rev() {
-                eq.abs(&[(x, x, t.clone())], true);
+                spec.abs(&[(x, x, t.clone())], true);
                 let mut m = mk_const(Name::intern("forall").unwrap(), vec![t]);
-                m.apply([eq]);
-                eq = m;
+                m.apply([spec]);
+                spec = m;
             }
 
-            equations.push(eq);
+            let ctor_spec_name = Name::intern(&format!("{}.spec", ctor_name)).unwrap();
+            self.add_axiom(ctor_spec_name, rec_local_types.clone(), spec);
         }
-        equations.reverse();
-        let mut spec = equations.pop();
-        for eq in equations.into_iter().rev() {
-            let mut conj = mk_const(Name::intern("and").unwrap(), vec![]);
-            conj.apply([spec.unwrap(), eq]);
-            spec = Some(conj);
-        }
-
-        self.add_const(rec_name, rec_local_types.clone(), rec_ty);
         self.proof_env.tt_env.recursors.insert(rec_name, recursors);
-
-        if let Some(spec) = spec {
-            self.add_axiom(rec_spec_name, rec_local_types, spec);
-        }
         Ok(())
     }
 
