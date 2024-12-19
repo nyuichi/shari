@@ -47,16 +47,17 @@ fn main() -> anyhow::Result<()> {
     let mut lex = Lex::new(input);
 
     loop {
-        let cmd = match Parser::new(&mut lex, &eval.tt, &eval.ns, eval.tv.clone()).cmd() {
-            Ok(cmd) => cmd,
-            Err(ParseError::Eof { .. }) => {
-                break;
-            }
-            Err(e) => {
-                println!("parse error: {e}");
-                break;
-            }
-        };
+        let cmd =
+            match Parser::new(&mut lex, &eval.tt, &eval.ns, eval.local_type_consts.clone()).cmd() {
+                Ok(cmd) => cmd,
+                Err(ParseError::Eof { .. }) => {
+                    break;
+                }
+                Err(e) => {
+                    println!("parse error: {e}");
+                    break;
+                }
+            };
         eval.run_cmd(cmd.clone())?;
         match cmd {
             cmd::Cmd::Def(cmd) => {

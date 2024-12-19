@@ -161,8 +161,6 @@ pub struct Parser<'a, 'b> {
     type_locals: Vec<Name>,
     locals: Vec<Name>,
     holes: Vec<(Name, Type)>,
-    // type variables declared by 'type variable' command
-    type_variables: Vec<Name>,
 }
 
 impl<'a, 'b> Parser<'a, 'b> {
@@ -176,10 +174,9 @@ impl<'a, 'b> Parser<'a, 'b> {
             lex,
             tt,
             ns,
-            type_locals: vec![],
+            type_locals: type_variables,
             locals: vec![],
             holes: vec![],
-            type_variables,
         }
     }
 
@@ -657,105 +654,6 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(left)
     }
 
-    fn path(&mut self) -> Result<Path, ParseError> {
-        todo!();
-    }
-
-    pub fn proof(&mut self) -> Result<Proof, ParseError> {
-        if let Some(_token) = self.expect_symbol_opt("(") {
-            let proof = self.proof()?;
-            self.expect_symbol(")")?;
-            return Ok(proof);
-        }
-        let token = self.ident()?;
-        match token.as_str() {
-            "assump" => self.proof_assump(),
-            "imp_intro" => self.proof_imp_intro(),
-            "imp_elim" => self.proof_imp_elim(),
-            "forall_intro" => self.proof_forall_intro(),
-            "forall_elim" => self.proof_forall_elim(),
-            "conv" => self.proof_conv(),
-            _ => self.proof_ref(token),
-        }
-    }
-
-    fn proof_assump(&mut self) -> Result<Proof, ParseError> {
-        let p = self.term()?;
-        Ok(mk_proof_assump(p))
-    }
-
-    fn proof_imp_intro(&mut self) -> Result<Proof, ParseError> {
-        let p = self.term()?;
-        self.expect_symbol(",")?;
-        let h = self.proof()?;
-        Ok(mk_proof_imp_intro(p, h))
-    }
-
-    fn proof_imp_elim(&mut self) -> Result<Proof, ParseError> {
-        let h1 = self.proof()?;
-        let h2 = self.proof()?;
-        Ok(mk_proof_imp_elim(h1, h2))
-    }
-
-    fn proof_forall_intro(&mut self) -> Result<Proof, ParseError> {
-        self.expect_symbol("(")?;
-        let x = self.name()?;
-        self.expect_symbol(":")?;
-        let ty = self.ty()?;
-        self.expect_symbol(")")?;
-        self.expect_symbol(",")?;
-        self.locals.push(x);
-        let h = self.proof()?;
-        self.locals.pop();
-        Ok(mk_proof_forall_intro(x, ty, h))
-    }
-
-    fn proof_forall_elim(&mut self) -> Result<Proof, ParseError> {
-        let mut ms = vec![];
-        loop {
-            ms.push(self.subterm(1024)?);
-            if let Some(_token) = self.expect_symbol_opt(",") {
-                break;
-            }
-        }
-        let mut h = self.proof()?;
-        for m in ms {
-            h = mk_proof_forall_elim(m, h)
-        }
-        Ok(h)
-    }
-
-    fn proof_conv(&mut self) -> Result<Proof, ParseError> {
-        let path = self.path()?;
-        self.expect_symbol(",")?;
-        let h = self.proof()?;
-        Ok(mk_proof_conv(path, h))
-    }
-
-    fn proof_ref(&mut self, token: Token<'a>) -> Result<Proof, ParseError> {
-        let name = Name::try_from(token.as_str()).unwrap();
-        let Some(fact_info) = self.ns.facts.get(&name).cloned() else {
-            return Self::fail(token, "unknown proposition");
-        };
-        let mut ty_args = vec![];
-        if let Some(_token) = self.expect_symbol_opt(".{") {
-            if self.expect_symbol_opt("}").is_none() {
-                loop {
-                    ty_args.push(self.ty()?);
-                    if self.expect_symbol_opt(",").is_none() {
-                        break;
-                    }
-                }
-                self.expect_symbol("}")?;
-            }
-        } else {
-            for _ in 0..fact_info.type_arity {
-                ty_args.push(mk_fresh_type_hole());
-            }
-        }
-        Ok(mk_proof_ref(name, ty_args))
-    }
-
     // Returns (?M l₁ ⋯ lₙ) where ?M is fresh and l₁ ⋯ lₙ are the context in place.
     fn mk_term_hole(&mut self) -> Term {
         let mut hole = mk_fresh_hole();
@@ -771,33 +669,6 @@ impl<'a, 'b> Parser<'a, 'b> {
     fn expr(&mut self) -> Result<Expr, ParseError> {
         self.subexpr(0)
     }
-
-    fn expr_opt(&mut self) -> Option<Expr> {
-        self.optional(|this| this.expr())
-    }
-
-    // fn expr_abs(&mut self, token: Token<'a>) -> Result<Expr, ParseError> {
-    //     let params = self.parameters()?;
-    //     self.expect_symbol(",")?;
-    //     if params.is_empty() {
-    //         return Self::fail(token, "empty binding");
-    //     }
-    //     let mut e = self.subexpr(0)?;
-    //     for (name, t) in params.into_iter().rev() {
-    //         e = mk_expr_fun(name, t, e);
-    //     }
-    //     Ok(e)
-    // }
-
-    // fn expr_var(&mut self, token: Token<'a>) -> Result<Expr, ParseError> {
-    //     Ok(Expr::Var(Name::intern(token.as_str()).unwrap()))
-    // }
-
-    // fn expr_unq(&mut self, token: Token<'a>) -> Result<MetaExpr, ParseError> {
-    //     let expr = self.meta_expr()?;
-    //     self.expect_symbol("}")?;
-    //     Ok(expr)
-    // }
 
     fn expr_const(&mut self, token: Token<'a>, auto_inst: bool) -> Result<Expr, ParseError> {
         let name = Name::try_from(token.as_str()).unwrap();
@@ -1010,7 +881,7 @@ impl<'a, 'b> Parser<'a, 'b> {
     //     Ok(left)
     // }
 
-    fn local_type_binder(&mut self) -> Result<Option<Vec<Name>>, ParseError> {
+    fn local_type_binder(&mut self) -> Result<Vec<Name>, ParseError> {
         if let Some(_token) = self.expect_symbol_opt(".{") {
             let mut local_types = vec![];
             if self.expect_symbol_opt("}").is_none() {
@@ -1029,9 +900,9 @@ impl<'a, 'b> Parser<'a, 'b> {
                 }
                 self.expect_symbol("}")?;
             }
-            Ok(Some(local_types))
+            Ok(local_types)
         } else {
-            Ok(None)
+            Ok(vec![])
         }
     }
 
@@ -1210,17 +1081,8 @@ impl<'a, 'b> Parser<'a, 'b> {
     fn def_cmd(&mut self, _token: Token) -> Result<CmdDef, ParseError> {
         let name = self.name()?;
         let local_types = self.local_type_binder()?;
-        match &local_types {
-            Some(local_types) => {
-                for ty in local_types {
-                    self.type_locals.push(*ty);
-                }
-            }
-            None => {
-                for ty in &self.type_variables {
-                    self.type_locals.push(*ty);
-                }
-            }
+        for ty in &local_types {
+            self.type_locals.push(*ty);
         }
         let mut params = vec![];
         while let Some(token) = self.expect_symbol_opt("(") {
@@ -1238,17 +1100,11 @@ impl<'a, 'b> Parser<'a, 'b> {
         let mut m = self.term()?;
         // Parsing finished.
         self.locals.truncate(self.locals.len() - params.len());
+        self.type_locals
+            .truncate(self.type_locals.len() - local_types.len());
         for (x, ty) in params.into_iter().rev() {
             t.discharge([ty.clone()]);
             m.abs(&[(x, x, ty)], true);
-        }
-        match &local_types {
-            Some(local_types) => {
-                self.type_locals.truncate(local_types.len());
-            }
-            None => {
-                self.type_locals.truncate(self.type_variables.len());
-            }
         }
         Ok(CmdDef {
             name,
@@ -1261,17 +1117,8 @@ impl<'a, 'b> Parser<'a, 'b> {
     fn axiom_cmd(&mut self, _token: Token) -> Result<CmdAxiom, ParseError> {
         let name = self.name()?;
         let local_types = self.local_type_binder()?;
-        match &local_types {
-            Some(local_types) => {
-                for ty in local_types {
-                    self.type_locals.push(*ty);
-                }
-            }
-            None => {
-                for ty in &self.type_variables {
-                    self.type_locals.push(*ty);
-                }
-            }
+        for ty in &local_types {
+            self.type_locals.push(*ty);
         }
         let mut params = vec![];
         while let Some(token) = self.expect_symbol_opt("(") {
@@ -1287,20 +1134,14 @@ impl<'a, 'b> Parser<'a, 'b> {
         let mut target = self.term()?;
         // Parsing finished.
         self.locals.truncate(self.locals.len() - params.len());
+        self.type_locals
+            .truncate(self.type_locals.len() - local_types.len());
         for (x, ty) in params.into_iter().rev() {
             target.abs(&[(x, x, ty.clone())], true);
             target = mk_app(
                 mk_const(Name::try_from("forall").unwrap(), vec![ty]),
                 target,
             );
-        }
-        match &local_types {
-            Some(local_types) => {
-                self.type_locals.truncate(local_types.len());
-            }
-            None => {
-                self.type_locals.truncate(self.type_variables.len());
-            }
         }
         Ok(CmdAxiom {
             name,
@@ -1312,17 +1153,8 @@ impl<'a, 'b> Parser<'a, 'b> {
     fn lemma_cmd(&mut self, _token: Token) -> Result<CmdLemma, ParseError> {
         let name = self.name()?;
         let local_types = self.local_type_binder()?;
-        match &local_types {
-            Some(local_types) => {
-                for ty in local_types {
-                    self.type_locals.push(*ty);
-                }
-            }
-            None => {
-                for ty in &self.type_variables {
-                    self.type_locals.push(*ty);
-                }
-            }
+        for ty in &local_types {
+            self.type_locals.push(*ty);
         }
         let mut params = vec![];
         while let Some(token) = self.expect_symbol_opt("(") {
@@ -1340,6 +1172,8 @@ impl<'a, 'b> Parser<'a, 'b> {
         let mut e = self.expr()?;
         // Parsing finished.
         self.locals.truncate(self.locals.len() - params.len());
+        self.type_locals
+            .truncate(self.type_locals.len() - local_types.len());
         for (x, ty) in params.into_iter().rev() {
             p.abs(&[(x, x, ty.clone())], true);
             p = mk_app(
@@ -1347,14 +1181,6 @@ impl<'a, 'b> Parser<'a, 'b> {
                 p,
             );
             e = mk_expr_take(x, ty, e);
-        }
-        match &local_types {
-            Some(local_types) => {
-                self.type_locals.truncate(local_types.len());
-            }
-            None => {
-                self.type_locals.truncate(self.type_variables.len());
-            }
         }
         let holes = self.holes.drain(..).collect();
         Ok(CmdLemma {
@@ -1369,29 +1195,14 @@ impl<'a, 'b> Parser<'a, 'b> {
     fn const_cmd(&mut self, _token: Token) -> Result<CmdConst, ParseError> {
         let name = self.name()?;
         let local_types = self.local_type_binder()?;
-        match &local_types {
-            Some(local_types) => {
-                for ty in local_types {
-                    self.type_locals.push(*ty);
-                }
-            }
-            None => {
-                for ty in &self.type_variables {
-                    self.type_locals.push(*ty);
-                }
-            }
+        for ty in &local_types {
+            self.type_locals.push(*ty);
         }
         self.expect_symbol(":")?;
         let t = self.ty()?;
-        // Parsing finished. We can now safaly tear off.
-        match &local_types {
-            Some(local_types) => {
-                self.type_locals.truncate(local_types.len());
-            }
-            None => {
-                self.type_locals.truncate(self.type_variables.len());
-            }
-        }
+        // Parsing finished.
+        self.type_locals
+            .truncate(self.type_locals.len() - local_types.len());
         Ok(CmdConst {
             name,
             local_types,
@@ -1459,17 +1270,8 @@ impl<'a, 'b> Parser<'a, 'b> {
         let name = self.name()?;
         self.locals.push(name);
         let local_types = self.local_type_binder()?;
-        match &local_types {
-            Some(local_types) => {
-                for ty in local_types {
-                    self.type_locals.push(*ty);
-                }
-            }
-            None => {
-                for ty in &self.type_variables {
-                    self.type_locals.push(*ty);
-                }
-            }
+        for ty in &local_types {
+            self.type_locals.push(*ty);
         }
         let mut params = vec![];
         while let Some(token) = self.expect_symbol_opt("(") {
@@ -1520,14 +1322,8 @@ impl<'a, 'b> Parser<'a, 'b> {
         // Parsing finished. We can now safaly tear off.
         self.locals.truncate(params.len());
         self.locals.pop();
-        match &local_types {
-            Some(local_types) => {
-                self.type_locals.truncate(local_types.len());
-            }
-            None => {
-                self.type_locals.truncate(self.type_variables.len());
-            }
-        }
+        self.type_locals
+            .truncate(self.type_locals.len() - local_types.len());
         Ok(CmdInductive {
             name,
             local_types,
@@ -1567,6 +1363,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     }));
 
                     self.locals.push(field_name);
+                    num_consts += 1;
                 }
                 "axiom" => {
                     let field_name = self.name()?;

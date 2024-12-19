@@ -85,7 +85,7 @@ pub struct CmdNofix {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CmdDef {
     pub name: Name,
-    pub local_types: Option<Vec<Name>>,
+    pub local_types: Vec<Name>,
     pub ty: Type,
     pub target: Term,
 }
@@ -93,14 +93,14 @@ pub struct CmdDef {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CmdAxiom {
     pub name: Name,
-    pub local_types: Option<Vec<Name>>,
+    pub local_types: Vec<Name>,
     pub target: Term,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CmdLemma {
     pub name: Name,
-    pub local_types: Option<Vec<Name>>,
+    pub local_types: Vec<Name>,
     pub target: Term,
     pub holes: Vec<(Name, Type)>,
     pub expr: Expr,
@@ -109,7 +109,7 @@ pub struct CmdLemma {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CmdConst {
     pub name: Name,
-    pub local_types: Option<Vec<Name>>,
+    pub local_types: Vec<Name>,
     pub ty: Type,
 }
 
@@ -140,7 +140,7 @@ pub struct DataConstructor {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CmdInductive {
     pub name: Name,
-    pub local_types: Option<Vec<Name>>,
+    pub local_types: Vec<Name>,
     pub params: Vec<(Name, Type)>,
     pub target_ty: Type,
     pub ctors: Vec<Constructor>,
@@ -183,7 +183,7 @@ pub struct Eval {
     pub tt: TokenTable,
     pub ns: Nasmespace,
     pub pp: OpTable,
-    pub tv: Vec<Name>,
+    pub local_type_consts: Vec<Name>,
 }
 
 impl Eval {
@@ -295,41 +295,39 @@ impl Eval {
             Cmd::Def(inner) => {
                 let CmdDef {
                     name,
-                    local_types,
+                    mut local_types,
                     mut ty,
                     mut target,
                 } = inner;
                 if self.has_const(name) {
                     bail!("already defined");
                 }
-                let need_shrink = local_types.is_none();
-                if let Some(local_types) = &local_types {
-                    for i in 0..local_types.len() {
-                        for j in i + 1..local_types.len() {
-                            if local_types[i] == local_types[j] {
-                                bail!("duplicate type variables");
-                            }
+                for i in 0..local_types.len() {
+                    for j in i + 1..local_types.len() {
+                        if local_types[i] == local_types[j] {
+                            bail!("duplicate type variables");
                         }
                     }
                 }
+                for local_type_const in self.local_type_consts.iter().rev() {
+                    if local_types.contains(local_type_const) {
+                        // shadowed by the .{} binder
+                        continue;
+                    }
+                    if !ty.contains_local(local_type_const) {
+                        // unused
+                        continue;
+                    }
+                    local_types.insert(0, *local_type_const);
+                }
                 let mut local_env = LocalEnv {
-                    local_types: local_types.unwrap_or_else(|| self.tv.clone()),
+                    local_types,
                     locals: vec![],
                     holes: vec![],
                 };
                 self.proof_env
                     .tt_env
                     .check_type(&mut local_env, &mut target, &mut ty)?;
-                if need_shrink {
-                    let mut shrinked_local_types = vec![];
-                    for t in local_env.local_types {
-                        if !ty.contains_local(&t) {
-                            continue;
-                        }
-                        shrinked_local_types.push(t);
-                    }
-                    local_env.local_types = shrinked_local_types;
-                }
                 self.add_const(name, local_env.local_types.clone(), ty.clone());
                 self.proof_env.tt_env.defs.insert(
                     name,
@@ -344,24 +342,32 @@ impl Eval {
             Cmd::Axiom(inner) => {
                 let CmdAxiom {
                     name,
-                    local_types,
+                    mut local_types,
                     mut target,
                 } = inner;
                 if self.has_axiom(name) {
                     bail!("already defined");
                 }
-                let need_shrink = local_types.is_none();
-                if let Some(local_types) = &local_types {
-                    for i in 0..local_types.len() {
-                        for j in i + 1..local_types.len() {
-                            if local_types[i] == local_types[j] {
-                                bail!("duplicate type variables");
-                            }
+                for i in 0..local_types.len() {
+                    for j in i + 1..local_types.len() {
+                        if local_types[i] == local_types[j] {
+                            bail!("duplicate type variables");
                         }
                     }
                 }
+                for local_type_const in self.local_type_consts.iter().rev() {
+                    if local_types.contains(local_type_const) {
+                        // shadowed by the .{} binder
+                        continue;
+                    }
+                    if !target.contains_local_type(local_type_const) {
+                        // unused
+                        continue;
+                    }
+                    local_types.insert(0, *local_type_const);
+                }
                 let mut local_env = LocalEnv {
-                    local_types: local_types.unwrap_or_else(|| self.tv.clone()),
+                    local_types,
                     locals: vec![],
                     holes: vec![],
                 };
@@ -370,23 +376,13 @@ impl Eval {
                     &mut target,
                     &mut mk_type_prop(),
                 )?;
-                if need_shrink {
-                    let mut shrinked_local_types = vec![];
-                    for t in local_env.local_types {
-                        if !target.contains_local_type(&t) {
-                            continue;
-                        }
-                        shrinked_local_types.push(t);
-                    }
-                    local_env.local_types = shrinked_local_types;
-                }
                 self.add_axiom(name, local_env.local_types, target);
                 Ok(())
             }
             Cmd::Lemma(inner) => {
                 let CmdLemma {
                     name,
-                    local_types,
+                    mut local_types,
                     mut target,
                     holes,
                     expr,
@@ -394,18 +390,26 @@ impl Eval {
                 if self.has_axiom(name) {
                     bail!("already defined");
                 }
-                let need_shrink = local_types.is_none();
-                if let Some(local_types) = &local_types {
-                    for i in 0..local_types.len() {
-                        for j in i + 1..local_types.len() {
-                            if local_types[i] == local_types[j] {
-                                bail!("duplicate type variables");
-                            }
+                for i in 0..local_types.len() {
+                    for j in i + 1..local_types.len() {
+                        if local_types[i] == local_types[j] {
+                            bail!("duplicate type variables");
                         }
                     }
                 }
+                for local_type_const in self.local_type_consts.iter().rev() {
+                    if local_types.contains(local_type_const) {
+                        // shadowed by the .{} binder
+                        continue;
+                    }
+                    if !target.contains_local_type(local_type_const) {
+                        // unused
+                        continue;
+                    }
+                    local_types.insert(0, *local_type_const);
+                }
                 let mut local_env = LocalEnv {
-                    local_types: local_types.unwrap_or_else(|| self.tv.clone()),
+                    local_types,
                     locals: vec![],
                     holes,
                 };
@@ -414,16 +418,6 @@ impl Eval {
                     &mut target,
                     &mut mk_type_prop(),
                 )?;
-                if need_shrink {
-                    let mut shrinked_local_types = vec![];
-                    for t in local_env.local_types {
-                        if !target.contains_local_type(&t) {
-                            continue;
-                        }
-                        shrinked_local_types.push(t);
-                    }
-                    local_env.local_types = shrinked_local_types;
-                }
                 // auto insert 'change'
                 let mut expr = mk_expr_app(
                     mk_expr_assume(target.clone(), mk_expr_assump(target.clone())),
@@ -448,40 +442,38 @@ impl Eval {
             Cmd::Const(inner) => {
                 let CmdConst {
                     name,
-                    local_types,
+                    mut local_types,
                     ty,
                 } = inner;
                 if self.has_const(name) {
                     bail!("already defined");
                 }
-                let need_shrink = local_types.is_none();
-                if let Some(local_types) = &local_types {
-                    for i in 0..local_types.len() {
-                        for j in i + 1..local_types.len() {
-                            if local_types[i] == local_types[j] {
-                                bail!("duplicate type variables");
-                            }
+                for i in 0..local_types.len() {
+                    for j in i + 1..local_types.len() {
+                        if local_types[i] == local_types[j] {
+                            bail!("duplicate type variables");
                         }
                     }
                 }
-                let mut local_env = LocalEnv {
-                    local_types: local_types.unwrap_or_else(|| self.tv.clone()),
+                for local_type_const in self.local_type_consts.iter().rev() {
+                    if local_types.contains(local_type_const) {
+                        // shadowed by the .{} binder
+                        continue;
+                    }
+                    if !ty.contains_local(local_type_const) {
+                        // unused
+                        continue;
+                    }
+                    local_types.insert(0, *local_type_const);
+                }
+                let local_env = LocalEnv {
+                    local_types,
                     locals: vec![],
                     holes: vec![],
                 };
                 self.proof_env
                     .tt_env
                     .check_kind(&local_env, &ty, &Kind::base())?;
-                if need_shrink {
-                    let mut shrinked_local_types = vec![];
-                    for t in local_env.local_types {
-                        if !ty.contains_local(&t) {
-                            continue;
-                        }
-                        shrinked_local_types.push(t);
-                    }
-                    local_env.local_types = shrinked_local_types;
-                }
                 self.add_const(name, local_env.local_types, ty);
                 Ok(())
             }
@@ -503,11 +495,11 @@ impl Eval {
                     }
                 }
                 for v in &variables {
-                    if self.tv.contains(v) {
+                    if self.local_type_consts.contains(v) {
                         bail!("type variable already defined");
                     }
                 }
-                self.tv.extend(variables);
+                self.local_type_consts.extend(variables);
                 Ok(())
             }
             Cmd::TypeInductive(cmd) => self.run_type_inductive_cmd(cmd),
@@ -866,7 +858,7 @@ impl Eval {
         //
         let CmdInductive {
             name,
-            local_types,
+            mut local_types,
             params,
             target_ty,
             mut ctors,
@@ -874,18 +866,31 @@ impl Eval {
         if self.has_const(name) {
             bail!("already defined");
         }
-        let need_shrink = local_types.is_none();
-        if let Some(local_types) = &local_types {
-            for i in 0..local_types.len() {
-                for j in i + 1..local_types.len() {
-                    if local_types[i] == local_types[j] {
-                        bail!("duplicate type variables");
-                    }
+        for i in 0..local_types.len() {
+            for j in i + 1..local_types.len() {
+                if local_types[i] == local_types[j] {
+                    bail!("duplicate type variables");
                 }
             }
         }
+        for local_type_const in self.local_type_consts.iter().rev() {
+            if local_types.contains(local_type_const) {
+                // shadowed by the .{} binder
+                continue;
+            }
+            if params
+                .iter()
+                .any(|(_, ty)| ty.contains_local(local_type_const))
+                || target_ty.contains_local(local_type_const)
+                || ctors
+                    .iter()
+                    .any(|ctor| ctor.target.contains_local_type(local_type_const))
+            {
+                local_types.insert(0, *local_type_const);
+            }
+        }
         let mut local_env = LocalEnv {
-            local_types: local_types.unwrap_or_else(|| self.tv.clone()),
+            local_types,
             locals: vec![],
             holes: vec![],
         };
@@ -985,19 +990,6 @@ impl Eval {
             ctor_ind_args_list.push(ctor_ind_args);
         }
         local_env.locals.remove(0);
-        if need_shrink {
-            let mut shrinked_local_types = vec![];
-            for t in local_env.local_types {
-                if params.iter().any(|(_, ty)| ty.contains_local(&t))
-                    || target_ty.contains_local(&t)
-                    || ctors.iter().any(|ctor| ctor.target.contains_local_type(&t))
-                {
-                    shrinked_local_types.push(t);
-                    continue;
-                }
-            }
-            local_env.local_types = shrinked_local_types;
-        }
         let ind_name = Name::intern(&format!("{}.ind", name)).unwrap();
         if self.has_axiom(ind_name) {
             bail!("already defined");
