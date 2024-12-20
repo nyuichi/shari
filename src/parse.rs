@@ -400,8 +400,8 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(t)
     }
 
-    /// typed parameters e.g. `"(x y : T)"`
-    fn parameter(&mut self, _token: Token) -> Result<(Vec<Name>, Type), ParseError> {
+    /// e.g. `"(x y : T)"`
+    fn typed_parameter(&mut self, _token: Token) -> Result<(Vec<Name>, Type), ParseError> {
         let mut idents = vec![];
         // needs at least one parameter
         idents.push(self.name()?);
@@ -414,11 +414,23 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok((idents, t))
     }
 
+    /// e.g. `"(x y : T) (z : U)"`
+    fn typed_parameters(&mut self) -> Result<Vec<(Name, Type)>, ParseError> {
+        let mut params = vec![];
+        while let Some(token) = self.expect_symbol_opt("(") {
+            let (names, t) = self.typed_parameter(token)?;
+            for name in names {
+                params.push((name, t.clone()));
+            }
+        }
+        Ok(params)
+    }
+
     fn parameters(&mut self) -> Result<Vec<(Name, Option<Type>)>, ParseError> {
         let mut params = vec![];
         loop {
             if let Some(token) = self.expect_symbol_opt("(") {
-                let (names, t) = self.parameter(token)?;
+                let (names, t) = self.typed_parameter(token)?;
                 for name in names {
                     params.push((name, Some(t.clone())));
                 }
@@ -1084,13 +1096,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
-        let mut params = vec![];
-        while let Some(token) = self.expect_symbol_opt("(") {
-            let (names, t) = self.parameter(token)?;
-            for name in names {
-                params.push((name, t.clone()));
-            }
-        }
+        let params = self.typed_parameters()?;
         for (x, _) in &params {
             self.locals.push(*x);
         }
@@ -1120,13 +1126,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
-        let mut params = vec![];
-        while let Some(token) = self.expect_symbol_opt("(") {
-            let (names, t) = self.parameter(token)?;
-            for name in names {
-                params.push((name, t.clone()));
-            }
-        }
+        let params = self.typed_parameters()?;
         for (x, _) in &params {
             self.locals.push(*x);
         }
@@ -1156,13 +1156,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
-        let mut params = vec![];
-        while let Some(token) = self.expect_symbol_opt("(") {
-            let (names, t) = self.parameter(token)?;
-            for name in names {
-                params.push((name, t.clone()));
-            }
-        }
+        let params = self.typed_parameters()?;
         for (x, _) in &params {
             self.locals.push(*x);
         }
@@ -1274,13 +1268,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
-        let mut params = vec![];
-        while let Some(token) = self.expect_symbol_opt("(") {
-            let (names, t) = self.parameter(token)?;
-            for name in names {
-                params.push((name, t.clone()));
-            }
-        }
+        let params = self.typed_parameters()?;
         for (x, _) in &params {
             self.locals.push(*x);
         }
@@ -1295,13 +1283,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     return Self::fail(token, "duplicate constructor")?;
                 }
             }
-            let mut ctor_params = vec![];
-            while let Some(token) = self.expect_symbol_opt("(") {
-                let (names, t) = self.parameter(token)?;
-                for name in names {
-                    ctor_params.push((name, t.clone()));
-                }
-            }
+            let ctor_params = self.typed_parameters()?;
             for (x, _) in &ctor_params {
                 self.locals.push(*x);
             }
@@ -1368,13 +1350,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                 }
                 "axiom" => {
                     let field_name = self.name()?;
-                    let mut params = vec![];
-                    while let Some(token) = self.expect_symbol_opt("(") {
-                        let (names, t) = self.parameter(token)?;
-                        for name in names {
-                            params.push((name, t.clone()));
-                        }
-                    }
+                    let params = self.typed_parameters()?;
                     for (x, _) in &params {
                         self.locals.push(*x);
                     }
