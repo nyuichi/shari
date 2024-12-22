@@ -7,7 +7,7 @@
  - [ ] type class
  - [x] inductive types
  - [x] inductive predicates
- - [ ] structures and instances
+ - [x] structures and instances
  - [ ] calc environment
  - [ ] namespace
  -/
@@ -564,7 +564,7 @@ structure is_inhabited u := {
   axiom inhabited : ∃ (a : u), ⊤
 }
 
-/-
+/-FIXME
 instance is_inhabited.mk.{u} (x : u) : is_inhabited u := {
   lemma inhabited := exists.intro true.intro
 }
