@@ -396,10 +396,10 @@ eq.symm unit.eta_expand
 lemma unit_ext (x₁ x₂ : unit) : x₁ = x₂ :=
 eq.trans unit.eta_expand unit.eta_reduce
 
-lemma prod.fst.spec.{u, v} (x : u) (y : v) : fst (pair x y) = x :=
+lemma prod.fst.pair.{u, v} (x : u) (y : v) : fst (pair x y) = x :=
 eq.congr_fun prod.pair.spec
 
-lemma prod.snd.spec.{u, v} (x : u) (y : v) : snd (pair x y) = y :=
+lemma prod.snd.pair.{u, v} (x : u) (y : v) : snd (pair x y) = y :=
 eq.congr_fun prod.pair.spec
 
 /- FIXME
@@ -468,17 +468,17 @@ uexists.intro
    have inhab.rep c₁ = inhab.rep c₂ := eq.trans (eq.symm ⟪s = inhab.rep c₁⟫) ⟪s = inhab.rep c₂⟫,
    inhab.ext ⟪inhab.rep c₁ = inhab.rep c₂⟫)
 
-/-
 -- This command introduces:
 --
 --   const power.inhab.{u} : set u → inhab (set u)
 --   def power.inhab.rep.{u} (A : set u) : set (set u) := power A
---   axiom power.inhab.rep.spec.{u} (A : set u) : inhab.rep (power.inhab A) = power.inhab.rep A
---   lemma power.inhab.inhabited.{u} : ∃ a, a ∈ power x := (..)
+--   axiom inhab.rep.power.inhab.{u} (A : set u) : inhab.rep (power.inhab A) = power.inhab.rep A
+--   lemma power.inhab.inhabited.{u} (A : set u) : ∃ a, a ∈ power x := (..)
 --
+-- Note `inhab.rep (power.inhab A)` is only propositionally equal to `power.inhab.rep A`.
 instance power.inhab.{u} (A : set u) : inhab (set u) := {
-  def rep := power A
-  lemma inhabited := exists.intro empty_in_power
+  def rep : set (set u) := power A
+  lemma inhabited :  ∃ a, a ∈ power A := exists.intro empty_in_power
 }
 
 instance cup.inhab.{u} (A B : inhab u) : inhab u := {
@@ -489,9 +489,8 @@ instance cup.inhab.{u} (A B : inhab u) : inhab u := {
   have x ∈ inhab.rep A ∨ x ∈ inhab.rep B := or.left ⟪x ∈ inhab.rep A⟫,
   exists.intro ⟪x ∈ inhab.rep A ∨ x ∈ inhab.rep B⟫
 }
--/
 
--- The exisistence of the constant and the axiom state that every type u is a choice type.
+-- The existence of the constant and the axiom state that every type u is a choice type.
 const choice.{u} : inhab u → u
 axiom choice.spec.{u} (x : inhab u) : choice x ∈ inhab.rep x
 

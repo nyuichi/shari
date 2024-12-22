@@ -285,6 +285,25 @@ impl Type {
         }
         t
     }
+
+    pub fn head(&self) -> &Type {
+        let mut t = self;
+        while let Type::App(inner) = t {
+            t = &inner.fun;
+        }
+        t
+    }
+
+    pub fn args(&self) -> Vec<&Type> {
+        let mut t = self;
+        let mut args = vec![];
+        while let Type::App(inner) = t {
+            args.push(&inner.arg);
+            t = &inner.fun;
+        }
+        args.reverse();
+        args
+    }
 }
 
 /// Locally nameless representation. See [Charguéraud, 2012].

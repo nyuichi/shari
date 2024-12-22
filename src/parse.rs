@@ -1,18 +1,16 @@
 use crate::cmd::{
-    Cmd, CmdAxiom, CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdLemma,
-    CmdLocalTypeConst, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive,
-    Constructor, DataConstructor, Fixity, Operator, StructureAxiom, StructureConst, StructureField,
+    Cmd, CmdAxiom, CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdInstance,
+    CmdLemma, CmdLocalTypeConst, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive,
+    Constructor, DataConstructor, Fixity, InstanceDef, InstanceField, InstanceLemma, Operator,
+    StructureAxiom, StructureConst, StructureField,
 };
 use crate::expr::{
     mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_const, mk_expr_inst, mk_expr_take, Expr,
 };
-use crate::proof::{
-    mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro, mk_proof_imp_elim,
-    mk_proof_imp_intro, mk_proof_ref, mk_type_prop, Proof,
-};
+use crate::proof::mk_type_prop;
 use crate::tt::{
     mk_app, mk_const, mk_fresh_hole, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const,
-    mk_type_local, Kind, Name, Path, Term, Type,
+    mk_type_local, Kind, Name, Term, Type,
 };
 
 use crate::lex::{Lex, LexError, SourceInfo, Token, TokenKind};
@@ -985,6 +983,10 @@ impl<'a, 'b> Parser<'a, 'b> {
                 let structure_cmd = self.structure_cmd(keyword)?;
                 Cmd::Structure(structure_cmd)
             }
+            "instance" => {
+                let instance_cmd = self.instance_cmd(keyword)?;
+                Cmd::Instance(instance_cmd)
+            }
             "local" => {
                 let keyword2 = self.keyword()?;
                 match keyword2.as_str() {
@@ -1380,6 +1382,88 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(CmdStructure {
             name,
             local_types,
+            fields,
+        })
+    }
+
+    fn instance_cmd(&mut self, _token: Token<'a>) -> Result<CmdInstance, ParseError> {
+        let name = self.name()?;
+        let local_types = self.local_type_binder()?;
+        for ty in &local_types {
+            self.type_locals.push(*ty);
+        }
+        let params = self.typed_parameters()?;
+        for (x, _) in &params {
+            self.locals.push(*x);
+        }
+        self.expect_symbol(":")?;
+        let target_ty = self.ty()?;
+        let mut fields = vec![];
+        self.expect_symbol(":=")?;
+        self.expect_symbol("{")?;
+        while self.expect_symbol_opt("}").is_none() {
+            let keyword = self.keyword()?;
+            match keyword.as_str() {
+                "def" => {
+                    let field_name = self.name()?;
+                    let field_params = self.typed_parameters()?;
+                    for (x, _) in &field_params {
+                        self.locals.push(*x);
+                    }
+                    self.expect_symbol(":")?;
+                    let mut field_ty = self.ty()?;
+                    self.expect_symbol(":=")?;
+                    let mut field_target = self.term()?;
+                    self.locals.truncate(self.locals.len() - field_params.len());
+                    for (x, t) in field_params.into_iter().rev() {
+                        field_ty.discharge([t.clone()]);
+                        field_target.abs(&[(x, x, t.clone())], true);
+                    }
+                    fields.push(InstanceField::Def(InstanceDef {
+                        name: field_name,
+                        ty: field_ty,
+                        target: field_target,
+                    }));
+                }
+                "lemma" => {
+                    let field_name = self.name()?;
+                    let field_params = self.typed_parameters()?;
+                    for (x, _) in &field_params {
+                        self.locals.push(*x);
+                    }
+                    self.expect_symbol(":")?;
+                    let mut field_target = self.term()?;
+                    self.expect_symbol(":=")?;
+                    let mut expr = self.expr()?;
+                    self.locals.truncate(self.locals.len() - field_params.len());
+                    for (x, ty) in field_params.into_iter().rev() {
+                        field_target.abs(&[(x, x, ty.clone())], true);
+                        field_target = mk_app(
+                            mk_const(Name::try_from("forall").unwrap(), vec![ty.clone()]),
+                            field_target,
+                        );
+                        expr = mk_expr_take(x, ty, expr);
+                    }
+                    let holes = self.holes.drain(..).collect();
+                    fields.push(InstanceField::Lemma(InstanceLemma {
+                        name: field_name,
+                        target: field_target,
+                        holes,
+                        expr,
+                    }))
+                }
+                _ => Self::fail(keyword, "unknown command in instance")?,
+            }
+        }
+        // parsing finished.
+        self.locals.truncate(self.locals.len() - params.len());
+        self.type_locals
+            .truncate(self.type_locals.len() - local_types.len());
+        Ok(CmdInstance {
+            name,
+            local_types,
+            params,
+            target_ty,
             fields,
         })
     }

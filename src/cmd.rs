@@ -1,4 +1,4 @@
-use std::iter::zip;
+use std::{collections::HashMap, iter::zip};
 
 use anyhow::bail;
 
@@ -12,23 +12,6 @@ use crate::{
         LocalEnv, Name, Term, Type,
     },
 };
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum Fixity {
-    Infix,
-    Infixl,
-    Infixr,
-    Nofix,
-    Prefix,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Operator {
-    pub symbol: String,
-    pub fixity: Fixity,
-    pub prec: usize,
-    pub entity: Name,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cmd {
@@ -46,6 +29,7 @@ pub enum Cmd {
     TypeInductive(CmdTypeInductive),
     Inductive(CmdInductive),
     Structure(CmdStructure),
+    Instance(CmdInstance),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -177,6 +161,36 @@ pub struct StructureAxiom {
     pub target: Term,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CmdInstance {
+    pub name: Name,
+    pub local_types: Vec<Name>,
+    pub params: Vec<(Name, Type)>,
+    pub target_ty: Type,
+    pub fields: Vec<InstanceField>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InstanceField {
+    Def(InstanceDef),
+    Lemma(InstanceLemma),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstanceDef {
+    pub name: Name,
+    pub ty: Type,
+    pub target: Term,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstanceLemma {
+    pub name: Name,
+    pub target: Term,
+    pub holes: Vec<(Name, Type)>,
+    pub expr: Expr,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Eval {
     pub proof_env: proof::Env,
@@ -184,6 +198,24 @@ pub struct Eval {
     pub ns: Nasmespace,
     pub pp: OpTable,
     pub local_type_consts: Vec<Name>,
+    pub structure_table: HashMap<Name, CmdStructure>,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Fixity {
+    Infix,
+    Infixl,
+    Infixr,
+    Nofix,
+    Prefix,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Operator {
+    pub symbol: String,
+    pub fixity: Fixity,
+    pub prec: usize,
+    pub entity: Name,
 }
 
 impl Eval {
@@ -520,6 +552,7 @@ impl Eval {
             Cmd::TypeInductive(cmd) => self.run_type_inductive_cmd(cmd),
             Cmd::Inductive(cmd) => self.run_inductive_cmd(cmd),
             Cmd::Structure(cmd) => self.run_structure_cmd(cmd),
+            Cmd::Instance(cmd) => self.run_instance_cmd(cmd),
         }
     }
 
@@ -1238,6 +1271,14 @@ impl Eval {
             bail!("already defined");
         }
         // well-formedness check is completed.
+        self.structure_table.insert(
+            name,
+            CmdStructure {
+                name,
+                local_types: local_types.clone(),
+                fields: fields.clone(),
+            },
+        );
         self.add_type_const(name, Kind(local_types.len()));
         let instance = Name::fresh();
         let instance_ty = {
@@ -1403,6 +1444,279 @@ impl Eval {
             target,
         );
         self.add_axiom(ext_name, local_types.clone(), target);
+        Ok(())
+    }
+
+    fn run_instance_cmd(&mut self, cmd: CmdInstance) -> anyhow::Result<()> {
+        // instance power.inhab.{u} (A : set u) : inhab (set u) := {
+        //   def rep := power A
+        //   lemma inhabited := exists.intro empty_in_power
+        // }
+        //
+        // generates:
+        //
+        //   const power.inhab.{u} : set u → inhab (set u)
+        //   def power.inhab.rep.{u} (A : set u) : set (set u) := power A
+        //   axiom inhab.rep.power.inhab.{u} (A : set u) : inhab.rep (power.inhab A) = power.inhab.rep A
+        //   lemma power.inhab.inhabited.{u} : ∃ a, a ∈ power x := (..)
+        //
+        let CmdInstance {
+            name,
+            mut local_types,
+            params,
+            target_ty,
+            mut fields,
+        } = cmd;
+        if self.has_const(name) {
+            bail!("already defined");
+        }
+        for i in 0..local_types.len() {
+            for j in i + 1..local_types.len() {
+                if local_types[i] == local_types[j] {
+                    bail!("duplicate type variables");
+                }
+            }
+        }
+        for local_type_const in self.local_type_consts.iter().rev() {
+            if local_types.contains(local_type_const) {
+                // shadowed by the .{} binder
+                continue;
+            }
+            if params
+                .iter()
+                .any(|(_, ty)| ty.contains_local(local_type_const))
+                || target_ty.contains_local(local_type_const)
+            {
+                local_types.insert(0, *local_type_const);
+            }
+        }
+        let mut local_env = LocalEnv {
+            local_types,
+            locals: vec![],
+            holes: vec![],
+        };
+        for i in 0..params.len() {
+            for j in i + 1..params.len() {
+                if params[i].0 == params[j].0 {
+                    bail!("duplicate parameters");
+                }
+            }
+            self.proof_env
+                .tt_env
+                .check_kind(&local_env, &params[i].1, &Kind::base())?;
+            local_env.locals.push((params[i].0, params[i].1.clone()));
+        }
+        self.proof_env
+            .tt_env
+            .check_kind(&local_env, &target_ty, &Kind::base())?;
+        let Type::Const(structure_name) = target_ty.head() else {
+            bail!("type of instance must be a structure");
+        };
+        let Some(cmd_structure) = self.structure_table.get(structure_name) else {
+            bail!("type of instance must be a structure");
+        };
+        let mut type_subst = vec![];
+        for (&x, t) in zip(&cmd_structure.local_types, target_ty.args()) {
+            type_subst.push((x, t));
+        }
+        let type_subst = type_subst;
+        if cmd_structure.fields.len() != fields.len() {
+            bail!("number of fields mismatch");
+        }
+        let mut subst = vec![];
+        for (structure_field, field) in zip(&cmd_structure.fields, &mut fields) {
+            match structure_field {
+                StructureField::Const(structure_field) => {
+                    let InstanceField::Def(InstanceDef {
+                        name: ref field_name,
+                        ty,
+                        target,
+                    }) = field
+                    else {
+                        bail!("definition expected");
+                    };
+                    let field_fullname = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
+                    if self.has_const(field_fullname) {
+                        bail!("already defined");
+                    }
+                    let axiom_fullname =
+                        Name::intern(&format!("{}.{}.{}", structure_name, field_name, name))
+                            .unwrap();
+                    if self.has_axiom(axiom_fullname) {
+                        bail!("already defined");
+                    }
+                    if structure_field.name != *field_name {
+                        bail!("field name mismatch");
+                    }
+                    self.proof_env
+                        .tt_env
+                        .check_type(&mut local_env, target, ty)?;
+                    let mut structure_field_ty = structure_field.ty.clone();
+                    structure_field_ty.subst(&type_subst);
+                    if structure_field_ty != *ty {
+                        bail!("type mismatch");
+                    }
+                    subst.push((*field_name, target.clone()));
+                }
+                StructureField::Axiom(structure_field) => {
+                    let InstanceField::Lemma(InstanceLemma {
+                        name: ref field_name,
+                        target,
+                        ref holes,
+                        ref expr,
+                    }) = field
+                    else {
+                        bail!("lemma expected");
+                    };
+                    let field_fullname = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
+                    if self.has_axiom(field_fullname) {
+                        bail!("already defined");
+                    }
+                    if structure_field.name != *field_name {
+                        bail!("field name mismatch");
+                    }
+                    self.proof_env.tt_env.check_type(
+                        &mut local_env,
+                        target,
+                        &mut mk_type_prop(),
+                    )?;
+                    // auto insert 'change'
+                    let mut expr = mk_expr_app(
+                        mk_expr_assume(target.clone(), mk_expr_assump(target.clone())),
+                        expr.clone(),
+                        target.clone(),
+                    );
+                    local_env.holes.extend(holes.iter().cloned());
+                    let mut h = expr::Env::new(
+                        &self.proof_env.tt_env,
+                        &mut local_env,
+                        &self.proof_env.facts,
+                    )
+                    .elaborate(&mut expr)?;
+                    local_env
+                        .holes
+                        .truncate(local_env.holes.len() - holes.len());
+                    self.proof_env.check_prop(
+                        &mut local_env,
+                        &mut proof::Context::default(),
+                        &mut h,
+                        target,
+                    )?;
+                    let mut structure_field_target = structure_field.target.clone();
+                    structure_field_target.subst_type(&type_subst);
+                    structure_field_target
+                        .subst(&subst.iter().map(|(x, m)| (*x, m)).collect::<Vec<_>>());
+                    if structure_field_target != *target {
+                        bail!("type mismatch");
+                    }
+                }
+            }
+        }
+        // well-formedness check is completed.
+
+        // e.g. const power.inhab.{u} : set u → inhab (set u)
+        let mut instance_ty = target_ty.clone();
+        for (_, t) in params.iter().rev() {
+            instance_ty.discharge([t.clone()]);
+        }
+        self.add_const(name, local_env.local_types.clone(), instance_ty);
+
+        for field in &fields {
+            match field {
+                InstanceField::Def(field) => {
+                    let InstanceDef {
+                        name: field_name,
+                        ty,
+                        target,
+                    } = field;
+                    // e.g. def power.inhab.rep.{u} (A : set u) : set (set u) := power A
+                    let fullname = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
+                    let mut def_target_ty = ty.clone();
+                    let mut def_target = target.clone();
+                    for (x, t) in params.iter().rev() {
+                        def_target_ty.discharge([t.clone()]);
+                        def_target.abs(&[(*x, *x, t.clone())], true);
+                    }
+                    self.add_const(
+                        fullname,
+                        local_env.local_types.clone(),
+                        def_target_ty.clone(),
+                    );
+                    self.proof_env.tt_env.defs.insert(
+                        name,
+                        Def {
+                            local_types: local_env.local_types.clone(),
+                            ty: def_target_ty.clone(),
+                            target: def_target.clone(),
+                            hint: self.proof_env.tt_env.defs.len(),
+                        },
+                    );
+
+                    // e.g. axiom inhab.rep.power.inhab.{u} (A : set u) : inhab.rep (power.inhab A) = power.inhab.rep A
+                    let axiom_fullname =
+                        Name::intern(&format!("{}.{}.{}", structure_name, field_name, name))
+                            .unwrap();
+
+                    let proj_name =
+                        Name::intern(&format!("{}.{}", structure_name, field_name)).unwrap();
+                    let mut lhs = mk_const(
+                        proj_name,
+                        type_subst.iter().map(|(_, t)| (*t).clone()).collect(),
+                    );
+                    let mut lhs_arg = mk_const(
+                        name,
+                        local_env
+                            .local_types
+                            .iter()
+                            .map(|x| mk_type_local(*x))
+                            .collect(),
+                    );
+                    lhs_arg.apply(params.iter().map(|(x, _)| mk_local(*x)));
+                    lhs.apply([lhs_arg]);
+
+                    let field_name = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
+                    let mut rhs = mk_const(
+                        field_name,
+                        local_env
+                            .local_types
+                            .iter()
+                            .map(|x| mk_type_local(*x))
+                            .collect(),
+                    );
+                    rhs.apply(params.iter().map(|(x, _)| mk_local(*x)));
+
+                    let mut eq = mk_const(Name::intern("eq").unwrap(), vec![ty.clone()]);
+                    eq.apply([lhs, rhs]);
+
+                    for (x, t) in params.iter().rev() {
+                        eq.abs(&[(*x, *x, t.clone())], true);
+                        let mut m = mk_const(Name::intern("forall").unwrap(), vec![t.clone()]);
+                        m.apply([eq]);
+                        eq = m;
+                    }
+
+                    self.add_axiom(axiom_fullname, local_env.local_types.clone(), eq);
+                }
+                InstanceField::Lemma(field) => {
+                    let InstanceLemma {
+                        name: field_name,
+                        target,
+                        holes: _,
+                        expr: _,
+                    } = field;
+                    // e.g. lemma power.inhab.inhabited.{u} : ∃ a, a ∈ power x := (..)
+                    let fullname = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
+                    let mut target = target.clone();
+                    for (x, t) in params.iter().rev() {
+                        target.abs(&[(*x, *x, t.clone())], true);
+                        let mut m = mk_const(Name::intern("forall").unwrap(), vec![t.clone()]);
+                        m.apply([target]);
+                        target = m;
+                    }
+                    self.add_axiom(fullname, local_env.local_types.clone(), target);
+                }
+            }
+        }
         Ok(())
     }
 }

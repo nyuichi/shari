@@ -1,7 +1,7 @@
 use lex::Lex;
 use parse::{ParseError, Parser};
 use print::Pretty;
-use tt::Name;
+use tt::{Name, Type};
 
 mod cmd;
 mod expr;
@@ -120,6 +120,33 @@ fn main() -> anyhow::Result<()> {
                 print_axiom(&eval, abs_name);
                 let ext_name = Name::intern(&format!("{}.ext", cmd.name)).unwrap();
                 print_axiom(&eval, ext_name);
+            }
+            cmd::Cmd::Instance(cmd) => {
+                println!("instance {}", cmd.name);
+                print_const(&eval, cmd.name);
+                for field in &cmd.fields {
+                    match field {
+                        cmd::InstanceField::Def(field) => {
+                            let field_name =
+                                Name::intern(&format!("{}.{}", cmd.name, field.name)).unwrap();
+                            print_const(&eval, field_name);
+                            let Type::Const(structure_name) = cmd.target_ty.head() else {
+                                panic!();
+                            };
+                            let axiom_name = Name::intern(&format!(
+                                "{}.{}.{}",
+                                structure_name, field.name, cmd.name
+                            ))
+                            .unwrap();
+                            print_axiom(&eval, axiom_name);
+                        }
+                        cmd::InstanceField::Lemma(field) => {
+                            let field_name =
+                                Name::intern(&format!("{}.{}", cmd.name, field.name)).unwrap();
+                            print_axiom(&eval, field_name);
+                        }
+                    }
+                }
             }
             _ => {}
         }
