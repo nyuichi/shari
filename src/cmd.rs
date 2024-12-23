@@ -910,9 +910,6 @@ impl Eval {
                 .iter()
                 .any(|(_, ty)| ty.contains_local(local_type_const))
                 || target_ty.contains_local(local_type_const)
-                || ctors
-                    .iter()
-                    .any(|ctor| ctor.target.contains_local_type(local_type_const))
             {
                 local_types.insert(0, *local_type_const);
             }
