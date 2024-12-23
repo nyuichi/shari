@@ -2,14 +2,16 @@
  - TODO:
  - [x] stronger type inference. (propagate constraints among exprs)
  - [x] automatic insertion of forall_elim using higher-order unification
- - [ ] field access notation (ad hoc overload)
- - [ ] coersion (especially automatic insertion of rep)
- - [ ] type class
  - [x] inductive types
  - [x] inductive predicates
  - [x] structures and instances
- - [ ] calc environment
+ - [ ] type class
  - [ ] namespace
+ - [ ] calc environment
+ - [ ] extension by new symbol
+ - [ ] kernel support for eta
+ - [ ] field access notation (ad hoc overload)
+ - [ ] coersion
  -/
 
 -- the very basic building blocks of our logic
@@ -272,6 +274,11 @@ def power.{u} (s : set u) : set (set u) := { t | t ⊆ s }
 def setminus.{u} (s : set u) (t : set u) : set u := { x | x ∈ s ∧ x ∉ t }
 def im.{u, v} (f : u → v) (s : set u) : set v := { y | ∃ x, x ∈ s ∧ y = f x }
 def insert.{u} (a : u) (s : set u) : set u := { x | x = a ∨ x ∈ s }
+
+-- I don't know why these are adopted as the standard notation in Lean.
+-- https://github.com/leanprover/lean3/pull/936/commits/549feb5d7f95c0d28450b3778d471becafe58046
+-- prefix ⋂₀ : 110 := bigcap
+-- prefix ⋃₀ : 110 := bigcup
 
 lemma cantor.{u} : ¬(∃ (e : u → set u), surjective e) :=
 mt lawvere_fixpoint (
@@ -680,3 +687,19 @@ eq.trans
 -- have unit m₁ = unit m₂ := eq.trans ⟪unit m₁ = mult m₂ (unit m₂) (unit m₂)⟫ left_unit,
 -- ⟪unit m₁ = unit m₂⟫
 -/
+
+inductive topology.{u} (subbase : set (set u)) : set (set u)
+| subbase (x : set u) : x ∈ subbase → topology x
+| univ : topology univ
+| inter (x y : set u) : topology (x ∩ y)
+| union (A : set (set u)) : (∀ a, a ∈ A → topology a) → topology (bigcup A)
+
+-- TODO: want the newtype syntax?
+structure space u := {
+  const subbase : set (set u)
+}
+
+-- TODO: maybe we want a definitional equality space.subbase (space.mk subbase) ≡ subbase
+instance space.mk.{u} (subbase : set (set u)) : space u := {
+  def subbase : set (set u) := subbase
+}
