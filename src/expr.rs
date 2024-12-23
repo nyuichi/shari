@@ -13,8 +13,8 @@ use crate::proof::{
     mk_proof_imp_intro, mk_proof_ref, mk_type_prop, Forall, Imp, Proof,
 };
 use crate::tt::{
-    self, mk_fresh_hole, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_var, Kind, Name, Term,
-    TermAbs, TermApp, Type, TypeApp, TypeArrow,
+    self, mk_fresh_hole, mk_fresh_type_hole, mk_local, mk_type_arrow, Kind, Name, Term, TermAbs,
+    TermApp, Type, TypeApp, TypeArrow,
 };
 
 /// p ::= ⟪φ⟫
@@ -515,18 +515,12 @@ impl<'a> Env<'a> {
                 }
 
                 self.tt_local_env.locals.push((*name, ty.clone()));
-                let body_prop = self.visit_expr(expr)?;
+                let mut target = self.visit_expr(expr)?;
                 self.tt_local_env.locals.pop();
 
-                let mut body = body_prop;
-                body.close(*name);
+                target.generalize(&[(*name, ty.clone())]);
 
-                Ok(Forall {
-                    name: *name,
-                    ty: ty.clone(),
-                    body,
-                }
-                .into())
+                Ok(target)
             }
             Expr::Inst(e) => {
                 let ExprInst {
@@ -544,14 +538,10 @@ impl<'a> Env<'a> {
 
                 let expr_prop = self.visit_expr(expr)?;
 
-                let mut body = predicate.clone();
-                body.apply([mk_var(0)]);
-                let pat: Term = Forall {
-                    name: Name::fresh(),
-                    ty: arg_ty.clone(),
-                    body,
-                }
-                .into();
+                let mut pat = predicate.clone();
+                let tmp = Name::fresh();
+                pat.apply([mk_local(tmp)]);
+                pat.generalize(&[(tmp, arg_ty.clone())]);
                 self.add_term_constraint(pat, expr_prop);
 
                 let mut target = predicate.clone();
@@ -681,23 +671,14 @@ impl<'a> Eval<'a> {
                 self.tt_local_env
                     .locals
                     .push((inner.name, inner.ty.clone()));
-                let (h, p) = self.run_help(&inner.expr);
+                let (h, mut p) = self.run_help(&inner.expr);
                 self.tt_local_env.locals.pop();
 
                 let h = mk_proof_forall_intro(inner.name, inner.ty.clone(), h);
 
-                let mut body = p;
-                body.close(inner.name);
+                p.generalize(&[(inner.name, inner.ty.clone())]);
 
-                (
-                    h,
-                    Forall {
-                        name: inner.name,
-                        ty: inner.ty.clone(),
-                        body,
-                    }
-                    .into(),
-                )
+                (h, p)
             }
             Expr::Inst(inner) => {
                 let (h, p) = self.run_help(&inner.expr);
@@ -705,14 +686,10 @@ impl<'a> Eval<'a> {
                 let mut arg = inner.arg.clone();
                 let ty = self.tt_env.infer_type(self.tt_local_env, &mut arg).unwrap();
 
-                let mut body = inner.predicate.clone();
-                body.apply([mk_var(0)]);
-                let pat: Term = Forall {
-                    name: Name::fresh(),
-                    ty: ty.clone(),
-                    body,
-                }
-                .into();
+                let mut pat = inner.predicate.clone();
+                let tmp = Name::fresh_with_name("x");
+                pat.apply([mk_local(tmp)]);
+                pat.generalize(&[(tmp, ty.clone())]);
 
                 let path = self.tt_env.equiv(&p, &pat).unwrap();
                 let h = mk_proof_forall_elim(arg.clone(), mk_proof_conv(path, h));

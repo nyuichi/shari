@@ -788,6 +788,21 @@ impl Term {
         }
     }
 
+    pub fn generalize(&mut self, xs: &[(Name, Type)]) {
+        static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall").unwrap());
+
+        self.abs_help(xs, 0, true);
+
+        let mut m = mem::take(self);
+        for &(x, ref t) in xs.iter().rev() {
+            m = mk_abs(x, t.clone(), m);
+            let mut c = mk_const(*FORALL, vec![t.clone()]);
+            c.apply([m]);
+            m = c;
+        }
+        *self = m;
+    }
+
     pub fn inst_hole(&mut self, subst: &[(Name, &Term)]) {
         match self {
             Term::Var(_) => {}

@@ -9,7 +9,7 @@ use crate::expr::{
 };
 use crate::proof::mk_type_prop;
 use crate::tt::{
-    mk_app, mk_const, mk_fresh_hole, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const,
+    mk_const, mk_fresh_hole, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const,
     mk_type_local, Kind, Name, Term, Type,
 };
 
@@ -1138,13 +1138,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.locals.truncate(self.locals.len() - params.len());
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
-        for (x, ty) in params.into_iter().rev() {
-            target.abs(&[(x, ty.clone())], true);
-            target = mk_app(
-                mk_const(Name::try_from("forall").unwrap(), vec![ty]),
-                target,
-            );
-        }
+        target.generalize(&params);
         Ok(CmdAxiom {
             name,
             local_types,
@@ -1170,12 +1164,8 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.locals.truncate(self.locals.len() - params.len());
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
+        p.generalize(&params);
         for (x, ty) in params.into_iter().rev() {
-            p.abs(&[(x, ty.clone())], true);
-            p = mk_app(
-                mk_const(Name::try_from("forall").unwrap(), vec![ty.clone()]),
-                p,
-            );
             e = mk_expr_take(x, ty, e);
         }
         let holes = self.holes.drain(..).collect();
@@ -1292,13 +1282,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.expect_symbol(":")?;
             let mut target = self.term()?;
             self.locals.truncate(self.locals.len() - ctor_params.len());
-            for (x, ty) in ctor_params.into_iter().rev() {
-                target.abs(&[(x, ty.clone())], true);
-                target = mk_app(
-                    mk_const(Name::try_from("forall").unwrap(), vec![ty]),
-                    target,
-                );
-            }
+            target.generalize(&ctor_params);
             ctors.push(Constructor {
                 name: ctor_name,
                 target,
@@ -1359,13 +1343,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     self.expect_symbol(":")?;
                     let mut target = self.term()?;
                     self.locals.truncate(self.locals.len() - params.len());
-                    for (x, ty) in params.into_iter().rev() {
-                        target.abs(&[(x, ty.clone())], true);
-                        target = mk_app(
-                            mk_const(Name::try_from("forall").unwrap(), vec![ty]),
-                            target,
-                        );
-                    }
+                    target.generalize(&params);
                     fields.push(StructureField::Axiom(StructureAxiom {
                         name: field_name,
                         target,
@@ -1436,12 +1414,8 @@ impl<'a, 'b> Parser<'a, 'b> {
                     self.expect_symbol(":=")?;
                     let mut expr = self.expr()?;
                     self.locals.truncate(self.locals.len() - field_params.len());
+                    field_target.generalize(&field_params);
                     for (x, ty) in field_params.into_iter().rev() {
-                        field_target.abs(&[(x, ty.clone())], true);
-                        field_target = mk_app(
-                            mk_const(Name::try_from("forall").unwrap(), vec![ty.clone()]),
-                            field_target,
-                        );
                         expr = mk_expr_take(x, ty, expr);
                     }
                     let holes = self.holes.drain(..).collect();

@@ -8,8 +8,8 @@ use crate::{
     print::OpTable,
     proof::{self, mk_type_prop, Forall, Imp},
     tt::{
-        mk_app, mk_const, mk_local, mk_type_arrow, mk_type_const, mk_type_local, Def, Kind,
-        LocalEnv, Name, Term, Type,
+        mk_const, mk_local, mk_type_arrow, mk_type_const, mk_type_local, Def, Kind, LocalEnv, Name,
+        Term, Type,
     },
 };
 
@@ -686,12 +686,7 @@ impl Eval {
                 a.apply(xs.iter().map(|(name, _)| mk_local(*name)));
                 let mut h = mk_local(motive);
                 h.apply([a]);
-                for (name, ty) in xs.into_iter().rev() {
-                    h.abs(&[(name, ty.clone())], true);
-                    let mut m = mk_const(Name::intern("forall").unwrap(), vec![ty]);
-                    m.apply([h]);
-                    h = m;
-                }
+                h.generalize(&xs);
                 ih_list.push(h);
             }
             // ∀ args, {IH} → P (C args)
@@ -708,13 +703,10 @@ impl Eval {
                 m.apply([ih, target]);
                 target = m;
             }
-            for (name, mut ty) in args.into_iter().rev() {
+            for (_, ty) in &mut args {
                 ty.subst(&subst);
-                target.abs(&[(name, ty.clone())], true);
-                let mut m = mk_const(Name::intern("forall").unwrap(), vec![ty]);
-                m.apply([target]);
-                target = m;
             }
+            target.generalize(&args);
             cases.push(target);
         }
         // ∀ x P, {cases} → P x
@@ -726,15 +718,10 @@ impl Eval {
             m.apply([case, target]);
             target = m;
         }
-        for (name, ty) in [
-            (motive, mk_type_arrow(target_ty.clone(), mk_type_prop())),
+        target.generalize(&[
             (x, target_ty.clone()),
-        ] {
-            target.abs(&[(name, ty.clone())], true);
-            let mut m = mk_const(Name::intern("forall").unwrap(), vec![ty]);
-            m.apply([target]);
-            target = m;
-        }
+            (motive, mk_type_arrow(target_ty.clone(), mk_type_prop())),
+        ]);
         self.add_axiom(ind_name, local_types.clone(), target);
 
         // generate the recursion principle
@@ -853,13 +840,7 @@ impl Eval {
 
             let mut spec = mk_const(Name::intern("eq").unwrap(), vec![eq_ty]);
             spec.apply([lhs, rhs]);
-
-            for (x, t) in ctor_params.into_iter().rev() {
-                spec.abs(&[(x, t.clone())], true);
-                let mut m = mk_const(Name::intern("forall").unwrap(), vec![t]);
-                m.apply([spec]);
-                spec = m;
-            }
+            spec.generalize(&ctor_params);
 
             let ctor_spec_name = Name::intern(&format!("{}.spec", ctor_name)).unwrap();
             self.add_axiom(ctor_spec_name, rec_local_types.clone(), spec);
@@ -959,7 +940,7 @@ impl Eval {
             let mut ctor_params = vec![];
             while let Ok(mut forall) = Forall::try_from(m.clone()) {
                 let fresh_name = Name::fresh_from(forall.name);
-                ctor_params.push((fresh_name, forall.name, forall.ty));
+                ctor_params.push((fresh_name, forall.ty));
                 forall.body.open(&mk_local(fresh_name));
                 m = forall.body;
             }
@@ -1045,15 +1026,7 @@ impl Eval {
             stash.apply(params.iter().map(|(name, _)| mk_local(*name)));
             let subst = [(name, &stash)];
             target.subst(&subst);
-            for (name, ty) in params.iter().rev() {
-                target.close(*name);
-                target = Forall {
-                    name: *name,
-                    ty: ty.clone(),
-                    body: target,
-                }
-                .into();
-            }
+            target.generalize(&params);
             self.add_axiom(ctor_name, local_env.local_types.clone(), target);
         }
 
@@ -1118,15 +1091,7 @@ impl Eval {
             }
 
             // ∀ y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
-            for (x, nickname, t) in ctor_params.into_iter().rev() {
-                guard.close(x);
-                guard = Forall {
-                    name: nickname,
-                    ty: t,
-                    body: guard,
-                }
-                .into();
-            }
+            guard.generalize(&ctor_params);
 
             guards.push(guard);
         }
@@ -1153,34 +1118,10 @@ impl Eval {
         }
         .into();
 
-        // ∀ (C : σ → Prop), P x w → (∀ y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N) → C w
-        target.close(motive);
-        target = Forall {
-            name: Name::intern("motive").unwrap(),
-            ty: target_ty.clone(),
-            body: target,
-        }
-        .into();
-        // ∀ w y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
-        for (x, t) in indexes.iter().rev() {
-            target.close(*x);
-            target = Forall {
-                name: *x,
-                ty: t.clone(),
-                body: target,
-            }
-            .into();
-        }
-        // ∀ x w y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
-        for (x, t) in params.iter().rev() {
-            target.close(*x);
-            target = Forall {
-                name: *x,
-                ty: t.clone(),
-                body: target,
-            }
-            .into();
-        }
+        target.generalize(&[(motive, target_ty.clone())]);
+        target.generalize(&indexes);
+        target.generalize(&params);
+
         self.add_axiom(ind_name, local_env.local_types, target);
         Ok(())
     }
@@ -1304,11 +1245,7 @@ impl Eval {
                     let mut target = field.target.clone();
                     target.subst(&subst.iter().map(|(x, m)| (*x, m)).collect::<Vec<_>>());
 
-                    target.abs(&[(instance, instance_ty.clone())], true);
-                    target = mk_app(
-                        mk_const(Name::try_from("forall").unwrap(), vec![instance_ty.clone()]),
-                        target,
-                    );
+                    target.generalize(&[(instance, instance_ty.clone())]);
 
                     self.add_axiom(fullname, local_types.clone(), target);
                 }
@@ -1371,13 +1308,7 @@ impl Eval {
             }
             .into();
         }
-        for &(var, ref ty) in params.iter().rev() {
-            abs.abs(&[(var, ty.clone())], true);
-            abs = mk_app(
-                mk_const(Name::try_from("forall").unwrap(), vec![ty.clone()]),
-                abs,
-            );
-        }
+        abs.generalize(&params);
         self.add_axiom(abs_name, local_types.clone(), abs);
 
         // generate extensionality
@@ -1415,16 +1346,10 @@ impl Eval {
             }
             .into();
         }
-        target.abs(&[(instance2, instance_ty.clone())], true);
-        target = mk_app(
-            mk_const(Name::try_from("forall").unwrap(), vec![instance_ty.clone()]),
-            target,
-        );
-        target.abs(&[(instance1, instance_ty.clone())], true);
-        target = mk_app(
-            mk_const(Name::try_from("forall").unwrap(), vec![instance_ty.clone()]),
-            target,
-        );
+        target.generalize(&[
+            (instance1, instance_ty.clone()),
+            (instance2, instance_ty.clone()),
+        ]);
         self.add_axiom(ext_name, local_types.clone(), target);
         Ok(())
     }
@@ -1669,13 +1594,7 @@ impl Eval {
 
                     let mut eq = mk_const(Name::intern("eq").unwrap(), vec![ty.clone()]);
                     eq.apply([lhs, rhs]);
-
-                    for &(x, ref t) in params.iter().rev() {
-                        eq.abs(&[(x, t.clone())], true);
-                        let mut m = mk_const(Name::intern("forall").unwrap(), vec![t.clone()]);
-                        m.apply([eq]);
-                        eq = m;
-                    }
+                    eq.generalize(&params);
 
                     self.add_axiom(axiom_fullname, local_env.local_types.clone(), eq);
                 }
@@ -1689,12 +1608,7 @@ impl Eval {
                     // e.g. lemma power.inhab.inhabited.{u} : ∃ a, a ∈ power x := (..)
                     let fullname = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
                     let mut target = target.clone();
-                    for &(x, ref t) in params.iter().rev() {
-                        target.abs(&[(x, t.clone())], true);
-                        let mut m = mk_const(Name::intern("forall").unwrap(), vec![t.clone()]);
-                        m.apply([target]);
-                        target = m;
-                    }
+                    target.generalize(&params);
                     self.add_axiom(fullname, local_env.local_types.clone(), target);
                 }
             }
