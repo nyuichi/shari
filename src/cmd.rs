@@ -226,19 +226,11 @@ impl Eval {
 
     fn add_axiom(&mut self, name: Name, local_types: Vec<Name>, target: Term) {
         assert!(self.is_wff(&local_types, &target));
-        let mut num_params = 0;
-        {
-            let mut target = target.clone();
-            while let Ok(forall) = Forall::try_from(target) {
-                num_params += 1;
-                target = forall.body;
-            }
-        }
         self.ns.axioms.insert(
             name,
             AxiomInfo {
                 type_arity: local_types.len(),
-                num_params,
+                num_params: target.clone().ungeneralize().len(),
             },
         );
         self.proof_env.axioms.insert(name, (local_types, target));
@@ -937,13 +929,7 @@ impl Eval {
             )?;
 
             let mut m = ctor.target.clone();
-            let mut ctor_params = vec![];
-            while let Ok(mut forall) = Forall::try_from(m.clone()) {
-                let fresh_name = Name::fresh_from(forall.name);
-                ctor_params.push((fresh_name, forall.ty));
-                forall.body.open(&mk_local(fresh_name));
-                m = forall.body;
-            }
+            let ctor_params = m.ungeneralize();
             ctor_params_list.push(ctor_params);
             let mut ctor_args = vec![];
             while let Ok(imp) = Imp::try_from(m.clone()) {

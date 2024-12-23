@@ -803,6 +803,51 @@ impl Term {
         *self = m;
     }
 
+    // ∀ x₁ ⋯ xₙ, m ↦ [x₁, ⋯ , xₙ]
+    // Fresh names are generated on the fly.
+    // Terms like forall.{u₁} (λ (x : u₂), m) where u₁ ≠ u₂ are not ungeneralized.
+    pub fn ungeneralize(&mut self) -> Vec<(Name, Type)> {
+        let mut acc = vec![];
+        while let Some((name, ty)) = self.ungeneralize1() {
+            acc.push((name, ty));
+        }
+        acc
+    }
+
+    fn ungeneralize1(&mut self) -> Option<(Name, Type)> {
+        static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall").unwrap());
+
+        let Term::App(m) = self else {
+            return None;
+        };
+        let m = Arc::make_mut(m);
+        let Term::Const(head) = &mut m.fun else {
+            return None;
+        };
+        if head.name != *FORALL {
+            return None;
+        }
+        if head.ty_args.len() != 1 {
+            return None;
+        }
+        let Term::Abs(abs) = &mut m.arg else {
+            return None;
+        };
+        if head.ty_args[0] != abs.binder_type {
+            return None;
+        }
+        let TermAbs {
+            binder_type,
+            binder_name,
+            body,
+        } = Arc::make_mut(abs);
+        let name = Name::fresh_from(*binder_name);
+        body.open(&mk_local(name));
+        let ret = (name, mem::take(binder_type));
+        *self = mem::take(body);
+        Some(ret)
+    }
+
     pub fn inst_hole(&mut self, subst: &[(Name, &Term)]) {
         match self {
             Term::Var(_) => {}
