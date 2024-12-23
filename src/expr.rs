@@ -399,7 +399,7 @@ impl<'a> Env<'a> {
             Term::Abs(m) => {
                 let TermAbs {
                     binder_type: arg_ty,
-                    binder_name: _,
+                    binder_name,
                     mut body,
                 } = Arc::unwrap_or_clone(m);
 
@@ -408,7 +408,7 @@ impl<'a> Env<'a> {
                     bail!("expected Type, but got {arg_ty_kind}");
                 }
 
-                let x = Name::fresh();
+                let x = Name::fresh_from(binder_name);
                 self.tt_local_env.locals.push((x, arg_ty.clone()));
                 body.open(&mk_local(x));
                 let body_ty = self.visit_term(body)?;

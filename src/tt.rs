@@ -49,6 +49,22 @@ impl Name {
         Name(id)
     }
 
+    pub fn fresh_from(name: Name) -> Self {
+        let value = NAME_REV_TABLE.lock().unwrap().get(&name).cloned();
+        let new_name = Name::fresh();
+        if let Some(value) = value {
+            NAME_REV_TABLE.lock().unwrap().insert(new_name, value);
+        }
+        new_name
+    }
+
+    pub fn fresh_with_name(name: &str) -> Self {
+        let value = name.to_owned();
+        let new_name = Name::fresh();
+        NAME_REV_TABLE.lock().unwrap().insert(new_name, value);
+        new_name
+    }
+
     pub fn intern(value: &str) -> Result<Name, InvalidNameError> {
         static RE: LazyLock<Regex> = LazyLock::new(|| {
             regex::Regex::new(r"[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*(\.[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*)*").unwrap()
@@ -152,7 +168,7 @@ pub fn mk_type_arrow(dom: Type, mut cod: Type) -> Type {
 }
 
 pub fn mk_fresh_type_hole() -> Type {
-    Type::Hole(Name::fresh())
+    Type::Hole(Name::fresh_with_name("α"))
 }
 
 pub fn mk_type_local(name: Name) -> Type {
@@ -408,7 +424,7 @@ pub fn mk_var(i: usize) -> Term {
 }
 
 pub fn mk_fresh_hole() -> Term {
-    Term::Hole(Name::fresh())
+    Term::Hole(Name::fresh_with_name("X"))
 }
 
 #[derive(Debug, Clone)]

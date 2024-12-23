@@ -663,7 +663,7 @@ impl Eval {
         //           (∀ α, P α → P (succ α)) →
         //           P zero →
         //           P α
-        let motive = Name::fresh();
+        let motive = Name::fresh_with_name("motive");
         let mut cases = vec![];
         for ctor in &ctors {
             let mut args = vec![];
@@ -718,7 +718,7 @@ impl Eval {
             cases.push(target);
         }
         // ∀ x P, {cases} → P x
-        let x = Name::fresh();
+        let x = Name::fresh_with_name("x");
         let mut target = mk_local(motive);
         target.apply([mk_local(x)]);
         for case in cases.into_iter().rev() {
@@ -753,7 +753,7 @@ impl Eval {
         //   rec (succ α) ≡ λ k₁ k₂ k₃, k₂ α (rec α k₁ k₂ k₃)
         //   rec zero ≡ λ k₁ k₂ k₃, k₃
         //
-        let rec_ty_var = Name::fresh();
+        let rec_ty_var = Name::fresh_with_name("α");
         let mut rec_local_types = local_types.clone();
         rec_local_types.push(rec_ty_var);
         let mut ctor_params_list = vec![];
@@ -768,7 +768,7 @@ impl Eval {
         }
         let mut cont_params = vec![];
         for _ in &ctors {
-            cont_params.push(Name::fresh());
+            cont_params.push(Name::fresh_with_name("k"));
         }
         let mut cont_param_tys = vec![];
         let mut rhs_bodies = vec![];
@@ -962,7 +962,7 @@ impl Eval {
             let mut m = ctor.target.clone();
             let mut ctor_params = vec![];
             while let Ok(mut forall) = Forall::try_from(m.clone()) {
-                let fresh_name = Name::fresh();
+                let fresh_name = Name::fresh_from(forall.name);
                 ctor_params.push((fresh_name, forall.name, forall.ty));
                 forall.body.open(&mk_local(fresh_name));
                 m = forall.body;
@@ -988,7 +988,7 @@ impl Eval {
                 let mut m = ctor_arg.clone();
                 loop {
                     if let Ok(forall) = Forall::try_from(m.clone()) {
-                        let name = Name::fresh();
+                        let name = Name::fresh_from(forall.name);
                         m = forall.body;
                         m.open(&mk_local(name));
                     } else if let Ok(imp) = Imp::try_from(m.clone()) {
@@ -1071,7 +1071,7 @@ impl Eval {
             .into_iter()
             .map(|t| (Name::fresh(), t))
             .collect::<Vec<_>>();
-        let motive = Name::fresh();
+        let motive = Name::fresh_with_name("motive");
         // C w
         let mut target = mk_local(motive);
         target.apply(indexes.iter().map(|(x, _)| mk_local(*x)));
@@ -1331,7 +1331,7 @@ impl Eval {
             match field {
                 StructureField::Const(field) => {
                     // (s : set u)
-                    let param = Name::fresh();
+                    let param = Name::fresh_from(field.name);
                     params.push((param, field.ty.clone()));
 
                     // inhab.rep d
