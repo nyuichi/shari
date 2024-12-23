@@ -708,15 +708,15 @@ impl Term {
 
     // λ x₁ ⋯ xₙ, m ↦ [x₁, ⋯ , xₙ]
     // Fresh names are generated on the fly.
-    pub fn unabs(&mut self) -> Vec<(Name, Name, Type)> {
+    pub fn unabs(&mut self) -> Vec<(Name, Type)> {
         let mut xs = vec![];
         while let Term::Abs(inner) = self {
-            let TermAbs {
-                binder_type,
+            let &mut TermAbs {
+                ref mut binder_type,
                 binder_name,
-                body,
+                ref mut body,
             } = Arc::make_mut(inner);
-            xs.push((Name::fresh(), *binder_name, mem::take(binder_type)));
+            xs.push((Name::fresh_from(binder_name), mem::take(binder_type)));
             *self = mem::take(body);
         }
         self.unabs_help(&xs, 0);
@@ -724,7 +724,7 @@ impl Term {
         xs
     }
 
-    fn unabs_help(&mut self, xs: &[(Name, Name, Type)], level: usize) {
+    fn unabs_help(&mut self, xs: &[(Name, Type)], level: usize) {
         match self {
             Self::Local(_) => {}
             Self::Var(i) => {
@@ -754,23 +754,23 @@ impl Term {
     //
     // If allow_free is true, this function always succeeds and returns true.
     // If allow_free is false and self contains extra free variables, abs returns false and the state of self is restored.
-    pub fn abs(&mut self, xs: &[(Name, Name, Type)], allow_free: bool) -> bool {
+    pub fn abs(&mut self, xs: &[(Name, Type)], allow_free: bool) -> bool {
         if !self.abs_help(xs, 0, allow_free) {
             self.unabs_help(xs, 0);
             return false;
         }
         let mut m = mem::take(self);
-        for (_, binder_name, ty) in xs.iter().rev() {
-            m = mk_abs(*binder_name, ty.clone(), m);
+        for &(x, ref t) in xs.iter().rev() {
+            m = mk_abs(x, t.clone(), m);
         }
         *self = m;
         true
     }
 
-    fn abs_help(&mut self, xs: &[(Name, Name, Type)], level: usize, allow_free: bool) -> bool {
+    fn abs_help(&mut self, xs: &[(Name, Type)], level: usize, allow_free: bool) -> bool {
         match self {
             Self::Local(x) => {
-                for (i, (y, _, _)) in xs.iter().rev().enumerate() {
+                for (i, (y, _)) in xs.iter().rev().enumerate() {
                     if x == y {
                         *self = Self::Var(level + i);
                         return true;
@@ -962,8 +962,8 @@ impl Term {
             Term::Abs(_) => {
                 let binders = self.unabs();
                 let mut p = self.hnf();
-                for (name, _, ty) in binders.iter().rev() {
-                    p = mk_path_congr_abs(*name, ty.clone(), p);
+                for &(name, ref ty) in binders.iter().rev() {
+                    p = mk_path_congr_abs(name, ty.clone(), p);
                 }
                 self.abs(&binders, true);
                 p
@@ -992,7 +992,7 @@ impl Term {
             Term::Abs(_) => {
                 let binders = self.unabs();
                 let mut p = self.normalize();
-                for (name, _, ty) in binders.iter().rev() {
+                for (name, ty) in binders.iter().rev() {
                     p = mk_path_congr_abs(*name, ty.clone(), p);
                 }
                 self.abs(&binders, true);
@@ -1303,8 +1303,8 @@ impl Env {
                 let (x, t) = local_env.locals.pop().unwrap();
                 let mut m1 = h.left;
                 let mut m2 = h.right;
-                m1.abs(&[(x, x, t.clone())], true);
-                m2.abs(&[(x, x, t.clone())], true);
+                m1.abs(&[(x, t.clone())], true);
+                m2.abs(&[(x, t.clone())], true);
                 Ok(Conv {
                     left: m1,
                     right: m2,

@@ -687,7 +687,7 @@ impl Eval {
                 let mut h = mk_local(motive);
                 h.apply([a]);
                 for (name, ty) in xs.into_iter().rev() {
-                    h.abs(&[(name, name, ty.clone())], true);
+                    h.abs(&[(name, ty.clone())], true);
                     let mut m = mk_const(Name::intern("forall").unwrap(), vec![ty]);
                     m.apply([h]);
                     h = m;
@@ -710,7 +710,7 @@ impl Eval {
             }
             for (name, mut ty) in args.into_iter().rev() {
                 ty.subst(&subst);
-                target.abs(&[(name, name, ty.clone())], true);
+                target.abs(&[(name, ty.clone())], true);
                 let mut m = mk_const(Name::intern("forall").unwrap(), vec![ty]);
                 m.apply([target]);
                 target = m;
@@ -726,15 +726,11 @@ impl Eval {
             m.apply([case, target]);
             target = m;
         }
-        for (name, nickname, ty) in [
-            (
-                motive,
-                Name::intern("P").unwrap(),
-                mk_type_arrow(target_ty.clone(), mk_type_prop()),
-            ),
-            (x, Name::intern("x").unwrap(), target_ty.clone()),
+        for (name, ty) in [
+            (motive, mk_type_arrow(target_ty.clone(), mk_type_prop())),
+            (x, target_ty.clone()),
         ] {
-            target.abs(&[(name, nickname, ty.clone())], true);
+            target.abs(&[(name, ty.clone())], true);
             let mut m = mk_const(Name::intern("forall").unwrap(), vec![ty]);
             m.apply([target]);
             target = m;
@@ -801,7 +797,7 @@ impl Eval {
                     .into_iter()
                     .map(|arg_ty| {
                         let name = Name::fresh();
-                        (name, name, arg_ty)
+                        (name, arg_ty)
                     })
                     .collect();
                 let mut m = mk_const(
@@ -809,7 +805,7 @@ impl Eval {
                     rec_local_types.iter().map(|t| mk_type_local(*t)).collect(),
                 );
                 let mut a = mk_local(*param);
-                a.apply(binders.iter().map(|(x, _, _)| mk_local(*x)));
+                a.apply(binders.iter().map(|(x, _)| mk_local(*x)));
                 m.apply([a]);
                 m.apply(cont_params.iter().map(|k| mk_local(*k)));
                 m.abs(&binders, true);
@@ -830,7 +826,7 @@ impl Eval {
         let rhs_binders = cont_params
             .into_iter()
             .zip(&cont_param_tys)
-            .map(|(x, t)| (x, x, t.clone()))
+            .map(|(x, t)| (x, t.clone()))
             .collect::<Vec<_>>();
         for ((rhs_body, ctor_params), ctor) in rhs_bodies
             .into_iter()
@@ -859,7 +855,7 @@ impl Eval {
             spec.apply([lhs, rhs]);
 
             for (x, t) in ctor_params.into_iter().rev() {
-                spec.abs(&[(x, x, t.clone())], true);
+                spec.abs(&[(x, t.clone())], true);
                 let mut m = mk_const(Name::intern("forall").unwrap(), vec![t]);
                 m.apply([spec]);
                 spec = m;
@@ -1277,7 +1273,7 @@ impl Eval {
             },
         );
         self.add_type_const(name, Kind(local_types.len()));
-        let instance = Name::fresh();
+        let instance = Name::fresh_with_name("d");
         let instance_ty = {
             let mut ty = mk_type_const(name);
             ty.apply(local_types.iter().map(|x| mk_type_local(*x)));
@@ -1308,10 +1304,7 @@ impl Eval {
                     let mut target = field.target.clone();
                     target.subst(&subst.iter().map(|(x, m)| (*x, m)).collect::<Vec<_>>());
 
-                    target.abs(
-                        &[(instance, "d".try_into().unwrap(), instance_ty.clone())],
-                        true,
-                    );
+                    target.abs(&[(instance, instance_ty.clone())], true);
                     target = mk_app(
                         mk_const(Name::try_from("forall").unwrap(), vec![instance_ty.clone()]),
                         target,
@@ -1368,10 +1361,7 @@ impl Eval {
                     conj
                 })
                 .unwrap_or_else(|| mk_const(Name::intern("true").unwrap(), vec![]));
-            char.abs(
-                &[(instance, "d".try_into().unwrap(), instance_ty.clone())],
-                true,
-            );
+            char.abs(&[(instance, instance_ty.clone())], true);
             char
         }]);
         for guard in guards.into_iter().rev() {
@@ -1381,8 +1371,8 @@ impl Eval {
             }
             .into();
         }
-        for (var, ty) in params.iter().rev() {
-            abs.abs(&[(*var, *var, ty.clone())], true);
+        for &(var, ref ty) in params.iter().rev() {
+            abs.abs(&[(var, ty.clone())], true);
             abs = mk_app(
                 mk_const(Name::try_from("forall").unwrap(), vec![ty.clone()]),
                 abs,
@@ -1392,7 +1382,8 @@ impl Eval {
 
         // generate extensionality
         // axiom inhab.ext.{u} (d₁ d₂ : inhab u) : inhab.rep d₁ = inhab.rep d₂ → d₁ = d₂
-        let instance2 = Name::fresh();
+        let instance1 = Name::fresh_with_name("d₁");
+        let instance2 = Name::fresh_with_name("d₂");
         let mut guards = vec![];
         for field in &fields {
             match field {
@@ -1404,7 +1395,7 @@ impl Eval {
                     );
 
                     let mut lhs = proj.clone();
-                    lhs.apply([mk_local(instance)]);
+                    lhs.apply([mk_local(instance1)]);
                     let mut rhs = proj;
                     rhs.apply([mk_local(instance2)]);
 
@@ -1416,7 +1407,7 @@ impl Eval {
             }
         }
         let mut target = mk_const(Name::intern("eq").unwrap(), vec![instance_ty.clone()]);
-        target.apply([mk_local(instance), mk_local(instance2)]);
+        target.apply([mk_local(instance1), mk_local(instance2)]);
         for guard in guards.into_iter().rev() {
             target = Imp {
                 lhs: guard,
@@ -1424,18 +1415,12 @@ impl Eval {
             }
             .into();
         }
-        target.abs(
-            &[(instance2, "d₂".try_into().unwrap(), instance_ty.clone())],
-            true,
-        );
+        target.abs(&[(instance2, instance_ty.clone())], true);
         target = mk_app(
             mk_const(Name::try_from("forall").unwrap(), vec![instance_ty.clone()]),
             target,
         );
-        target.abs(
-            &[(instance, "d₁".try_into().unwrap(), instance_ty.clone())],
-            true,
-        );
+        target.abs(&[(instance1, instance_ty.clone())], true);
         target = mk_app(
             mk_const(Name::try_from("forall").unwrap(), vec![instance_ty.clone()]),
             target,
@@ -1630,9 +1615,9 @@ impl Eval {
                     let fullname = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
                     let mut def_target_ty = ty.clone();
                     let mut def_target = target.clone();
-                    for (x, t) in params.iter().rev() {
+                    for &(x, ref t) in params.iter().rev() {
                         def_target_ty.arrow([t.clone()]);
-                        def_target.abs(&[(*x, *x, t.clone())], true);
+                        def_target.abs(&[(x, t.clone())], true);
                     }
                     self.add_const(
                         fullname,
@@ -1685,8 +1670,8 @@ impl Eval {
                     let mut eq = mk_const(Name::intern("eq").unwrap(), vec![ty.clone()]);
                     eq.apply([lhs, rhs]);
 
-                    for (x, t) in params.iter().rev() {
-                        eq.abs(&[(*x, *x, t.clone())], true);
+                    for &(x, ref t) in params.iter().rev() {
+                        eq.abs(&[(x, t.clone())], true);
                         let mut m = mk_const(Name::intern("forall").unwrap(), vec![t.clone()]);
                         m.apply([eq]);
                         eq = m;
@@ -1704,8 +1689,8 @@ impl Eval {
                     // e.g. lemma power.inhab.inhabited.{u} : ∃ a, a ∈ power x := (..)
                     let fullname = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
                     let mut target = target.clone();
-                    for (x, t) in params.iter().rev() {
-                        target.abs(&[(*x, *x, t.clone())], true);
+                    for &(x, ref t) in params.iter().rev() {
+                        target.abs(&[(x, t.clone())], true);
                         let mut m = mk_const(Name::intern("forall").unwrap(), vec![t.clone()]);
                         m.apply([target]);
                         target = m;

@@ -1161,7 +1161,7 @@ impl<'a> Unifier<'a> {
                     let binders = args
                         .into_iter()
                         // TODO determine types from local_env
-                        .map(|n| (n, n, mk_fresh_type_hole()))
+                        .map(|n| (n, mk_fresh_type_hole()))
                         .collect::<Vec<_>>();
                     if left.abs(&binders, false) {
                         self.add_subst(right_head, left.clone());
@@ -1198,7 +1198,7 @@ impl<'a> Unifier<'a> {
                     let binders = args
                         .into_iter()
                         // TODO determine types from local_env
-                        .map(|n| (n, n, mk_fresh_type_hole()))
+                        .map(|n| (n, mk_fresh_type_hole()))
                         .collect::<Vec<_>>();
                     if right.abs(&binders, false) {
                         self.add_subst(left_head, right.clone());
@@ -1498,7 +1498,7 @@ impl<'a> Unifier<'a> {
                 .map(|_| {
                     let name = Name::fresh();
                     // TODO: determine the types of new binders from t[1]..t[p].
-                    (name, name, mk_fresh_type_hole())
+                    (name, mk_fresh_type_hole())
                 })
                 .chain(right_binders.iter().cloned())
                 .collect::<Vec<_>>();
@@ -1507,7 +1507,7 @@ impl<'a> Unifier<'a> {
             let new_args = (0..right_args.len())
                 .map(|_| {
                     let mut arg = mk_fresh_hole();
-                    for &(name, _, _) in &new_binders {
+                    for &(name, _) in &new_binders {
                         arg.apply([mk_local(name)]);
                     }
                     arg
@@ -1515,7 +1515,7 @@ impl<'a> Unifier<'a> {
                 .collect::<Vec<_>>();
 
             // projection
-            for (x, _, _) in new_binders.iter().take(left_args.len()) {
+            for (x, _) in new_binders.iter().take(left_args.len()) {
                 // TODO: yeild a candidate only if the target type is correct
                 let mut cand = mk_local(*x);
                 cand.apply(new_args.clone());
@@ -1539,7 +1539,7 @@ impl<'a> Unifier<'a> {
                 }
                 Term::Local(name) => {
                     // @ ∈ { x[1], .., x[m] }
-                    if right_binders.iter().any(|(x, _, _)| x == name) {
+                    if right_binders.iter().any(|(x, _)| x == name) {
                         let mut cand = right_head.clone();
                         cand.apply(new_args.clone());
                         cand.abs(&new_binders, true);
@@ -1573,7 +1573,7 @@ impl<'a> Unifier<'a> {
                     .map(|_| {
                         let name = Name::fresh();
                         // TODO: determine the types of new binders from t[1]..t[p].
-                        (name, name, mk_fresh_type_hole())
+                        (name, mk_fresh_type_hole())
                     })
                     .collect::<Vec<_>>();
 
@@ -1589,7 +1589,7 @@ impl<'a> Unifier<'a> {
                     .collect::<Vec<_>>();
 
                 // projection
-                for (x, _, _) in &new_binders {
+                for (x, _) in &new_binders {
                     // TODO: yeild a candidate only if the target type is correct
                     let mut cand = mk_local(*x);
                     cand.apply(new_args.clone());

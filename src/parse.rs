@@ -471,7 +471,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.pop();
         }
         for (name, t) in binders.into_iter().rev() {
-            m.abs(&[(name, name, t)], true);
+            m.abs(&[(name, t)], true);
         }
         Ok(m)
     }
@@ -512,7 +512,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.locals.pop();
         }
         for (name, t) in binders.into_iter().rev() {
-            m.abs(&[(name, name, t.clone())], true);
+            m.abs(&[(name, t.clone())], true);
             let f = mem::take(&mut m);
             m = mk_const(Name::try_from(binder).unwrap(), vec![t]);
             m.apply(vec![f]);
@@ -532,7 +532,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.locals.push(name);
         let mut m = self.subterm(0)?;
         self.locals.pop();
-        m.abs(&[(name, name, t)], true);
+        m.abs(&[(name, t)], true);
         self.expect_symbol("}")?;
         Ok(m)
     }
@@ -1112,7 +1112,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             .truncate(self.type_locals.len() - local_types.len());
         for (x, ty) in params.into_iter().rev() {
             t.arrow([ty.clone()]);
-            m.abs(&[(x, x, ty)], true);
+            m.abs(&[(x, ty)], true);
         }
         Ok(CmdDef {
             name,
@@ -1139,7 +1139,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
         for (x, ty) in params.into_iter().rev() {
-            target.abs(&[(x, x, ty.clone())], true);
+            target.abs(&[(x, ty.clone())], true);
             target = mk_app(
                 mk_const(Name::try_from("forall").unwrap(), vec![ty]),
                 target,
@@ -1171,7 +1171,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
         for (x, ty) in params.into_iter().rev() {
-            p.abs(&[(x, x, ty.clone())], true);
+            p.abs(&[(x, ty.clone())], true);
             p = mk_app(
                 mk_const(Name::try_from("forall").unwrap(), vec![ty.clone()]),
                 p,
@@ -1293,7 +1293,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             let mut target = self.term()?;
             self.locals.truncate(self.locals.len() - ctor_params.len());
             for (x, ty) in ctor_params.into_iter().rev() {
-                target.abs(&[(x, x, ty.clone())], true);
+                target.abs(&[(x, ty.clone())], true);
                 target = mk_app(
                     mk_const(Name::try_from("forall").unwrap(), vec![ty]),
                     target,
@@ -1360,7 +1360,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let mut target = self.term()?;
                     self.locals.truncate(self.locals.len() - params.len());
                     for (x, ty) in params.into_iter().rev() {
-                        target.abs(&[(x, x, ty.clone())], true);
+                        target.abs(&[(x, ty.clone())], true);
                         target = mk_app(
                             mk_const(Name::try_from("forall").unwrap(), vec![ty]),
                             target,
@@ -1417,7 +1417,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     self.locals.truncate(self.locals.len() - field_params.len());
                     for (x, t) in field_params.into_iter().rev() {
                         field_ty.arrow([t.clone()]);
-                        field_target.abs(&[(x, x, t.clone())], true);
+                        field_target.abs(&[(x, t.clone())], true);
                     }
                     fields.push(InstanceField::Def(InstanceDef {
                         name: field_name,
@@ -1437,7 +1437,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let mut expr = self.expr()?;
                     self.locals.truncate(self.locals.len() - field_params.len());
                     for (x, ty) in field_params.into_iter().rev() {
-                        field_target.abs(&[(x, x, ty.clone())], true);
+                        field_target.abs(&[(x, ty.clone())], true);
                         field_target = mk_app(
                             mk_const(Name::try_from("forall").unwrap(), vec![ty.clone()]),
                             field_target,
