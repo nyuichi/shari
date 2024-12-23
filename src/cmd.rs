@@ -13,7 +13,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Cmd {
     Infix(CmdInfix),
     Infixr(CmdInfixr),
@@ -32,41 +32,41 @@ pub enum Cmd {
     Instance(CmdInstance),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct CmdInfix {
     pub op: String,
     pub prec: usize,
     pub entity: Name,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct CmdInfixr {
     pub op: String,
     pub prec: usize,
     pub entity: Name,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct CmdInfixl {
     pub op: String,
     pub prec: usize,
     pub entity: Name,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct CmdPrefix {
     pub op: String,
     pub prec: usize,
     pub entity: Name,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct CmdNofix {
     pub op: String,
     pub entity: Name,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct CmdDef {
     pub name: Name,
     pub local_types: Vec<Name>,
@@ -74,14 +74,14 @@ pub struct CmdDef {
     pub target: Term,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct CmdAxiom {
     pub name: Name,
     pub local_types: Vec<Name>,
     pub target: Term,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct CmdLemma {
     pub name: Name,
     pub local_types: Vec<Name>,
@@ -90,38 +90,38 @@ pub struct CmdLemma {
     pub expr: Expr,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct CmdConst {
     pub name: Name,
     pub local_types: Vec<Name>,
     pub ty: Type,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct CmdTypeConst {
     pub name: Name,
     pub kind: Kind,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct CmdLocalTypeConst {
     pub variables: Vec<Name>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct CmdTypeInductive {
     pub name: Name,
     pub local_types: Vec<Name>,
     pub ctors: Vec<DataConstructor>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct DataConstructor {
     pub name: Name,
     pub ty: Type,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct CmdInductive {
     pub name: Name,
     pub local_types: Vec<Name>,
@@ -130,38 +130,38 @@ pub struct CmdInductive {
     pub ctors: Vec<Constructor>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Constructor {
     pub name: Name,
     pub target: Term,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct CmdStructure {
     pub name: Name,
     pub local_types: Vec<Name>,
     pub fields: Vec<StructureField>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum StructureField {
     Const(StructureConst),
     Axiom(StructureAxiom),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct StructureConst {
     pub name: Name,
     pub ty: Type,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct StructureAxiom {
     pub name: Name,
     pub target: Term,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct CmdInstance {
     pub name: Name,
     pub local_types: Vec<Name>,
@@ -170,20 +170,20 @@ pub struct CmdInstance {
     pub fields: Vec<InstanceField>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum InstanceField {
     Def(InstanceDef),
     Lemma(InstanceLemma),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct InstanceDef {
     pub name: Name,
     pub ty: Type,
     pub target: Term,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct InstanceLemma {
     pub name: Name,
     pub target: Term,
@@ -970,7 +970,7 @@ impl Eval {
                 m = imp.rhs;
             }
             ctor_args_list.push(ctor_args.clone());
-            if m.head() != &mk_local(name) {
+            if !m.head().typed_eq(&mk_local(name)) {
                 bail!("invalid constructor. Currently only Horn clauses are supported in inductive clauses: {m}");
             }
             for a in m.args() {
@@ -997,7 +997,7 @@ impl Eval {
                     }
                 }
                 if m.contains_local(&name) {
-                    if m.head() != &mk_local(name) {
+                    if !m.head().typed_eq(&mk_local(name)) {
                         bail!("invalid target");
                     }
                     for a in m.args() {
@@ -1588,8 +1588,8 @@ impl Eval {
                     structure_field_target.subst_type(&type_subst);
                     structure_field_target
                         .subst(&subst.iter().map(|(x, m)| (*x, m)).collect::<Vec<_>>());
-                    if structure_field_target != *target {
-                        bail!("type mismatch");
+                    if !structure_field_target.typed_eq(target) {
+                        bail!("target mismatch");
                     }
                 }
             }

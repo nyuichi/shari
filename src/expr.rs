@@ -47,7 +47,7 @@ use crate::tt::{
 /// -------------------------
 /// Γ | Φ ⊢ c.{u₁, ⋯, uₙ} : φ
 ///
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Expr {
     Assump(Arc<ExprAssump>),
     Assume(Arc<ExprAssume>),
@@ -57,18 +57,18 @@ pub enum Expr {
     Const(Arc<ExprConst>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ExprAssump {
     pub target: Term,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ExprAssume {
     pub target: Term,
     pub expr: Expr,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ExprApp {
     pub expr1: Expr,
     pub expr2: Expr,
@@ -76,14 +76,14 @@ pub struct ExprApp {
     pub target: Term,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ExprTake {
     pub name: Name,
     pub ty: Type,
     pub expr: Expr,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ExprInst {
     pub expr: Expr,
     pub arg: Term,
@@ -91,7 +91,7 @@ pub struct ExprInst {
     pub predicate: Term,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ExprConst {
     pub name: Name,
     pub ty_args: Vec<Type>,
@@ -1115,7 +1115,7 @@ impl<'a> Unifier<'a> {
     }
 
     fn find_conflict_in_terms(&mut self, mut left: Term, mut right: Term) -> Option<()> {
-        if left == right {
+        if left.typed_eq(&right) {
             return None;
         }
         if let (Term::Abs(l), Term::Abs(r)) = (&mut left, &mut right) {
@@ -1167,7 +1167,7 @@ impl<'a> Unifier<'a> {
                         self.add_subst(right_head, left.clone());
                         if let Some(constraints) = self.watch_list.get(&right_head) {
                             for c in constraints.iter().rev() {
-                                if c.left.head() == &Term::Hole(right_head) {
+                                if c.left.head().typed_eq(&Term::Hole(right_head)) {
                                     if let Term::Hole(right_head) = c.right.head() {
                                         if self.subst_map.contains_key(right_head) {
                                             continue;
@@ -1204,7 +1204,7 @@ impl<'a> Unifier<'a> {
                         self.add_subst(left_head, right.clone());
                         if let Some(constraints) = self.watch_list.get(&left_head) {
                             for c in constraints.iter().rev() {
-                                if c.left.head() == &Term::Hole(left_head) {
+                                if c.left.head().typed_eq(&Term::Hole(left_head)) {
                                     if let Term::Hole(right_head) = c.right.head() {
                                         if self.subst_map.contains_key(right_head) {
                                             continue;

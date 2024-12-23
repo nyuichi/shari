@@ -312,7 +312,7 @@ impl Type {
 }
 
 /// Locally nameless representation. See [Charguéraud, 2012].
-#[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Clone, Debug)]
 pub enum Term {
     Var(usize),
     Abs(Arc<TermAbs>),
@@ -322,7 +322,7 @@ pub enum Term {
     Hole(Name),
 }
 
-#[derive(Clone, Debug, Eq, Default, Ord, PartialOrd)]
+#[derive(Clone, Debug, Default)]
 pub struct TermAbs {
     pub binder_type: Type,
     // for pretty-printing
@@ -330,20 +330,13 @@ pub struct TermAbs {
     pub body: Term,
 }
 
-impl PartialEq for TermAbs {
-    /// Compares only [binder_type] and [body].
-    fn eq(&self, other: &Self) -> bool {
-        self.binder_type == other.binder_type && self.body == other.body
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Default, Ord, PartialOrd)]
+#[derive(Clone, Debug, Default)]
 pub struct TermApp {
     pub fun: Term,
     pub arg: Term,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Default, Ord, PartialOrd)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TermConst {
     pub name: Name,
     pub ty_args: Vec<Type>,
@@ -900,6 +893,24 @@ impl Term {
         }
     }
 
+    pub fn typed_eq(&self, other: &Term) -> bool {
+        match (self, other) {
+            (Term::Var(index1), Term::Var(index2)) => index1 == index2,
+            (Term::Abs(inner1), Term::Abs(inner2)) => {
+                inner1.binder_type == inner2.binder_type && inner1.body.typed_eq(&inner2.body)
+            }
+            (Term::App(inner1), Term::App(inner2)) => {
+                inner1.fun.typed_eq(&inner2.fun) && inner1.arg.typed_eq(&inner2.arg)
+            }
+            (Term::Local(name1), Term::Local(name2)) => name1 == name2,
+            (Term::Const(inner1), Term::Const(inner2)) => {
+                inner1.name == inner2.name && inner1.ty_args == inner2.ty_args
+            }
+            (Term::Hole(name1), Term::Hole(name2)) => name1 == name2,
+            _ => false,
+        }
+    }
+
     pub fn untyped_eq(&self, other: &Term) -> bool {
         match (self, other) {
             (Term::Var(index1), Term::Var(index2)) => index1 == index2,
@@ -1047,7 +1058,7 @@ impl std::fmt::Display for Conv {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Path {
     /// ```text
     ///
@@ -1272,7 +1283,7 @@ impl Env {
                 let inner = Arc::make_mut(inner);
                 let h1 = self.infer_conv(local_env, &mut inner.0)?;
                 let h2 = self.infer_conv(local_env, &mut inner.1)?;
-                if h1.right != h2.left {
+                if !h1.right.typed_eq(&h2.left) {
                     bail!("transitivity mismatch");
                 }
                 // h1.right == h2.left means the types in the both sides match.

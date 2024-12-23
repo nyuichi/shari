@@ -9,7 +9,7 @@ use crate::tt::{
     self, mk_abs, mk_const, mk_type_const, Kind, LocalEnv, Name, Path, Term, TermAbs, Type,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Proof {
     /// ```text
     ///
@@ -232,7 +232,7 @@ impl Env {
         prop: &Term,
     ) -> anyhow::Result<()> {
         let p = self.infer_prop(local_env, context, h)?;
-        if &p != prop {
+        if !p.typed_eq(prop) {
             bail!("propositions mismatch: {p} is not equal to {prop}");
         };
         Ok(())
@@ -248,7 +248,7 @@ impl Env {
             Proof::Assump(p) => {
                 self.tt_env.check_type(local_env, p, &mut mk_type_prop())?;
                 for c in &context.props {
-                    if p == c {
+                    if p.typed_eq(c) {
                         return Ok(p.clone());
                     }
                 }
