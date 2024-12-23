@@ -4,7 +4,7 @@ use anyhow::bail;
 
 use crate::{
     expr::{self, mk_expr_app, mk_expr_assume, mk_expr_assump, Expr},
-    parse::{FactInfo, Nasmespace, TokenTable},
+    parse::{AxiomInfo, Nasmespace, TokenTable},
     print::OpTable,
     proof::{self, mk_type_prop, Forall, Imp},
     tt::{
@@ -234,14 +234,14 @@ impl Eval {
                 target = forall.body;
             }
         }
-        self.ns.facts.insert(
+        self.ns.axioms.insert(
             name,
-            FactInfo {
+            AxiomInfo {
                 type_arity: local_types.len(),
                 num_params,
             },
         );
-        self.proof_env.facts.insert(name, (local_types, target));
+        self.proof_env.axioms.insert(name, (local_types, target));
     }
 
     fn add_type_const(&mut self, name: Name, kind: Kind) {
@@ -254,7 +254,7 @@ impl Eval {
     }
 
     fn has_axiom(&self, name: Name) -> bool {
-        self.proof_env.facts.contains_key(&name)
+        self.proof_env.axioms.contains_key(&name)
     }
 
     fn has_type_const(&self, name: Name) -> bool {
@@ -474,7 +474,7 @@ impl Eval {
                 let mut h = expr::Env::new(
                     &self.proof_env.tt_env,
                     &mut local_env,
-                    &self.proof_env.facts,
+                    &self.proof_env.axioms,
                 )
                 .elaborate(&mut expr)?;
                 self.proof_env.check_prop(
@@ -1590,7 +1590,7 @@ impl Eval {
                     let mut h = expr::Env::new(
                         &self.proof_env.tt_env,
                         &mut local_env,
-                        &self.proof_env.facts,
+                        &self.proof_env.axioms,
                     )
                     .elaborate(&mut expr)?;
                     local_env

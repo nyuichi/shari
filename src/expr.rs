@@ -301,7 +301,7 @@ pub struct Env<'a> {
     tt_env: &'a tt::Env,
     tt_local_env: &'a mut tt::LocalEnv,
     // Proved or postulated facts
-    facts: &'a HashMap<Name, (Vec<Name>, Term)>,
+    axioms: &'a HashMap<Name, (Vec<Name>, Term)>,
     locals: Vec<Term>,
     type_constraints: Vec<(Type, Type)>,
     term_constraints: Vec<(Term, Term)>,
@@ -311,12 +311,12 @@ impl<'a> Env<'a> {
     pub fn new(
         tt_env: &'a tt::Env,
         tt_local_env: &'a mut tt::LocalEnv,
-        facts: &'a HashMap<Name, (Vec<Name>, Term)>,
+        axioms: &'a HashMap<Name, (Vec<Name>, Term)>,
     ) -> Self {
         Env {
             tt_env,
             tt_local_env,
-            facts,
+            axioms,
             locals: vec![],
             type_constraints: vec![],
             term_constraints: vec![],
@@ -559,7 +559,7 @@ impl<'a> Env<'a> {
                 Ok(target)
             }
             Expr::Const(e) => {
-                let Some((tv, target)) = self.facts.get(&e.name) else {
+                let Some((tv, target)) = self.axioms.get(&e.name) else {
                     bail!("proposition not found: {}", e.name);
                 };
                 if tv.len() != e.ty_args.len() {
@@ -625,7 +625,7 @@ impl<'a> Env<'a> {
         }
 
         let h = Eval {
-            facts: self.facts,
+            axioms: self.axioms,
             tt_env: self.tt_env,
             tt_local_env: self.tt_local_env,
         }
@@ -637,7 +637,7 @@ impl<'a> Env<'a> {
 
 #[derive(Debug)]
 struct Eval<'a> {
-    facts: &'a HashMap<Name, (Vec<Name>, Term)>,
+    axioms: &'a HashMap<Name, (Vec<Name>, Term)>,
     tt_env: &'a tt::Env,
     tt_local_env: &'a mut tt::LocalEnv,
 }
@@ -729,7 +729,7 @@ impl<'a> Eval<'a> {
             }
             Expr::Const(inner) => {
                 let h = mk_proof_ref(inner.name, inner.ty_args.clone());
-                let (tv, mut target) = self.facts.get(&inner.name).cloned().unwrap();
+                let (tv, mut target) = self.axioms.get(&inner.name).cloned().unwrap();
                 let subst: Vec<_> = std::iter::zip(tv, inner.ty_args.iter()).collect();
                 target.subst_type(&subst);
                 (h, target)

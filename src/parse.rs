@@ -135,7 +135,7 @@ pub enum ParseError {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct FactInfo {
+pub struct AxiomInfo {
     pub type_arity: usize,
     pub num_params: usize,
 }
@@ -149,7 +149,7 @@ pub struct Nasmespace {
     // mapping name to type arity
     pub locals: Vec<Name>,
     // mapping name to type arity
-    pub facts: HashMap<Name, FactInfo>,
+    pub axioms: HashMap<Name, AxiomInfo>,
 }
 
 pub struct Parser<'a, 'b> {
@@ -682,7 +682,7 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     fn expr_const(&mut self, token: Token<'a>, auto_inst: bool) -> Result<Expr, ParseError> {
         let name = Name::try_from(token.as_str()).unwrap();
-        let Some(fact_info) = self.ns.facts.get(&name).cloned() else {
+        let Some(axiom_info) = self.ns.axioms.get(&name).cloned() else {
             return Self::fail(token, "unknown variable");
         };
         let mut ty_args = vec![];
@@ -697,13 +697,13 @@ impl<'a, 'b> Parser<'a, 'b> {
                 self.expect_symbol("}")?;
             }
         } else {
-            for _ in 0..fact_info.type_arity {
+            for _ in 0..axiom_info.type_arity {
                 ty_args.push(mk_fresh_type_hole());
             }
         }
         let mut expr = mk_expr_const(name, ty_args);
         if auto_inst {
-            for _ in 0..fact_info.num_params {
+            for _ in 0..axiom_info.num_params {
                 expr = mk_expr_inst(expr, self.mk_term_hole(), self.mk_term_hole());
             }
         }

@@ -26,7 +26,7 @@ fn print_const(eval: &cmd::Eval, name: Name) {
 }
 
 fn print_axiom(eval: &cmd::Eval, name: Name) {
-    let (local_types, m) = eval.proof_env.facts.get(&name).unwrap();
+    let (local_types, m) = eval.proof_env.axioms.get(&name).unwrap();
     print!("axiom {}.{{", name);
     let mut first = true;
     for local_type in local_types {

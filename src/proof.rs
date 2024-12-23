@@ -215,7 +215,7 @@ impl From<Forall> for Term {
 pub struct Env {
     pub tt_env: tt::Env,
     // Proved or postulated facts
-    pub facts: HashMap<Name, (Vec<Name>, Term)>,
+    pub axioms: HashMap<Name, (Vec<Name>, Term)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -316,7 +316,7 @@ impl Env {
             }
             Proof::Ref(inner) => {
                 let (name, ty_args) = Arc::make_mut(inner);
-                let Some((tv, mut target)) = self.facts.get(name).cloned() else {
+                let Some((tv, mut target)) = self.axioms.get(name).cloned() else {
                     bail!("proposition not found");
                 };
                 if ty_args.len() != tv.len() {
@@ -375,7 +375,7 @@ mod tests {
 
         Env {
             tt_env,
-            facts: Default::default(),
+            axioms: Default::default(),
         }
     }
 
