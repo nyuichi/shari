@@ -598,12 +598,12 @@ impl Eval {
                 .tt_env
                 .check_kind(&local_env, &ctor.ty, &Kind::base())?;
             let mut t = ctor.ty.clone();
-            let args = t.undischarge();
+            let args = t.unarrow();
             if t != mk_type_local(name) {
                 bail!("invalid constructor: {t}");
             }
             for mut a in args {
-                let xs = a.undischarge();
+                let xs = a.unarrow();
                 for x in &xs {
                     if x.contains_local(&name) {
                         bail!("constructor violates strict positivity");
@@ -667,7 +667,7 @@ impl Eval {
         let mut cases = vec![];
         for ctor in &ctors {
             let mut args = vec![];
-            for arg in ctor.ty.clone().undischarge() {
+            for arg in ctor.ty.clone().unarrow() {
                 args.push((Name::fresh(), arg));
             }
             // induction hypotheses
@@ -675,7 +675,7 @@ impl Eval {
             for (arg_name, arg_ty) in &args {
                 let mut t = arg_ty.clone();
                 let mut xs = vec![];
-                for x in t.undischarge() {
+                for x in t.unarrow() {
                     xs.push((Name::fresh(), x));
                 }
                 if t != mk_type_local(name) {
@@ -759,7 +759,7 @@ impl Eval {
         let mut ctor_params_list = vec![];
         for ctor in &ctors {
             let mut ctor_params = vec![];
-            let ctor_param_tys = ctor.ty.clone().undischarge();
+            let ctor_param_tys = ctor.ty.clone().unarrow();
             for mut ctor_param_ty in ctor_param_tys {
                 ctor_param_ty.subst(&subst);
                 ctor_params.push((Name::fresh(), ctor_param_ty));
@@ -786,10 +786,10 @@ impl Eval {
                 target.apply([mk_local(*param)]);
             }
             // stepping
-            let ctor_arg_tys = ctor.ty.clone().undischarge();
+            let ctor_arg_tys = ctor.ty.clone().unarrow();
             for (ctor_arg, (param, _)) in ctor_arg_tys.into_iter().zip(ctor_params.iter()) {
                 let mut ctor_arg_target = ctor_arg.clone();
-                let arg_tys = ctor_arg_target.undischarge();
+                let arg_tys = ctor_arg_target.unarrow();
                 if ctor_arg_target != mk_type_local(name) {
                     continue;
                 }
@@ -817,14 +817,14 @@ impl Eval {
             }
 
             let mut cont_param_ty = mk_type_local(rec_ty_var);
-            cont_param_ty.discharge(cont_arg_tys);
+            cont_param_ty.arrow(cont_arg_tys);
             cont_param_tys.push(cont_param_ty);
 
             rhs_bodies.push(target);
         }
         let mut rec_ty = mk_type_local(rec_ty_var);
-        rec_ty.discharge(cont_param_tys.clone());
-        rec_ty.discharge([target_ty]);
+        rec_ty.arrow(cont_param_tys.clone());
+        rec_ty.arrow([target_ty]);
         self.add_const(rec_name, rec_local_types.clone(), rec_ty);
 
         let rhs_binders = cont_params
@@ -853,7 +853,7 @@ impl Eval {
             rhs.abs(&rhs_binders, true);
 
             let mut eq_ty = mk_type_local(rec_ty_var);
-            eq_ty.discharge(cont_param_tys.clone());
+            eq_ty.arrow(cont_param_tys.clone());
 
             let mut spec = mk_const(Name::intern("eq").unwrap(), vec![eq_ty]);
             spec.apply([lhs, rhs]);
@@ -1031,7 +1031,7 @@ impl Eval {
         for (_, t) in &params {
             param_types.push(t.clone());
         }
-        pred_ty.discharge(param_types);
+        pred_ty.arrow(param_types);
         self.add_const(name, local_env.local_types.clone(), pred_ty);
 
         // inductive P.{u} (x : τ) : σ → Prop
@@ -1070,7 +1070,7 @@ impl Eval {
         //  : P x w → (∀ y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N) → C w
         let indexes = target_ty
             .clone()
-            .undischarge()
+            .unarrow()
             .into_iter()
             .map(|t| (Name::fresh(), t))
             .collect::<Vec<_>>();
@@ -1294,7 +1294,7 @@ impl Eval {
                     // ↦ inhab.rep.{u} : inhab u → set u
                     let fullname = Name::intern(&format!("{}.{}", name, field.name)).unwrap();
                     let mut ty = field.ty.clone();
-                    ty.discharge([instance_ty.clone()]);
+                    ty.arrow([instance_ty.clone()]);
                     self.add_const(fullname, local_types.clone(), ty);
 
                     // rep ↦ inhab.rep.{u} d
@@ -1617,7 +1617,7 @@ impl Eval {
         // e.g. const power.inhab.{u} : set u → inhab (set u)
         let mut instance_ty = target_ty.clone();
         for (_, t) in params.iter().rev() {
-            instance_ty.discharge([t.clone()]);
+            instance_ty.arrow([t.clone()]);
         }
         self.add_const(name, local_env.local_types.clone(), instance_ty);
 
@@ -1634,7 +1634,7 @@ impl Eval {
                     let mut def_target_ty = ty.clone();
                     let mut def_target = target.clone();
                     for (x, t) in params.iter().rev() {
-                        def_target_ty.discharge([t.clone()]);
+                        def_target_ty.arrow([t.clone()]);
                         def_target.abs(&[(*x, *x, t.clone())], true);
                     }
                     self.add_const(

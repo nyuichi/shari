@@ -1111,7 +1111,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
         for (x, ty) in params.into_iter().rev() {
-            t.discharge([ty.clone()]);
+            t.arrow([ty.clone()]);
             m.abs(&[(x, x, ty)], true);
         }
         Ok(CmdDef {
@@ -1416,7 +1416,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let mut field_target = self.term()?;
                     self.locals.truncate(self.locals.len() - field_params.len());
                     for (x, t) in field_params.into_iter().rev() {
-                        field_ty.discharge([t.clone()]);
+                        field_ty.arrow([t.clone()]);
                         field_target.abs(&[(x, x, t.clone())], true);
                     }
                     fields.push(InstanceField::Def(InstanceDef {

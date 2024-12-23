@@ -147,7 +147,7 @@ impl Display for Type {
 }
 
 pub fn mk_type_arrow(dom: Type, mut cod: Type) -> Type {
-    cod.discharge_rev([dom]);
+    cod.arrow([dom]);
     cod
 }
 
@@ -165,23 +165,12 @@ pub fn mk_type_const(name: Name) -> Type {
 
 /// See [Barendregt+, 06](https://ftp.science.ru.nl/CSI/CompMath.Found/I.pdf).
 impl Type {
-    /// t.discharge_rev([t1, t2]);
-    /// assert_eq!(t, "t2 → t1 → t");
-    fn discharge_rev(&mut self, cs: impl IntoIterator<Item = Type>) {
-        for c in cs {
-            *self = Type::Arrow(Arc::new(TypeArrow {
-                dom: c,
-                cod: mem::take(self),
-            }));
-        }
-    }
-
-    /// t.discharge([t1, t2]);
+    /// t.arrow([t1, t2]);
     /// assert_eq!(t, "t1 → t2 → t");
-    pub fn discharge(&mut self, cs: impl IntoIterator<Item = Type>) {
+    pub fn arrow(&mut self, cs: impl IntoIterator<Item = Type>) {
         let mut iter = cs.into_iter();
         if let Some(item) = iter.next() {
-            self.discharge(iter);
+            self.arrow(iter);
             *self = Type::Arrow(Arc::new(TypeArrow {
                 dom: item,
                 cod: mem::take(self),
@@ -190,8 +179,8 @@ impl Type {
     }
 
     /// assert_eq!(t, "t1 → t2 → t");
-    /// assert_eq!(t.undischarge(), [t1, t2]);
-    pub fn undischarge(&mut self) -> Vec<Type> {
+    /// assert_eq!(t.unarrow(), [t1, t2]);
+    pub fn unarrow(&mut self) -> Vec<Type> {
         let mut ts = vec![];
         let mut t = &mut *self;
         while let Type::Arrow(inner) = t {
