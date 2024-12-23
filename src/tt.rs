@@ -805,7 +805,7 @@ impl Term {
 
     // ∀ x₁ ⋯ xₙ, m ↦ [x₁, ⋯ , xₙ]
     // Fresh names are generated on the fly.
-    // Terms like forall.{u₁} (λ (x : u₂), m) where u₁ ≠ u₂ are not ungeneralized.
+    // Does not check ty_args of forall.
     pub fn ungeneralize(&mut self) -> Vec<(Name, Type)> {
         let mut acc = vec![];
         while let Some((name, ty)) = self.ungeneralize1() {
@@ -821,21 +821,15 @@ impl Term {
             return None;
         };
         let m = Arc::make_mut(m);
-        let Term::Const(head) = &mut m.fun else {
+        let Term::Const(head) = &m.fun else {
             return None;
         };
         if head.name != *FORALL {
             return None;
         }
-        if head.ty_args.len() != 1 {
-            return None;
-        }
         let Term::Abs(abs) = &mut m.arg else {
             return None;
         };
-        if head.ty_args[0] != abs.binder_type {
-            return None;
-        }
         let TermAbs {
             binder_type,
             binder_name,
@@ -846,6 +840,53 @@ impl Term {
         let ret = (name, mem::take(binder_type));
         *self = mem::take(body);
         Some(ret)
+    }
+
+    pub fn guard(&mut self, guards: impl IntoIterator<Item = Term>) {
+        self.guard_help(guards.into_iter())
+    }
+
+    fn guard_help(&mut self, mut guards: impl Iterator<Item = Term>) {
+        static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp").unwrap());
+
+        if let Some(guard) = guards.next() {
+            self.guard_help(guards);
+            let target = mem::take(self);
+            let mut m = mk_const(*IMP, vec![]);
+            m.apply([guard, target]);
+            *self = m;
+        }
+    }
+
+    pub fn unguard(&mut self) -> Vec<Term> {
+        let mut acc = vec![];
+        while let Some(guard) = self.unguard1() {
+            acc.push(guard);
+        }
+        acc
+    }
+
+    fn unguard1(&mut self) -> Option<Term> {
+        static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp").unwrap());
+
+        let Term::App(m) = self else {
+            return None;
+        };
+        let m = Arc::make_mut(m);
+        let Term::App(n) = &mut m.fun else {
+            return None;
+        };
+        let n = Arc::make_mut(n);
+        let Term::Const(head) = &n.fun else {
+            return None;
+        };
+        if head.name != *IMP {
+            return None;
+        }
+        let left = mem::take(&mut n.arg);
+        let right = mem::take(&mut m.arg);
+        *self = right;
+        Some(left)
     }
 
     pub fn inst_hole(&mut self, subst: &[(Name, &Term)]) {

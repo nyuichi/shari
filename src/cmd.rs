@@ -6,7 +6,7 @@ use crate::{
     expr::{self, mk_expr_app, mk_expr_assume, mk_expr_assump, Expr},
     parse::{AxiomInfo, Nasmespace, TokenTable},
     print::OpTable,
-    proof::{self, mk_type_prop, Forall, Imp},
+    proof::{self, mk_type_prop},
     tt::{
         mk_const, mk_local, mk_type_arrow, mk_type_const, mk_type_local, Def, Kind, LocalEnv, Name,
         Term, Type,
@@ -656,7 +656,7 @@ impl Eval {
         //           P zero →
         //           P α
         let motive = Name::fresh_with_name("motive");
-        let mut cases = vec![];
+        let mut guards = vec![];
         for ctor in &ctors {
             let mut args = vec![];
             for arg in ctor.ty.clone().unarrow() {
@@ -690,26 +690,18 @@ impl Eval {
             a.apply(args.iter().map(|(name, _)| mk_local(*name)));
             let mut target = mk_local(motive);
             target.apply([a]);
-            for ih in ih_list.into_iter().rev() {
-                let mut m = mk_const(Name::intern("imp").unwrap(), vec![]);
-                m.apply([ih, target]);
-                target = m;
-            }
+            target.guard(ih_list);
             for (_, ty) in &mut args {
                 ty.subst(&subst);
             }
             target.generalize(&args);
-            cases.push(target);
+            guards.push(target);
         }
-        // ∀ x P, {cases} → P x
+        // ∀ x P, {guards} → P x
         let x = Name::fresh_with_name("x");
         let mut target = mk_local(motive);
         target.apply([mk_local(x)]);
-        for case in cases.into_iter().rev() {
-            let mut m = mk_const(Name::intern("imp").unwrap(), vec![]);
-            m.apply([case, target]);
-            target = m;
-        }
+        target.guard(guards);
         target.generalize(&[
             (x, target_ty.clone()),
             (motive, mk_type_arrow(target_ty.clone(), mk_type_prop())),
@@ -931,11 +923,7 @@ impl Eval {
             let mut m = ctor.target.clone();
             let ctor_params = m.ungeneralize();
             ctor_params_list.push(ctor_params);
-            let mut ctor_args = vec![];
-            while let Ok(imp) = Imp::try_from(m.clone()) {
-                ctor_args.push(imp.lhs);
-                m = imp.rhs;
-            }
+            let ctor_args = m.unguard();
             ctor_args_list.push(ctor_args.clone());
             if !m.head().typed_eq(&mk_local(name)) {
                 bail!("invalid constructor. Currently only Horn clauses are supported in inductive clauses: {m}");
@@ -950,16 +938,9 @@ impl Eval {
             for ctor_arg in &ctor_args {
                 let mut m = ctor_arg.clone();
                 loop {
-                    if let Ok(forall) = Forall::try_from(m.clone()) {
-                        let name = Name::fresh_from(forall.name);
-                        m = forall.body;
-                        m.open(&mk_local(name));
-                    } else if let Ok(imp) = Imp::try_from(m.clone()) {
-                        if imp.lhs.contains_local(&name) {
-                            bail!("constructor violates strict positivity");
-                        }
-                        m = imp.rhs;
-                    } else {
+                    let params = m.ungeneralize();
+                    let args = m.unguard();
+                    if params.is_empty() && args.is_empty() {
                         break;
                     }
                 }
@@ -1032,7 +1013,7 @@ impl Eval {
         target.apply(indexes.iter().map(|(x, _)| mk_local(*x)));
         let mut guards = vec![];
         // (∀ y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N) → C w
-        for (ctor_params, (ctor_args, (ctor_target, ctor_ind_args))) in zip(
+        for (ctor_params, (mut ctor_args, (ctor_target, mut ctor_ind_args))) in zip(
             ctor_params_list,
             zip(ctor_args_list, zip(ctor_target_list, ctor_ind_args_list)),
         ) {
@@ -1045,14 +1026,10 @@ impl Eval {
             guard.subst(&subst_with_motive);
 
             // (∀ z, ψ → C M) → C N
-            for mut ctor_ind_arg in ctor_ind_args.into_iter().rev() {
+            for ctor_ind_arg in &mut ctor_ind_args {
                 ctor_ind_arg.subst(&subst_with_motive);
-                guard = Imp {
-                    lhs: ctor_ind_arg,
-                    rhs: guard,
-                }
-                .into();
             }
+            guard.guard(ctor_ind_args);
 
             // P ↦ P.{u} x
             let mut stash = mk_const(
@@ -1067,27 +1044,18 @@ impl Eval {
             let subst = [(name, &stash)];
 
             // φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
-            for mut ctor_arg in ctor_args.into_iter().rev() {
+            for ctor_arg in &mut ctor_args {
                 ctor_arg.subst(&subst);
-                guard = Imp {
-                    lhs: ctor_arg,
-                    rhs: guard,
-                }
-                .into();
             }
+            guard.guard(ctor_args);
 
             // ∀ y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
             guard.generalize(&ctor_params);
 
             guards.push(guard);
         }
-        for guard in guards.into_iter().rev() {
-            target = Imp {
-                lhs: guard,
-                rhs: target,
-            }
-            .into();
-        }
+        target.guard(guards);
+
         let mut p = mk_const(
             name,
             local_env
@@ -1098,11 +1066,7 @@ impl Eval {
         );
         p.apply(params.iter().map(|(name, _)| mk_local(*name)));
         p.apply(indexes.iter().map(|(x, _)| mk_local(*x)));
-        target = Imp {
-            lhs: p,
-            rhs: target,
-        }
-        .into();
+        target.guard([p]);
 
         target.generalize(&[(motive, target_ty.clone())]);
         target.generalize(&indexes);
@@ -1287,13 +1251,7 @@ impl Eval {
             char.abs(&[(instance, instance_ty.clone())], true);
             char
         }]);
-        for guard in guards.into_iter().rev() {
-            abs = Imp {
-                lhs: guard,
-                rhs: abs,
-            }
-            .into();
-        }
+        abs.guard(guards);
         abs.generalize(&params);
         self.add_axiom(abs_name, local_types.clone(), abs);
 
@@ -1325,13 +1283,7 @@ impl Eval {
         }
         let mut target = mk_const(Name::intern("eq").unwrap(), vec![instance_ty.clone()]);
         target.apply([mk_local(instance1), mk_local(instance2)]);
-        for guard in guards.into_iter().rev() {
-            target = Imp {
-                lhs: guard,
-                rhs: target,
-            }
-            .into();
-        }
+        target.guard(guards);
         target.generalize(&[
             (instance1, instance_ty.clone()),
             (instance2, instance_ty.clone()),
