@@ -6,8 +6,7 @@ use anyhow::bail;
 use std::sync::LazyLock;
 
 use crate::tt::{
-    self, mk_abs, mk_const, mk_type_arrow, mk_type_const, mk_type_local, Kind, LocalEnv, Name,
-    Path, Term, TermAbs, Type,
+    self, mk_abs, mk_const, mk_type_const, Kind, LocalEnv, Name, Path, Term, TermAbs, Type,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -335,14 +334,13 @@ impl Env {
 
 #[cfg(test)]
 mod tests {
+    use tt::{mk_type_arrow, mk_type_local};
+
     use super::tt::{mk_abs, mk_app, mk_fresh_type_hole, mk_local, mk_var};
     use super::*;
 
     static P: LazyLock<Name> = LazyLock::new(|| Name::intern("p").unwrap());
-    static Q: LazyLock<Name> = LazyLock::new(|| Name::intern("q").unwrap());
-    static ALPHA: LazyLock<Name> = LazyLock::new(|| Name::intern("α").unwrap());
     static X: LazyLock<Name> = LazyLock::new(|| Name::intern("x").unwrap());
-    static Y: LazyLock<Name> = LazyLock::new(|| Name::intern("y").unwrap());
 
     fn new_kernel() -> Env {
         let mut tt_env = tt::Env::default();
@@ -419,101 +417,6 @@ mod tests {
         infer(&mut q);
         insta::assert_snapshot!(check([q], mk_proof_assump(p)), @"(forall.{Prop} (lam Prop ((imp (var 0)) (var 0))))");
     }
-
-    // #[test]
-    // fn test_assume_err() {
-    //     // not a proposition
-    //     let p = mk_local(*P, mk_type_arrow(mk_type_prop(), mk_type_prop()));
-    //     insta::assert_snapshot!(assume(p).unwrap_err(), @"type mismatch");
-
-    //     // ill-typed
-    //     // (λ (x : Prop), x) (λ y, y)
-    //     let p = mk_app(
-    //         mk_abs(*X, mk_type_prop(), mk_var(0)),
-    //         mk_abs(*Y, mk_fresh_type_mvar(), mk_var(0)),
-    //     );
-    //     insta::assert_snapshot!(assume(p).unwrap_err(), @"type mismatch");
-
-    //     // not fully instantiated
-    //     // (λ x, x) = (λ x, x)
-    //     let p = mk_app(
-    //         mk_app(
-    //             mk_const(*EQ, vec![mk_fresh_type_mvar()]),
-    //             mk_abs(*X, mk_fresh_type_mvar(), mk_var(0)),
-    //         ),
-    //         mk_abs(*X, mk_fresh_type_mvar(), mk_var(0)),
-    //     );
-    //     insta::assert_snapshot!(assume(p).unwrap_err(), @"uninstantiated meta type variable");
-    // }
-    // #[test]
-    // fn test_imp_ok() {
-    //     let p = mk_local(*P, mk_fresh_type_mvar());
-    //     let h = assume(p.clone()).unwrap();
-    //     insta::assert_snapshot!(imp_intro(p, h).unwrap(), @"⊢ ((imp (local p Prop)) (local p Prop))");
-
-    //     // weakening
-    //     let p = mk_local(*P, mk_fresh_type_mvar());
-    //     insta::assert_snapshot!(imp_intro(p, eq_intro(mk_const(*IMP, vec![])).unwrap()).unwrap(), @"⊢ ((imp (local p Prop)) ((eq.{(Prop → (Prop → Prop))} imp) imp))");
-
-    //     // p → q
-    //     let p1 = mk_app(
-    //         mk_app(mk_const(*IMP, vec![]), mk_local(*P, mk_fresh_type_mvar())),
-    //         mk_local(*Q, mk_fresh_type_mvar()),
-    //     );
-    //     // p
-    //     let p2 = mk_local(*P, mk_fresh_type_mvar());
-    //     let h1 = assume(p1).unwrap();
-    //     let h2 = assume(p2).unwrap();
-    //     insta::assert_snapshot!(imp_elim(h1, h2).unwrap(), @"((imp (local p Prop)) (local q Prop)) (local p Prop) ⊢ (local q Prop)");
-    // }
-
-    // #[test]
-    // fn test_imp_err() {
-    //     // (λ (x : Prop), x) (λ (x : Prop), x)
-    //     let p1 = mk_app(
-    //         mk_abs(*X, mk_type_prop(), mk_var(0)),
-    //         mk_abs(*X, mk_type_prop(), mk_var(0)),
-    //     );
-    //     // p
-    //     let p2 = mk_local(*P, mk_fresh_type_mvar());
-    //     // p q
-    //     let p3 = mk_app(
-    //         mk_local(*P, mk_fresh_type_mvar()),
-    //         mk_local(*Q, mk_fresh_type_mvar()),
-    //     );
-    //     // q
-    //     let p4 = mk_local(*Q, mk_fresh_type_mvar());
-
-    //     insta::assert_snapshot!(imp_intro(p1, assume(p2.clone()).unwrap()).unwrap_err(), @"type mismatch");
-    //     insta::assert_snapshot!(imp_intro(p3, assume(p2.clone()).unwrap()).unwrap_err(), @"uninstantiated meta type variable");
-
-    //     let h1 = assume(p2).unwrap();
-    //     let h2 = assume(p4).unwrap();
-    //     insta::assert_snapshot!(imp_elim(h1, h2).unwrap_err(), @"not an implication");
-    // }
-
-    // #[test]
-    // fn test_forall() {
-    //     // err
-    //     let p: Term = mk_local(*P, mk_fresh_type_mvar());
-    //     let h = assume(p.clone()).unwrap();
-    //     insta::assert_snapshot!(forall_intro(*P, mk_type_prop(), h).unwrap_err(), @"eigenvariable condition fails");
-
-    //     let p: Term = mk_local(*P, mk_fresh_type_mvar());
-    //     let h = assume(p.clone()).unwrap();
-    //     let h = imp_intro(p, h).unwrap();
-    //     insta::assert_snapshot!(forall_intro(*P, mk_type_prop(), h).unwrap(), @"⊢ (forall.{Prop} (lam Prop ((imp (var 0)) (var 0))))");
-
-    //     // weakening
-    //     let h = eq_intro(mk_const(*IMP, vec![])).unwrap();
-    //     insta::assert_snapshot!(forall_intro(*P, mk_type_prop(), h).unwrap(), @"⊢ (forall.{Prop} (lam Prop ((eq.{(Prop → (Prop → Prop))} imp) imp)))");
-
-    //     let p: Term = mk_local(*P, mk_fresh_type_mvar());
-    //     let h = assume(p.clone()).unwrap();
-    //     let h = imp_intro(p, h).unwrap();
-    //     let h = forall_intro(*P, mk_type_prop(), h).unwrap();
-    //     insta::assert_snapshot!(forall_elim(mk_local(*Q, mk_fresh_type_mvar()), h).unwrap(), @"⊢ ((imp (local q Prop)) (local q Prop))");
-    // }
 
     #[test]
     fn test_infer_prop() {
