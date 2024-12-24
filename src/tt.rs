@@ -1286,7 +1286,6 @@ pub struct Def {
 pub struct LocalEnv {
     pub local_types: Vec<Name>,
     pub locals: Vec<(Name, Type)>,
-    // type context of meta variables
     pub holes: Vec<(Name, Type)>,
 }
 

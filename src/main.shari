@@ -485,7 +485,7 @@ uexists.intro
 -- Note `inhab.rep (power.inhab A)` is only propositionally equal to `power.inhab.rep A`.
 instance power.inhab.{u} (A : set u) : inhab (set u) := {
   def rep : set (set u) := power A
-  lemma inhabited :  ∃ a, a ∈ power A := exists.intro empty_in_power
+  lemma inhabited : ∃ a, a ∈ power A := exists.intro empty_in_power
 }
 
 instance cup.inhab.{u} (A B : inhab u) : inhab u := {
