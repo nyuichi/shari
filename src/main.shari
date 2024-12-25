@@ -9,8 +9,7 @@
  - [ ] namespace
  - [ ] calc environment
  - [ ] extension by new symbol
- - [ ] kernel support for eta
- - [ ] field access notation (ad hoc overload)
+ - [ ] field access notation
  - [ ] coersion
  -/
 
