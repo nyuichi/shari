@@ -72,24 +72,21 @@ axiom fun_ext.{u, v} (f₁ f₂ : u → v) : (∀ x, f₁ x = f₂ x) → f₁ =
 axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) → ∃! f, ∀ x, R x (f x)
 
 lemma eq.transport.{u} (m₁ m₂ : u) (P : u → Prop) : m₁ = m₂ → P m₁ → P m₂ := eq.ind
-lemma eq.symm.{u} (m₁ m₂ : u) : m₁ = m₂ → m₂ = m₁ := assume m₁ = m₂, eq.transport ⟪m₁ = m₂⟫ @eq.refl[m₁]
+lemma eq.symm.{u} (m₁ m₂ : u) : m₁ = m₂ → m₂ = m₁ := assume m₁ = m₂, eq.transport ⟪m₁ = m₂⟫ eq.refl
 lemma eq.trans.{u} (m₁ m₂ m₃ : u) : m₁ = m₂ → m₂ = m₃ → m₁ = m₃ := assume m₁ = m₂, assume m₂ = m₃, eq.transport ⟪m₂ = m₃⟫ ⟪m₁ = m₂⟫
 
 lemma eq.ap.{u, v} (m₁ m₂ : u) (C : u → v) : m₁ = m₂ → C m₁ = C m₂ :=
 assume m₁ = m₂,
-eq.transport ⟪m₁ = m₂⟫ @eq.refl[C m₁]
+eq.transport ⟪m₁ = m₂⟫ eq.refl
 
 lemma eq.congr_fun.{u, v} (f₁ f₂ : u → v) (x : u) : f₁ = f₂ → f₁ x = f₂ x :=
-@eq.ap[_, _, λ (f : u → v), f x]
+eq.ap
 
 lemma eq.congr_arg.{u, v} (f : u → v) (x₁ x₂ : u) : x₁ = x₂ → f x₁ = f x₂ :=
 eq.ap
 
--- TODO: remove this and replace with eq.ap
-lemma eq.conv (φ ψ : Prop) : (φ = ψ) → φ → ψ := @eq.transport[_, _, λ (ξ : Prop), ξ]
-
 -- material adequacy
-lemma ma (φ : Prop) : (⊤ = φ) → φ := assume ⊤ = φ, eq.conv ⟪⊤ = φ⟫ true.intro
+lemma ma (φ : Prop) : (⊤ = φ) → φ := assume ⊤ = φ, eq.transport ⟪⊤ = φ⟫ true.intro
 
 -- modus ponens
 lemma mp (φ ψ : Prop) : φ → (φ → ψ) → ψ := assume φ, assume φ → ψ, ⟪φ → ψ⟫ ⟪φ⟫
@@ -121,15 +118,15 @@ lemma absurd (φ : Prop) : ⊥ → φ := false.ind
 
 lemma not.fixed_point_free (φ : Prop) : φ ≠ ¬φ :=
 assume φ = ¬φ,
-have ¬φ := assume φ, contradiction ⟪φ⟫ (eq.conv ⟪φ = ¬φ⟫ ⟪φ⟫),
-have φ := eq.conv (eq.symm ⟪φ = ¬φ⟫) ⟪¬φ⟫,
+have ¬φ := assume φ, contradiction ⟪φ⟫ (eq.transport ⟪φ = ¬φ⟫ ⟪φ⟫),
+have φ := eq.transport (eq.symm ⟪φ = ¬φ⟫) ⟪¬φ⟫,
 contradiction ⟪φ⟫ ⟪¬φ⟫
 
 -- Internal version of nondegeneracy of topos.
 -- Of course, this lemma holds in any (possibly degenerate) topos.
 lemma true_ne_false : ⊤ ≠ ⊥ :=
 assume ⊤ = ⊥,
-eq.conv ⟪⊤ = ⊥⟫ true.intro
+eq.transport ⟪⊤ = ⊥⟫ true.intro
 
 -- law of non-contradiction
 lemma nc (φ : Prop) : ¬(φ ∧ ¬φ) :=
@@ -219,8 +216,9 @@ lemma eq.congr_abs.{u, v} (m₁ m₂ : u) : (∀ (x : v), m₁ = m₂) → (λ (
 assume ∀ (x : v), m₁ = m₂,
 fun_ext ⟪∀ (x : v), m₁ = m₂⟫
 
+-- FIXME
 lemma eta_expand.{u, v} (f : u → v) : f = λ x, f x :=
-@fun_ext[f, λ x, f x] (take (x : u), @eq.refl[f x])
+@fun_ext[f, _] (take (x : u), eq.refl)
 
 /-
  - functions
@@ -439,9 +437,9 @@ bool.ind (or.left eq.refl) (or.right eq.refl)
 lemma bool.tt_ne_ff : tt ≠ ff :=
 assume tt = ff,
 have ⊤ = ⊥ :=
-  have ⊤ = bool.rec tt ⊤ ⊥ := @eq.ap[_, _, λ f, f ⊤ ⊥] (eq.symm bool.tt.spec),
+  have ⊤ = bool.rec tt ⊤ ⊥ := eq.ap (eq.symm bool.tt.spec),
   have bool.rec tt ⊤ ⊥ = bool.rec ff ⊤ ⊥ := eq.ap ⟪tt = ff⟫,
-  have bool.rec ff ⊤ ⊥ = ⊥ := @eq.ap[_, _, λ f, f ⊤ ⊥] bool.ff.spec,
+  have bool.rec ff ⊤ ⊥ = ⊥ := eq.ap bool.ff.spec,
   eq.trans ⟪⊤ = bool.rec tt ⊤ ⊥⟫ (eq.trans ⟪bool.rec tt ⊤ ⊥ = bool.rec ff ⊤ ⊥⟫ ⟪bool.rec ff ⊤ ⊥ = ⊥⟫),
 contradiction ⟪⊤ = ⊥⟫ true_ne_false
 
@@ -514,7 +512,7 @@ exists.intro
   (take (x : u),
    have inhab.rep (f x) (choice (f x)) :=
      choice.spec,
-   eq.conv (eq.symm (eq.congr_fun ⟪∀ x, R x = inhab.rep (f x)⟫[x])) ⟪inhab.rep (f x) (choice (f x))⟫)
+   eq.transport (eq.symm (eq.congr_fun ⟪∀ x, R x = inhab.rep (f x)⟫[x])) ⟪inhab.rep (f x) (choice (f x))⟫)
 
 lemma surjective.split.{u, v} (f : u → v) : surjective f → split f :=
 ac
@@ -544,9 +542,9 @@ have φ → choice h₁ = choice h₂ :=
     inhab.ext ⟪inhab.rep h₁ = inhab.rep h₂⟫,
   eq.congr_arg ⟪h₁ = h₂⟫,
 have φ ∨ choice h₁ = tt :=
-  eq.conv (eq.symm (eq.congr_fun ⟪(λ b, φ ∨ b = tt) = inhab.rep h₁⟫)) choice.spec,
+  eq.transport (eq.symm (eq.congr_fun ⟪(λ b, φ ∨ b = tt) = inhab.rep h₁⟫)) choice.spec,
 have φ ∨ choice h₂ = ff :=
-  eq.conv (eq.symm (eq.congr_fun ⟪(λ b, φ ∨ b = ff) = inhab.rep h₂⟫)) choice.spec,
+  eq.transport (eq.symm (eq.congr_fun ⟪(λ b, φ ∨ b = ff) = inhab.rep h₂⟫)) choice.spec,
 have φ ∨ choice h₁ ≠ choice h₂ :=
   or.ind ⟪φ ∨ choice h₁ = tt⟫
     (assume φ, or.left ⟪φ⟫)

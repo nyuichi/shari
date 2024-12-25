@@ -8,13 +8,16 @@ use std::{
 
 use anyhow::{bail, Context};
 
-use crate::proof::{
-    mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro, mk_proof_imp_elim,
-    mk_proof_imp_intro, mk_proof_ref, mk_type_prop, Forall, Imp, Proof,
-};
 use crate::tt::{
-    self, mk_fresh_hole, mk_fresh_type_hole, mk_local, mk_type_arrow, Kind, Name, Term, TermAbs,
-    TermApp, Type, TypeApp, TypeArrow,
+    self, mk_fresh_type_hole, mk_local, mk_type_arrow, Kind, Name, Term, TermAbs, TermApp, Type,
+    TypeApp, TypeArrow,
+};
+use crate::{
+    proof::{
+        mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro,
+        mk_proof_imp_elim, mk_proof_imp_intro, mk_proof_ref, mk_type_prop, Forall, Imp, Proof,
+    },
+    tt::LocalEnv,
 };
 
 /// p ::= ⟪φ⟫
@@ -304,7 +307,7 @@ pub struct Env<'a> {
     axioms: &'a HashMap<Name, (Vec<Name>, Term)>,
     locals: Vec<Term>,
     type_constraints: Vec<(Type, Type)>,
-    term_constraints: Vec<(Term, Term)>,
+    term_constraints: Vec<(LocalEnv, Term, Term)>,
 }
 
 impl<'a> Env<'a> {
@@ -327,8 +330,8 @@ impl<'a> Env<'a> {
         self.type_constraints.push((t1, t2));
     }
 
-    fn add_term_constraint(&mut self, m1: Term, m2: Term) {
-        self.term_constraints.push((m1, m2));
+    fn add_term_constraint(&mut self, local_env: LocalEnv, m1: Term, m2: Term) {
+        self.term_constraints.push((local_env, m1, m2));
     }
 
     fn visit_type(&self, t: Type) -> anyhow::Result<Kind> {
@@ -502,7 +505,7 @@ impl<'a> Env<'a> {
                     rhs: target.clone(),
                 }
                 .into();
-                self.add_term_constraint(pat, fun_prop);
+                self.add_term_constraint(self.tt_local_env.clone(), pat, fun_prop);
 
                 Ok(target.clone())
             }
@@ -542,7 +545,7 @@ impl<'a> Env<'a> {
                 let tmp = Name::fresh();
                 pat.apply([mk_local(tmp)]);
                 pat.generalize(&[(tmp, arg_ty.clone())]);
-                self.add_term_constraint(pat, expr_prop);
+                self.add_term_constraint(self.tt_local_env.clone(), pat, expr_prop);
 
                 let mut target = predicate.clone();
                 target.apply([arg.clone()]);
@@ -578,10 +581,14 @@ impl<'a> Env<'a> {
 
         self.visit_expr(e)?;
 
-        let (mut subst, mut type_subst) =
-            Unifier::new(self.tt_env, self.term_constraints, self.type_constraints)
-                .solve()
-                .context("unification failed")?;
+        let (mut subst, mut type_subst) = Unifier::new(
+            self.tt_env,
+            self.tt_local_env.holes.clone(),
+            self.term_constraints,
+            self.type_constraints,
+        )
+        .solve()
+        .context("unification failed")?;
         // Because subst is not topologically sorted, make it sorted by applying subst to subst in order.
         for i in 1..subst.len() {
             let (first, last) = subst.split_at_mut(i);
@@ -729,6 +736,8 @@ enum ConstraintKind {
 
 #[derive(Debug, Clone)]
 struct Constraint {
+    // TODO: only the locals field is used. Use a more efficient data structure.
+    local_env: LocalEnv,
     left: Term,
     right: Term,
     kind: ConstraintKind,
@@ -745,7 +754,7 @@ struct Snapshot {
 #[derive(Debug, Default)]
 struct Node {
     type_constraints: Vec<(Type, Type)>,
-    term_constraints: Vec<(Term, Term)>,
+    term_constraints: Vec<(LocalEnv, Term, Term)>,
 }
 
 struct Branch<'a> {
@@ -756,6 +765,7 @@ struct Branch<'a> {
 
 struct Unifier<'a> {
     tt_env: &'a tt::Env,
+    term_holes: Vec<(Name, Type)>,
     queue_delta: VecDeque<Rc<Constraint>>,
     queue_qp: VecDeque<Rc<Constraint>>,
     queue_fr: VecDeque<Rc<Constraint>>,
@@ -768,7 +778,7 @@ struct Unifier<'a> {
     // for backjumping
     trail: Vec<Rc<Constraint>>,
     // only used in find_conflict
-    stack: Vec<(Term, Term)>,
+    stack: Vec<(LocalEnv, Term, Term)>,
     type_constraints_index: usize,
     type_constraints: Vec<(Type, Type)>,
     type_subst: Vec<(Name, Type)>,
@@ -778,11 +788,13 @@ struct Unifier<'a> {
 impl<'a> Unifier<'a> {
     fn new(
         tt_env: &'a tt::Env,
-        constraints: Vec<(Term, Term)>,
+        term_holes: Vec<(Name, Type)>,
+        constraints: Vec<(LocalEnv, Term, Term)>,
         type_constraints: Vec<(Type, Type)>,
     ) -> Self {
         let mut solver = Self {
             tt_env,
+            term_holes,
             queue_delta: Default::default(),
             queue_qp: Default::default(),
             queue_fr: Default::default(),
@@ -798,8 +810,8 @@ impl<'a> Unifier<'a> {
             type_subst: vec![],
             type_subst_map: Default::default(),
         };
-        for (left, right) in constraints.into_iter().rev() {
-            solver.stack.push((left, right));
+        for (local_env, left, right) in constraints.into_iter().rev() {
+            solver.stack.push((local_env, left, right));
         }
         solver
     }
@@ -810,7 +822,7 @@ impl<'a> Unifier<'a> {
         println!("{sp}+current state");
         if !self.stack.is_empty() {
             println!("{sp}| stack:");
-            for (left, right) in &self.stack {
+            for (_, left, right) in &self.stack {
                 println!("{sp}| - {}\n{sp}|   {}", left, right);
             }
             println!();
@@ -951,18 +963,37 @@ impl<'a> Unifier<'a> {
         }
     }
 
-    fn is_fully_inst(&self, m: &Term) -> bool {
-        match m {
-            Term::Var(_) => true,
-            Term::Abs(m) => self.is_fully_inst(&m.body),
-            Term::App(m) => self.is_fully_inst(&m.fun) && self.is_fully_inst(&m.arg),
-            Term::Local(_) => true,
-            Term::Const(_) => true,
-            Term::Hole(name) => !self.subst_map.contains_key(name),
+    fn inst_type(&self, t: &mut Type) {
+        match t {
+            Type::Const(_) => {}
+            Type::Arrow(t) => {
+                let TypeArrow { dom, cod } = Arc::make_mut(t);
+                self.inst_type(dom);
+                self.inst_type(cod);
+            }
+            Type::App(t) => {
+                let TypeApp { fun, arg } = Arc::make_mut(t);
+                self.inst_type(fun);
+                self.inst_type(arg);
+            }
+            Type::Local(_) => {}
+            Type::Hole(name) => {
+                let Some(a) = self.type_subst_map.get(name).cloned() else {
+                    return;
+                };
+                *t = a;
+                self.inst_type(t);
+            }
         }
     }
 
-    fn add_derived_constraint(&mut self, mut left: Term, mut right: Term, is_delta: bool) {
+    fn add_derived_constraint(
+        &mut self,
+        local_env: LocalEnv,
+        mut left: Term,
+        mut right: Term,
+        is_delta: bool,
+    ) {
         let kind;
         if is_delta {
             kind = ConstraintKind::Delta;
@@ -994,6 +1025,7 @@ impl<'a> Unifier<'a> {
         }
 
         let c = Rc::new(Constraint {
+            local_env,
             left: left.clone(),
             right: right.clone(),
             kind,
@@ -1029,7 +1061,29 @@ impl<'a> Unifier<'a> {
         }
 
         self.subst.push((name, m.clone()));
-        self.subst_map.insert(name, m);
+        self.subst_map.insert(name, m.clone());
+
+        if let Some(constraints) = self.watch_list.get(&name) {
+            for c in constraints.iter().rev() {
+                // skip constraints already resolved anyway
+                if c.left.head().typed_eq(&Term::Hole(name)) {
+                    if let Term::Hole(name) = c.right.head() {
+                        if self.subst_map.contains_key(name) {
+                            continue;
+                        }
+                    }
+                } else if let Term::Hole(name) = c.left.head() {
+                    if self.subst_map.contains_key(name) {
+                        continue;
+                    }
+                }
+                let mut c = (**c).clone();
+                let subst = [(name, &m)];
+                c.left.inst_hole(&subst);
+                c.right.inst_hole(&subst);
+                self.stack.push((c.local_env, c.left, c.right));
+            }
+        }
     }
 
     fn add_type_constraint(&mut self, t1: Type, t2: Type) {
@@ -1057,6 +1111,17 @@ impl<'a> Unifier<'a> {
         self.inst_type_head(ty)
     }
 
+    fn get_hole_type(&self, name: Name) -> Option<&Type> {
+        self.term_holes
+            .iter()
+            .find(|&&(n, _)| n == name)
+            .map(|(_, t)| t)
+    }
+
+    fn add_hole_type(&mut self, name: Name, ty: Type) {
+        self.term_holes.push((name, ty));
+    }
+
     fn find_conflict_in_types(&mut self, t1: Type, t2: Type) -> Option<()> {
         let t1 = self.inst_type_head(t1);
         let t2 = self.inst_type_head(t2);
@@ -1082,6 +1147,11 @@ impl<'a> Unifier<'a> {
                 self.add_type_constraint(inner1.arg, inner2.arg);
             }
             (Type::Hole(name), t) | (t, Type::Hole(name)) => {
+                let mut t = t.clone();
+                self.inst_type(&mut t); // TODO: avoid instantiation
+                if t.contains_hole(&name) {
+                    return Some(());
+                }
                 self.add_type_subst(name, t);
             }
             (_, _) => {
@@ -1091,7 +1161,12 @@ impl<'a> Unifier<'a> {
         None
     }
 
-    fn find_conflict_in_terms(&mut self, mut left: Term, mut right: Term) -> Option<()> {
+    fn find_conflict_in_terms(
+        &mut self,
+        mut local_env: LocalEnv,
+        mut left: Term,
+        mut right: Term,
+    ) -> Option<()> {
         if left.typed_eq(&right) {
             return None;
         }
@@ -1099,34 +1174,57 @@ impl<'a> Unifier<'a> {
             let x = Name::fresh();
             Arc::make_mut(l).body.open(&mk_local(x));
             Arc::make_mut(r).body.open(&mk_local(x));
-            // TODO: I think this line is not necessary...
             self.add_type_constraint(l.binder_type.clone(), r.binder_type.clone());
+            local_env
+                .locals
+                .push((x, mem::take(&mut Arc::make_mut(l).binder_type)));
             let left = mem::take(&mut Arc::make_mut(l).body);
             let right = mem::take(&mut Arc::make_mut(r).body);
-            self.stack.push((left, right));
+            self.stack.push((local_env, left, right));
             return None;
         }
         if left.whnf().is_some() || right.whnf().is_some() {
-            self.stack.push((left, right));
+            self.stack.push((local_env, left, right));
+            return None;
+        }
+        if self.inst_head(&mut left) || self.inst_head(&mut right) {
+            self.stack.push((local_env, left, right));
             return None;
         }
         if left.is_abs() {
             mem::swap(&mut left, &mut right);
         }
         if right.is_abs() {
-            // L ≡ (?M t₁ ⋯ tₙ)
-            if left.head().is_hole() {
-                // this case is handled later.
+            if let &Term::Hole(left_head) = left.head() {
+                // R ≡ λ x, N
+                // L ≡ (?M t₁ ⋯ tₙ)
+                // ?M := λ y₁ ⋯ yₙ x, ?M' y₁ ⋯ yₙ x
+                let hole_ty = self.get_hole_type(left_head).unwrap().clone();
+                let new_hole = Name::fresh();
+                self.add_hole_type(new_hole, hole_ty.clone());
+                // (y₁ : t₁) .. (yₙ : tₙ) (x : t)
+                let left_args = left.args();
+                let mut args = left_args
+                    .iter()
+                    .map(|_| (Name::fresh(), mk_fresh_type_hole()))
+                    .collect::<Vec<_>>();
+                args.push((Name::fresh(), mk_fresh_type_hole()));
+                let mut target = Term::Hole(new_hole);
+                target.apply(args.iter().map(|&(x, _)| mk_local(x)));
+                target.abs(&args, false);
+                self.add_subst(left_head, target);
+                let mut tmp = mk_fresh_type_hole();
+                tmp.arrow(args.iter().map(|(_, t)| t.clone()));
+                self.add_type_constraint(hole_ty, tmp);
+                self.stack.push((local_env, left, right));
+                return None;
             } else if self.tt_env.unfold_head(&mut left).is_some() {
-                self.stack.push((left, right));
+                self.stack.push((local_env, left, right));
                 return None;
             } else {
+                // TODO: if we decide to land the kernel support for eta we need to add a clause here
                 return Some(());
             }
-        }
-        if self.inst_head(&mut left) || self.inst_head(&mut right) {
-            self.stack.push((left, right));
-            return None;
         }
         // then each of the heads can be a local, a const, or a hole
         if let Term::Hole(right_head) = right.head() {
@@ -1137,31 +1235,10 @@ impl<'a> Unifier<'a> {
                 if self.inst(&mut left, right_head) {
                     let binders = args
                         .into_iter()
-                        // TODO determine types from local_env
-                        .map(|n| (n, mk_fresh_type_hole()))
+                        .map(|n| (n, local_env.get_local(n).unwrap().clone()))
                         .collect::<Vec<_>>();
                     if left.abs(&binders, false) {
                         self.add_subst(right_head, left.clone());
-                        if let Some(constraints) = self.watch_list.get(&right_head) {
-                            for c in constraints.iter().rev() {
-                                if c.left.head().typed_eq(&Term::Hole(right_head)) {
-                                    if let Term::Hole(right_head) = c.right.head() {
-                                        if self.subst_map.contains_key(right_head) {
-                                            continue;
-                                        }
-                                    }
-                                } else if let Term::Hole(left_head) = c.left.head() {
-                                    if self.subst_map.contains_key(left_head) {
-                                        continue;
-                                    }
-                                }
-                                let mut c = (**c).clone();
-                                let subst = [(right_head, &left)];
-                                c.left.inst_hole(&subst);
-                                c.right.inst_hole(&subst);
-                                self.stack.push((c.left, c.right));
-                            }
-                        }
                         return None;
                     }
                 }
@@ -1174,38 +1251,17 @@ impl<'a> Unifier<'a> {
                 if self.inst(&mut right, left_head) {
                     let binders = args
                         .into_iter()
-                        // TODO determine types from local_env
-                        .map(|n| (n, mk_fresh_type_hole()))
+                        .map(|n| (n, local_env.get_local(n).unwrap().clone()))
                         .collect::<Vec<_>>();
                     if right.abs(&binders, false) {
                         self.add_subst(left_head, right.clone());
-                        if let Some(constraints) = self.watch_list.get(&left_head) {
-                            for c in constraints.iter().rev() {
-                                if c.left.head().typed_eq(&Term::Hole(left_head)) {
-                                    if let Term::Hole(right_head) = c.right.head() {
-                                        if self.subst_map.contains_key(right_head) {
-                                            continue;
-                                        }
-                                    }
-                                } else if let Term::Hole(left_head) = c.left.head() {
-                                    if self.subst_map.contains_key(left_head) {
-                                        continue;
-                                    }
-                                }
-                                let mut c = (**c).clone();
-                                let subst = [(left_head, &right)];
-                                c.left.inst_hole(&subst);
-                                c.right.inst_hole(&subst);
-                                self.stack.push((c.left, c.right));
-                            }
-                        }
                         return None;
                     }
                 }
             }
         }
         if right.head().is_hole() || left.head().is_hole() {
-            self.add_derived_constraint(left, right, false);
+            self.add_derived_constraint(local_env, left, right, false);
             return None;
         }
         // then each of the heads can be a local or a const.
@@ -1220,12 +1276,12 @@ impl<'a> Unifier<'a> {
                     match left_hint.cmp(&right_hint) {
                         std::cmp::Ordering::Greater => {
                             self.tt_env.unfold_head(&mut left).unwrap();
-                            self.stack.push((left, right));
+                            self.stack.push((local_env, left, right));
                             return None;
                         }
                         std::cmp::Ordering::Less => {
                             self.tt_env.unfold_head(&mut right).unwrap();
-                            self.stack.push((left, right));
+                            self.stack.push((local_env, left, right));
                             return None;
                         }
                         std::cmp::Ordering::Equal => {
@@ -1235,7 +1291,7 @@ impl<'a> Unifier<'a> {
                             }
                             self.tt_env.unfold_head(&mut left).unwrap();
                             self.tt_env.unfold_head(&mut right).unwrap();
-                            self.stack.push((left, right));
+                            self.stack.push((local_env, left, right));
                             return None;
                         }
                     }
@@ -1253,12 +1309,12 @@ impl<'a> Unifier<'a> {
                     for (left_arg, right_arg) in
                         left_args.into_iter().zip(right_args.into_iter()).rev()
                     {
-                        self.stack.push((left_arg, right_arg));
+                        self.stack.push((local_env.clone(), left_arg, right_arg));
                     }
                     return None;
                 }
                 // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where any of t or s contains a hole.
-                self.add_derived_constraint(left, right, true);
+                self.add_derived_constraint(local_env, left, right, true);
                 None
             }
             (Term::Const(left_head), Term::Local(right_head)) => {
@@ -1272,7 +1328,7 @@ impl<'a> Unifier<'a> {
                 }
                 left.open(&mk_local(*right_head));
                 self.tt_env.unfold_head(&mut left).unwrap();
-                self.stack.push((left, right));
+                self.stack.push((local_env, left, right));
                 None
             }
             (Term::Local(left_head), Term::Local(right_head)) => {
@@ -1286,7 +1342,7 @@ impl<'a> Unifier<'a> {
                 }
                 for (left_arg, right_arg) in left_args.into_iter().zip(right_args.into_iter()).rev()
                 {
-                    self.stack.push((left_arg, right_arg));
+                    self.stack.push((local_env.clone(), left_arg, right_arg));
                 }
                 None
             }
@@ -1313,12 +1369,12 @@ impl<'a> Unifier<'a> {
                     return Some(());
                 }
             }
-            if let Some((m1, m2)) = self.stack.pop() {
+            if let Some((local_env, m1, m2)) = self.stack.pop() {
                 #[cfg(debug_assertions)]
                 {
                     println!("find conflict in {m1} =?= {m2}");
                 }
-                if self.find_conflict_in_terms(m1, m2).is_some() {
+                if self.find_conflict_in_terms(local_env, m1, m2).is_some() {
                     #[cfg(debug_assertions)]
                     {
                         println!("conflict in terms");
@@ -1409,8 +1465,8 @@ impl<'a> Unifier<'a> {
         for (left, right) in node.type_constraints.into_iter().rev() {
             self.type_constraints.push((left, right));
         }
-        for (left, right) in node.term_constraints.into_iter().rev() {
-            self.stack.push((left, right));
+        for (local_env, left, right) in node.term_constraints.into_iter().rev() {
+            self.stack.push((local_env, left, right));
         }
         true
     }
@@ -1433,7 +1489,7 @@ impl<'a> Unifier<'a> {
         for (&left_arg, &right_arg) in left_args.iter().zip(right_args.iter()) {
             node1
                 .term_constraints
-                .push((left_arg.clone(), right_arg.clone()));
+                .push((c.local_env.clone(), left_arg.clone(), right_arg.clone()));
         }
         // Try second ((unfold f) t₁ ⋯ tₙ ≈ (unfold f) s₁ ⋯ sₙ)
         let mut node2 = Node::default();
@@ -1442,157 +1498,198 @@ impl<'a> Unifier<'a> {
             let mut right = c.right.clone();
             self.tt_env.unfold_head(&mut left).unwrap();
             self.tt_env.unfold_head(&mut right).unwrap();
-            node2.term_constraints.push((left, right));
+            node2
+                .term_constraints
+                .push((c.local_env.clone(), left, right));
         }
         vec![node1, node2]
     }
 
-    fn choice_fr(&self, c: &Constraint) -> Vec<Node> {
-        let left = &c.left;
-        let mut right = c.right.clone();
+    // The type of ?M must be fully determined beforehand.
+    // FIXME: this restriction is ad-hoc. Relax it!
+    //
+    // Consider the following lemma
+    //
+    //   lemma L : bool.rec tt true false = true := eq.ap bool.tt.spec
+    //
+    // where bool.tt.spec.{α} : bool.rec tt = (λ x y, x).
+    // Then we will need to solve tt = C (λ x y, x), but C has an uninstantiated meta type variable α,
+    // and it makes hard to proceed the projection step.
+    //
+    // More generally, when we solve the following constraint:
+    //
+    //  (?M : α → Prop) (t : α) =?= N
+    //
+    // We have infinitely many solutions produced by projection in combination with type instantiation:
+    //
+    //   ?M = λ x, x : Prop → Prop
+    //      | λ x, x (Y x) : (β → Prop) → Prop
+    //      | λ x, x (Y x) (Z x) : (β → γ → Prop) → Prop
+    //      ...
+    //
+    // In our implementation we only try the first solution.
+    // (question: can we justify this using parametricity, or is this strategy insufficient in practice?)
+    fn choice_fr(&mut self, c: &Constraint) -> Vec<Node> {
+        // left  ≡ ?M t[1] .. t[p]
+        // right ≡  @ u[1] .. u[q]
+        let &Term::Hole(left_head) = c.left.head() else {
+            panic!()
+        };
+        let left_args = c.left.args();
+        let right_args = c.right.args();
+        let right_head = c.right.head();
 
         let mut nodes = vec![];
 
-        if right.is_abs() {
-            // f ≡                 ?M t[1] .. t[p]
-            // r ≡ λ x[1] .. x[m],  @ u[1] .. u[q]
-            //
-            // Yield solutions in the form of:
-            //
-            // X ↦ λ z[1] .. z[p] x[1] .. x[m], ? (Y[1] z[1] .. z[p] x[1] .. x[m]) .. (Y[q] z[1] .. z[p] x[1] .. x[m])
+        // τ(?M)
+        let left_head_ty = {
+            let mut t = self.get_hole_type(left_head).unwrap().clone();
+            self.inst_type(&mut t); // TODO: avoid full instantiation
+            t
+        };
 
-            // TODO: remove this and check if the hole is used only once
-            right.hnf();
+        // τ(?M t[1] .. t[p]) (= τ(@ u[1] .. u[q]))
+        let left_ty = {
+            let mut t = left_head_ty.target().clone();
+            t.arrow(
+                left_head_ty
+                    .components()
+                    .into_iter()
+                    .skip(left_args.len())
+                    .cloned(),
+            );
+            t
+        };
 
-            let left_head = left.head();
-            let left_args = left.args();
-            let right_binders = right.unabs();
-            let right_args = right.args();
-            let right_head = right.head();
+        // z[1] .. z[p]
+        let new_binders = left_head_ty
+            .components()
+            .iter()
+            .take(left_args.len())
+            .map(|&t| (Name::fresh(), t.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(new_binders.len(), left_args.len());
 
-            // z[1] .. z[p] x[1] .. x[m]
-            let new_binders = (0..left_args.len())
-                .map(|_| {
-                    let name = Name::fresh();
-                    // TODO: determine the types of new binders from t[1]..t[p].
-                    (name, mk_fresh_type_hole())
+        // Projection step.
+        //
+        //   M ↦ λ z[1] .. z[p], z[i] (Y[1] z[1] .. z[p]) .. (Y[m] z[1] .. z[p])
+        //
+        // where τ(z[i]) = t₁ → ⋯ → tₘ → τ(@ u[1] .. u[q]).
+        // We try projection first because projection yields more general solutions.
+        for &(z, ref z_ty) in &new_binders {
+            let mut t = z_ty.target().clone();
+            t.arrow(
+                z_ty.components()
+                    .into_iter()
+                    .rev()
+                    .take(left_ty.components().len())
+                    .rev()
+                    .cloned(),
+            );
+
+            // Y[1] .. Y[m]
+            let arg_holes = z_ty
+                .components()
+                .iter()
+                .take(z_ty.components().len() - left_ty.components().len())
+                .map(|&arg_ty| {
+                    let new_hole = Name::fresh();
+                    let mut ty = arg_ty.clone();
+                    ty.arrow(new_binders.iter().map(|(_, t)| t.clone()));
+                    (new_hole, ty)
                 })
-                .chain(right_binders.iter().cloned())
                 .collect::<Vec<_>>();
 
-            // (Y[1] z[1] .. z[p] x[1] .. x[m]) .. (Y[q] z[1] .. z[p] x[1] .. x[m])
-            let new_args = (0..right_args.len())
-                .map(|_| {
-                    let mut arg = mk_fresh_hole();
-                    for &(name, _) in &new_binders {
-                        arg.apply([mk_local(name)]);
-                    }
+            for &(x, ref t) in &arg_holes {
+                self.add_hole_type(x, t.clone());
+            }
+
+            // (Y[1] z[1] .. z[p]) .. (Y[m] z[1] .. z[p])
+            let new_args = arg_holes
+                .iter()
+                .map(|&(hole, _)| {
+                    let mut arg = Term::Hole(hole);
+                    arg.apply(new_binders.iter().map(|&(x, _)| mk_local(x)));
                     arg
                 })
                 .collect::<Vec<_>>();
 
-            // projection
-            for (x, _) in new_binders.iter().take(left_args.len()) {
-                // TODO: yeild a candidate only if the target type is correct
-                let mut cand = mk_local(*x);
-                cand.apply(new_args.clone());
-                cand.abs(&new_binders, true);
-                nodes.push(Node {
-                    type_constraints: vec![],
-                    term_constraints: vec![(left_head.clone(), cand)],
-                });
-            }
-
-            // imitation
-            match right_head {
-                Term::Const(_) => {
-                    let mut cand = right_head.clone();
-                    cand.apply(new_args.clone());
-                    cand.abs(&new_binders, true);
-                    nodes.push(Node {
-                        type_constraints: vec![],
-                        term_constraints: vec![(left_head.clone(), cand)],
-                    });
-                }
-                Term::Local(name) => {
-                    // @ ∈ { x[1], .., x[m] }
-                    if right_binders.iter().any(|(x, _)| x == name) {
-                        let mut cand = right_head.clone();
-                        cand.apply(new_args.clone());
-                        cand.abs(&new_binders, true);
-                        nodes.push(Node {
-                            type_constraints: vec![],
-                            term_constraints: vec![(left_head.clone(), cand)],
-                        });
-                    }
-                }
-                _ => unreachable!(),
-            };
-        } else {
-            // left  ≡ ?M t[1] .. t[p]
-            // right ≡  @ u[1] .. u[q]
-
-            let left_head = left.head();
-            let left_args = left.args();
-            let right_args = right.args();
-            let right_head = right.head();
-
-            for k in 0..=left_args.len().min(right_args.len()) {
-                // Yield solutions in the form of:
-                //
-                // X ↦ λ z[1] .. z[p-k], ? (Y[1] z[1] .. z[p-k]) .. (Y[q-k] z[1] .. z[p-k])
-
-                // TODO: check if types are equal for t[-k]..t[-1] and u[-k]..u[-1]
-                // TODO: report types of Y[1]..Y[q-k]
-
-                // z[1] .. z[p-k]
-                let new_binders = (0..left_args.len() - k)
-                    .map(|_| {
-                        let name = Name::fresh();
-                        // TODO: determine the types of new binders from t[1]..t[p].
-                        (name, mk_fresh_type_hole())
-                    })
-                    .collect::<Vec<_>>();
-
-                // (Y[1] z[1] .. z[p-k]) .. (Y[q-k] z[1] .. z[p-k])
-                let new_args = (0..right_args.len() - k)
-                    .map(|_| {
-                        let mut arg = mk_fresh_hole();
-                        for i in 0..left_args.len() - k {
-                            arg.apply([mk_local(new_binders[i].0)]);
-                        }
-                        arg
-                    })
-                    .collect::<Vec<_>>();
-
-                // projection
-                for (x, _) in &new_binders {
-                    // TODO: yeild a candidate only if the target type is correct
-                    let mut cand = mk_local(*x);
-                    cand.apply(new_args.clone());
-                    cand.abs(&new_binders, true);
-                    nodes.push(Node {
-                        type_constraints: vec![],
-                        term_constraints: vec![(left_head.clone(), cand)],
-                    });
-                }
-
-                // imitation
-                match right_head {
-                    Term::Const(_) => {
-                        let mut cand = right_head.clone();
-                        cand.apply(new_args.clone());
-                        cand.abs(&new_binders, true);
-                        nodes.push(Node {
-                            type_constraints: vec![],
-                            term_constraints: vec![(left_head.clone(), cand)],
-                        });
-                    }
-                    Term::Local(_) => {}
-                    _ => unreachable!("{right_head}"),
-                };
-            }
+            // TODO: try eta equal condidates when the hole ?M is used twice or more among the whole set of constraints.
+            let mut target = mk_local(z);
+            target.apply(new_args);
+            target.abs(&new_binders, false);
+            nodes.push(Node {
+                type_constraints: vec![(t, left_ty.clone())],
+                term_constraints: vec![(c.local_env.clone(), Term::Hole(left_head), target)],
+            });
         }
+
+        // Imitation step.
+        //
+        //   M ↦ λ z[1] .. z[p], C (Y[1] z[1] .. z[p]) .. (Y[q] z[1] .. z[p])
+        //
+        // when @ = C.
+        if let Term::Const(right_head) = right_head {
+            let mut type_constraints = vec![];
+
+            // τ(u[1]) ⋯ τ(u[q])
+            let new_arg_tys = {
+                let new_arg_tys = (0..right_args.len())
+                    .map(|_| mk_fresh_type_hole())
+                    .collect::<Vec<_>>();
+
+                let right_head_ty = {
+                    let (args, t) = self.tt_env.consts.get(&right_head.name).unwrap();
+                    let subst = zip(args.iter().copied(), &right_head.ty_args).collect::<Vec<_>>();
+                    let mut t = t.clone();
+                    t.subst(&subst);
+                    t
+                };
+                let right_head_ty2 = {
+                    let mut right_head_ty = left_ty.clone();
+                    right_head_ty.arrow(new_arg_tys.iter().cloned());
+                    right_head_ty
+                };
+                type_constraints.push((right_head_ty, right_head_ty2));
+
+                new_arg_tys
+            };
+
+            // Y[1] .. Y[q]
+            let new_arg_holes = new_arg_tys
+                .iter()
+                .map(|arg_ty| {
+                    let new_hole = Name::fresh();
+                    let mut ty = arg_ty.clone();
+                    ty.arrow(new_binders.iter().map(|(_, t)| t.clone()));
+                    (new_hole, ty)
+                })
+                .collect::<Vec<_>>();
+
+            for &(x, ref t) in &new_arg_holes {
+                self.add_hole_type(x, t.clone());
+            }
+
+            // (Y[1] z[1] .. z[p]) .. (Y[q] z[1] .. z[p])
+            let new_args = new_arg_holes
+                .iter()
+                .map(|&(hole, _)| {
+                    let mut arg = Term::Hole(hole);
+                    arg.apply(new_binders.iter().map(|&(x, _)| mk_local(x)));
+                    arg
+                })
+                .collect::<Vec<_>>();
+
+            // TODO: try eta equal condidates when the hole ?M is used twice or more among the whole set of constraints.
+            let mut target = Term::Const(right_head.clone());
+            target.apply(new_args);
+            target.abs(&new_binders, false);
+            nodes.push(Node {
+                type_constraints,
+                term_constraints: vec![(c.local_env.clone(), Term::Hole(left_head), target)],
+            });
+        }
+
         nodes
     }
 

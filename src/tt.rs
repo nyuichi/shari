@@ -208,6 +208,16 @@ impl Type {
         ts
     }
 
+    pub fn components(&self) -> Vec<&Type> {
+        let mut cs = vec![];
+        let mut t = self;
+        while let Type::Arrow(inner) = t {
+            cs.push(&inner.dom);
+            t = &inner.cod;
+        }
+        cs
+    }
+
     pub fn apply(&mut self, args: impl IntoIterator<Item = Type>) {
         for arg in args {
             *self = Type::App(Arc::new(TypeApp {
@@ -280,6 +290,16 @@ impl Type {
             Type::App(t) => t.fun.contains_local(name) || t.arg.contains_local(name),
             Type::Local(t) => t == name,
             Type::Hole(_) => false,
+        }
+    }
+
+    pub fn contains_hole(&self, name: &Name) -> bool {
+        match self {
+            Type::Const(_) => false,
+            Type::Arrow(t) => t.dom.contains_hole(name) || t.cod.contains_hole(name),
+            Type::App(t) => t.fun.contains_hole(name) || t.arg.contains_hole(name),
+            Type::Local(_) => false,
+            Type::Hole(n) => n == name,
         }
     }
 
@@ -1287,6 +1307,15 @@ pub struct LocalEnv {
     pub local_types: Vec<Name>,
     pub locals: Vec<(Name, Type)>,
     pub holes: Vec<(Name, Type)>,
+}
+
+impl LocalEnv {
+    pub fn get_local(&self, name: Name) -> Option<&Type> {
+        self.locals
+            .iter()
+            .find(|&&(n, _)| n == name)
+            .map(|(_, t)| t)
+    }
 }
 
 impl Env {
