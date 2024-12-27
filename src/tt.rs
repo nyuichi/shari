@@ -4,6 +4,7 @@ use anyhow::bail;
 use regex::Regex;
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::iter::zip;
 use std::sync::atomic::AtomicUsize;
 use std::sync::LazyLock;
 use std::sync::{Arc, Mutex, RwLock};
@@ -225,6 +226,18 @@ impl Type {
                 arg,
             }));
         }
+    }
+
+    pub fn unapply(&mut self) -> Vec<Type> {
+        let mut acc = vec![];
+        let mut t = self;
+        while let Type::App(s) = t {
+            let s = Arc::make_mut(s);
+            acc.push(mem::take(&mut s.arg));
+            t = &mut s.fun;
+        }
+        acc.reverse();
+        acc
     }
 
     /// Simultaneously substitute `t₁ ⋯ tₙ` for locals with names `x₁ ⋯ xₙ`.
@@ -1066,7 +1079,7 @@ impl Term {
         Some(path)
     }
 
-    pub fn whnf(&mut self) -> Option<Path> {
+    fn whnf(&mut self) -> Option<Path> {
         match self {
             Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) | Term::Abs(_) => None,
             Term::App(inner) => {
@@ -1193,6 +1206,12 @@ pub enum Path {
     /// Γ ⊢ delta_reduce c.{t₁ ⋯ tₙ} : c.{t₁ ⋯ tₙ} ≡ [t₁/u₁ ⋯ tₙ/uₙ]m
     /// ```
     Delta(Arc<(Name, Vec<Type>)>),
+    /// ```text
+    ///
+    /// -----------------------------------------------------------------------
+    /// Γ ⊢ proj_reduce (prj (mk m₁ ⋯ mₙ)) : prj (mk m₁ ⋯ mₙ) ≡ [m₁/x₁ ⋯ mₙ/xₙ]n
+    /// ```
+    Proj(Term),
 }
 
 impl Display for Path {
@@ -1217,6 +1236,9 @@ impl Display for Path {
                     write!(f, "}}")?;
                 }
                 Ok(())
+            }
+            Path::Proj(m) => {
+                write!(f, "(proj {m})")
             }
         }
     }
@@ -1250,26 +1272,28 @@ pub fn mk_path_delta(name: Name, ty_args: Vec<Type>) -> Path {
     Path::Delta(Arc::new((name, ty_args)))
 }
 
+pub fn mk_path_proj(m: Term) -> Path {
+    Path::Proj(m)
+}
+
 impl Path {
     pub fn is_refl(&self) -> bool {
         matches!(self, Path::Refl(_))
     }
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct Env {
-    pub type_consts: HashMap<Name, Kind>,
-    pub consts: HashMap<Name, (Vec<Name>, Type)>,
-    // c.{τ₁ ⋯ tₙ} :≡ m
-    pub defs: HashMap<Name, Def>,
+#[derive(Debug, Clone)]
+pub struct DefInfo {
+    pub local_types: Vec<Name>,
+    pub target: Term,
+    pub hint: usize,
 }
 
 #[derive(Debug, Clone)]
-pub struct Def {
+pub struct ProjInfo {
     pub local_types: Vec<Name>,
-    pub ty: Type,
+    pub params: Vec<Name>,
     pub target: Term,
-    pub hint: usize,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -1288,7 +1312,25 @@ impl LocalEnv {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct Env {
+    pub type_consts: HashMap<Name, Kind>,
+    pub consts: HashMap<Name, (Vec<Name>, Type)>,
+    // c.{τ₁ ⋯ tₙ} :≡ m
+    pub defs: HashMap<Name, DefInfo>,
+    // prj ↦ (ctor ↦ info)
+    pub projs: HashMap<Name, Vec<(Name, ProjInfo)>>,
+}
+
 impl Env {
+    pub fn add_proj_rule(&mut self, prj: Name, ctor: Name, info: ProjInfo) {
+        if let Some(v) = self.projs.get_mut(&prj) {
+            v.push((ctor, info));
+        } else {
+            self.projs.insert(prj, vec![(ctor, info)]);
+        }
+    }
+
     /// Infer the kind of `t`. This method also checks whether arities are consistent.
     pub fn infer_kind(&self, local_env: &LocalEnv, t: &Type) -> anyhow::Result<Kind> {
         match t {
@@ -1317,7 +1359,7 @@ impl Env {
                         return Ok(Kind::base());
                     }
                 }
-                bail!("unbound local type");
+                bail!("unbound local type: {x}");
             }
             // no higher-kinded polymorphism
             Type::Hole(_) => Ok(Kind::base()),
@@ -1440,10 +1482,9 @@ impl Env {
                 let Some(def) = self.defs.get(name).cloned() else {
                     bail!("definition not found: {name}");
                 };
-                let Def {
+                let DefInfo {
                     local_types,
                     mut target,
-                    ty: _,
                     hint: _,
                 } = def;
                 if local_types.len() != ty_args.len() {
@@ -1461,6 +1502,139 @@ impl Env {
                     right: target,
                 })
             }
+            Path::Proj(m) => {
+                self.infer_type(local_env, m)?;
+                let mut r = m.clone();
+                let mut args = r.unapply();
+                let Term::Const(prj) = r else {
+                    bail!("not a proj redex");
+                };
+                let Some(proj_rules) = self.get_proj_rules(prj.name) else {
+                    bail!("not a projection: {}", prj.name);
+                };
+                if args.len() != 1 {
+                    bail!("not a proj redex");
+                }
+                let mut a = args.pop().unwrap();
+                let args = a.unapply();
+                let Term::Const(ctor) = a else {
+                    bail!("not a proj redex");
+                };
+                let Some((_, proj_info)) = proj_rules.iter().find(|red| red.0 == ctor.name) else {
+                    bail!("projection rule not found: {}, {}", prj.name, ctor.name);
+                };
+                let ProjInfo {
+                    local_types,
+                    params,
+                    target,
+                } = proj_info;
+                if params.len() != args.len() {
+                    bail!("number of constructor arguments mismatch");
+                }
+                let mut target = target.clone();
+                let mut subst = vec![];
+                for (&x, t) in zip(local_types, ctor.ty_args.iter()) {
+                    subst.push((x, t));
+                }
+                target.subst_type(&subst);
+
+                let mut subst = vec![];
+                for (&x, t) in zip(params, args.iter()) {
+                    subst.push((x, t));
+                }
+                target.subst(&subst);
+                Ok(Conv {
+                    left: m.clone(),
+                    right: target,
+                })
+            }
+        }
+    }
+
+    pub fn get_proj_rules(&self, prj: Name) -> Option<&[(Name, ProjInfo)]> {
+        self.projs.get(&prj).map(|v| &**v)
+    }
+
+    // proj_reduce[prj (mk m₁ ⋯ mₙ)] := [m₁/x₁, ⋯ mₙ/xₙ]n
+    //
+    // Note that this method does not reduce the argument.
+    pub fn proj_reduce(&self, m: &mut Term) -> Option<Path> {
+        let orig_m = m.clone();
+        let Term::App(inner) = m else {
+            return None;
+        };
+        let TermApp { fun, arg } = Arc::make_mut(inner);
+        let Term::Const(fun) = fun else {
+            return None;
+        };
+        let Some(proj_rules) = self.get_proj_rules(fun.name) else {
+            return None;
+        };
+        let Term::Const(arg_head) = arg.head() else {
+            return None;
+        };
+        let Some((_, proj_info)) = proj_rules.iter().find(|red| red.0 == arg_head.name) else {
+            return None;
+        };
+        let ProjInfo {
+            local_types,
+            params,
+            target,
+        } = proj_info;
+        if params.len() != arg.args().len() {
+            // this case is impossible unless the term is type incorrect.
+            return None;
+        }
+        let args = arg.unapply();
+        let Term::Const(arg) = arg else {
+            unreachable!()
+        };
+        let mut target = target.clone();
+        let mut subst = vec![];
+        for (&ty_param, ty_arg) in zip(local_types, &arg.ty_args) {
+            subst.push((ty_param, ty_arg));
+        }
+        target.subst_type(&subst);
+        let mut subst = vec![];
+        for (&param, arg) in zip(params, &args) {
+            subst.push((param, arg));
+        }
+        target.subst(&subst);
+        *m = target;
+        Some(mk_path_proj(orig_m))
+    }
+
+    // Run head β-reduction and π-reduction until it's stuck
+    pub fn weak_reduce(&self, m: &mut Term) -> Option<Path> {
+        match m {
+            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) | Term::Abs(_) => None,
+            Term::App(inner) => {
+                let inner = Arc::make_mut(inner);
+                // try reduce one step
+                let p;
+                if let Some(p_fun) = self.weak_reduce(&mut inner.fun) {
+                    let p_arg = mk_path_refl(inner.arg.clone());
+                    p = mk_path_congr_app(p_fun, p_arg);
+                } else if let Term::Const(fun) = &mut inner.fun {
+                    if self.get_proj_rules(fun.name).is_none() {
+                        return None;
+                    }
+                    let p_fun = mk_path_refl(inner.fun.clone());
+                    let p_arg = self
+                        .weak_reduce(&mut inner.arg)
+                        .unwrap_or_else(|| mk_path_refl(inner.arg.clone()));
+                    let p_proj = self.proj_reduce(m)?;
+                    p = mk_path_trans(mk_path_congr_app(p_fun, p_arg), p_proj);
+                } else if let Some(p_beta) = m.beta_reduce() {
+                    p = p_beta;
+                } else {
+                    return None;
+                }
+                match self.weak_reduce(m) {
+                    Some(p_next) => Some(mk_path_trans(p, p_next)),
+                    None => Some(p),
+                }
+            }
         }
     }
 
@@ -1474,9 +1648,8 @@ impl Env {
         };
         let TermConst { name, ty_args } = Arc::make_mut(inner);
         let def = self.defs.get(name).cloned()?;
-        let Def {
+        let DefInfo {
             local_types,
-            ty: _,
             mut target,
             hint: _,
         } = def;
@@ -1503,6 +1676,33 @@ impl Env {
         }
     }
 
+    fn is_prj(&self, name: Name) -> bool {
+        self.get_proj_rules(name).is_some()
+    }
+
+    fn unfold_stuck(&self, m: &mut Term) -> Option<Path> {
+        match m {
+            Term::Var(_) | Term::Local(_) | Term::Abs(_) | Term::Hole(_) => None,
+            Term::Const(_) => self.delta_reduce(m),
+            Term::App(m) => {
+                let TermApp { fun, arg } = Arc::make_mut(m);
+                if let Some(h_fun) = self.unfold_stuck(fun) {
+                    let h_arg = mk_path_refl(arg.clone());
+                    return Some(mk_path_congr_app(h_fun, h_arg));
+                }
+                let Term::Const(fun) = fun else {
+                    return None;
+                };
+                if !self.is_prj(fun.name) {
+                    return None;
+                }
+                let h_arg = self.unfold_stuck(arg)?;
+                let h_fun = mk_path_refl(Term::Const(fun.clone()));
+                Some(mk_path_congr_app(h_fun, h_arg))
+            }
+        }
+    }
+
     pub fn def_hint(&self, name: Name) -> Option<usize> {
         let def = self.defs.get(&name)?;
         Some(def.hint + 1)
@@ -1522,8 +1722,10 @@ impl Env {
             let h = self.equiv_help(&mut inner1.body, &mut inner2.body)?;
             return Some(mk_path_congr_abs(x, inner1.binder_type.clone(), h));
         }
-        let h1 = m1.whnf().unwrap_or_else(|| mk_path_refl(m1.clone()));
-        let h2 = match m2.whnf() {
+        let h1 = self
+            .weak_reduce(m1)
+            .unwrap_or_else(|| mk_path_refl(m1.clone()));
+        let h2 = match self.weak_reduce(m2) {
             Some(h) => mk_path_symm(h),
             None => mk_path_refl(m2.clone()),
         };
@@ -1550,7 +1752,7 @@ impl Env {
         }
         if let Term::Abs(_) = m2 {
             // m1 must be unfoldable
-            let h = self.unfold_head(m1)?;
+            let h = self.unfold_stuck(m1)?;
             let h1 = mk_path_trans(h1, h);
             let h = self.equiv_help(m1, m2)?;
             return Some(mk_path_trans(h1, mk_path_trans(h, h2)));
@@ -1581,7 +1783,7 @@ impl Env {
         }
         if let Term::Local(_) = head2 {
             // m1 must be unfoldable
-            let h = self.unfold_head(m1)?;
+            let h = self.unfold_stuck(m1)?;
             let h1 = mk_path_trans(h1, h);
             let h = self.equiv_help(m1, m2)?;
             return Some(mk_path_trans(h1, mk_path_trans(h, h2)));
@@ -1634,6 +1836,20 @@ impl Env {
                     return Some(mk_path_trans(h1, mk_path_trans(h3, mk_path_trans(h4, h2))));
                 }
             }
+        }
+        if let Some(h_stuck) = self.unfold_stuck(m1) {
+            let h = self.equiv_help(m1, m2)?;
+            return Some(mk_path_trans(
+                h1,
+                mk_path_trans(h_stuck, mk_path_trans(h, h2)),
+            ));
+        }
+        if let Some(h_stuck) = self.unfold_stuck(m2) {
+            let h = self.equiv_help(m1, m2)?;
+            return Some(mk_path_trans(
+                h1,
+                mk_path_trans(h, mk_path_trans(mk_path_symm(h_stuck), h2)),
+            ));
         }
         None
     }

@@ -130,15 +130,6 @@ fn main() -> anyhow::Result<()> {
                             let field_name =
                                 Name::intern(&format!("{}.{}", cmd.name, field.name)).unwrap();
                             print_const(&eval, field_name);
-                            let Type::Const(structure_name) = cmd.target_ty.head() else {
-                                panic!();
-                            };
-                            let axiom_name = Name::intern(&format!(
-                                "{}.{}.{}",
-                                structure_name, field.name, cmd.name
-                            ))
-                            .unwrap();
-                            print_axiom(&eval, axiom_name);
                         }
                         cmd::InstanceField::Lemma(field) => {
                             let field_name =

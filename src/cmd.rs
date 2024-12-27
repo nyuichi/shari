@@ -8,8 +8,8 @@ use crate::{
     print::OpTable,
     proof::{self, mk_type_prop},
     tt::{
-        mk_const, mk_local, mk_type_arrow, mk_type_const, mk_type_local, Def, Kind, LocalEnv, Name,
-        Term, Type,
+        mk_const, mk_local, mk_type_arrow, mk_type_const, mk_type_local, DefInfo, Kind, LocalEnv,
+        Name, ProjInfo, Term, Type,
     },
 };
 
@@ -369,9 +369,8 @@ impl Eval {
                 self.add_const(name, local_env.local_types.clone(), ty.clone());
                 self.proof_env.tt_env.defs.insert(
                     name,
-                    Def {
+                    DefInfo {
                         local_types: local_env.local_types,
-                        ty,
                         target,
                         hint: self.proof_env.tt_env.defs.len(),
                     },
@@ -467,6 +466,7 @@ impl Eval {
                     &self.proof_env.tt_env,
                     &mut local_env,
                     &self.proof_env.axioms,
+                    &self.structure_table,
                 )
                 .elaborate(&mut expr)?;
                 self.proof_env.check_prop(
@@ -1436,6 +1436,7 @@ impl Eval {
                         &self.proof_env.tt_env,
                         &mut local_env,
                         &self.proof_env.axioms,
+                        &self.structure_table,
                     )
                     .elaborate(&mut expr)?;
                     local_env
@@ -1476,65 +1477,38 @@ impl Eval {
                     } = field;
                     // e.g. def power.inhab.rep.{u} (A : set u) : set (set u) := power A
                     let fullname = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
-                    let mut def_target_ty = ty.clone();
-                    let mut def_target = target.clone();
-                    for &(x, ref t) in params.iter().rev() {
-                        def_target_ty.arrow([t.clone()]);
-                        def_target.abs(&[(x, t.clone())], true);
-                    }
-                    self.add_const(
-                        fullname,
-                        local_env.local_types.clone(),
-                        def_target_ty.clone(),
-                    );
+                    let def_target_ty = {
+                        let mut t = ty.clone();
+                        t.arrow(params.iter().map(|(_, t)| t.clone()));
+                        t
+                    };
+                    let def_target = {
+                        let mut m = target.clone();
+                        m.abs(&params, true);
+                        m
+                    };
+                    self.add_const(fullname, local_env.local_types.clone(), def_target_ty);
                     self.proof_env.tt_env.defs.insert(
                         name,
-                        Def {
+                        DefInfo {
                             local_types: local_env.local_types.clone(),
-                            ty: def_target_ty.clone(),
-                            target: def_target.clone(),
+                            target: def_target,
                             hint: self.proof_env.tt_env.defs.len(),
                         },
                     );
 
-                    // e.g. axiom inhab.rep.power.inhab.{u} (A : set u) : inhab.rep (power.inhab A) = power.inhab.rep A
-                    let axiom_fullname =
-                        Name::intern(&format!("{}.{}.{}", structure_name, field_name, name))
-                            .unwrap();
-
+                    // e.g. example rep_of_power.{u} (A : set u) : inhab.rep (power.inhab A) = power A := eq.refl
                     let proj_name =
                         Name::intern(&format!("{}.{}", structure_name, field_name)).unwrap();
-                    let mut lhs = mk_const(
+                    self.proof_env.tt_env.add_proj_rule(
                         proj_name,
-                        type_subst.iter().map(|(_, t)| (*t).clone()).collect(),
-                    );
-                    let mut lhs_arg = mk_const(
                         name,
-                        local_env
-                            .local_types
-                            .iter()
-                            .map(|x| mk_type_local(*x))
-                            .collect(),
+                        ProjInfo {
+                            local_types: local_env.local_types.clone(),
+                            params: params.iter().map(|&(x, _)| x).collect(),
+                            target: target.clone(),
+                        },
                     );
-                    lhs_arg.apply(params.iter().map(|(x, _)| mk_local(*x)));
-                    lhs.apply([lhs_arg]);
-
-                    let field_name = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
-                    let mut rhs = mk_const(
-                        field_name,
-                        local_env
-                            .local_types
-                            .iter()
-                            .map(|x| mk_type_local(*x))
-                            .collect(),
-                    );
-                    rhs.apply(params.iter().map(|(x, _)| mk_local(*x)));
-
-                    let mut eq = mk_const(Name::intern("eq").unwrap(), vec![ty.clone()]);
-                    eq.apply([lhs, rhs]);
-                    eq.generalize(&params);
-
-                    self.add_axiom(axiom_fullname, local_env.local_types.clone(), eq);
                 }
                 InstanceField::Lemma(field) => {
                     let InstanceLemma {
