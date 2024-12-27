@@ -1086,36 +1086,6 @@ impl Term {
         }
     }
 
-    pub fn hnf(&mut self) -> Path {
-        match self {
-            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) => {
-                mk_path_refl(self.clone())
-            }
-            Term::Abs(_) => {
-                let binders = self.unabs();
-                let mut p = self.hnf();
-                for &(name, ref ty) in binders.iter().rev() {
-                    p = mk_path_congr_abs(name, ty.clone(), p);
-                }
-                self.abs(&binders, true);
-                p
-            }
-            Term::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                let p1 = inner.fun.hnf();
-                let p2 = mk_path_refl(inner.arg.clone());
-                let h = mk_path_congr_app(p1, p2);
-                let Term::Abs(_) = &mut inner.fun else {
-                    return h;
-                };
-                let h_redex = self.beta_reduce().unwrap();
-                let h = mk_path_trans(h, h_redex);
-                let h_next = self.hnf();
-                mk_path_trans(h, h_next)
-            }
-        }
-    }
-
     pub fn normalize(&mut self) -> Path {
         match self {
             Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) => {
