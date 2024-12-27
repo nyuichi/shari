@@ -1,7 +1,7 @@
 use lex::Lex;
 use parse::{ParseError, Parser};
 use print::Pretty;
-use tt::{Name, Type};
+use tt::Name;
 
 mod cmd;
 mod expr;

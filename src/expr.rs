@@ -760,6 +760,7 @@ struct Snapshot {
 
 #[derive(Debug, Default)]
 struct Node {
+    subst: Vec<(Name, Term)>,
     type_constraints: Vec<(Type, Type)>,
     term_constraints: Vec<(LocalEnv, Term, Term)>,
 }
@@ -1536,8 +1537,20 @@ impl<'a> Unifier<'a> {
         self.restore(&br.snapshot);
         for _ in 0..self.trail.len() - br.trail_len {
             let c = self.trail.pop().unwrap();
-            assert_eq!(c.kind, ConstraintKind::Delta);
-            self.queue_delta.push_front(c);
+            match c.kind {
+                ConstraintKind::Delta => {
+                    self.queue_delta.push_front(c);
+                }
+                ConstraintKind::QuasiPattern => {
+                    self.queue_qp.push_front(c);
+                }
+                ConstraintKind::FlexRigid => {
+                    self.queue_fr.push_front(c);
+                }
+                ConstraintKind::FlexFlex => {
+                    self.queue_ff.push_front(c);
+                }
+            }
         }
         true
     }
@@ -1551,6 +1564,9 @@ impl<'a> Unifier<'a> {
         };
         let snapshot = br.snapshot.clone();
         self.restore(&snapshot);
+        for (x, m) in node.subst.into_iter().rev() {
+            self.add_subst(x, m);
+        }
         for (left, right) in node.type_constraints.into_iter().rev() {
             self.type_constraints.push((left, right));
         }
@@ -1571,26 +1587,31 @@ impl<'a> Unifier<'a> {
         let left_args = c.left.args();
         let right_args = c.right.args();
         // Try first (t₁ ≈ s₁) ∧ ⋯ ∧ (tₙ ≈ sₙ)
-        let mut node1 = Node::default();
-        for (t1, t2) in zip(&left_head.ty_args, &right_head.ty_args) {
-            node1.type_constraints.push((t1.clone(), t2.clone()));
-        }
-        for (&left_arg, &right_arg) in left_args.iter().zip(right_args.iter()) {
-            node1
-                .term_constraints
-                .push((c.local_env.clone(), left_arg.clone(), right_arg.clone()));
-        }
+        let node1 = {
+            let mut node = Node::default();
+            for (t1, t2) in zip(&left_head.ty_args, &right_head.ty_args) {
+                node.type_constraints.push((t1.clone(), t2.clone()));
+            }
+            for (&left_arg, &right_arg) in left_args.iter().zip(right_args.iter()) {
+                node.term_constraints.push((
+                    c.local_env.clone(),
+                    left_arg.clone(),
+                    right_arg.clone(),
+                ));
+            }
+            node
+        };
         // Try second ((unfold f) t₁ ⋯ tₙ ≈ (unfold f) s₁ ⋯ sₙ)
-        let mut node2 = Node::default();
-        {
+        let node2 = {
+            let mut node = Node::default();
             let mut left = c.left.clone();
             let mut right = c.right.clone();
             self.tt_env.unfold_head(&mut left).unwrap();
             self.tt_env.unfold_head(&mut right).unwrap();
-            node2
-                .term_constraints
+            node.term_constraints
                 .push((c.local_env.clone(), left, right));
-        }
+            node
+        };
         vec![node1, node2]
     }
 
@@ -1713,8 +1734,9 @@ impl<'a> Unifier<'a> {
             target.apply(new_args);
             target.abs(&new_binders, false);
             nodes.push(Node {
+                subst: vec![(left_head, target)],
                 type_constraints: vec![(t, left_ty.clone())],
-                term_constraints: vec![(c.local_env.clone(), Term::Hole(left_head), target)],
+                term_constraints: vec![(c.local_env.clone(), c.left.clone(), c.right.clone())], // TODO: optimize
             });
         }
 
@@ -1772,8 +1794,9 @@ impl<'a> Unifier<'a> {
             target.apply(new_args);
             target.abs(&new_binders, false);
             nodes.push(Node {
+                subst: vec![(left_head, target)],
                 type_constraints: vec![],
-                term_constraints: vec![(c.local_env.clone(), Term::Hole(left_head), target)],
+                term_constraints: vec![(c.local_env.clone(), c.left.clone(), c.right.clone())], // TODO: optimize
             });
         }
 
@@ -1885,8 +1908,9 @@ impl<'a> Unifier<'a> {
                 target.apply(new_args);
                 target.abs(&new_binders, false);
                 nodes.push(Node {
+                    subst: vec![(left_head, target)],
                     type_constraints: vec![(t, left_ty.clone())],
-                    term_constraints: vec![(c.local_env.clone(), Term::Hole(left_head), target)],
+                    term_constraints: vec![(c.local_env.clone(), c.left.clone(), c.right.clone())], // TODO: optimize me!
                 });
             }
         }
@@ -1916,14 +1940,16 @@ impl<'a> Unifier<'a> {
                 self.trail.push(c.clone());
                 break 'next c;
             }
-            for c in &self.queue_qp {
-                if !self.is_resolved_constraint(c) {
-                    break 'next c.clone();
+            while let Some(c) = self.queue_qp.pop_front() {
+                self.trail.push(c.clone());
+                if !self.is_resolved_constraint(&c) {
+                    break 'next c;
                 }
             }
-            for c in &self.queue_fr {
-                if !self.is_resolved_constraint(c) {
-                    break 'next c.clone();
+            while let Some(c) = self.queue_fr.pop_front() {
+                self.trail.push(c.clone());
+                if !self.is_resolved_constraint(&c) {
+                    break 'next c;
                 }
             }
             return false;
