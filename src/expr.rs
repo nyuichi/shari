@@ -1631,30 +1631,22 @@ impl<'a> Unifier<'a> {
         //
         // when @ = C.
         if let Term::Const(right_head) = right_head {
-            let mut type_constraints = vec![];
+            // τ(C)
+            let right_head_ty = {
+                let (args, t) = self.tt_env.consts.get(&right_head.name).unwrap();
+                let subst = zip(args.iter().copied(), &right_head.ty_args).collect::<Vec<_>>();
+                let mut t = t.clone();
+                t.subst(&subst);
+                t
+            };
 
             // τ(u[1]) ⋯ τ(u[q])
-            let new_arg_tys = {
-                let new_arg_tys = (0..right_args.len())
-                    .map(|_| mk_fresh_type_hole())
-                    .collect::<Vec<_>>();
-
-                let right_head_ty = {
-                    let (args, t) = self.tt_env.consts.get(&right_head.name).unwrap();
-                    let subst = zip(args.iter().copied(), &right_head.ty_args).collect::<Vec<_>>();
-                    let mut t = t.clone();
-                    t.subst(&subst);
-                    t
-                };
-                let right_head_ty2 = {
-                    let mut right_head_ty = left_ty.clone();
-                    right_head_ty.arrow(new_arg_tys.iter().cloned());
-                    right_head_ty
-                };
-                type_constraints.push((right_head_ty, right_head_ty2));
-
-                new_arg_tys
-            };
+            let new_arg_tys = right_head_ty
+                .components()
+                .iter()
+                .take(right_args.len())
+                .map(|&t| t.clone())
+                .collect::<Vec<_>>();
 
             // Y[1] .. Y[q]
             let new_arg_holes = new_arg_tys
@@ -1686,7 +1678,7 @@ impl<'a> Unifier<'a> {
             target.apply(new_args);
             target.abs(&new_binders, false);
             nodes.push(Node {
-                type_constraints,
+                type_constraints: vec![],
                 term_constraints: vec![(c.local_env.clone(), Term::Hole(left_head), target)],
             });
         }
