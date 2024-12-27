@@ -476,10 +476,12 @@ uexists.intro
 --
 --   const power.inhab.{u} : set u → inhab (set u)
 --   def power.inhab.rep.{u} (A : set u) : set (set u) := power A
---   axiom inhab.rep.power.inhab.{u} (A : set u) : inhab.rep (power.inhab A) = power.inhab.rep A
 --   lemma power.inhab.inhabited.{u} (A : set u) : ∃ a, a ∈ power x := (..)
 --
--- Note `inhab.rep (power.inhab A)` is only propositionally equal to `power.inhab.rep A`.
+-- and a definitional equality
+--
+--   example _.{u} (A : set u) : inhab.rep (power.inhab A) ≡ power A := eq.refl
+--
 instance power.inhab.{u} (A : set u) : inhab (set u) := {
   def rep : set (set u) := power A
   lemma inhabited : ∃ a, a ∈ power A := exists.intro empty_in_power
@@ -696,7 +698,6 @@ structure space u := {
   const subbase : set (set u)
 }
 
--- TODO: maybe we want a definitional equality space.subbase (space.mk subbase) ≡ subbase
 instance space.mk.{u} (subbase : set (set u)) : space u := {
   def subbase : set (set u) := subbase
 }
