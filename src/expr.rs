@@ -1194,32 +1194,32 @@ impl<'a> Unifier<'a> {
         if left.is_abs() {
             mem::swap(&mut left, &mut right);
         }
-        if right.is_abs() {
-            if let &Term::Hole(left_head) = left.head() {
-                // R ≡ λ x, N
-                // L ≡ (?M t₁ ⋯ tₙ)
-                // ?M := λ y₁ ⋯ yₙ x, ?M' y₁ ⋯ yₙ x
-                let hole_ty = self.get_hole_type(left_head).unwrap().clone();
-                let new_hole = Name::fresh();
-                self.add_hole_type(new_hole, hole_ty.clone());
-                // (y₁ : t₁) .. (yₙ : tₙ) (x : t)
-                let left_args = left.args();
-                let mut args = left_args
-                    .iter()
-                    .map(|_| (Name::fresh(), mk_fresh_type_hole()))
-                    .collect::<Vec<_>>();
-                args.push((Name::fresh(), mk_fresh_type_hole()));
-                let mut target = Term::Hole(new_hole);
-                target.apply(args.iter().map(|&(x, _)| mk_local(x)));
-                target.abs(&args, false);
-                self.add_subst(left_head, target);
-                let mut tmp = mk_fresh_type_hole();
-                tmp.arrow(args.iter().map(|(_, t)| t.clone()));
-                self.add_type_constraint(hole_ty, tmp);
+        if let Term::Abs(right) = right {
+            if left.head().is_hole() {
+                // ?M t₁ ⋯ tₙ =?= λ x, N
+                // ----------------------
+                // ?M t₁ ⋯ tₙ x =?= N
+                //
+                // Note that this rule in general allows us to reason eta equivalence like
+                //
+                // ?M =?= λ x, f x
+                // ---------------
+                // ?M x =?= f x
+                // --------------- (1)  (possible in theory, but not implemented in our code!)
+                // ?M := f
+                //
+                // but in our implementation (1) is solved by choice_fr which always solves it
+                // by assigning ?M := λ x, f x, so we don't need to worry about that.
+                let right = Arc::unwrap_or_clone(right);
+                let x = Name::fresh_from(right.binder_name);
+                local_env.locals.push((x, right.binder_type));
+                let mut right = right.body;
+                right.open(&mk_local(x));
+                left.apply([mk_local(x)]);
                 self.stack.push((local_env, left, right));
                 return None;
             } else if self.tt_env.unfold_head(&mut left).is_some() {
-                self.stack.push((local_env, left, right));
+                self.stack.push((local_env, left, Term::Abs(right)));
                 return None;
             } else {
                 // TODO: if we decide to land the kernel support for eta we need to add a clause here
@@ -1637,6 +1637,7 @@ impl<'a> Unifier<'a> {
                 let subst = zip(args.iter().copied(), &right_head.ty_args).collect::<Vec<_>>();
                 let mut t = t.clone();
                 t.subst(&subst);
+                self.inst_type(&mut t); // TODO: avoid full instantiation
                 t
             };
 
