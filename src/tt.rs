@@ -1567,15 +1567,11 @@ impl Env {
         let Term::Const(fun) = fun else {
             return None;
         };
-        let Some(proj_rules) = self.get_proj_rules(fun.name) else {
-            return None;
-        };
+        let proj_rules = self.get_proj_rules(fun.name)?;
         let Term::Const(arg_head) = arg.head() else {
             return None;
         };
-        let Some((_, proj_info)) = proj_rules.iter().find(|red| red.0 == arg_head.name) else {
-            return None;
-        };
+        let (_, proj_info) = proj_rules.iter().find(|red| red.0 == arg_head.name)?;
         let ProjInfo {
             local_types,
             params,
@@ -1616,9 +1612,7 @@ impl Env {
                     let p_arg = mk_path_refl(inner.arg.clone());
                     p = mk_path_congr_app(p_fun, p_arg);
                 } else if let Term::Const(fun) = &mut inner.fun {
-                    if self.get_proj_rules(fun.name).is_none() {
-                        return None;
-                    }
+                    self.get_proj_rules(fun.name)?;
                     let p_fun = mk_path_refl(inner.fun.clone());
                     let p_arg = self
                         .weak_reduce(&mut inner.arg)
