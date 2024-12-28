@@ -1302,8 +1302,11 @@ impl Eval {
         //
         //   const power.inhab.{u} : set u → inhab (set u)
         //   def power.inhab.rep.{u} (A : set u) : set (set u) := power A
-        //   axiom inhab.rep.power.inhab.{u} (A : set u) : inhab.rep (power.inhab A) = power.inhab.rep A
         //   lemma power.inhab.inhabited.{u} : ∃ a, a ∈ power x := (..)
+        //
+        // with a definitional equality
+        //
+        //  inhab.rep (power.inhab A) ≡ power A
         //
         let CmdInstance {
             name,
