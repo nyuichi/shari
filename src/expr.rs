@@ -742,12 +742,11 @@ enum ConstraintKind {
 }
 
 #[derive(Debug, Clone)]
-struct Constraint {
+struct EqConstraint {
     // TODO: only the locals field is used. Use a more efficient data structure.
     local_env: LocalEnv,
     left: Term,
     right: Term,
-    kind: ConstraintKind,
 }
 
 #[derive(Debug, Clone)]
@@ -774,20 +773,19 @@ struct Unifier<'a> {
     tt_env: &'a tt::Env,
     structure_table: &'a HashMap<Name, CmdStructure>,
     term_holes: Vec<(Name, Type)>,
-    queue_delta: VecDeque<Rc<Constraint>>,
-    queue_qp: VecDeque<Rc<Constraint>>,
-    queue_fr: VecDeque<Rc<Constraint>>,
-    queue_ff: VecDeque<Rc<Constraint>>,
-    watch_list: HashMap<Name, Vec<Rc<Constraint>>>,
+    queue_delta: VecDeque<Rc<EqConstraint>>,
+    queue_qp: VecDeque<Rc<EqConstraint>>,
+    queue_fr: VecDeque<Rc<EqConstraint>>,
+    queue_ff: VecDeque<Rc<EqConstraint>>,
+    watch_list: HashMap<Name, Vec<Rc<EqConstraint>>>,
     subst: Vec<(Name, Term)>,
-    // this map is always sync'd to subst.
     subst_map: HashMap<Name, Term>,
     type_subst: Vec<(Name, Type)>,
-    // this map is always sync'd to type_subst.
     type_subst_map: HashMap<Name, Type>,
     decisions: Vec<Branch<'a>>,
-    // for backjumping; we only record term-term constraints because decisions can only happen in solving them.
-    trail: Vec<Rc<Constraint>>,
+    // for backjumping.
+    // It extends when a new constraint is queued or a decision is made.
+    trail: Vec<(Rc<EqConstraint>, ConstraintKind)>,
     // only used in find_conflict
     stack: Vec<(LocalEnv, Term, Term)>,
     type_stack: Vec<(Type, Type)>,
@@ -863,55 +861,51 @@ impl<'a> Unifier<'a> {
         println!();
     }
 
-    fn watch(&mut self, c: Rc<Constraint>) {
-        if c.kind != ConstraintKind::Delta {
-            if let &Term::Hole(left_head) = c.left.head() {
-                match self.watch_list.get_mut(&left_head) {
-                    Some(watch_list) => {
-                        watch_list.push(c.clone());
-                    }
-                    None => {
-                        self.watch_list.insert(left_head, vec![c.clone()]);
-                    }
+    fn watch(&mut self, c: Rc<EqConstraint>) {
+        if let &Term::Hole(left_head) = c.left.head() {
+            match self.watch_list.get_mut(&left_head) {
+                Some(watch_list) => {
+                    watch_list.push(c.clone());
+                }
+                None => {
+                    self.watch_list.insert(left_head, vec![c.clone()]);
                 }
             }
-            if let &Term::Hole(right_head) = c.right.head() {
-                match self.watch_list.get_mut(&right_head) {
-                    Some(watch_list) => {
-                        watch_list.push(c);
-                    }
-                    None => {
-                        self.watch_list.insert(right_head, vec![c]);
-                    }
+        }
+        if let &Term::Hole(right_head) = c.right.head() {
+            match self.watch_list.get_mut(&right_head) {
+                Some(watch_list) => {
+                    watch_list.push(c);
+                }
+                None => {
+                    self.watch_list.insert(right_head, vec![c]);
                 }
             }
         }
     }
 
-    fn unwatch(&mut self, c: &Rc<Constraint>) {
-        if c.kind != ConstraintKind::Delta {
-            if let &Term::Hole(left_head) = c.left.head() {
-                let watch_list = self.watch_list.get_mut(&left_head).unwrap();
-                let mut index = 0;
-                for i in (0..watch_list.len()).rev() {
-                    if Rc::ptr_eq(&watch_list[i], c) {
-                        index = i;
-                        break;
-                    }
+    fn unwatch(&mut self, c: &Rc<EqConstraint>) {
+        if let &Term::Hole(left_head) = c.left.head() {
+            let watch_list = self.watch_list.get_mut(&left_head).unwrap();
+            let mut index = 0;
+            for i in (0..watch_list.len()).rev() {
+                if Rc::ptr_eq(&watch_list[i], c) {
+                    index = i;
+                    break;
                 }
-                watch_list.swap_remove(index);
             }
-            if let &Term::Hole(right_head) = c.right.head() {
-                let watch_list = self.watch_list.get_mut(&right_head).unwrap();
-                let mut index = 0;
-                for i in (0..watch_list.len()).rev() {
-                    if Rc::ptr_eq(&watch_list[i], c) {
-                        index = i;
-                        break;
-                    }
+            watch_list.swap_remove(index);
+        }
+        if let &Term::Hole(right_head) = c.right.head() {
+            let watch_list = self.watch_list.get_mut(&right_head).unwrap();
+            let mut index = 0;
+            for i in (0..watch_list.len()).rev() {
+                if Rc::ptr_eq(&watch_list[i], c) {
+                    index = i;
+                    break;
                 }
-                watch_list.swap_remove(index);
             }
+            watch_list.swap_remove(index);
         }
     }
 
@@ -1064,14 +1058,13 @@ impl<'a> Unifier<'a> {
             );
         }
 
-        let c = Rc::new(Constraint {
+        let c = Rc::new(EqConstraint {
             local_env,
             left: left.clone(),
             right: right.clone(),
-            kind,
         });
 
-        self.trail.push(c.clone());
+        self.trail.push((c.clone(), kind));
 
         assert!(!self.is_resolved_constraint(&c));
 
@@ -1486,8 +1479,8 @@ impl<'a> Unifier<'a> {
         self.subst.truncate(snapshot.subst_len);
         for i in 0..self.trail.len() - snapshot.trail_len {
             let i = self.trail.len() - i - 1;
-            let c = &self.trail[i];
-            match c.kind {
+            let (c, kind) = &self.trail[i];
+            match kind {
                 ConstraintKind::Delta => {
                     self.queue_delta.pop_back();
                 }
@@ -1526,8 +1519,8 @@ impl<'a> Unifier<'a> {
         };
         self.restore(&br.snapshot);
         for _ in 0..self.trail.len() - br.trail_len {
-            let c = self.trail.pop().unwrap();
-            match c.kind {
+            let (c, kind) = self.trail.pop().unwrap();
+            match kind {
                 ConstraintKind::Delta => {
                     self.queue_delta.push_front(c);
                 }
@@ -1566,7 +1559,7 @@ impl<'a> Unifier<'a> {
         true
     }
 
-    fn choice_delta(&self, c: &Constraint) -> Vec<Node> {
+    fn choice_delta(&self, c: &EqConstraint) -> Vec<Node> {
         // suppose (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₙ)
         let Term::Const(left_head) = c.left.head() else {
             unreachable!();
@@ -1605,7 +1598,7 @@ impl<'a> Unifier<'a> {
         vec![node1, node2]
     }
 
-    fn choice_fr(&mut self, c: &Constraint) -> Vec<Node> {
+    fn choice_fr(&mut self, c: &EqConstraint) -> Vec<Node> {
         // left  ≡ ?M t[1] .. t[p]
         // right ≡  @ u[1] .. u[q]
         let &Term::Hole(left_head) = c.left.head() else {
@@ -1908,7 +1901,7 @@ impl<'a> Unifier<'a> {
         nodes
     }
 
-    fn is_resolved_constraint(&self, c: &Constraint) -> bool {
+    fn is_resolved_constraint(&self, c: &EqConstraint) -> bool {
         if let &Term::Hole(right_head) = c.right.head() {
             if self.subst_map.contains_key(&right_head) {
                 return true;
@@ -1925,38 +1918,48 @@ impl<'a> Unifier<'a> {
     // Returns false if the constraints are pre-unified.
     fn decide(&mut self) -> bool {
         let trail_len = self.trail.len();
-        let c = 'next: {
+        let nodes = 'next: {
             if let Some(c) = self.queue_delta.pop_front() {
-                self.trail.push(c.clone());
-                break 'next c;
+                self.trail.push((c.clone(), ConstraintKind::Delta));
+                #[cfg(debug_assertions)]
+                {
+                    let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
+                    println!(
+                        "{sp}making a decision (delta):\n{sp}- {}\n{sp}  {}",
+                        c.left, c.right
+                    );
+                }
+                break 'next self.choice_delta(&c);
             }
             while let Some(c) = self.queue_qp.pop_front() {
-                self.trail.push(c.clone());
+                self.trail.push((c.clone(), ConstraintKind::QuasiPattern));
                 if !self.is_resolved_constraint(&c) {
-                    break 'next c;
+                    #[cfg(debug_assertions)]
+                    {
+                        let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
+                        println!(
+                            "{sp}making a decision (qp):\n{sp}- {}\n{sp}  {}",
+                            c.left, c.right
+                        );
+                    }
+                    break 'next self.choice_fr(&c);
                 }
             }
             while let Some(c) = self.queue_fr.pop_front() {
-                self.trail.push(c.clone());
+                self.trail.push((c.clone(), ConstraintKind::FlexRigid));
                 if !self.is_resolved_constraint(&c) {
-                    break 'next c;
+                    #[cfg(debug_assertions)]
+                    {
+                        let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
+                        println!(
+                            "{sp}making a decision (fr):\n{sp}- {}\n{sp}  {}",
+                            c.left, c.right
+                        );
+                    }
+                    break 'next self.choice_fr(&c);
                 }
             }
             return false;
-        };
-        #[cfg(debug_assertions)]
-        {
-            let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
-            println!(
-                "{sp}making a decision ({:?}):\n{sp}- {}\n{sp}  {}",
-                c.kind, c.left, c.right
-            );
-        }
-        let nodes = match c.kind {
-            ConstraintKind::Delta => self.choice_delta(&c),
-            ConstraintKind::QuasiPattern => self.choice_fr(&c),
-            ConstraintKind::FlexRigid => self.choice_fr(&c),
-            ConstraintKind::FlexFlex => unreachable!(),
         };
 
         self.push_branch(trail_len, Box::new(nodes.into_iter()));
