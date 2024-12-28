@@ -754,7 +754,6 @@ struct Constraint {
 struct Snapshot {
     subst_len: usize,
     trail_len: usize,
-    type_constraints_len: usize,
     type_subst_len: usize,
 }
 
@@ -783,15 +782,15 @@ struct Unifier<'a> {
     subst: Vec<(Name, Term)>,
     // this map is always sync'd to subst.
     subst_map: HashMap<Name, Term>,
+    type_subst: Vec<(Name, Type)>,
+    // this map is always sync'd to type_subst.
+    type_subst_map: HashMap<Name, Type>,
     decisions: Vec<Branch<'a>>,
-    // for backjumping
+    // for backjumping; we only record term-term constraints because decisions can only happen in solving them.
     trail: Vec<Rc<Constraint>>,
     // only used in find_conflict
     stack: Vec<(LocalEnv, Term, Term)>,
-    type_constraints_index: usize,
-    type_constraints: Vec<(Type, Type)>,
-    type_subst: Vec<(Name, Type)>,
-    type_subst_map: HashMap<Name, Type>,
+    type_stack: Vec<(Type, Type)>,
 }
 
 impl<'a> Unifier<'a> {
@@ -802,7 +801,7 @@ impl<'a> Unifier<'a> {
         constraints: Vec<(LocalEnv, Term, Term)>,
         type_constraints: Vec<(Type, Type)>,
     ) -> Self {
-        let mut solver = Self {
+        Self {
             tt_env,
             structure_table,
             term_holes,
@@ -813,18 +812,13 @@ impl<'a> Unifier<'a> {
             watch_list: Default::default(),
             subst: Default::default(),
             subst_map: Default::default(),
-            decisions: Default::default(),
-            trail: Default::default(),
-            stack: Default::default(),
-            type_constraints_index: 0,
-            type_constraints,
             type_subst: vec![],
             type_subst_map: Default::default(),
-        };
-        for (local_env, left, right) in constraints.into_iter().rev() {
-            solver.stack.push((local_env, left, right));
+            decisions: Default::default(),
+            trail: Default::default(),
+            stack: constraints,
+            type_stack: type_constraints,
         }
-        solver
     }
 
     #[cfg(debug_assertions)]
@@ -1133,7 +1127,7 @@ impl<'a> Unifier<'a> {
     }
 
     fn add_type_constraint(&mut self, t1: Type, t2: Type) {
-        self.type_constraints.push((t1, t2));
+        self.type_stack.push((t1, t2));
     }
 
     fn add_type_subst(&mut self, name: Name, ty: Type) {
@@ -1445,8 +1439,8 @@ impl<'a> Unifier<'a> {
         {
             self.print_state();
         }
-        while !self.type_constraints.is_empty() || !self.stack.is_empty() {
-            if let Some((t1, t2)) = self.type_constraints.pop() {
+        while !self.type_stack.is_empty() || !self.stack.is_empty() {
+            if let Some((t1, t2)) = self.type_stack.pop() {
                 #[cfg(debug_assertions)]
                 {
                     println!("find conflict in {t1} =?= {t2}");
@@ -1480,7 +1474,6 @@ impl<'a> Unifier<'a> {
         Snapshot {
             subst_len: self.subst.len(),
             trail_len: self.trail.len(),
-            type_constraints_len: self.type_constraints.len(),
             type_subst_len: self.type_subst.len(),
         }
     }
@@ -1516,9 +1509,6 @@ impl<'a> Unifier<'a> {
             self.type_subst_map.remove(&name);
         }
         self.type_subst.truncate(snapshot.type_subst_len);
-        self.type_constraints
-            .truncate(snapshot.type_constraints_len);
-        self.type_constraints_index = snapshot.type_constraints_len;
     }
 
     fn push_branch(&mut self, trail_len: usize, nodes: Box<dyn Iterator<Item = Node> + 'a>) {
@@ -1568,7 +1558,7 @@ impl<'a> Unifier<'a> {
             self.add_subst(x, m);
         }
         for (left, right) in node.type_constraints.into_iter().rev() {
-            self.type_constraints.push((left, right));
+            self.type_stack.push((left, right));
         }
         for (local_env, left, right) in node.term_constraints.into_iter().rev() {
             self.stack.push((local_env, left, right));
@@ -1976,6 +1966,7 @@ impl<'a> Unifier<'a> {
 
     fn backjump(&mut self) -> bool {
         self.stack.clear();
+        self.type_stack.clear();
         while !self.next() {
             if !self.pop_branch() {
                 return false;
