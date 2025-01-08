@@ -9,7 +9,7 @@ use std::{
 use anyhow::{bail, Context};
 
 use crate::{
-    cmd::{CmdStructure, StructureField},
+    cmd::{CmdClass, CmdStructure, StructureField},
     tt::{
         self, mk_const, mk_fresh_type_hole, mk_local, mk_type_arrow, Kind, Name, Term, TermAbs,
         TermApp, Type, TypeApp, TypeArrow,
@@ -312,6 +312,8 @@ pub struct Env<'a> {
     locals: Vec<Term>,
     type_constraints: Vec<(Type, Type)>,
     term_constraints: Vec<(LocalEnv, Term, Term)>,
+    class_constraints: Vec<Term>,
+    database: &'a Vec<CmdClass>,
 }
 
 impl<'a> Env<'a> {
@@ -320,6 +322,7 @@ impl<'a> Env<'a> {
         tt_local_env: &'a mut tt::LocalEnv,
         axioms: &'a HashMap<Name, (Vec<Name>, Term)>,
         structure_table: &'a HashMap<Name, CmdStructure>,
+        database: &'a Vec<CmdClass>,
     ) -> Self {
         Env {
             tt_env,
@@ -329,6 +332,8 @@ impl<'a> Env<'a> {
             locals: vec![],
             type_constraints: vec![],
             term_constraints: vec![],
+            class_constraints: vec![],
+            database,
         }
     }
 
@@ -593,6 +598,8 @@ impl<'a> Env<'a> {
             self.tt_local_env.holes.clone(),
             self.term_constraints,
             self.type_constraints,
+            self.class_constraints,
+            self.database,
         )
         .solve()
         .context("unification failed")?;
@@ -750,6 +757,11 @@ struct EqConstraint {
 }
 
 #[derive(Debug, Clone)]
+struct ClassConstraint {
+    target: Term,
+}
+
+#[derive(Debug, Clone)]
 struct Snapshot {
     subst_len: usize,
     trail_len: usize,
@@ -769,14 +781,21 @@ struct Branch<'a> {
     nodes: Box<dyn Iterator<Item = Node> + 'a>,
 }
 
+enum TrailElement {
+    EqConstraint(Rc<EqConstraint>, ConstraintKind),
+    ClassConstraint(Rc<ClassConstraint>),
+}
+
 struct Unifier<'a> {
     tt_env: &'a tt::Env,
     structure_table: &'a HashMap<Name, CmdStructure>,
     term_holes: Vec<(Name, Type)>,
+    database: &'a [CmdClass],
     queue_delta: VecDeque<Rc<EqConstraint>>,
     queue_qp: VecDeque<Rc<EqConstraint>>,
     queue_fr: VecDeque<Rc<EqConstraint>>,
     queue_ff: VecDeque<Rc<EqConstraint>>,
+    queue_class: VecDeque<Rc<ClassConstraint>>,
     watch_list: HashMap<Name, Vec<Rc<EqConstraint>>>,
     subst: Vec<(Name, Term)>,
     subst_map: HashMap<Name, Term>,
@@ -785,7 +804,7 @@ struct Unifier<'a> {
     decisions: Vec<Branch<'a>>,
     // for backjumping.
     // It extends when a new constraint is queued or a decision is made.
-    trail: Vec<(Rc<EqConstraint>, ConstraintKind)>,
+    trail: Vec<TrailElement>,
     // only used in find_conflict
     stack: Vec<(LocalEnv, Term, Term)>,
     type_stack: Vec<(Type, Type)>,
@@ -798,15 +817,22 @@ impl<'a> Unifier<'a> {
         term_holes: Vec<(Name, Type)>,
         constraints: Vec<(LocalEnv, Term, Term)>,
         type_constraints: Vec<(Type, Type)>,
+        class_constraints: Vec<Term>,
+        database: &'a [CmdClass],
     ) -> Self {
         Self {
             tt_env,
             structure_table,
             term_holes,
+            database,
             queue_delta: Default::default(),
             queue_qp: Default::default(),
             queue_fr: Default::default(),
             queue_ff: Default::default(),
+            queue_class: class_constraints
+                .into_iter()
+                .map(|target| Rc::new(ClassConstraint { target }))
+                .collect(),
             watch_list: Default::default(),
             subst: Default::default(),
             subst_map: Default::default(),
@@ -1064,7 +1090,7 @@ impl<'a> Unifier<'a> {
             right: right.clone(),
         });
 
-        self.trail.push((c.clone(), kind));
+        self.trail.push(TrailElement::EqConstraint(c.clone(), kind));
 
         assert!(!self.is_resolved_constraint(&c));
 
@@ -1149,6 +1175,41 @@ impl<'a> Unifier<'a> {
             .iter()
             .find(|&&(n, _)| n == name)
             .map(|(_, t)| t)
+    }
+
+    fn get_type(&self, local_env: &mut LocalEnv, target: &Term) -> Type {
+        match target {
+            Term::Var(_) => unreachable!(),
+            Term::Abs(target) => {
+                let x = Name::fresh();
+                let mut dom = target.binder_type.clone();
+                self.inst_type(&mut dom);
+                local_env.locals.push((x, dom.clone()));
+                let mut body = target.body.clone();
+                body.open(&mk_local(x));
+                let mut cod = self.get_type(local_env, &body);
+                local_env.locals.pop();
+                cod.arrow([dom]);
+                cod
+            }
+            Term::App(target) => {
+                let mut t = self.get_type(local_env, &target.fun);
+                let mut doms = t.unarrow();
+                doms.remove(0);
+                t.arrow(doms);
+                t
+            }
+            Term::Const(target) => {
+                let (args, t) = self.tt_env.consts.get(&target.name).unwrap();
+                let subst = zip(args.iter().copied(), &target.ty_args).collect::<Vec<_>>();
+                let mut t = t.clone();
+                t.subst(&subst);
+                self.inst_type(&mut t);
+                t
+            }
+            &Term::Local(name) => local_env.get_local(name).unwrap().clone(),
+            &Term::Hole(name) => self.get_hole_type(name).unwrap().clone(),
+        }
     }
 
     fn add_hole_type(&mut self, name: Name, ty: Type) {
@@ -1479,7 +1540,9 @@ impl<'a> Unifier<'a> {
         self.subst.truncate(snapshot.subst_len);
         for i in 0..self.trail.len() - snapshot.trail_len {
             let i = self.trail.len() - i - 1;
-            let (c, kind) = &self.trail[i];
+            let TrailElement::EqConstraint(c, kind) = &self.trail[i] else {
+                unreachable!()
+            };
             match kind {
                 ConstraintKind::Delta => {
                     self.queue_delta.pop_back();
@@ -1519,19 +1582,23 @@ impl<'a> Unifier<'a> {
         };
         self.restore(&br.snapshot);
         for _ in 0..self.trail.len() - br.trail_len {
-            let (c, kind) = self.trail.pop().unwrap();
-            match kind {
-                ConstraintKind::Delta => {
-                    self.queue_delta.push_front(c);
-                }
-                ConstraintKind::QuasiPattern => {
-                    self.queue_qp.push_front(c);
-                }
-                ConstraintKind::FlexRigid => {
-                    self.queue_fr.push_front(c);
-                }
-                ConstraintKind::FlexFlex => {
-                    self.queue_ff.push_front(c);
+            match self.trail.pop().unwrap() {
+                TrailElement::EqConstraint(c, kind) => match kind {
+                    ConstraintKind::Delta => {
+                        self.queue_delta.push_front(c);
+                    }
+                    ConstraintKind::QuasiPattern => {
+                        self.queue_qp.push_front(c);
+                    }
+                    ConstraintKind::FlexRigid => {
+                        self.queue_fr.push_front(c);
+                    }
+                    ConstraintKind::FlexFlex => {
+                        self.queue_ff.push_front(c);
+                    }
+                },
+                TrailElement::ClassConstraint(c) => {
+                    self.queue_class.push_front(c);
                 }
             }
         }
@@ -1901,6 +1968,85 @@ impl<'a> Unifier<'a> {
         nodes
     }
 
+    fn synthesize_instance(&self, goal: &Type) -> Option<Term> {
+        // TODO(typeclass): support local class constraints
+        for clause in self.database {
+            let CmdClass {
+                local_types,
+                params,
+                ty,
+                target,
+            } = clause;
+            let pattern = {
+                let mut subst = vec![];
+                for &name in local_types {
+                    subst.push((name, mk_fresh_type_hole()));
+                }
+                let subst = subst.iter().map(|&(x, ref t)| (x, t)).collect::<Vec<_>>();
+                let mut ty = ty.clone();
+                ty.subst(&subst);
+                ty
+            };
+            let Some(type_subst) = goal.matches(&pattern) else {
+                continue;
+            };
+            // TODO(typeclass): allow the params to contain its own local types.
+            assert!(local_types
+                .iter()
+                .all(|local| type_subst.iter().any(|(x, _)| x == local)));
+            let mut subst = vec![];
+            let mut success = true;
+            for &(x, ref t) in params {
+                let mut subgoal = t.clone();
+                subgoal.subst(
+                    &type_subst
+                        .iter()
+                        .map(|&(x, ref t)| (x, t))
+                        .collect::<Vec<_>>(),
+                );
+                let Some(arg) = self.synthesize_instance(&subgoal) else {
+                    success = false;
+                    break;
+                };
+                subst.push((x, arg));
+            }
+            if !success {
+                continue;
+            }
+            let mut target = target.clone();
+            target.subst_type(
+                &type_subst
+                    .iter()
+                    .map(|&(x, ref t)| (x, t))
+                    .collect::<Vec<_>>(),
+            );
+            target.subst(&subst.iter().map(|&(x, ref t)| (x, t)).collect::<Vec<_>>());
+            // TODO(typeclass):
+            // Our language does not support overlapping instances so we generally don't need to check other instances.
+            // However, if we try to synthesize for a non-ground goal like `H a ?b`, we will possibly find more than one solutions,
+            // and we may want to report an error to tell the user so.
+            return Some(target);
+        }
+        None
+    }
+
+    fn choice_class(&mut self, c: &ClassConstraint) -> Vec<Node> {
+        // TODO(typeclass): if hole is already assigned, check if the synthesized term is an instance.
+        // TODO(typeclass): solve c early when the type of c is known.
+        let mut t = self.get_type(&mut LocalEnv::default(), &c.target);
+        self.inst_type(&mut t);
+        assert!(t.is_ground());
+        let Some(instance) = self.synthesize_instance(&t) else {
+            return vec![];
+        };
+        let node = Node {
+            subst: vec![],
+            type_constraints: vec![],
+            term_constraints: vec![(LocalEnv::default(), c.target.clone(), instance)],
+        };
+        vec![node]
+    }
+
     fn is_resolved_constraint(&self, c: &EqConstraint) -> bool {
         if let &Term::Hole(right_head) = c.right.head() {
             if self.subst_map.contains_key(&right_head) {
@@ -1920,7 +2066,8 @@ impl<'a> Unifier<'a> {
         let trail_len = self.trail.len();
         let nodes = 'next: {
             if let Some(c) = self.queue_delta.pop_front() {
-                self.trail.push((c.clone(), ConstraintKind::Delta));
+                self.trail
+                    .push(TrailElement::EqConstraint(c.clone(), ConstraintKind::Delta));
                 #[cfg(debug_assertions)]
                 {
                     let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
@@ -1932,7 +2079,10 @@ impl<'a> Unifier<'a> {
                 break 'next self.choice_delta(&c);
             }
             while let Some(c) = self.queue_qp.pop_front() {
-                self.trail.push((c.clone(), ConstraintKind::QuasiPattern));
+                self.trail.push(TrailElement::EqConstraint(
+                    c.clone(),
+                    ConstraintKind::QuasiPattern,
+                ));
                 if !self.is_resolved_constraint(&c) {
                     #[cfg(debug_assertions)]
                     {
@@ -1946,7 +2096,10 @@ impl<'a> Unifier<'a> {
                 }
             }
             while let Some(c) = self.queue_fr.pop_front() {
-                self.trail.push((c.clone(), ConstraintKind::FlexRigid));
+                self.trail.push(TrailElement::EqConstraint(
+                    c.clone(),
+                    ConstraintKind::FlexRigid,
+                ));
                 if !self.is_resolved_constraint(&c) {
                     #[cfg(debug_assertions)]
                     {
@@ -1957,6 +2110,16 @@ impl<'a> Unifier<'a> {
                         );
                     }
                     break 'next self.choice_fr(&c);
+                }
+            }
+            for i in 0..self.queue_class.len() {
+                let mut t = self.get_type(&mut LocalEnv::default(), &self.queue_class[i].target);
+                self.inst_type(&mut t);
+                // TODO(typeclass): synthesize instances for constraints with type holes (e.g. ?M : C a ?b)
+                if t.is_ground() {
+                    let c = self.queue_class.swap_remove_back(i).unwrap();
+                    self.trail.push(TrailElement::ClassConstraint(c.clone()));
+                    break 'next self.choice_class(&c);
                 }
             }
             return false;

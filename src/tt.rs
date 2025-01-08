@@ -342,6 +342,53 @@ impl Type {
         args.reverse();
         args
     }
+
+    pub fn unify(&self, other: &Type) -> Option<Vec<(Name, Type)>> {
+        let mut eq_set = EqSet::default();
+        eq_set.equations.push((self.clone(), other.clone()));
+        eq_set
+            .solve()
+            .ok()
+            .map(|subst| subst.0.into_iter().collect())
+    }
+
+    pub fn matches(&self, pattern: &Type) -> Option<Vec<(Name, Type)>> {
+        let mut subst = vec![];
+        if self.matches_help(pattern, &mut subst) {
+            Some(subst)
+        } else {
+            None
+        }
+    }
+
+    fn matches_help(&self, pattern: &Type, subst: &mut Vec<(Name, Type)>) -> bool {
+        match pattern {
+            Type::Const(_) => self == pattern,
+            Type::Arrow(pattern) => {
+                let Type::Arrow(target) = self else {
+                    return false;
+                };
+                target.dom.matches_help(&pattern.dom, subst)
+                    && target.cod.matches_help(&pattern.cod, subst)
+            }
+            Type::App(pattern) => {
+                let Type::App(target) = self else {
+                    return false;
+                };
+                target.fun.matches_help(&pattern.fun, subst)
+                    && target.arg.matches_help(&pattern.arg, subst)
+            }
+            Type::Local(_) => self == pattern,
+            &Type::Hole(pattern) => {
+                if let Some((_, t)) = subst.iter().find(|&&(x, _)| x == pattern) {
+                    self.matches_help(&t.clone(), subst)
+                } else {
+                    subst.push((pattern, self.clone()));
+                    true
+                }
+            }
+        }
+    }
 }
 
 /// Locally nameless representation. See [Charguéraud, 2012].

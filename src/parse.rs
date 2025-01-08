@@ -1,8 +1,8 @@
 use crate::cmd::{
-    Cmd, CmdAxiom, CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdInstance,
-    CmdLemma, CmdLocalTypeConst, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive,
-    Constructor, DataConstructor, Fixity, InstanceDef, InstanceField, InstanceLemma, Operator,
-    StructureAxiom, StructureConst, StructureField,
+    Cmd, CmdAxiom, CmdClass, CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr,
+    CmdInstance, CmdLemma, CmdLocalTypeConst, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst,
+    CmdTypeInductive, Constructor, DataConstructor, Fixity, InstanceDef, InstanceField,
+    InstanceLemma, Operator, StructureAxiom, StructureConst, StructureField,
 };
 use crate::expr::{
     mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_const, mk_expr_inst, mk_expr_take, Expr,
@@ -441,6 +441,19 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(params)
     }
 
+    /// e.g. `"[x : T] [y : U]"`
+    fn class_parameters(&mut self) -> Result<Vec<(Name, Type)>, ParseError> {
+        let mut params = vec![];
+        while let Some(_token) = self.expect_symbol_opt("[") {
+            let name = self.name()?;
+            self.expect_symbol(":")?;
+            let t = self.ty()?;
+            self.expect_symbol("]")?;
+            params.push((name, t));
+        }
+        Ok(params)
+    }
+
     pub fn term(&mut self) -> Result<Term, ParseError> {
         self.subterm(0)
     }
@@ -838,60 +851,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(left)
     }
 
-    // pub fn meta_expr(&mut self) -> Result<MetaExpr, ParseError> {
-    //     self.meta_subexpr(0)
-    // }
-
-    // fn meta_subexpr(&mut self, rbp: usize) -> Result<MetaExpr, ParseError> {
-    //     let token = self.any_token()?;
-    //     let mut left = if token.is_ident() {
-    //         MetaExpr::Var(Name::intern(token.as_str()).unwrap())
-    //     } else if token.is_symbol() {
-    //         match token.as_str() {
-    //             "(" => {
-    //                 let e = self.meta_subexpr(0)?;
-    //                 self.expect_symbol(")")?;
-    //                 e
-    //             }
-    //             "{" => self.meta_expr_block(token)?,
-    //             "λ" => self.meta_expr_fun(token)?,
-    //             _ => {}
-    //         }
-    //     } else {
-    //         return Self::fail(token, "unexpected token")?;
-    //     };
-    //     while let Some(token) = self.peek_opt() {
-    //         let led = match self.tt.get_led(&token) {
-    //             None => break,
-    //             Some(led) => led,
-    //         };
-    //         let prec = led.prec();
-    //         if rbp >= prec {
-    //             break;
-    //         }
-    //         match led {
-    //             Led::App => {
-    //                 let right = self.subterm(led.prec())?;
-    //                 left.apply(vec![right]);
-    //             }
-    //             Led::User(op) => {
-    //                 let prec = match op.fixity {
-    //                     Fixity::Infix | Fixity::Infixl => prec,
-    //                     Fixity::Infixr => prec - 1,
-    //                     Fixity::Nofix | Fixity::Prefix => unreachable!("op = {op:?}"),
-    //                 };
-    //                 self.advance();
-    //                 let mut fun = self.term_var(token, Some(op.entity))?;
-    //                 let right = self.subterm(prec)?;
-    //                 fun.apply(vec![left, right]);
-    //                 left = fun;
-    //             }
-    //         }
-    //     }
-    //     Ok(left)
-    // }
-
-    fn local_type_binder(&mut self) -> Result<Vec<Name>, ParseError> {
+    fn local_type_parameters(&mut self) -> Result<Vec<Name>, ParseError> {
         if let Some(_token) = self.expect_symbol_opt(".{") {
             let mut local_types = vec![];
             if self.expect_symbol_opt("}").is_none() {
@@ -986,6 +946,10 @@ impl<'a, 'b> Parser<'a, 'b> {
             "instance" => {
                 let instance_cmd = self.instance_cmd(keyword)?;
                 Cmd::Instance(instance_cmd)
+            }
+            "class" => {
+                let class_cmd = self.class_cmd(keyword)?;
+                Cmd::Class(class_cmd)
             }
             "local" => {
                 let keyword2 = self.keyword()?;
@@ -1094,7 +1058,7 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     fn def_cmd(&mut self, _token: Token) -> Result<CmdDef, ParseError> {
         let name = self.name()?;
-        let local_types = self.local_type_binder()?;
+        let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
@@ -1124,7 +1088,7 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     fn axiom_cmd(&mut self, _token: Token) -> Result<CmdAxiom, ParseError> {
         let name = self.name()?;
-        let local_types = self.local_type_binder()?;
+        let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
@@ -1148,7 +1112,7 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     fn lemma_cmd(&mut self, _token: Token) -> Result<CmdLemma, ParseError> {
         let name = self.name()?;
-        let local_types = self.local_type_binder()?;
+        let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
@@ -1180,7 +1144,7 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     fn const_cmd(&mut self, _token: Token) -> Result<CmdConst, ParseError> {
         let name = self.name()?;
-        let local_types = self.local_type_binder()?;
+        let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
@@ -1256,7 +1220,7 @@ impl<'a, 'b> Parser<'a, 'b> {
     fn inductive_cmd(&mut self, _token: Token<'a>) -> Result<CmdInductive, ParseError> {
         let name = self.name()?;
         self.locals.push(name);
-        let local_types = self.local_type_binder()?;
+        let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
@@ -1366,7 +1330,7 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     fn instance_cmd(&mut self, _token: Token<'a>) -> Result<CmdInstance, ParseError> {
         let name = self.name()?;
-        let local_types = self.local_type_binder()?;
+        let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
@@ -1439,6 +1403,34 @@ impl<'a, 'b> Parser<'a, 'b> {
             params,
             target_ty,
             fields,
+        })
+    }
+
+    fn class_cmd(&mut self, _token: Token<'a>) -> Result<CmdClass, ParseError> {
+        // TODO: remove type parameters
+        let local_types = self.local_type_parameters()?;
+        for &ty in &local_types {
+            self.type_locals.push(ty);
+        }
+        let ty = self.ty()?;
+        let mut params = vec![];
+        if let Some(_token) = self.expect_symbol_opt(":-") {
+            params = self.class_parameters()?;
+            for &(x, _) in &params {
+                self.locals.push(x);
+            }
+        }
+        self.expect_symbol(":=")?;
+        let target = self.term()?;
+        // parsing finished.
+        self.locals.truncate(self.locals.len() - params.len());
+        self.type_locals
+            .truncate(self.type_locals.len() - local_types.len());
+        Ok(CmdClass {
+            local_types,
+            params,
+            ty,
+            target,
         })
     }
 }

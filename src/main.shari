@@ -632,6 +632,15 @@ structure monoid u := {
 }
 
 /-
+structure monoid.hom u v := {
+  class monoid u
+  class monoid v
+  const f : u → v
+  axiom homomorphic (x₁ x₂ : u) : mult (f x₁) (f x₂) = f (mult x₁ x₂)
+}
+-/
+
+/-
 instance Prop_conj_monoid : monoid Prop := {
   def mult := and
   def unit := ⊤
@@ -701,3 +710,25 @@ structure space u := {
 instance space.mk.{u} (subbase : set (set u)) : space u := {
   def subbase : set (set u) := subbase
 }
+
+/-
+structure show u := {
+  const show : u → string
+}
+
+instance nat.show : show nat := {
+  def show : nat → string := show_nat
+}
+
+instance list.show.{α} (a : show α) : show (list α) := {
+  def show : list α → string := (..)
+}
+
+class show (list α) :- [a : show α] := list.show a
+
+def show.{α} [d : show α] : α → string := show.show d
+
+class monoid α :- [g : group α] := group.to_monoid g
+
+def summon.{α} [x : α] : α := x
+-/

@@ -8,8 +8,8 @@ use crate::{
     print::OpTable,
     proof::{self, mk_type_prop},
     tt::{
-        mk_const, mk_local, mk_type_arrow, mk_type_const, mk_type_local, DefInfo, Kind, LocalEnv,
-        Name, ProjInfo, Term, Type,
+        mk_const, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
+        DefInfo, Kind, LocalEnv, Name, ProjInfo, Term, Type,
     },
 };
 
@@ -30,6 +30,7 @@ pub enum Cmd {
     Inductive(CmdInductive),
     Structure(CmdStructure),
     Instance(CmdInstance),
+    Class(CmdClass),
 }
 
 #[derive(Clone, Debug)]
@@ -191,6 +192,14 @@ pub struct InstanceLemma {
     pub expr: Expr,
 }
 
+#[derive(Debug, Clone)]
+pub struct CmdClass {
+    pub local_types: Vec<Name>,
+    pub params: Vec<(Name, Type)>,
+    pub ty: Type,
+    pub target: Term,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Eval {
     pub proof_env: proof::Env,
@@ -199,6 +208,7 @@ pub struct Eval {
     pub pp: OpTable,
     pub local_type_consts: Vec<Name>,
     pub structure_table: HashMap<Name, CmdStructure>,
+    pub database: Vec<CmdClass>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -467,6 +477,7 @@ impl Eval {
                     &mut local_env,
                     &self.proof_env.axioms,
                     &self.structure_table,
+                    &self.database,
                 )
                 .elaborate(&mut expr)?;
                 self.proof_env.check_prop(
@@ -545,6 +556,91 @@ impl Eval {
             Cmd::Inductive(cmd) => self.run_inductive_cmd(cmd),
             Cmd::Structure(cmd) => self.run_structure_cmd(cmd),
             Cmd::Instance(cmd) => self.run_instance_cmd(cmd),
+            Cmd::Class(cmd) => {
+                let CmdClass {
+                    mut local_types,
+                    params,
+                    mut ty,
+                    mut target,
+                } = cmd;
+                for i in 0..local_types.len() {
+                    for j in i + 1..local_types.len() {
+                        if local_types[i] == local_types[j] {
+                            bail!("duplicate type variables");
+                        }
+                    }
+                }
+                for local_type_const in self.local_type_consts.iter().rev() {
+                    if local_types.contains(local_type_const) {
+                        // shadowed by the .{} binder
+                        continue;
+                    }
+                    if !ty.contains_local(local_type_const)
+                        || !params
+                            .iter()
+                            .any(|(_, t)| t.contains_local(local_type_const))
+                    {
+                        // unused
+                        continue;
+                    }
+                    local_types.insert(0, *local_type_const);
+                }
+                let mut local_env = LocalEnv {
+                    local_types: local_types.clone(),
+                    locals: vec![],
+                    holes: vec![],
+                };
+                for i in 0..params.len() {
+                    for j in i + 1..params.len() {
+                        if params[i].0 == params[j].0 {
+                            bail!("duplicate parameter names");
+                        }
+                    }
+                }
+                for &(x, ref t) in &params {
+                    self.proof_env
+                        .tt_env
+                        .check_kind(&local_env, t, &Kind::base())?;
+                    local_env.locals.push((x, t.clone()));
+                }
+                self.proof_env
+                    .tt_env
+                    .check_type(&mut local_env, &mut target, &mut ty)?;
+                for rule in &self.database {
+                    let ty = {
+                        let mut subst = vec![];
+                        for &name in &local_env.local_types {
+                            subst.push((name, mk_fresh_type_hole()));
+                        }
+                        let subst = subst.iter().map(|&(x, ref t)| (x, t)).collect::<Vec<_>>();
+                        let mut ty = ty.clone();
+                        ty.subst(&subst);
+                        ty
+                    };
+                    let rule_head = {
+                        let mut subst = vec![];
+                        for &name in &rule.local_types {
+                            subst.push((name, mk_fresh_type_hole()));
+                        }
+                        let subst = subst.iter().map(|&(x, ref t)| (x, t)).collect::<Vec<_>>();
+                        let mut ty = rule.ty.clone();
+                        ty.subst(&subst);
+                        ty
+                    };
+                    if ty.unify(&rule_head).is_some() {
+                        bail!("overlapping instances are disallowed");
+                    }
+                }
+                // TODO(typeclass): detect cycles
+                // well-formedness check is completed
+                self.database.push(CmdClass {
+                    local_types,
+                    params,
+                    ty,
+                    target,
+                });
+                Ok(())
+            }
         }
     }
 
@@ -1440,6 +1536,7 @@ impl Eval {
                         &mut local_env,
                         &self.proof_env.axioms,
                         &self.structure_table,
+                        &self.database,
                     )
                     .elaborate(&mut expr)?;
                     local_env
