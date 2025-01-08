@@ -230,13 +230,6 @@ impl<'a, 'b> Parser<'a, 'b> {
             .expect("impossible lex error! probably due to unchecked advance");
     }
 
-    pub fn eof(&mut self) -> Result<(), ParseError> {
-        if let Some(token) = self.peek_opt() {
-            Self::fail(token, "expected EOF but tokens remain")?;
-        }
-        Ok(())
-    }
-
     fn any_token(&mut self) -> Result<Token<'a>, ParseError> {
         self.lex
             .next()
@@ -972,24 +965,10 @@ impl<'a, 'b> Parser<'a, 'b> {
                 Cmd::Class(class_cmd)
             }
             "local" => {
-                let keyword2 = self.keyword()?;
-                match keyword2.as_str() {
-                    "type" => {
-                        let keyword3 = self.keyword()?;
-                        match keyword3.as_str() {
-                            "const" => {
-                                let local_type_const_cmd = self.local_type_const_cmd(keyword)?;
-                                Cmd::LocalTypeConst(local_type_const_cmd)
-                            }
-                            _ => {
-                                return Self::fail(keyword, "unknown command");
-                            }
-                        }
-                    }
-                    _ => {
-                        return Self::fail(keyword, "unknown command");
-                    }
-                }
+                self.expect_keyword("type")?;
+                self.expect_keyword("const")?;
+                let local_type_const_cmd = self.local_type_const_cmd(keyword)?;
+                Cmd::LocalTypeConst(local_type_const_cmd)
             }
             _ => {
                 return Self::fail(keyword, "expected command");
