@@ -4,6 +4,7 @@ use print::Pretty;
 use tt::Name;
 
 mod cmd;
+mod elab;
 mod expr;
 mod lex;
 mod parse;

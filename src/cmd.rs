@@ -3,8 +3,9 @@ use std::{collections::HashMap, iter::zip};
 use anyhow::bail;
 
 use crate::{
+    elab,
     expr::{self, mk_expr_app, mk_expr_assume, mk_expr_assump, Expr},
-    parse::{AxiomInfo, Nasmespace, TokenTable},
+    parse::{AxiomInfo, ConstInfo, Nasmespace, TokenTable},
     print::OpTable,
     proof::{self, mk_type_prop},
     tt::{
@@ -71,7 +72,10 @@ pub struct CmdNofix {
 pub struct CmdDef {
     pub name: Name,
     pub local_types: Vec<Name>,
+    pub local_classes: Vec<(Name, Type)>,
     pub ty: Type,
+    pub holes: Vec<(Name, Type)>,
+    pub class_constraints: Vec<Term>,
     pub target: Term,
 }
 
@@ -229,12 +233,25 @@ pub struct Operator {
 }
 
 impl Eval {
-    fn add_const(&mut self, name: Name, local_types: Vec<Name>, ty: Type) {
-        self.ns.consts.insert(name, local_types.len());
+    fn add_const(
+        &mut self,
+        name: Name,
+        local_types: Vec<Name>,
+        local_classes: Vec<(Name, Type)>,
+        ty: Type,
+    ) {
+        self.ns.consts.insert(
+            name,
+            ConstInfo {
+                type_arity: local_types.len(),
+                num_local_classes: local_classes.len(),
+            },
+        );
         self.proof_env.tt_env.consts.insert(name, (local_types, ty));
     }
 
     fn add_axiom(&mut self, name: Name, local_types: Vec<Name>, target: Term) {
+        println!("{target}");
         assert!(self.is_wff(&local_types, &target));
         self.ns.axioms.insert(
             name,
@@ -344,7 +361,10 @@ impl Eval {
                 let CmdDef {
                     name,
                     mut local_types,
+                    local_classes,
                     mut ty,
+                    holes,
+                    class_constraints,
                     mut target,
                 } = inner;
                 if self.has_const(name) {
@@ -362,7 +382,11 @@ impl Eval {
                         // shadowed by the .{} binder
                         continue;
                     }
-                    if !ty.contains_local(local_type_const) {
+                    if !ty.contains_local(local_type_const)
+                        && !local_classes
+                            .iter()
+                            .any(|(_, t)| t.contains_local(local_type_const))
+                    {
                         // unused
                         continue;
                     }
@@ -371,12 +395,38 @@ impl Eval {
                 let mut local_env = LocalEnv {
                     local_types,
                     locals: vec![],
-                    holes: vec![],
+                    holes,
                 };
-                self.proof_env
-                    .tt_env
-                    .check_type(&mut local_env, &mut target, &mut ty)?;
-                self.add_const(name, local_env.local_types.clone(), ty.clone());
+                for i in 0..local_classes.len() {
+                    for j in i + 1..local_classes.len() {
+                        if local_classes[i].0 == local_classes[j].0 {
+                            bail!("duplicate local class parameters");
+                        }
+                    }
+                }
+                for &(x, ref t) in &local_classes {
+                    self.proof_env
+                        .tt_env
+                        .check_kind(&local_env, t, &Kind::base())?;
+                    local_env.locals.push((x, t.clone()));
+                }
+                elab::Elaborator::new(
+                    &self.proof_env.tt_env,
+                    &mut local_env,
+                    &self.proof_env.axioms,
+                    &self.structure_table,
+                    &self.database,
+                )
+                .elaborate_term(&mut target, &ty, class_constraints)?;
+                // well-formedness check is completed.
+                ty.arrow(local_classes.iter().map(|(_, t)| t.clone()));
+                target.abs(&local_classes, false);
+                self.add_const(
+                    name,
+                    local_env.local_types.clone(),
+                    local_classes,
+                    ty.clone(),
+                );
                 self.proof_env.tt_env.defs.insert(
                     name,
                     DefInfo {
@@ -459,7 +509,7 @@ impl Eval {
                 let mut local_env = LocalEnv {
                     local_types,
                     locals: vec![],
-                    holes,
+                    holes: holes.clone(),
                 };
                 self.proof_env.tt_env.check_type(
                     &mut local_env,
@@ -472,14 +522,23 @@ impl Eval {
                     expr,
                     target.clone(),
                 );
-                let mut h = expr::Env::new(
+                elab::Elaborator::new(
                     &self.proof_env.tt_env,
                     &mut local_env,
                     &self.proof_env.axioms,
                     &self.structure_table,
                     &self.database,
                 )
-                .elaborate(&mut expr)?;
+                .elaborate_expr(&mut expr)?;
+                local_env
+                    .holes
+                    .truncate(local_env.holes.len() - holes.len());
+                let mut h = expr::Env {
+                    axioms: &self.proof_env.axioms,
+                    tt_env: &self.proof_env.tt_env,
+                    tt_local_env: &mut local_env,
+                }
+                .run(&expr);
                 self.proof_env.check_prop(
                     &mut local_env,
                     &mut proof::Context::default(),
@@ -524,7 +583,12 @@ impl Eval {
                 self.proof_env
                     .tt_env
                     .check_kind(&local_env, &ty, &Kind::base())?;
-                self.add_const(name, local_env.local_types, ty);
+                self.add_const(
+                    name,
+                    local_env.local_types,
+                    vec![], /* TODO(typeclass) */
+                    ty,
+                );
                 Ok(())
             }
             Cmd::TypeConst(inner) => {
@@ -576,7 +640,7 @@ impl Eval {
                         continue;
                     }
                     if !ty.contains_local(local_type_const)
-                        || !params
+                        && !params
                             .iter()
                             .any(|(_, t)| t.contains_local(local_type_const))
                     {
@@ -732,7 +796,12 @@ impl Eval {
             cs.push((ctor_name, ty));
         }
         for (name, ty) in cs {
-            self.add_const(name, local_types.clone(), ty);
+            self.add_const(
+                name,
+                local_types.clone(),
+                vec![], /* TODO(typeclass) */
+                ty,
+            );
         }
 
         // generate the induction principle
@@ -888,7 +957,12 @@ impl Eval {
         let mut rec_ty = mk_type_local(rec_ty_var);
         rec_ty.arrow(cont_param_tys.clone());
         rec_ty.arrow([target_ty]);
-        self.add_const(rec_name, rec_local_types.clone(), rec_ty);
+        self.add_const(
+            rec_name,
+            rec_local_types.clone(),
+            vec![], /* TODO(typeclass) */
+            rec_ty,
+        );
 
         let rhs_binders = cont_params
             .into_iter()
@@ -1069,7 +1143,12 @@ impl Eval {
             param_types.push(t.clone());
         }
         pred_ty.arrow(param_types);
-        self.add_const(name, local_env.local_types.clone(), pred_ty);
+        self.add_const(
+            name,
+            local_env.local_types.clone(),
+            vec![], /* TODO(typeclass) */
+            pred_ty,
+        );
 
         // inductive P.{u} (x : τ) : σ → Prop
         // | intro : ∀ y, φ → (∀ z, ψ → P M) → P N
@@ -1275,7 +1354,12 @@ impl Eval {
                     let fullname = Name::intern(&format!("{}.{}", name, field.name)).unwrap();
                     let mut ty = field.ty.clone();
                     ty.arrow([instance_ty.clone()]);
-                    self.add_const(fullname, local_types.clone(), ty);
+                    self.add_const(
+                        fullname,
+                        local_types.clone(),
+                        vec![], /* TODO(typeclass) */
+                        ty,
+                    );
 
                     // rep ↦ inhab.rep.{u} d
                     let mut target = mk_const(
@@ -1531,14 +1615,20 @@ impl Eval {
                         target.clone(),
                     );
                     local_env.holes.extend(holes.iter().cloned());
-                    let mut h = expr::Env::new(
+                    elab::Elaborator::new(
                         &self.proof_env.tt_env,
                         &mut local_env,
                         &self.proof_env.axioms,
                         &self.structure_table,
                         &self.database,
                     )
-                    .elaborate(&mut expr)?;
+                    .elaborate_expr(&mut expr)?;
+                    let mut h = expr::Env {
+                        axioms: &self.proof_env.axioms,
+                        tt_env: &self.proof_env.tt_env,
+                        tt_local_env: &mut local_env,
+                    }
+                    .run(&expr);
                     local_env
                         .holes
                         .truncate(local_env.holes.len() - holes.len());
@@ -1565,7 +1655,12 @@ impl Eval {
         for (_, t) in params.iter().rev() {
             instance_ty.arrow([t.clone()]);
         }
-        self.add_const(name, local_env.local_types.clone(), instance_ty);
+        self.add_const(
+            name,
+            local_env.local_types.clone(),
+            vec![], /* TODO(typeclass) */
+            instance_ty,
+        );
 
         for field in &fields {
             match field {
@@ -1587,7 +1682,12 @@ impl Eval {
                         m.abs(&params, true);
                         m
                     };
-                    self.add_const(fullname, local_env.local_types.clone(), def_target_ty);
+                    self.add_const(
+                        fullname,
+                        local_env.local_types.clone(),
+                        vec![], /* TODO(typeclass) */
+                        def_target_ty,
+                    );
                     self.proof_env.tt_env.defs.insert(
                         name,
                         DefInfo {

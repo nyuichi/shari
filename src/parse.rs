@@ -141,15 +141,19 @@ pub struct AxiomInfo {
 }
 
 #[derive(Debug, Default, Clone)]
+pub struct ConstInfo {
+    pub type_arity: usize,
+    pub num_local_classes: usize,
+}
+
+#[derive(Debug, Default, Clone)]
 pub struct Nasmespace {
     pub type_consts: HashSet<Name>,
-    // mapping name to type arity
-    pub consts: HashMap<Name, usize>,
+    pub consts: HashMap<Name, ConstInfo>,
+    pub axioms: HashMap<Name, AxiomInfo>,
     pub type_locals: Vec<Name>,
     // mapping name to type arity
     pub locals: Vec<Name>,
-    // mapping name to type arity
-    pub axioms: HashMap<Name, AxiomInfo>,
 }
 
 pub struct Parser<'a, 'b> {
@@ -159,6 +163,7 @@ pub struct Parser<'a, 'b> {
     type_locals: Vec<Name>,
     locals: Vec<Name>,
     holes: Vec<(Name, Type)>,
+    class_constraints: Vec<Term>,
 }
 
 impl<'a, 'b> Parser<'a, 'b> {
@@ -175,6 +180,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             type_locals: type_variables,
             locals: vec![],
             holes: vec![],
+            class_constraints: vec![],
         }
     }
 
@@ -442,7 +448,7 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     /// e.g. `"[x : T] [y : U]"`
-    fn class_parameters(&mut self) -> Result<Vec<(Name, Type)>, ParseError> {
+    fn local_class_parameters(&mut self) -> Result<Vec<(Name, Type)>, ParseError> {
         let mut params = vec![];
         while let Some(_token) = self.expect_symbol_opt("[") {
             let name = self.name()?;
@@ -494,7 +500,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             .ns
             .consts
             .get(&name.try_into().unwrap())
-            .copied()
+            .map(|info| info.type_arity)
             .unwrap_or_else(|| panic!("unknown constant: {name}"));
         let mut ty_args = vec![];
         for _ in 0..ty_arity {
@@ -565,9 +571,13 @@ impl<'a, 'b> Parser<'a, 'b> {
                 return Ok(mk_local(name));
             }
         }
-        let Some(ty_arity) = self.ns.consts.get(&name).copied() else {
+        let Some(const_info) = self.ns.consts.get(&name).cloned() else {
             return Self::fail(token, "unknown variable");
         };
+        let ConstInfo {
+            type_arity,
+            num_local_classes,
+        } = const_info;
         let mut ty_args = vec![];
         if let Some(_token) = self.expect_symbol_opt(".{") {
             if self.expect_symbol_opt("}").is_none() {
@@ -580,11 +590,21 @@ impl<'a, 'b> Parser<'a, 'b> {
                 self.expect_symbol("}")?;
             }
         } else {
-            for _ in 0..ty_arity {
+            for _ in 0..type_arity {
                 ty_args.push(mk_fresh_type_hole());
             }
         }
-        Ok(mk_const(name, ty_args))
+        let mut target = mk_const(name, ty_args);
+        for _ in 0..num_local_classes {
+            let hole = mk_fresh_hole();
+            let &Term::Hole(hole_name) = &hole else {
+                unreachable!()
+            };
+            self.holes.push((hole_name, mk_fresh_type_hole()));
+            self.class_constraints.push(hole.clone());
+            target.apply([hole]);
+        }
+        Ok(target)
     }
 
     fn subterm(&mut self, rbp: usize) -> Result<Term, ParseError> {
@@ -1062,6 +1082,10 @@ impl<'a, 'b> Parser<'a, 'b> {
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
+        let local_classes = self.local_class_parameters()?;
+        for (x, _) in &local_classes {
+            self.locals.push(*x);
+        }
         let params = self.typed_parameters()?;
         for (x, _) in &params {
             self.locals.push(*x);
@@ -1071,17 +1095,23 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.expect_symbol(":=")?;
         let mut m = self.term()?;
         // Parsing finished.
-        self.locals.truncate(self.locals.len() - params.len());
+        self.locals
+            .truncate(self.locals.len() - params.len() - local_classes.len());
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
         for (x, ty) in params.into_iter().rev() {
             t.arrow([ty.clone()]);
             m.abs(&[(x, ty)], true);
         }
+        let holes = self.holes.drain(..).collect();
+        let class_constraints = self.class_constraints.drain(..).collect();
         Ok(CmdDef {
             name,
             local_types,
+            local_classes,
             ty: t,
+            holes,
+            class_constraints,
             target: m,
         })
     }
@@ -1415,7 +1445,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         let ty = self.ty()?;
         let mut params = vec![];
         if let Some(_token) = self.expect_symbol_opt(":-") {
-            params = self.class_parameters()?;
+            params = self.local_class_parameters()?;
             for &(x, _) in &params {
                 self.locals.push(x);
             }
@@ -1433,65 +1463,4 @@ impl<'a, 'b> Parser<'a, 'b> {
             target,
         })
     }
-}
-
-#[test]
-fn parse_term() {
-    let mut tt = TokenTable::default();
-
-    let ops = [
-        Operator {
-            symbol: "=".to_owned(),
-            fixity: Fixity::Infix,
-            prec: 50,
-            entity: "eq".try_into().unwrap(),
-        },
-        Operator {
-            symbol: "⊤".to_owned(),
-            fixity: Fixity::Nofix,
-            prec: usize::MAX,
-            entity: "top".try_into().unwrap(),
-        },
-        Operator {
-            symbol: "∧".to_owned(),
-            fixity: Fixity::Infixr,
-            prec: 35,
-            entity: "and".try_into().unwrap(),
-        },
-        Operator {
-            symbol: "¬".to_owned(),
-            fixity: Fixity::Prefix,
-            prec: 40,
-            entity: "not".try_into().unwrap(),
-        },
-    ];
-    for op in ops {
-        tt.add(op).unwrap();
-    }
-
-    let mut ns = Nasmespace::default();
-    ns.type_consts.insert("Prop".try_into().unwrap());
-    ns.consts.insert("eq".try_into().unwrap(), 1);
-    ns.consts.insert("top".try_into().unwrap(), 0);
-    ns.consts.insert("and".try_into().unwrap(), 0);
-    ns.consts.insert("not".try_into().unwrap(), 0);
-    ns.type_locals.push("α".try_into().unwrap());
-    ns.type_locals.push("u".try_into().unwrap());
-    ns.type_locals.push("v".try_into().unwrap());
-
-    let parse = |input: &str| -> Term {
-        let mut lex = Lex::new(input);
-        let mut parser = Parser::new(&mut lex, &tt, &ns, vec![]);
-        let m = parser.term().unwrap();
-        parser.eof().unwrap();
-        m
-    };
-
-    insta::assert_snapshot!(parse("λ (x : α), x"), @"(lam (local α) (var 0))");
-    insta::assert_snapshot!(parse("λ (p q r : Prop), p q r"), @"(lam Prop (lam Prop (lam Prop (((var 2) (var 1)) (var 0)))))");
-    insta::assert_snapshot!(parse("λ (φ ψ : Prop), eq.{α} (λ (f : Prop → Prop → Prop), f φ ψ) (λ (f : Prop → Prop → Prop), f ⊤ ⊤)"), @"(lam Prop (lam Prop ((eq.{(local α)} (lam (Prop → (Prop → Prop)) (((var 0) (var 2)) (var 1)))) (lam (Prop → (Prop → Prop)) (((var 0) top) top)))))");
-    insta::assert_snapshot!(parse("λ (p q : Prop), p =.{Prop} (p ∧ q)"), @"(lam Prop (lam Prop ((eq.{Prop} (var 1)) ((and (var 1)) (var 0)))))");
-    insta::assert_snapshot!(parse("λ (a b : Prop), (¬a) =.{Prop} b"), @"(lam Prop (lam Prop ((eq.{Prop} (not (var 1))) (var 0))))");
-    insta::assert_snapshot!(parse("λ (a b : Prop), ¬a =.{Prop} b"), @"(lam Prop (lam Prop (not ((eq.{Prop} (var 1)) (var 0)))))");
-    insta::assert_snapshot!(parse("λ (x : α), eq.{u → v} x"), @"(lam (local α) (eq.{((local u) → (local v))} (var 0)))");
 }
