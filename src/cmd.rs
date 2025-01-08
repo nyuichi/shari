@@ -676,7 +676,6 @@ impl Eval {
                         for &name in &local_env.local_types {
                             subst.push((name, mk_fresh_type_hole()));
                         }
-                        let subst = subst.iter().map(|&(x, ref t)| (x, t)).collect::<Vec<_>>();
                         let mut ty = ty.clone();
                         ty.subst(&subst);
                         ty
@@ -686,7 +685,6 @@ impl Eval {
                         for &name in &rule.local_types {
                             subst.push((name, mk_fresh_type_hole()));
                         }
-                        let subst = subst.iter().map(|&(x, ref t)| (x, t)).collect::<Vec<_>>();
                         let mut ty = rule.ty.clone();
                         ty.subst(&subst);
                         ty
@@ -787,7 +785,7 @@ impl Eval {
             c
         };
         // Foo ↦ Foo u v
-        let subst = [(name, &target_ty)];
+        let subst = [(name, target_ty.clone())];
         let mut cs = vec![];
         for ctor in &ctors {
             let ctor_name = Name::intern(&format!("{}.{}", name, ctor.name)).unwrap();
@@ -926,7 +924,7 @@ impl Eval {
                     continue;
                 }
                 let mut t = ctor_arg.clone();
-                t.subst(&[(name, &mk_type_local(rec_ty_var))]);
+                t.subst(&[(name, mk_type_local(rec_ty_var))]);
                 cont_arg_tys.push(t);
 
                 let binders: Vec<_> = arg_tys
@@ -1166,7 +1164,7 @@ impl Eval {
                     .collect(),
             );
             stash.apply(params.iter().map(|(name, _)| mk_local(*name)));
-            let subst = [(name, &stash)];
+            let subst = [(name, stash)];
             target.subst(&subst);
             target.generalize(&params);
             self.add_axiom(ctor_name, local_env.local_types.clone(), target);
@@ -1193,7 +1191,7 @@ impl Eval {
             zip(ctor_args_list, zip(ctor_target_list, ctor_ind_args_list)),
         ) {
             // P ↦ C
-            let subst_with_motive = [(name, &mk_local(motive))];
+            let subst_with_motive = [(name, mk_local(motive))];
 
             let mut guard = ctor_target;
 
@@ -1216,7 +1214,7 @@ impl Eval {
                     .collect(),
             );
             stash.apply(params.iter().map(|(name, _)| mk_local(*name)));
-            let subst = [(name, &stash)];
+            let subst = [(name, stash)];
 
             // φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
             for ctor_arg in &mut ctor_args {
@@ -1373,7 +1371,7 @@ impl Eval {
                     let fullname = Name::intern(&format!("{}.{}", name, field.name)).unwrap();
 
                     let mut target = field.target.clone();
-                    target.subst(&subst.iter().map(|(x, m)| (*x, m)).collect::<Vec<_>>());
+                    target.subst(&subst);
 
                     target.generalize(&[(instance, instance_ty.clone())]);
 
@@ -1412,7 +1410,7 @@ impl Eval {
                 }
                 StructureField::Axiom(field) => {
                     let mut target = field.target.clone();
-                    target.subst(&subst.iter().map(|(x, m)| (*x, m)).collect::<Vec<_>>());
+                    target.subst(&subst);
 
                     guards.push(target);
                 }
@@ -1545,7 +1543,7 @@ impl Eval {
         };
         let mut type_subst = vec![];
         for (&x, t) in zip(&cmd_structure.local_types, target_ty.args()) {
-            type_subst.push((x, t));
+            type_subst.push((x, t.clone()));
         }
         let type_subst = type_subst;
         if cmd_structure.fields.len() != fields.len() {
@@ -1640,8 +1638,7 @@ impl Eval {
                     )?;
                     let mut structure_field_target = structure_field.target.clone();
                     structure_field_target.subst_type(&type_subst);
-                    structure_field_target
-                        .subst(&subst.iter().map(|(x, m)| (*x, m)).collect::<Vec<_>>());
+                    structure_field_target.subst(&subst);
                     if !structure_field_target.typed_eq(target) {
                         bail!("target mismatch");
                     }

@@ -1,6 +1,6 @@
 //! Prove by type synthesis.
 
-use std::{collections::HashMap, sync::Arc, vec};
+use std::{collections::HashMap, iter::zip, sync::Arc, vec};
 
 use anyhow::bail;
 use std::sync::LazyLock;
@@ -324,7 +324,10 @@ impl Env {
                 for ty_arg in &mut *ty_args {
                     self.tt_env.check_kind(local_env, ty_arg, &Kind::base())?;
                 }
-                let subst: Vec<_> = std::iter::zip(tv, ty_args.iter()).collect();
+                let mut subst = vec![];
+                for (&x, t) in zip(&tv, &*ty_args) {
+                    subst.push((x, t.clone()))
+                }
                 target.subst_type(&subst);
                 Ok(target)
             }

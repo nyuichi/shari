@@ -241,11 +241,11 @@ impl Type {
     }
 
     /// Simultaneously substitute `t₁ ⋯ tₙ` for locals with names `x₁ ⋯ xₙ`.
-    pub fn subst(&mut self, subst: &[(Name, &Type)]) {
+    pub fn subst(&mut self, subst: &[(Name, Type)]) {
         match self {
             Self::Const(_) => {}
             Self::Local(x) => {
-                if let Some((_, t)) = subst.iter().copied().find(|(y, _)| y == x) {
+                if let Some((_, t)) = subst.iter().find(|(y, _)| y == x) {
                     *self = t.clone();
                 }
             }
@@ -263,7 +263,7 @@ impl Type {
         }
     }
 
-    pub fn inst_hole(&mut self, subst: &[(Name, &Type)]) {
+    pub fn inst_hole(&mut self, subst: &[(Name, Type)]) {
         match self {
             Type::Const(_) => {}
             Type::Arrow(inner) => {
@@ -279,7 +279,7 @@ impl Type {
             Type::Local(_) => {}
             Type::Hole(name) => {
                 if let Some((_, ty)) = subst.iter().find(|(x, _)| x == name) {
-                    *self = (*ty).clone();
+                    *self = ty.clone();
                 };
             }
         }
@@ -969,13 +969,13 @@ impl Term {
         Some(left)
     }
 
-    pub fn inst_hole(&mut self, subst: &[(Name, &Term)]) {
+    pub fn inst_hole(&mut self, subst: &[(Name, Term)]) {
         match self {
             Term::Var(_) => {}
             Term::Local(_) => {}
             Term::Const(_) => {}
             Term::Hole(x) => {
-                if let Some((_, m)) = subst.iter().copied().find(|(y, _)| y == x) {
+                if let Some((_, m)) = subst.iter().find(|(y, _)| y == x) {
                     *self = m.clone();
                 }
             }
@@ -991,7 +991,7 @@ impl Term {
         }
     }
 
-    pub fn subst_type(&mut self, subst: &[(Name, &Type)]) {
+    pub fn subst_type(&mut self, subst: &[(Name, Type)]) {
         match self {
             Term::Var(_) => {}
             Term::Abs(inner) => {
@@ -1014,7 +1014,7 @@ impl Term {
         }
     }
 
-    pub fn subst(&mut self, subst: &[(Name, &Term)]) {
+    pub fn subst(&mut self, subst: &[(Name, Term)]) {
         match self {
             Term::Var(_) => {}
             Term::Abs(inner) => {
@@ -1029,7 +1029,7 @@ impl Term {
             Term::Local(name) => {
                 for (x, m) in subst {
                     if name == x {
-                        *self = (*m).clone();
+                        *self = m.clone();
                         break;
                     }
                 }
@@ -1039,7 +1039,7 @@ impl Term {
         }
     }
 
-    pub fn inst_type_hole(&mut self, subst: &[(Name, &Type)]) {
+    pub fn inst_type_hole(&mut self, subst: &[(Name, Type)]) {
         match self {
             Term::Var(_) => {}
             Term::Abs(inner) => {
@@ -1071,6 +1071,17 @@ impl Term {
             Term::Local(_) => true,
             Term::Const(_) => true,
             Term::Hole(_) => false,
+        }
+    }
+
+    pub fn is_type_ground(&self) -> bool {
+        match self {
+            Term::Var(_) => true,
+            Term::Abs(inner) => inner.binder_type.is_ground() && inner.body.is_type_ground(),
+            Term::App(inner) => inner.fun.is_type_ground() && inner.arg.is_type_ground(),
+            Term::Local(_) => true,
+            Term::Const(inner) => inner.ty_args.iter().all(Type::is_ground),
+            Term::Hole(_) => true,
         }
     }
 
@@ -1538,9 +1549,9 @@ impl Env {
                     bail!("number of type arguments mismatch");
                 }
                 let mut subst = vec![];
-                for (&x, t) in std::iter::zip(&local_types, ty_args.iter()) {
+                for (&x, t) in zip(&local_types, &*ty_args) {
                     self.check_kind(local_env, t, &Kind::base())?;
-                    subst.push((x, t));
+                    subst.push((x, t.clone()));
                 }
                 target.subst_type(&subst);
                 let c = mk_const(*name, ty_args.clone());
@@ -1580,13 +1591,13 @@ impl Env {
                 }
                 let mut target = target.clone();
                 let mut subst = vec![];
-                for (&x, t) in zip(local_types, ctor.ty_args.iter()) {
-                    subst.push((x, t));
+                for (&x, t) in zip(local_types, &ctor.ty_args) {
+                    subst.push((x, t.clone()));
                 }
                 target.subst_type(&subst);
 
                 let mut subst = vec![];
-                for (&x, t) in zip(params, args.iter()) {
+                for (&x, t) in zip(params, args) {
                     subst.push((x, t));
                 }
                 target.subst(&subst);
@@ -1635,11 +1646,11 @@ impl Env {
         let mut target = target.clone();
         let mut subst = vec![];
         for (&ty_param, ty_arg) in zip(local_types, &arg.ty_args) {
-            subst.push((ty_param, ty_arg));
+            subst.push((ty_param, ty_arg.clone()));
         }
         target.subst_type(&subst);
         let mut subst = vec![];
-        for (&param, arg) in zip(params, &args) {
+        for (&param, arg) in zip(params, args) {
             subst.push((param, arg));
         }
         target.subst(&subst);
@@ -1697,7 +1708,10 @@ impl Env {
         if local_types.len() != ty_args.len() {
             return None;
         }
-        let subst: Vec<_> = std::iter::zip(local_types.iter().copied(), ty_args.iter()).collect();
+        let mut subst = vec![];
+        for (&x, t) in zip(&local_types, &*ty_args) {
+            subst.push((x, t.clone()));
+        }
         target.subst_type(&subst);
         let path = mk_path_delta(*name, mem::take(ty_args));
         *m = target;
@@ -1978,8 +1992,12 @@ impl<'a> Infer<'a> {
                 for t in &inner.ty_args {
                     self.env.check_kind(self.local_env, t, &Kind::base())?;
                 }
+                let mut subst = vec![];
+                for (&x, t) in zip(tv, &inner.ty_args) {
+                    subst.push((x, t.clone()));
+                }
                 let mut ty = ty.clone();
-                ty.subst(&std::iter::zip(tv.iter().copied(), &inner.ty_args).collect::<Vec<_>>());
+                ty.subst(&subst);
                 self.eq_set.unify(ty, target.clone());
             }
         }

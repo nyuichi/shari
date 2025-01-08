@@ -173,8 +173,12 @@ impl<'a> Elaborator<'a> {
                         bail!("expected Type, but got {ty_arg_kind}");
                     }
                 }
+                let mut subst = vec![];
+                for (&x, t) in zip(tv, &m.ty_args) {
+                    subst.push((x, t.clone()));
+                }
                 let mut ty = ty.clone();
-                ty.subst(&std::iter::zip(tv.iter().copied(), &m.ty_args).collect::<Vec<_>>());
+                ty.subst(&subst);
                 Ok(ty)
             }
         }
@@ -294,10 +298,12 @@ impl<'a> Elaborator<'a> {
                         bail!("expected Type, but got {ty_arg_kind}");
                     }
                 }
+                let mut subst = vec![];
+                for (&x, t) in zip(tv, &e.ty_args) {
+                    subst.push((x, t.clone()));
+                }
                 let mut target = target.clone();
-                target.subst_type(
-                    &std::iter::zip(tv.iter().copied(), &e.ty_args).collect::<Vec<_>>(),
-                );
+                target.subst_type(&subst);
                 Ok(target)
             }
         }
@@ -315,7 +321,7 @@ impl<'a> Elaborator<'a> {
         self.add_type_constraint(target_ty.clone(), t);
         self.class_constraints.extend(class_constraints);
 
-        let (mut subst, mut type_subst) = Unifier::new(
+        let (subst, type_subst) = Unifier::new(
             self.tt_env,
             self.structure_table,
             self.tt_local_env.holes.clone(),
@@ -326,32 +332,10 @@ impl<'a> Elaborator<'a> {
         )
         .solve()
         .context("unification failed")?;
-        // Because subst is not topologically sorted, make it sorted by applying subst to subst in order.
-        for i in 1..subst.len() {
-            let (first, last) = subst.split_at_mut(i);
-            let (name, m) = first.last().unwrap();
-            for (_, n) in last {
-                n.inst_hole(&[(*name, m)]);
-            }
-        }
-        for i in 1..type_subst.len() {
-            let (first, last) = type_subst.split_at_mut(i);
-            let (name, m) = first.last().unwrap();
-            for (_, n) in last {
-                n.inst_hole(&[(*name, m)]);
-            }
-        }
 
-        for (name, n) in subst {
-            let subst = [(name, &n)];
-            target.inst_hole(&subst);
-        }
+        target.inst_type_hole(&type_subst);
+        target.inst_hole(&subst);
         target.normalize();
-
-        for (name, ty) in type_subst {
-            let subst = [(name, &ty)];
-            target.inst_type_hole(&subst);
-        }
 
         Ok(())
     }
@@ -364,7 +348,7 @@ impl<'a> Elaborator<'a> {
 
         self.visit_expr(e)?;
 
-        let (mut subst, mut type_subst) = Unifier::new(
+        let (subst, type_subst) = Unifier::new(
             self.tt_env,
             self.structure_table,
             self.tt_local_env.holes.clone(),
@@ -375,32 +359,10 @@ impl<'a> Elaborator<'a> {
         )
         .solve()
         .context("unification failed")?;
-        // Because subst is not topologically sorted, make it sorted by applying subst to subst in order.
-        for i in 1..subst.len() {
-            let (first, last) = subst.split_at_mut(i);
-            let (name, m) = first.last().unwrap();
-            for (_, n) in last {
-                n.inst_hole(&[(*name, m)]);
-            }
-        }
-        for i in 1..type_subst.len() {
-            let (first, last) = type_subst.split_at_mut(i);
-            let (name, m) = first.last().unwrap();
-            for (_, n) in last {
-                n.inst_hole(&[(*name, m)]);
-            }
-        }
 
-        for (name, m) in subst {
-            let subst = [(name, &m)];
-            e.inst_hole(&subst);
-        }
+        e.inst_type_hole(&type_subst);
+        e.inst_hole(&subst);
         e.normalize();
-
-        for (name, ty) in type_subst {
-            let subst = [(name, &ty)];
-            e.inst_type_hole(&subst);
-        }
 
         #[cfg(debug_assertions)]
         {
@@ -610,7 +572,7 @@ impl<'a> Unifier<'a> {
     fn inst_head(&self, m: &mut Term) -> bool {
         if let &Term::Hole(m_head) = m.head() {
             if let Some(a) = self.subst_map.get(&m_head) {
-                let subst = [(m_head, a)];
+                let subst = [(m_head, a.clone())];
                 m.head_mut().inst_hole(&subst);
                 return true;
             }
@@ -808,7 +770,7 @@ impl<'a> Unifier<'a> {
                     }
                 }
                 let mut c = (**c).clone();
-                let subst = [(name, &m)];
+                let subst = [(name, m.clone())];
                 c.left.inst_hole(&subst);
                 c.right.inst_hole(&subst);
                 self.stack.push((c.local_env, c.left, c.right));
@@ -872,7 +834,10 @@ impl<'a> Unifier<'a> {
             }
             Term::Const(target) => {
                 let (args, t) = self.tt_env.consts.get(&target.name).unwrap();
-                let subst = zip(args.iter().copied(), &target.ty_args).collect::<Vec<_>>();
+                let mut subst = vec![];
+                for (&x, t) in zip(args, &target.ty_args) {
+                    subst.push((x, t.clone()));
+                }
                 let mut t = t.clone();
                 t.subst(&subst);
                 self.inst_type(&mut t);
@@ -1470,7 +1435,10 @@ impl<'a> Unifier<'a> {
             // τ(C)
             let right_head_ty = {
                 let (args, t) = self.tt_env.consts.get(&right_head.name).unwrap();
-                let subst = zip(args.iter().copied(), &right_head.ty_args).collect::<Vec<_>>();
+                let mut subst = vec![];
+                for (&x, t) in zip(args, &right_head.ty_args) {
+                    subst.push((x, t.clone()));
+                }
                 let mut t = t.clone();
                 t.subst(&subst);
                 self.inst_type(&mut t); // TODO: avoid full instantiation
@@ -1542,7 +1510,10 @@ impl<'a> Unifier<'a> {
             let Some(structure) = self.structure_table.get(&head) else {
                 continue;
             };
-            let ty_subst = zip(structure.local_types.iter().copied(), &ty_args).collect::<Vec<_>>();
+            let mut ty_subst = vec![];
+            for (&x, t) in zip(&structure.local_types, &ty_args) {
+                ty_subst.push((x, t.clone()));
+            }
             for field in &structure.fields {
                 let StructureField::Const(field) = field else {
                     continue;
@@ -1653,7 +1624,6 @@ impl<'a> Unifier<'a> {
                 for &name in local_types {
                     subst.push((name, mk_fresh_type_hole()));
                 }
-                let subst = subst.iter().map(|&(x, ref t)| (x, t)).collect::<Vec<_>>();
                 let mut ty = ty.clone();
                 ty.subst(&subst);
                 ty
@@ -1669,12 +1639,7 @@ impl<'a> Unifier<'a> {
             let mut success = true;
             for &(x, ref t) in params {
                 let mut subgoal = t.clone();
-                subgoal.subst(
-                    &type_subst
-                        .iter()
-                        .map(|&(x, ref t)| (x, t))
-                        .collect::<Vec<_>>(),
-                );
+                subgoal.subst(&type_subst);
                 let Some(arg) = self.synthesize_instance(&subgoal) else {
                     success = false;
                     break;
@@ -1685,13 +1650,8 @@ impl<'a> Unifier<'a> {
                 continue;
             }
             let mut target = target.clone();
-            target.subst_type(
-                &type_subst
-                    .iter()
-                    .map(|&(x, ref t)| (x, t))
-                    .collect::<Vec<_>>(),
-            );
-            target.subst(&subst.iter().map(|&(x, ref t)| (x, t)).collect::<Vec<_>>());
+            target.subst_type(&type_subst);
+            target.subst(&subst);
             // TODO(typeclass):
             // Our language does not support overlapping instances so we generally don't need to check other instances.
             // However, if we try to synthesize for a non-ground goal like `H a ?b`, we will possibly find more than one solutions,
@@ -1825,8 +1785,27 @@ impl<'a> Unifier<'a> {
                 }
             }
             if !self.decide() {
-                return Some((self.subst, self.type_subst));
+                break;
             }
         }
+        // TODO: optimize
+        for i in 0..self.type_subst.len() {
+            let mut t = self.type_subst[i].1.clone();
+            while !t.is_ground() {
+                t.inst_hole(&self.type_subst);
+            }
+            self.type_subst[i].1 = t;
+        }
+        for i in 0..self.subst.len() {
+            let mut m = self.subst[i].1.clone();
+            while !m.is_ground() {
+                m.inst_hole(&self.subst);
+            }
+            while !m.is_type_ground() {
+                m.inst_type_hole(&self.type_subst);
+            }
+            self.subst[i].1 = m;
+        }
+        Some((self.subst, self.type_subst))
     }
 }

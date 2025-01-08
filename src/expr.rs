@@ -1,3 +1,4 @@
+use std::iter::zip;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::proof::{
@@ -153,7 +154,7 @@ impl std::fmt::Display for Expr {
 }
 
 impl Expr {
-    pub fn inst_type_hole(&mut self, subst: &[(Name, &Type)]) {
+    pub fn inst_type_hole(&mut self, subst: &[(Name, Type)]) {
         match self {
             Expr::Assump(e) => {
                 let ExprAssump { target } = Arc::make_mut(e);
@@ -198,7 +199,7 @@ impl Expr {
         }
     }
 
-    pub fn inst_hole(&mut self, subst: &[(Name, &Term)]) {
+    pub fn inst_hole(&mut self, subst: &[(Name, Term)]) {
         match self {
             Expr::Assump(e) => {
                 let ExprAssump { target } = Arc::make_mut(e);
@@ -367,7 +368,10 @@ impl<'a> Env<'a> {
             Expr::Const(inner) => {
                 let h = mk_proof_ref(inner.name, inner.ty_args.clone());
                 let (tv, mut target) = self.axioms.get(&inner.name).cloned().unwrap();
-                let subst: Vec<_> = std::iter::zip(tv, inner.ty_args.iter()).collect();
+                let mut subst = vec![];
+                for (&x, t) in zip(&tv, &inner.ty_args) {
+                    subst.push((x, t.clone()));
+                }
                 target.subst_type(&subst);
                 (h, target)
             }
