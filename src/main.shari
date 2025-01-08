@@ -16,6 +16,7 @@
 -- the very basic building blocks of our logic
 type const Prop : Type
 const imp : Prop → Prop → Prop
+-- the universe Prop of all propositions is impredicative.
 const forall.{u} : (u → Prop) → Prop
 
 infixr → : 25 := imp
