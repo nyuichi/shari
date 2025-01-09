@@ -5,9 +5,7 @@ use std::{collections::HashMap, iter::zip, sync::Arc, vec};
 use anyhow::bail;
 use std::sync::LazyLock;
 
-use crate::tt::{
-    self, mk_abs, mk_const, mk_type_const, Kind, LocalEnv, Name, Path, Term, TermAbs, Type,
-};
+use crate::tt::{self, mk_abs, mk_const, mk_type_const, LocalEnv, Name, Path, Term, TermAbs, Type};
 
 #[derive(Debug, Clone)]
 pub enum Proof {
@@ -273,7 +271,7 @@ impl Env {
             }
             Proof::ForallIntro(inner) => {
                 let (x, t, h) = Arc::make_mut(inner);
-                self.tt_env.check_kind(local_env, t, &Kind::base())?;
+                self.tt_env.ensure_wft(local_env, t)?;
                 for c in &context.props {
                     if !c.is_fresh(&[*x]) {
                         bail!("eigenvariable condition fails");
@@ -322,7 +320,7 @@ impl Env {
                     bail!("wrong number of type arguments supplied");
                 }
                 for ty_arg in &mut *ty_args {
-                    self.tt_env.check_kind(local_env, ty_arg, &Kind::base())?;
+                    self.tt_env.ensure_wft(local_env, ty_arg)?;
                 }
                 let mut subst = vec![];
                 for (&x, t) in zip(&tv, &*ty_args) {
@@ -337,7 +335,7 @@ impl Env {
 
 #[cfg(test)]
 mod tests {
-    use tt::{mk_type_arrow, mk_type_local};
+    use tt::{mk_type_arrow, mk_type_local, Kind};
 
     use super::tt::{mk_abs, mk_app, mk_fresh_type_hole, mk_local, mk_var};
     use super::*;

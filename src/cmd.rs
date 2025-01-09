@@ -405,9 +405,7 @@ impl Eval {
                     }
                 }
                 for &(x, ref t) in &local_classes {
-                    self.proof_env
-                        .tt_env
-                        .check_kind(&local_env, t, &Kind::base())?;
+                    self.proof_env.tt_env.ensure_wft(&local_env, t)?;
                     local_env.locals.push((x, t.clone()));
                 }
                 elab::Elaborator::new(
@@ -580,9 +578,7 @@ impl Eval {
                     locals: vec![],
                     holes: vec![],
                 };
-                self.proof_env
-                    .tt_env
-                    .check_kind(&local_env, &ty, &Kind::base())?;
+                self.proof_env.tt_env.ensure_wft(&local_env, &ty)?;
                 self.add_const(
                     name,
                     local_env.local_types,
@@ -662,9 +658,7 @@ impl Eval {
                     }
                 }
                 for &(x, ref t) in &params {
-                    self.proof_env
-                        .tt_env
-                        .check_kind(&local_env, t, &Kind::base())?;
+                    self.proof_env.tt_env.ensure_wft(&local_env, t)?;
                     local_env.locals.push((x, t.clone()));
                 }
                 self.proof_env
@@ -744,9 +738,7 @@ impl Eval {
             if self.has_const(ctor_spec_name) {
                 bail!("already defined");
             }
-            self.proof_env
-                .tt_env
-                .check_kind(&local_env, &ctor.ty, &Kind::base())?;
+            self.proof_env.tt_env.ensure_wft(&local_env, &ctor.ty)?;
             let mut t = ctor.ty.clone();
             let args = t.unarrow();
             if t != mk_type_local(name) {
@@ -1054,14 +1046,10 @@ impl Eval {
                     bail!("duplicate parameters");
                 }
             }
-            self.proof_env
-                .tt_env
-                .check_kind(&local_env, &params[i].1, &Kind::base())?;
+            self.proof_env.tt_env.ensure_wft(&local_env, &params[i].1)?;
             local_env.locals.push((params[i].0, params[i].1.clone()));
         }
-        self.proof_env
-            .tt_env
-            .check_kind(&local_env, &target_ty, &Kind::base())?;
+        self.proof_env.tt_env.ensure_wft(&local_env, &target_ty)?;
         if target_ty.target() != &mk_type_prop() {
             bail!("the target type of an inductive predicate must be Prop");
         }
@@ -1293,9 +1281,7 @@ impl Eval {
                         bail!("duplicate const field");
                     }
                     const_field_names.push(field_name);
-                    self.proof_env
-                        .tt_env
-                        .check_kind(&local_env, field_ty, &Kind::base())?;
+                    self.proof_env.tt_env.ensure_wft(&local_env, field_ty)?;
                     local_env.locals.push((*field_name, field_ty.clone()));
                 }
                 StructureField::Axiom(field) => {
@@ -1527,14 +1513,10 @@ impl Eval {
                     bail!("duplicate parameters");
                 }
             }
-            self.proof_env
-                .tt_env
-                .check_kind(&local_env, &params[i].1, &Kind::base())?;
+            self.proof_env.tt_env.ensure_wft(&local_env, &params[i].1)?;
             local_env.locals.push((params[i].0, params[i].1.clone()));
         }
-        self.proof_env
-            .tt_env
-            .check_kind(&local_env, &target_ty, &Kind::base())?;
+        self.proof_env.tt_env.ensure_wft(&local_env, &target_ty)?;
         let Type::Const(structure_name) = target_ty.head() else {
             bail!("type of instance must be a structure");
         };

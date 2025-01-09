@@ -1389,8 +1389,7 @@ impl Env {
         }
     }
 
-    /// Infer the kind of `t`. This method also checks whether arities are consistent.
-    pub fn infer_kind(&self, local_env: &LocalEnv, t: &Type) -> anyhow::Result<Kind> {
+    fn infer_kind(&self, local_env: &LocalEnv, t: &Type) -> anyhow::Result<Kind> {
         match t {
             Type::Const(name) => {
                 let Some(kind) = self.type_consts.get(name) else {
@@ -1424,11 +1423,18 @@ impl Env {
         }
     }
 
-    /// Check whether arities are consistent.
-    pub fn check_kind(&self, local_env: &LocalEnv, t: &Type, kind: &Kind) -> anyhow::Result<()> {
+    fn check_kind(&self, local_env: &LocalEnv, t: &Type, kind: &Kind) -> anyhow::Result<()> {
         let my_kind = self.infer_kind(local_env, t)?;
         if &my_kind != kind {
             bail!("expected {kind}, but got {my_kind}");
+        }
+        Ok(())
+    }
+
+    pub fn ensure_wft(&self, local_env: &LocalEnv, t: &Type) -> anyhow::Result<()> {
+        self.check_kind(local_env, t, &Kind::base())?;
+        if !t.is_ground() {
+            bail!("an uninstantiated type hole found");
         }
         Ok(())
     }
