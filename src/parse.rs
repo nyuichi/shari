@@ -66,7 +66,6 @@ enum Nud {
     Exists,
     Uexists,
     Paren,
-    Bracket,
     Hole,
     Brace,
     User(Operator),
@@ -102,7 +101,6 @@ impl TokenTable {
                 let lit = token.as_str();
                 match lit {
                     "(" => Some(Nud::Paren),
-                    "⟨" => Some(Nud::Bracket),
                     "λ" => Some(Nud::Abs),
                     "∀" => Some(Nud::Forall),
                     "∃" => Some(Nud::Exists),
@@ -488,20 +486,6 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(m)
     }
 
-    fn mk_const_unchecked(&self, name: &str) -> Term {
-        let ty_arity = self
-            .ns
-            .consts
-            .get(&name.try_into().unwrap())
-            .map(|info| info.type_arity)
-            .unwrap_or_else(|| panic!("unknown constant: {name}"));
-        let mut ty_args = vec![];
-        for _ in 0..ty_arity {
-            ty_args.push(mk_fresh_type_hole());
-        }
-        mk_const(Name::try_from(name).expect("invalid name"), ty_args)
-    }
-
     fn term_binder(&mut self, token: Token<'a>, binder: &str) -> Result<Term, ParseError> {
         let params = self.parameters()?;
         self.expect_symbol(",")?;
@@ -614,33 +598,6 @@ impl<'a, 'b> Parser<'a, 'b> {
                 let m = self.subterm(0)?;
                 self.expect_symbol(")")?;
                 m
-            }
-            Nud::Bracket => {
-                let mut terms = vec![];
-                while let Some(m) = self.term_opt() {
-                    terms.push(m);
-                    if self.expect_symbol_opt(",").is_none() {
-                        break;
-                    }
-                }
-                self.expect_symbol("⟩")?;
-                // right associative encoding:
-                // ⟨⟩ ⇒ star
-                // ⟨m⟩ ⇒ m
-                // ⟨m,n,l⟩ ⇒ ⟨m, ⟨n, l⟩⟩
-                match terms.len() {
-                    0 => self.mk_const_unchecked("star"),
-                    1 => terms.pop().unwrap(),
-                    _ => {
-                        let mut m = terms.pop().unwrap();
-                        for n in terms.into_iter().rev() {
-                            let mut x = self.mk_const_unchecked("pair");
-                            x.apply(vec![n, m]);
-                            m = x;
-                        }
-                        m
-                    }
-                }
             }
             Nud::Forall => self.term_binder(token, "forall")?,
             Nud::Exists => self.term_binder(token, "exists")?,
