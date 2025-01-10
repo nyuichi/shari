@@ -74,8 +74,6 @@ pub struct CmdDef {
     pub local_types: Vec<Name>,
     pub local_classes: Vec<(Name, Type)>,
     pub ty: Type,
-    pub holes: Vec<(Name, Type)>,
-    pub class_constraints: Vec<Term>,
     pub target: Term,
 }
 
@@ -205,12 +203,30 @@ pub struct CmdClass {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct Const {
+    pub local_types: Vec<Name>,
+    pub local_classes: Vec<(Name, Type)>,
+    // ty is not arrowed by local class types
+    pub ty: Type,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Axiom {
+    pub local_types: Vec<Name>,
+    pub local_classes: Vec<(Name, Type)>,
+    // target is not generalized by local classes
+    pub target: Term,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct Eval {
     pub proof_env: proof::Env,
     pub tt: TokenTable,
     pub ns: Nasmespace,
     pub pp: OpTable,
     pub local_type_consts: Vec<Name>,
+    pub const_table: HashMap<Name, Const>,
+    pub axiom_table: HashMap<Name, Axiom>,
     pub structure_table: HashMap<Name, CmdStructure>,
     pub database: Vec<CmdClass>,
 }
@@ -240,19 +256,43 @@ impl Eval {
         local_classes: Vec<(Name, Type)>,
         ty: Type,
     ) {
+        // TODO: remove and integrate into const_table
         self.ns.consts.insert(
             name,
             ConstInfo {
                 type_arity: local_types.len(),
-                num_local_classes: local_classes.len(),
             },
         );
-        self.proof_env.tt_env.consts.insert(name, (local_types, ty));
+        // TODO: remove and integrate into const_table
+        {
+            let mut ty = ty.clone();
+            ty.arrow(local_classes.iter().map(|(_, t)| t.clone()));
+            self.proof_env
+                .tt_env
+                .consts
+                .insert(name, (local_types.clone(), ty));
+        }
+
+        self.const_table.insert(
+            name,
+            Const {
+                local_types,
+                local_classes,
+                ty,
+            },
+        );
     }
 
-    fn add_axiom(&mut self, name: Name, local_types: Vec<Name>, target: Term) {
-        println!("{target}");
+    fn add_axiom(
+        &mut self,
+        name: Name,
+        local_types: Vec<Name>,
+        local_classes: Vec<(Name, Type)>,
+        target: Term,
+    ) {
         assert!(self.is_wff(&local_types, &target));
+
+        // TODO: remove and integrate into axiom_table
         self.ns.axioms.insert(
             name,
             AxiomInfo {
@@ -260,7 +300,23 @@ impl Eval {
                 num_params: target.clone().ungeneralize().len(),
             },
         );
-        self.proof_env.axioms.insert(name, (local_types, target));
+        // TODO: remove and integrate into axiom_table
+        {
+            let mut target = target.clone();
+            target.generalize(&local_classes);
+            self.proof_env
+                .axioms
+                .insert(name, (local_types.clone(), target.clone()));
+        }
+
+        self.axiom_table.insert(
+            name,
+            Axiom {
+                local_types,
+                local_classes,
+                target,
+            },
+        );
     }
 
     fn add_type_const(&mut self, name: Name, kind: Kind) {
@@ -280,6 +336,7 @@ impl Eval {
         self.proof_env.tt_env.type_consts.contains_key(&name)
     }
 
+    // TODO: move to Term
     fn is_wff(&self, local_types: &[Name], target: &Term) -> bool {
         let mut local_env = LocalEnv {
             local_types: local_types.to_vec(),
@@ -363,8 +420,6 @@ impl Eval {
                     mut local_types,
                     local_classes,
                     mut ty,
-                    holes,
-                    class_constraints,
                     mut target,
                 } = inner;
                 if self.has_const(name) {
@@ -395,7 +450,7 @@ impl Eval {
                 let mut local_env = LocalEnv {
                     local_types,
                     locals: vec![],
-                    holes,
+                    holes: vec![],
                 };
                 for i in 0..local_classes.len() {
                     for j in i + 1..local_classes.len() {
@@ -412,19 +467,20 @@ impl Eval {
                     &self.proof_env.tt_env,
                     &mut local_env,
                     &self.proof_env.axioms,
+                    &self.const_table,
                     &self.structure_table,
                     &self.database,
                 )
-                .elaborate_term(&mut target, &ty, class_constraints)?;
+                .elaborate_term(&mut target, &ty)?;
                 // well-formedness check is completed.
-                ty.arrow(local_classes.iter().map(|(_, t)| t.clone()));
-                target.abs(&local_classes, false);
                 self.add_const(
                     name,
                     local_env.local_types.clone(),
-                    local_classes,
+                    local_classes.clone(),
                     ty.clone(),
                 );
+                ty.arrow(local_classes.iter().map(|(_, t)| t.clone()));
+                target.abs(&local_classes, false);
                 self.proof_env.tt_env.defs.insert(
                     name,
                     DefInfo {
@@ -472,7 +528,12 @@ impl Eval {
                     &mut target,
                     &mut mk_type_prop(),
                 )?;
-                self.add_axiom(name, local_env.local_types, target);
+                self.add_axiom(
+                    name,
+                    local_env.local_types,
+                    vec![], /* TODO(typeclass) */
+                    target,
+                );
                 Ok(())
             }
             Cmd::Lemma(inner) => {
@@ -524,6 +585,7 @@ impl Eval {
                     &self.proof_env.tt_env,
                     &mut local_env,
                     &self.proof_env.axioms,
+                    &self.const_table,
                     &self.structure_table,
                     &self.database,
                 )
@@ -543,7 +605,12 @@ impl Eval {
                     &mut h,
                     &target,
                 )?;
-                self.add_axiom(name, local_env.local_types, target);
+                self.add_axiom(
+                    name,
+                    local_env.local_types,
+                    vec![], /* TODO(typeclass) */
+                    target,
+                );
                 Ok(())
             }
             Cmd::Const(inner) => {
@@ -861,7 +928,12 @@ impl Eval {
             (x, target_ty.clone()),
             (motive, mk_type_arrow(target_ty.clone(), mk_type_prop())),
         ]);
-        self.add_axiom(ind_name, local_types.clone(), target);
+        self.add_axiom(
+            ind_name,
+            local_types.clone(),
+            vec![], /* TODO(typeclass) */
+            target,
+        );
 
         // generate the recursion principle
         //
@@ -987,7 +1059,12 @@ impl Eval {
             spec.generalize(&ctor_params);
 
             let ctor_spec_name = Name::intern(&format!("{}.spec", ctor_name)).unwrap();
-            self.add_axiom(ctor_spec_name, rec_local_types.clone(), spec);
+            self.add_axiom(
+                ctor_spec_name,
+                rec_local_types.clone(),
+                vec![], /* TODO(typeclass) */
+                spec,
+            );
         }
         Ok(())
     }
@@ -1155,7 +1232,12 @@ impl Eval {
             let subst = [(name, stash)];
             target.subst(&subst);
             target.generalize(&params);
-            self.add_axiom(ctor_name, local_env.local_types.clone(), target);
+            self.add_axiom(
+                ctor_name,
+                local_env.local_types.clone(),
+                vec![], /* TODO(typeclass) */
+                target,
+            );
         }
 
         // inductive P.{u} (x : τ) : σ → Prop
@@ -1233,7 +1315,12 @@ impl Eval {
         target.generalize(&indexes);
         target.generalize(&params);
 
-        self.add_axiom(ind_name, local_env.local_types, target);
+        self.add_axiom(
+            ind_name,
+            local_env.local_types,
+            vec![], /* TODO(typeclass) */
+            target,
+        );
         Ok(())
     }
 
@@ -1361,7 +1448,12 @@ impl Eval {
 
                     target.generalize(&[(instance, instance_ty.clone())]);
 
-                    self.add_axiom(fullname, local_types.clone(), target);
+                    self.add_axiom(
+                        fullname,
+                        local_types.clone(),
+                        vec![], /* TODO(typeclass) */
+                        target,
+                    );
                 }
             }
         }
@@ -1417,7 +1509,12 @@ impl Eval {
         }]);
         abs.guard(guards);
         abs.generalize(&params);
-        self.add_axiom(abs_name, local_types.clone(), abs);
+        self.add_axiom(
+            abs_name,
+            local_types.clone(),
+            vec![], /* TODO(typeclass) */
+            abs,
+        );
 
         // generate extensionality
         // axiom inhab.ext.{u} (d₁ d₂ : inhab u) : inhab.rep d₁ = inhab.rep d₂ → d₁ = d₂
@@ -1452,7 +1549,12 @@ impl Eval {
             (instance1, instance_ty.clone()),
             (instance2, instance_ty.clone()),
         ]);
-        self.add_axiom(ext_name, local_types.clone(), target);
+        self.add_axiom(
+            ext_name,
+            local_types.clone(),
+            vec![], /* TODO(typeclass) */
+            target,
+        );
         Ok(())
     }
 
@@ -1599,6 +1701,7 @@ impl Eval {
                         &self.proof_env.tt_env,
                         &mut local_env,
                         &self.proof_env.axioms,
+                        &self.const_table,
                         &self.structure_table,
                         &self.database,
                     )
@@ -1700,7 +1803,12 @@ impl Eval {
                     let fullname = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
                     let mut target = target.clone();
                     target.generalize(&params);
-                    self.add_axiom(fullname, local_env.local_types.clone(), target);
+                    self.add_axiom(
+                        fullname,
+                        local_env.local_types.clone(),
+                        vec![], /* TODO(typeclass) */
+                        target,
+                    );
                 }
             }
         }

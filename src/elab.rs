@@ -9,7 +9,7 @@ use std::{
 use anyhow::{bail, Context};
 
 use crate::{
-    cmd::{CmdClass, CmdStructure, StructureField},
+    cmd::{CmdClass, CmdStructure, Const, StructureField},
     expr::{Expr, ExprApp, ExprAssume, ExprAssump, ExprInst, ExprTake},
     tt::{
         self, mk_const, mk_fresh_type_hole, mk_local, mk_type_arrow, Kind, Name, Term, TermAbs,
@@ -26,13 +26,14 @@ pub struct Elaborator<'a> {
     tt_env: &'a tt::Env,
     tt_local_env: &'a mut tt::LocalEnv,
     structure_table: &'a HashMap<Name, CmdStructure>,
+    const_table: &'a HashMap<Name, Const>,
+    database: &'a Vec<CmdClass>,
     // Proved or postulated facts
     axioms: &'a HashMap<Name, (Vec<Name>, Term)>,
     locals: Vec<Term>,
     type_constraints: Vec<(Type, Type)>,
     term_constraints: Vec<(LocalEnv, Term, Term)>,
     class_constraints: Vec<Term>,
-    database: &'a Vec<CmdClass>,
 }
 
 impl<'a> Elaborator<'a> {
@@ -40,19 +41,21 @@ impl<'a> Elaborator<'a> {
         tt_env: &'a tt::Env,
         tt_local_env: &'a mut tt::LocalEnv,
         axioms: &'a HashMap<Name, (Vec<Name>, Term)>,
+        const_table: &'a HashMap<Name, Const>,
         structure_table: &'a HashMap<Name, CmdStructure>,
         database: &'a Vec<CmdClass>,
     ) -> Self {
         Elaborator {
             tt_env,
             tt_local_env,
+            const_table,
             structure_table,
+            database,
             axioms,
             locals: vec![],
             type_constraints: vec![],
             term_constraints: vec![],
             class_constraints: vec![],
-            database,
         }
     }
 
@@ -64,16 +67,20 @@ impl<'a> Elaborator<'a> {
         self.term_constraints.push((local_env, m1, m2));
     }
 
-    fn visit_type(&self, t: Type) -> anyhow::Result<Kind> {
+    fn add_class_constraint(&mut self, m: Term) {
+        self.class_constraints.push(m);
+    }
+
+    fn visit_type(&self, t: &Type) -> anyhow::Result<Kind> {
         match t {
             Type::Const(t) => {
-                let Some(kind) = self.tt_env.type_consts.get(&t) else {
+                let Some(kind) = self.tt_env.type_consts.get(t) else {
                     bail!("constant type not found");
                 };
                 Ok(kind.clone())
             }
             Type::Arrow(t) => {
-                let TypeArrow { dom, cod } = Arc::unwrap_or_clone(t);
+                let TypeArrow { dom, cod } = &**t;
                 let dom_kind = self.visit_type(dom)?;
                 if !dom_kind.is_base() {
                     bail!("expected Type, but got {dom_kind}");
@@ -85,8 +92,8 @@ impl<'a> Elaborator<'a> {
                 Ok(Kind::base())
             }
             Type::App(t) => {
-                let TypeApp { fun, arg } = Arc::unwrap_or_clone(t);
-                let fun_kind = self.visit_type(fun.clone())?;
+                let TypeApp { fun, arg } = &**t;
+                let fun_kind = self.visit_type(fun)?;
                 if fun_kind.is_base() {
                     bail!("too many type arguments: {fun} {arg}");
                 }
@@ -98,7 +105,7 @@ impl<'a> Elaborator<'a> {
             }
             Type::Local(t) => {
                 for local_type in self.tt_local_env.local_types.iter().rev() {
-                    if *local_type == t {
+                    if local_type == t {
                         return Ok(Kind::base());
                     }
                 }
@@ -108,11 +115,11 @@ impl<'a> Elaborator<'a> {
         }
     }
 
-    fn visit_term(&mut self, m: Term) -> anyhow::Result<Type> {
+    fn visit_term(&mut self, m: &mut Term) -> anyhow::Result<Type> {
         match m {
             Term::Local(m) => {
                 for (local, ty) in &self.tt_local_env.locals {
-                    if *local == m {
+                    if local == m {
                         return Ok(ty.clone());
                     }
                 }
@@ -120,7 +127,7 @@ impl<'a> Elaborator<'a> {
             }
             Term::Hole(m) => {
                 for (local, ty) in &self.tt_local_env.holes {
-                    if *local == m {
+                    if local == m {
                         return Ok(ty.clone());
                     }
                 }
@@ -130,13 +137,13 @@ impl<'a> Elaborator<'a> {
                 bail!("term not locally closed");
             }
             Term::Abs(m) => {
-                let TermAbs {
-                    binder_type: arg_ty,
+                let &mut TermAbs {
+                    binder_type: ref arg_ty,
                     binder_name,
-                    mut body,
-                } = Arc::unwrap_or_clone(m);
+                    ref mut body,
+                } = Arc::make_mut(m);
 
-                let arg_ty_kind = self.visit_type(arg_ty.clone())?;
+                let arg_ty_kind = self.visit_type(arg_ty)?;
                 if !arg_ty_kind.is_base() {
                     bail!("expected Type, but got {arg_ty_kind}");
                 }
@@ -145,12 +152,13 @@ impl<'a> Elaborator<'a> {
                 self.tt_local_env.locals.push((x, arg_ty.clone()));
                 body.open(&mk_local(x));
                 let body_ty = self.visit_term(body)?;
+                body.close(x);
                 self.tt_local_env.locals.pop();
 
-                Ok(mk_type_arrow(arg_ty, body_ty))
+                Ok(mk_type_arrow(arg_ty.clone(), body_ty))
             }
             Term::App(m) => {
-                let TermApp { fun, arg } = Arc::unwrap_or_clone(m);
+                let TermApp { fun, arg } = Arc::make_mut(m);
 
                 let fun_ty = self.visit_term(fun)?;
                 let arg_ty = self.visit_term(arg)?;
@@ -160,36 +168,54 @@ impl<'a> Elaborator<'a> {
 
                 Ok(ret_ty)
             }
-            Term::Const(m) => {
-                let Some((tv, ty)) = self.tt_env.consts.get(&m.name) else {
+            Term::Const(n) => {
+                let Some(Const {
+                    local_types,
+                    local_classes,
+                    ty,
+                }) = self.const_table.get(&n.name)
+                else {
                     bail!("constant not found");
                 };
-                if tv.len() != m.ty_args.len() {
+                if local_types.len() != n.ty_args.len() {
                     bail!("number of type variables mismatch");
                 }
-                for ty_arg in &m.ty_args {
-                    let ty_arg_kind = self.visit_type(ty_arg.clone())?;
+                for ty_arg in &n.ty_args {
+                    let ty_arg_kind = self.visit_type(ty_arg)?;
                     if !ty_arg_kind.is_base() {
                         bail!("expected Type, but got {ty_arg_kind}");
                     }
                 }
                 let mut subst = vec![];
-                for (&x, t) in zip(tv, &m.ty_args) {
+                for (&x, t) in zip(local_types, &n.ty_args) {
                     subst.push((x, t.clone()));
+                }
+                let mut class_args = vec![];
+                for (_, class_ty) in local_classes {
+                    let hole = Name::fresh_with_name("d");
+                    let mut hole_ty = class_ty.clone();
+                    hole_ty.subst(&subst);
+                    self.tt_local_env.holes.push((hole, hole_ty));
+                    self.add_class_constraint(Term::Hole(hole));
+                    class_args.push(Term::Hole(hole));
                 }
                 let mut ty = ty.clone();
                 ty.subst(&subst);
+
+                // C ↦ C d₁ ⋯ dₙ
+                m.apply(class_args);
+
                 Ok(ty)
             }
         }
     }
 
-    fn visit_expr(&mut self, e: &Expr) -> anyhow::Result<Term> {
-        match e {
-            Expr::Assump(e) => {
-                let ExprAssump { target } = &**e;
+    fn visit_expr(&mut self, expr: &mut Expr) -> anyhow::Result<Term> {
+        match expr {
+            Expr::Assump(expr) => {
+                let ExprAssump { target } = Arc::make_mut(expr);
 
-                let target_ty = self.visit_term(target.clone())?;
+                let target_ty = self.visit_term(target)?;
                 self.add_type_constraint(target_ty, mk_type_prop());
 
                 let mut found = false;
@@ -206,10 +232,10 @@ impl<'a> Elaborator<'a> {
 
                 Ok(target.clone())
             }
-            Expr::Assume(e) => {
-                let ExprAssume { target, expr } = &**e;
+            Expr::Assume(expr) => {
+                let ExprAssume { target, expr } = Arc::make_mut(expr);
 
-                let target_ty = self.visit_term(target.clone())?;
+                let target_ty = self.visit_term(target)?;
                 self.add_type_constraint(target_ty, mk_type_prop());
 
                 self.locals.push(target.clone());
@@ -222,16 +248,16 @@ impl<'a> Elaborator<'a> {
                 }
                 .into())
             }
-            Expr::App(e) => {
+            Expr::App(expr) => {
                 let ExprApp {
                     expr1,
                     expr2,
                     target,
-                } = &**e;
+                } = Arc::make_mut(expr);
 
                 let fun_prop = self.visit_expr(expr1)?;
                 let arg_prop = self.visit_expr(expr2)?;
-                let target_ty = self.visit_term(target.clone())?;
+                let target_ty = self.visit_term(target)?;
                 self.add_type_constraint(target_ty, mk_type_prop());
 
                 let pat: Term = Imp {
@@ -243,10 +269,10 @@ impl<'a> Elaborator<'a> {
 
                 Ok(target.clone())
             }
-            Expr::Take(e) => {
-                let ExprTake { name, ty, expr } = &**e;
+            Expr::Take(expr) => {
+                let ExprTake { name, ty, expr } = Arc::make_mut(expr);
 
-                let ty_kind = self.visit_type(ty.clone())?;
+                let ty_kind = self.visit_type(ty)?;
                 if !ty_kind.is_base() {
                     bail!("expected Type, but got {ty_kind}");
                 }
@@ -259,15 +285,15 @@ impl<'a> Elaborator<'a> {
 
                 Ok(target)
             }
-            Expr::Inst(e) => {
+            Expr::Inst(expr) => {
                 let ExprInst {
                     expr,
                     arg,
                     predicate,
-                } = &**e;
+                } = Arc::make_mut(expr);
 
-                let arg_ty = self.visit_term(arg.clone())?;
-                let predicate_ty = self.visit_term(predicate.clone())?;
+                let arg_ty = self.visit_term(arg)?;
+                let predicate_ty = self.visit_term(predicate)?;
                 self.add_type_constraint(
                     predicate_ty,
                     mk_type_arrow(arg_ty.clone(), mk_type_prop()),
@@ -285,21 +311,21 @@ impl<'a> Elaborator<'a> {
                 target.apply([arg.clone()]);
                 Ok(target)
             }
-            Expr::Const(e) => {
-                let Some((tv, target)) = self.axioms.get(&e.name) else {
-                    bail!("proposition not found: {}", e.name);
+            Expr::Const(expr) => {
+                let Some((tv, target)) = self.axioms.get(&expr.name) else {
+                    bail!("proposition not found: {}", expr.name);
                 };
-                if tv.len() != e.ty_args.len() {
+                if tv.len() != expr.ty_args.len() {
                     bail!("number of type variables mismatch");
                 }
-                for ty_arg in &e.ty_args {
-                    let ty_arg_kind = self.visit_type(ty_arg.clone())?;
+                for ty_arg in &expr.ty_args {
+                    let ty_arg_kind = self.visit_type(ty_arg)?;
                     if !ty_arg_kind.is_base() {
                         bail!("expected Type, but got {ty_arg_kind}");
                     }
                 }
                 let mut subst = vec![];
-                for (&x, t) in zip(tv, &e.ty_args) {
+                for (&x, t) in zip(tv, &expr.ty_args) {
                     subst.push((x, t.clone()));
                 }
                 let mut target = target.clone();
@@ -309,17 +335,10 @@ impl<'a> Elaborator<'a> {
         }
     }
 
-    pub fn elaborate_term(
-        mut self,
-        target: &mut Term,
-        target_ty: &Type,
-        // TODO: insert holes in this elaborator, not in the parser
-        class_constraints: Vec<Term>,
-    ) -> anyhow::Result<()> {
-        self.visit_type(target_ty.clone())?;
-        let t = self.visit_term(target.clone())?;
+    pub fn elaborate_term(mut self, target: &mut Term, target_ty: &Type) -> anyhow::Result<()> {
+        self.visit_type(target_ty)?;
+        let t = self.visit_term(target)?;
         self.add_type_constraint(target_ty.clone(), t);
-        self.class_constraints.extend(class_constraints);
 
         let (subst, type_subst) = Unifier::new(
             self.tt_env,

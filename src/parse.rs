@@ -141,7 +141,6 @@ pub struct AxiomInfo {
 #[derive(Debug, Default, Clone)]
 pub struct ConstInfo {
     pub type_arity: usize,
-    pub num_local_classes: usize,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -161,7 +160,6 @@ pub struct Parser<'a, 'b> {
     type_locals: Vec<Name>,
     locals: Vec<Name>,
     holes: Vec<(Name, Type)>,
-    class_constraints: Vec<Term>,
 }
 
 impl<'a, 'b> Parser<'a, 'b> {
@@ -178,7 +176,6 @@ impl<'a, 'b> Parser<'a, 'b> {
             type_locals: type_variables,
             locals: vec![],
             holes: vec![],
-            class_constraints: vec![],
         }
     }
 
@@ -551,10 +548,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         let Some(const_info) = self.ns.consts.get(&name).cloned() else {
             return Self::fail(token, "unknown variable");
         };
-        let ConstInfo {
-            type_arity,
-            num_local_classes,
-        } = const_info;
+        let ConstInfo { type_arity } = const_info;
         let mut ty_args = vec![];
         if let Some(_token) = self.expect_symbol_opt(".{") {
             if self.expect_symbol_opt("}").is_none() {
@@ -571,17 +565,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                 ty_args.push(mk_fresh_type_hole());
             }
         }
-        let mut target = mk_const(name, ty_args);
-        for _ in 0..num_local_classes {
-            let hole = mk_fresh_hole();
-            let &Term::Hole(hole_name) = &hole else {
-                unreachable!()
-            };
-            self.holes.push((hole_name, mk_fresh_type_hole()));
-            self.class_constraints.push(hole.clone());
-            target.apply([hole]);
-        }
-        Ok(target)
+        Ok(mk_const(name, ty_args))
     }
 
     fn subterm(&mut self, rbp: usize) -> Result<Term, ParseError> {
@@ -1039,15 +1023,11 @@ impl<'a, 'b> Parser<'a, 'b> {
             t.arrow([ty.clone()]);
             m.abs(&[(x, ty)], true);
         }
-        let holes = self.holes.drain(..).collect();
-        let class_constraints = self.class_constraints.drain(..).collect();
         Ok(CmdDef {
             name,
             local_types,
             local_classes,
             ty: t,
-            holes,
-            class_constraints,
             target: m,
         })
     }
