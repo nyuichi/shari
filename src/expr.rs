@@ -13,6 +13,7 @@ use crate::tt::{self, mk_local, Name, Term, Type};
 ///     | take (x : τ), p
 ///     | p[m]
 ///     | c.{u₁, ⋯, uₙ}
+///     | change φ, p
 ///
 ///
 /// --------------- (φ ∈ Φ)
@@ -37,6 +38,10 @@ use crate::tt::{self, mk_local, Name, Term, Type};
 /// -------------------------
 /// Γ | Φ ⊢ c.{u₁, ⋯, uₙ} : φ
 ///
+/// Γ | Φ ⊢ h : ψ     ψ ≈ φ
+/// ------------------------
+/// Γ | Φ ⊢ change φ, h : φ
+///
 #[derive(Debug, Clone)]
 pub enum Expr {
     Assump(Arc<ExprAssump>),
@@ -45,6 +50,7 @@ pub enum Expr {
     Take(Arc<ExprTake>),
     Inst(Arc<ExprInst>),
     Const(Arc<ExprConst>),
+    Change(Arc<ExprChange>),
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +93,12 @@ pub struct ExprConst {
     pub ty_args: Vec<Type>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ExprChange {
+    pub target: Term,
+    pub expr: Expr,
+}
+
 pub fn mk_expr_assump(m: Term) -> Expr {
     Expr::Assump(Arc::new(ExprAssump { target: m }))
 }
@@ -119,6 +131,10 @@ pub fn mk_expr_const(name: Name, ty_args: Vec<Type>) -> Expr {
     Expr::Const(Arc::new(ExprConst { name, ty_args }))
 }
 
+pub fn mk_expr_change(target: Term, expr: Expr) -> Expr {
+    Expr::Change(Arc::new(ExprChange { target, expr }))
+}
+
 impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -148,6 +164,9 @@ impl std::fmt::Display for Expr {
                     first = false;
                 }
                 write!(f, "}}")
+            }
+            Expr::Change(e) => {
+                write!(f, "change {}, {}", e.target, e.expr)
             }
         }
     }
@@ -196,6 +215,11 @@ impl Expr {
                     ty_arg.inst_hole(subst);
                 }
             }
+            Expr::Change(e) => {
+                let ExprChange { target, expr } = Arc::make_mut(e);
+                target.inst_type_hole(subst);
+                expr.inst_type_hole(subst);
+            }
         }
     }
 
@@ -239,6 +263,11 @@ impl Expr {
                 predicate.inst_hole(subst);
             }
             Expr::Const(_) => {}
+            Expr::Change(e) => {
+                let ExprChange { target, expr } = Arc::make_mut(e);
+                target.inst_hole(subst);
+                expr.inst_hole(subst);
+            }
         }
     }
 
@@ -282,6 +311,11 @@ impl Expr {
                 predicate.normalize();
             }
             Expr::Const(_) => {}
+            Expr::Change(e) => {
+                let ExprChange { target, expr } = Arc::make_mut(e);
+                target.normalize();
+                expr.normalize();
+            }
         }
     }
 }
@@ -374,6 +408,11 @@ impl<'a> Env<'a> {
                 }
                 target.subst_type(&subst);
                 (h, target)
+            }
+            Expr::Change(inner) => {
+                let (h, p) = self.run_help(&inner.expr);
+                let path = self.tt_env.equiv(&p, &inner.target).unwrap();
+                (mk_proof_conv(path, h), inner.target.clone())
             }
         }
     }

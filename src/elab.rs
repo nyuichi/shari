@@ -10,7 +10,7 @@ use anyhow::{bail, Context};
 
 use crate::{
     cmd::{CmdClass, CmdStructure, Const, StructureField},
-    expr::{Expr, ExprApp, ExprAssume, ExprAssump, ExprInst, ExprTake},
+    expr::{Expr, ExprApp, ExprAssume, ExprAssump, ExprChange, ExprInst, ExprTake},
     tt::{
         self, mk_const, mk_fresh_type_hole, mk_local, mk_type_arrow, Kind, Name, Term, TermAbs,
         TermApp, Type, TypeApp, TypeArrow,
@@ -331,6 +331,20 @@ impl<'a> Elaborator<'a> {
                 let mut target = target.clone();
                 target.subst_type(&subst);
                 Ok(target)
+            }
+            Expr::Change(expr) => {
+                let ExprChange { target, expr } = Arc::make_mut(expr);
+
+                let target_ty = self.visit_term(target)?;
+                self.add_type_constraint(target_ty, mk_type_prop());
+                let expr_prop = self.visit_expr(expr)?;
+                self.add_term_constraint(
+                    self.tt_local_env.clone(),
+                    expr_prop.clone(),
+                    target.clone(),
+                );
+
+                Ok(target.clone())
             }
         }
     }
