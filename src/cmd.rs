@@ -10,7 +10,7 @@ use crate::{
     proof,
     tt::{
         mk_const, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
-        mk_type_prop, DefInfo, Kind, LocalEnv, Name, ProjInfo, Term, Type,
+        mk_type_prop, Delta, Iota, Kind, LocalEnv, Name, Term, Type,
     },
 };
 
@@ -521,12 +521,12 @@ impl Eval {
                 );
                 ty.arrow(local_classes.iter().map(|(_, t)| t.clone()));
                 target.abs(&local_classes, false);
-                self.proof_env.tt_env.defs.insert(
+                self.proof_env.tt_env.delta_table.insert(
                     name,
-                    DefInfo {
+                    Delta {
                         local_types: local_env.local_types,
                         target,
-                        hint: self.proof_env.tt_env.defs.len(),
+                        hint: self.proof_env.tt_env.delta_table.len(),
                     },
                 );
                 Ok(())
@@ -1768,22 +1768,22 @@ impl Eval {
                         vec![], /* TODO(typeclass) */
                         def_target_ty,
                     );
-                    self.proof_env.tt_env.defs.insert(
+                    self.proof_env.tt_env.delta_table.insert(
                         name,
-                        DefInfo {
+                        Delta {
                             local_types: local_env.local_types.clone(),
                             target: def_target,
-                            hint: self.proof_env.tt_env.defs.len(),
+                            hint: self.proof_env.tt_env.delta_table.len(),
                         },
                     );
 
                     // e.g. example rep_of_power.{u} (A : set u) : inhab.rep (power.inhab A) = power A := eq.refl
                     let proj_name =
                         Name::intern(&format!("{}.{}", structure_name, field_name)).unwrap();
-                    self.proof_env.tt_env.add_proj_rule(
+                    self.proof_env.tt_env.add_iota(
                         proj_name,
                         name,
-                        ProjInfo {
+                        Iota {
                             local_types: local_env.local_types.clone(),
                             params: params.iter().map(|&(x, _)| x).collect(),
                             target: target.clone(),

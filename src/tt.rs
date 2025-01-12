@@ -1241,9 +1241,9 @@ pub enum Path {
     /// ```text
     ///
     /// -----------------------------------------------------------------------
-    /// Γ ⊢ proj_reduce (prj (mk m₁ ⋯ mₙ)) : prj (mk m₁ ⋯ mₙ) ≡ [m₁/x₁ ⋯ mₙ/xₙ]n
+    /// Γ ⊢ iota_reduce (rec (mk m₁ ⋯ mₙ)) : rec (mk m₁ ⋯ mₙ) ≡ [m₁/x₁ ⋯ mₙ/xₙ]n
     /// ```
-    Proj(Term),
+    Iota(Term),
 }
 
 impl Display for Path {
@@ -1269,8 +1269,8 @@ impl Display for Path {
                 }
                 Ok(())
             }
-            Path::Proj(m) => {
-                write!(f, "(proj {m})")
+            Path::Iota(m) => {
+                write!(f, "(iota {m})")
             }
         }
     }
@@ -1304,28 +1304,14 @@ pub fn mk_path_delta(name: Name, ty_args: Vec<Type>) -> Path {
     Path::Delta(Arc::new((name, ty_args)))
 }
 
-pub fn mk_path_proj(m: Term) -> Path {
-    Path::Proj(m)
+pub fn mk_path_iota(m: Term) -> Path {
+    Path::Iota(m)
 }
 
 impl Path {
     pub fn is_refl(&self) -> bool {
         matches!(self, Path::Refl(_))
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct DefInfo {
-    pub local_types: Vec<Name>,
-    pub target: Term,
-    pub hint: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct ProjInfo {
-    pub local_types: Vec<Name>,
-    pub params: Vec<Name>,
-    pub target: Term,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -1353,25 +1339,29 @@ impl LocalEnv {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct Delta {
+    pub local_types: Vec<Name>,
+    pub target: Term,
+    pub hint: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct Iota {
+    pub local_types: Vec<Name>,
+    pub params: Vec<Name>,
+    pub target: Term,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct Env {
     pub type_consts: HashMap<Name, Kind>,
     pub consts: HashMap<Name, (Vec<Name>, Type)>,
-    // c.{τ₁ ⋯ tₙ} :≡ m
-    pub defs: HashMap<Name, DefInfo>,
-    // prj ↦ (ctor ↦ info)
-    pub projs: HashMap<Name, Vec<(Name, ProjInfo)>>,
+    pub delta_table: HashMap<Name, Delta>,
+    pub iota_table: HashMap<Name, HashMap<Name, Iota>>,
 }
 
 impl Env {
-    pub fn add_proj_rule(&mut self, prj: Name, ctor: Name, info: ProjInfo) {
-        if let Some(v) = self.projs.get_mut(&prj) {
-            v.push((ctor, info));
-        } else {
-            self.projs.insert(prj, vec![(ctor, info)]);
-        }
-    }
-
     pub fn infer_kind(&self, local_env: &LocalEnv, t: &Type) -> Option<Kind> {
         match t {
             Type::Const(name) => Some(self.type_consts.get(name)?.clone()),
@@ -1547,11 +1537,11 @@ impl Env {
             }
             Path::Delta(path) => {
                 let left = mk_const(path.0, path.1.clone());
-                let DefInfo {
+                let Delta {
                     local_types,
                     target,
                     hint: _,
-                } = self.defs.get(&path.0)?;
+                } = self.delta_table.get(&path.0)?;
                 if local_types.len() != path.1.len() {
                     return None;
                 }
@@ -1569,12 +1559,11 @@ impl Env {
                     right: target,
                 })
             }
-            Path::Proj(m) => {
+            Path::Iota(m) => {
                 let _ty = self.infer_type(local_env, m)?;
                 let Term::Const(head) = m.head() else {
                     return None;
                 };
-                let proj_rules = self.get_proj_rules(head.name).expect("not a projection");
                 let mut args = m.args();
                 if args.len() != 1 {
                     return None;
@@ -1585,12 +1574,11 @@ impl Env {
                     return None;
                 };
                 let ctor_args = arg.args();
-                let (_, proj_info) = proj_rules.iter().find(|red| red.0 == ctor.name)?;
-                let ProjInfo {
+                let Iota {
                     local_types,
                     params,
                     target,
-                } = proj_info;
+                } = self.get_iota(head.name)?.get(&ctor.name)?;
                 if local_types.len() != ctor.ty_args.len() {
                     return None;
                 }
@@ -1616,14 +1604,18 @@ impl Env {
         }
     }
 
-    pub fn get_proj_rules(&self, prj: Name) -> Option<&[(Name, ProjInfo)]> {
-        self.projs.get(&prj).map(|v| &**v)
+    pub fn add_iota(&mut self, rec: Name, ctor: Name, iota: Iota) {
+        self.iota_table.entry(rec).or_default().insert(ctor, iota);
     }
 
-    // proj_reduce[prj (mk m₁ ⋯ mₙ)] := [m₁/x₁, ⋯ mₙ/xₙ]n
+    pub fn get_iota(&self, rec: Name) -> Option<&HashMap<Name, Iota>> {
+        self.iota_table.get(&rec)
+    }
+
+    // iota_reduce[rec (mk m₁ ⋯ mₙ)] := [m₁/x₁, ⋯ mₙ/xₙ]n
     //
     // Note that this method does not reduce the argument.
-    fn proj_reduce(&self, m: &mut Term) -> Option<Path> {
+    fn iota_reduce(&self, m: &mut Term) -> Option<Path> {
         let orig_m = m.clone();
         let Term::App(inner) = m else {
             return None;
@@ -1632,16 +1624,14 @@ impl Env {
         let Term::Const(fun) = fun else {
             return None;
         };
-        let proj_rules = self.get_proj_rules(fun.name)?;
         let Term::Const(arg_head) = arg.head() else {
             return None;
         };
-        let (_, proj_info) = proj_rules.iter().find(|red| red.0 == arg_head.name)?;
-        let ProjInfo {
+        let Iota {
             local_types,
             params,
             target,
-        } = proj_info;
+        } = self.get_iota(fun.name)?.get(&arg_head.name)?;
         if params.len() != arg.args().len() {
             // this case is impossible unless the term is type incorrect.
             return None;
@@ -1662,10 +1652,10 @@ impl Env {
         }
         target.subst(&subst);
         *m = target;
-        Some(mk_path_proj(orig_m))
+        Some(mk_path_iota(orig_m))
     }
 
-    // Run head β-reduction and π-reduction until it's stuck
+    // Run head β-reduction and ι-reduction until it's stuck
     pub fn weak_reduce(&self, m: &mut Term) -> Option<Path> {
         match m {
             Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) | Term::Abs(_) => None,
@@ -1677,18 +1667,18 @@ impl Env {
                     let p_arg = mk_path_refl(inner.arg.clone());
                     p = mk_path_congr_app(p_fun, p_arg);
                 } else if let Term::Const(fun) = &mut inner.fun {
-                    self.get_proj_rules(fun.name)?;
+                    self.get_iota(fun.name)?;
                     match self.weak_reduce(&mut inner.arg) {
                         Some(p_arg) => {
                             let p_fun = mk_path_refl(Term::Const(fun.clone()));
                             let p_app = mk_path_congr_app(p_fun, p_arg);
                             let p_proj = self
-                                .proj_reduce(m)
+                                .iota_reduce(m)
                                 .unwrap_or_else(|| mk_path_refl(m.clone()));
                             p = mk_path_trans(p_app, p_proj);
                         }
                         None => {
-                            p = self.proj_reduce(m)?;
+                            p = self.iota_reduce(m)?;
                         }
                     }
                 } else if let Some(p_beta) = m.beta_reduce() {
@@ -1713,12 +1703,11 @@ impl Env {
             return None;
         };
         let TermConst { name, ty_args } = Arc::make_mut(inner);
-        let def = self.defs.get(name).cloned()?;
-        let DefInfo {
+        let Delta {
             local_types,
             mut target,
             hint: _,
-        } = def;
+        } = self.delta_table.get(name).cloned()?;
         if local_types.len() != ty_args.len() {
             return None;
         }
@@ -1745,8 +1734,8 @@ impl Env {
         }
     }
 
-    fn is_prj(&self, name: Name) -> bool {
-        self.get_proj_rules(name).is_some()
+    fn is_recursor(&self, name: Name) -> bool {
+        self.get_iota(name).is_some()
     }
 
     fn unfold_stuck(&self, m: &mut Term) -> Option<Path> {
@@ -1762,7 +1751,7 @@ impl Env {
                 let Term::Const(fun) = fun else {
                     return None;
                 };
-                if !self.is_prj(fun.name) {
+                if !self.is_recursor(fun.name) {
                     return None;
                 }
                 let h_arg = self.unfold_stuck(arg)?;
@@ -1773,7 +1762,7 @@ impl Env {
     }
 
     pub fn def_hint(&self, name: Name) -> Option<usize> {
-        let def = self.defs.get(&name)?;
+        let def = self.delta_table.get(&name)?;
         Some(def.hint + 1)
     }
 

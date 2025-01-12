@@ -655,7 +655,7 @@ impl<'a> Unifier<'a> {
         let Term::Const(m_head) = m.head() else {
             return false;
         };
-        if self.tt_env.get_proj_rules(m_head.name).is_none() {
+        if self.tt_env.get_iota(m_head.name).is_none() {
             return false;
         };
         let mut args = m.args_mut();
@@ -672,7 +672,7 @@ impl<'a> Unifier<'a> {
         let Term::Const(m_head) = m.head() else {
             return false;
         };
-        if self.tt_env.get_proj_rules(m_head.name).is_none() {
+        if self.tt_env.get_iota(m_head.name).is_none() {
             return false;
         };
         let mut args = m.args_mut();
