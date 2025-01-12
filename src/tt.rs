@@ -495,10 +495,6 @@ pub fn mk_local(name: Name) -> Term {
     Term::Local(name)
 }
 
-pub fn mk_var(i: usize) -> Term {
-    Term::Var(i)
-}
-
 pub fn mk_fresh_hole() -> Term {
     Term::Hole(Name::fresh())
 }
@@ -639,11 +635,11 @@ impl Term {
         self.is_lclosed_at(1)
     }
 
-    pub(crate) fn has_var(&self, i: usize) -> bool {
+    pub fn contains_var(&self, i: usize) -> bool {
         match self {
             &Term::Var(level) => i == level,
-            Term::Abs(inner) => inner.body.has_var(i + 1),
-            Term::App(inner) => inner.fun.has_var(i) || inner.arg.has_var(i),
+            Term::Abs(inner) => inner.body.contains_var(i + 1),
+            Term::App(inner) => inner.fun.contains_var(i) || inner.arg.contains_var(i),
             Term::Local(_) => false,
             Term::Const(_) => false,
             Term::Hole(_) => false,
@@ -1156,36 +1152,6 @@ impl Term {
                     Some(p_next) => Some(mk_path_trans(p, p_next)),
                     None => Some(p),
                 }
-            }
-        }
-    }
-
-    pub fn normalize(&mut self) -> Path {
-        match self {
-            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) => {
-                mk_path_refl(self.clone())
-            }
-            Term::Abs(_) => {
-                let binders = self.unabs();
-                let mut p = self.normalize();
-                for (name, ty) in binders.iter().rev() {
-                    p = mk_path_congr_abs(*name, ty.clone(), p);
-                }
-                self.abs(&binders, true);
-                p
-            }
-            Term::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                let p1 = inner.fun.normalize();
-                let p2 = inner.arg.normalize();
-                let h = mk_path_congr_app(p1, p2);
-                let Term::Abs(_) = &mut inner.fun else {
-                    return h;
-                };
-                let h_redex = self.beta_reduce().unwrap();
-                let h = mk_path_trans(h, h_redex);
-                let h_next = self.normalize();
-                mk_path_trans(h, h_next)
             }
         }
     }

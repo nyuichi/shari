@@ -26,13 +26,13 @@ use crate::{
 
 #[derive(Debug)]
 pub struct Elaborator<'a> {
-    tt_env: &'a tt::Env,
-    tt_local_env: &'a mut tt::LocalEnv,
-    structure_table: &'a HashMap<Name, CmdStructure>,
     const_table: &'a HashMap<Name, Const>,
     axiom_table: &'a HashMap<Name, Axiom>,
+    structure_table: &'a HashMap<Name, CmdStructure>,
     database: &'a Vec<CmdClass>,
-    locals: Vec<Term>,
+    tt_env: &'a tt::Env,
+    tt_local_env: &'a mut tt::LocalEnv,
+    local_axioms: Vec<Term>,
     type_constraints: Vec<(Type, Type)>,
     term_constraints: Vec<(LocalEnv, Term, Term)>,
     class_constraints: Vec<Term>,
@@ -54,7 +54,7 @@ impl<'a> Elaborator<'a> {
             axiom_table,
             structure_table,
             database,
-            locals: vec![],
+            local_axioms: vec![],
             type_constraints: vec![],
             term_constraints: vec![],
             class_constraints: vec![],
@@ -235,7 +235,7 @@ impl<'a> Elaborator<'a> {
                 self.add_type_constraint(target_ty, mk_type_prop());
 
                 let mut found = false;
-                for local in &self.locals {
+                for local in &self.local_axioms {
                     // use literal equality by intention
                     if local.untyped_eq(target) {
                         found = true;
@@ -254,9 +254,9 @@ impl<'a> Elaborator<'a> {
                 let target_ty = self.visit_term(target)?;
                 self.add_type_constraint(target_ty, mk_type_prop());
 
-                self.locals.push(target.clone());
+                self.local_axioms.push(target.clone());
                 let rhs = self.visit_expr(expr)?;
-                self.locals.pop();
+                self.local_axioms.pop();
 
                 Ok(Imp {
                     lhs: target.clone(),

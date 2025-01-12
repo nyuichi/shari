@@ -336,6 +336,40 @@ impl Eval {
         self.proof_env.tt_env.type_consts.contains_key(&name)
     }
 
+    fn elaborate_term(
+        &self,
+        local_env: &mut LocalEnv,
+        target: &mut Term,
+        ty: &Type,
+    ) -> anyhow::Result<()> {
+        elab::Elaborator::new(
+            &self.proof_env.tt_env,
+            local_env,
+            &self.const_table,
+            &self.axiom_table,
+            &self.structure_table,
+            &self.database,
+        )
+        .elaborate_term(target, ty)
+    }
+
+    fn elaborate_expr(
+        &self,
+        local_env: &mut LocalEnv,
+        expr: &mut Expr,
+        target: &Term,
+    ) -> anyhow::Result<()> {
+        elab::Elaborator::new(
+            &self.proof_env.tt_env,
+            local_env,
+            &self.const_table,
+            &self.axiom_table,
+            &self.structure_table,
+            &self.database,
+        )
+        .elaborate_expr(expr, target)
+    }
+
     // TODO: move to Term
     fn is_wff(&self, local_types: &[Name], target: &Term) -> bool {
         let mut local_env = LocalEnv {
@@ -464,15 +498,7 @@ impl Eval {
                     local_env.locals.push((x, t.clone()));
                 }
                 self.proof_env.tt_env.ensure_wft(&local_env, &ty)?;
-                elab::Elaborator::new(
-                    &self.proof_env.tt_env,
-                    &mut local_env,
-                    &self.const_table,
-                    &self.axiom_table,
-                    &self.structure_table,
-                    &self.database,
-                )
-                .elaborate_term(&mut target, &ty)?;
+                self.elaborate_term(&mut local_env, &mut target, &ty)?;
                 // well-formedness check is completed.
                 self.add_const(
                     name,
@@ -524,11 +550,7 @@ impl Eval {
                     locals: vec![],
                     holes: vec![],
                 };
-                self.proof_env.tt_env.check_type(
-                    &mut local_env,
-                    &mut target,
-                    &mut mk_type_prop(),
-                )?;
+                self.elaborate_term(&mut local_env, &mut target, &mk_type_prop())?;
                 self.add_axiom(
                     name,
                     local_env.local_types,
@@ -571,20 +593,8 @@ impl Eval {
                     locals: vec![],
                     holes: holes.clone(),
                 };
-                self.proof_env.tt_env.check_type(
-                    &mut local_env,
-                    &mut target,
-                    &mut mk_type_prop(),
-                )?;
-                elab::Elaborator::new(
-                    &self.proof_env.tt_env,
-                    &mut local_env,
-                    &self.const_table,
-                    &self.axiom_table,
-                    &self.structure_table,
-                    &self.database,
-                )
-                .elaborate_expr(&mut expr, &target)?;
+                self.elaborate_term(&mut local_env, &mut target, &mk_type_prop())?;
+                self.elaborate_expr(&mut local_env, &mut expr, &target)?;
                 local_env
                     .holes
                     .truncate(local_env.holes.len() - holes.len());
@@ -682,7 +692,7 @@ impl Eval {
                 let CmdClass {
                     mut local_types,
                     params,
-                    mut ty,
+                    ty,
                     mut target,
                 } = cmd;
                 for i in 0..local_types.len() {
@@ -723,9 +733,8 @@ impl Eval {
                     self.proof_env.tt_env.ensure_wft(&local_env, t)?;
                     local_env.locals.push((x, t.clone()));
                 }
-                self.proof_env
-                    .tt_env
-                    .check_type(&mut local_env, &mut target, &mut ty)?;
+                self.proof_env.tt_env.ensure_wft(&local_env, &ty)?;
+                self.elaborate_term(&mut local_env, &mut target, &ty)?;
                 for rule in &self.database {
                     let ty = {
                         let mut subst = vec![];
@@ -1142,11 +1151,7 @@ impl Eval {
             if self.has_axiom(ctor_name) {
                 bail!("already defined");
             }
-            self.proof_env.tt_env.check_type(
-                &mut local_env,
-                &mut ctor.target,
-                &mut mk_type_prop(),
-            )?;
+            self.elaborate_term(&mut local_env, &mut ctor.target, &mk_type_prop())?;
 
             let mut m = ctor.target.clone();
             let ctor_params = m.ungeneralize();
@@ -1379,11 +1384,7 @@ impl Eval {
                         bail!("duplicate axiom field");
                     }
                     axiom_field_names.push(field_name);
-                    self.proof_env.tt_env.check_type(
-                        &mut local_env,
-                        target,
-                        &mut mk_type_prop(),
-                    )?;
+                    self.elaborate_term(&mut local_env, target, &mk_type_prop())?;
                 }
             }
         }
@@ -1634,7 +1635,7 @@ impl Eval {
                 StructureField::Const(structure_field) => {
                     let InstanceField::Def(InstanceDef {
                         name: ref field_name,
-                        ty,
+                        ref ty,
                         target,
                     }) = field
                     else {
@@ -1653,9 +1654,8 @@ impl Eval {
                     if structure_field.name != *field_name {
                         bail!("field name mismatch");
                     }
-                    self.proof_env
-                        .tt_env
-                        .check_type(&mut local_env, target, ty)?;
+                    self.proof_env.tt_env.ensure_wft(&local_env, ty)?;
+                    self.elaborate_term(&mut local_env, target, ty)?;
                     let mut structure_field_ty = structure_field.ty.clone();
                     structure_field_ty.subst(&type_subst);
                     if structure_field_ty != *ty {
@@ -1680,21 +1680,9 @@ impl Eval {
                     if structure_field.name != *field_name {
                         bail!("field name mismatch");
                     }
-                    self.proof_env.tt_env.check_type(
-                        &mut local_env,
-                        target,
-                        &mut mk_type_prop(),
-                    )?;
+                    self.elaborate_term(&mut local_env, target, &mk_type_prop())?;
                     local_env.holes.extend(holes.iter().cloned());
-                    elab::Elaborator::new(
-                        &self.proof_env.tt_env,
-                        &mut local_env,
-                        &self.const_table,
-                        &self.axiom_table,
-                        &self.structure_table,
-                        &self.database,
-                    )
-                    .elaborate_expr(expr, &*target)?;
+                    self.elaborate_expr(&mut local_env, expr, target)?;
                     let mut h = expr::Env {
                         axioms: &self.proof_env.axioms,
                         tt_env: &self.proof_env.tt_env,

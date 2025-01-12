@@ -133,7 +133,7 @@ impl<'a> Printer<'a> {
                                     .unwrap();
                                 }
                                 for (i, local_name) in local_names.iter().rev().enumerate() {
-                                    if local_name == &x && inner.body.has_var(i + 1) {
+                                    if local_name == &x && inner.body.contains_var(i + 1) {
                                         continue 'refresh;
                                     }
                                 }
@@ -173,7 +173,7 @@ impl<'a> Printer<'a> {
                                     .unwrap();
                                 }
                                 for (i, local_name) in local_names.iter().rev().enumerate() {
-                                    if local_name == &x && inner.body.has_var(i + 1) {
+                                    if local_name == &x && inner.body.contains_var(i + 1) {
                                         continue 'refresh;
                                     }
                                 }
@@ -213,7 +213,7 @@ impl<'a> Printer<'a> {
                                     .unwrap();
                                 }
                                 for (i, local_name) in local_names.iter().rev().enumerate() {
-                                    if local_name == &x && inner.body.has_var(i + 1) {
+                                    if local_name == &x && inner.body.contains_var(i + 1) {
                                         continue 'refresh;
                                     }
                                 }
@@ -288,7 +288,7 @@ impl<'a> Printer<'a> {
                         .unwrap();
                     }
                     for (i, local_name) in local_names.iter().rev().enumerate() {
-                        if local_name == &x && inner.body.has_var(i + 1) {
+                        if local_name == &x && inner.body.contains_var(i + 1) {
                             continue 'refresh;
                         }
                     }
