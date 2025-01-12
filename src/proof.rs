@@ -4,7 +4,7 @@ use std::{collections::HashMap, iter::zip, sync::Arc, vec};
 
 use std::sync::LazyLock;
 
-use crate::tt::{self, mk_abs, mk_const, mk_type_const, Name, Path, Term, TermAbs, Type};
+use crate::tt::{self, Name, Path, Term, Type};
 
 #[derive(Debug, Clone)]
 pub enum Proof {
@@ -33,9 +33,9 @@ pub enum Proof {
     /// ```
     ForallIntro(Arc<(Name, Type, Proof)>),
     /// ```text
-    /// Γ | Φ ⊢ h : ∀ (x : τ), φ
-    /// ----------------------------------
-    /// Γ | Φ ⊢ forall_elim m, h : [m/x]φ]
+    /// Γ | Φ ⊢ h : ∀ φ
+    /// ------------------------------
+    /// Γ | Φ ⊢ forall_elim m, h : φ m
     /// ```
     ForallElim(Arc<(Term, Proof)>),
     /// ```text
@@ -111,14 +111,8 @@ pub fn mk_proof_ref(name: Name, ty_args: Vec<Type>) -> Proof {
     Proof::Ref(Arc::new((name, ty_args)))
 }
 
-static PROP: LazyLock<Name> = LazyLock::new(|| Name::intern("Prop").unwrap());
 static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp").unwrap());
 static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall").unwrap());
-
-pub fn mk_type_prop() -> Type {
-    static T_PROP: LazyLock<Type> = LazyLock::new(|| mk_type_const(*PROP));
-    T_PROP.clone()
-}
 
 #[derive(Debug, Clone)]
 pub struct Imp {
@@ -146,20 +140,10 @@ impl TryFrom<Term> for Imp {
     }
 }
 
-impl From<Imp> for Term {
-    fn from(value: Imp) -> Self {
-        let mut m = mk_const(*IMP, vec![]);
-        m.apply([value.lhs, value.rhs]);
-        m
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Forall {
-    pub name: Name,
-    pub ty: Type,
-    // locally open
-    pub body: Term,
+    pub domain: Type,
+    pub pred: Term,
 }
 
 impl TryFrom<Term> for Forall {
@@ -173,37 +157,12 @@ impl TryFrom<Term> for Forall {
         if head.name != *FORALL {
             return Err(());
         }
-        let domain_ty = Arc::make_mut(&mut head).ty_args.pop().unwrap();
+        let domain = Arc::make_mut(&mut head).ty_args.pop().unwrap();
         if args.len() != 1 {
             return Err(());
         }
-        let arg = args.pop().unwrap();
-        let Term::Abs(abs) = arg else {
-            return Err(());
-        };
-        let TermAbs {
-            binder_type,
-            binder_name,
-            body,
-        } = Arc::unwrap_or_clone(abs);
-        if binder_type != domain_ty {
-            return Err(());
-        }
-        Ok(Forall {
-            name: binder_name,
-            ty: binder_type,
-            body,
-        })
-    }
-}
-
-impl From<Forall> for Term {
-    fn from(value: Forall) -> Self {
-        let Forall { name, ty, body } = value;
-        let abs = mk_abs(name, ty.clone(), body);
-        let mut m = mk_const(*FORALL, vec![ty]);
-        m.apply([abs]);
-        m
+        let pred = args.pop().unwrap();
+        Ok(Forall { domain, pred })
     }
 }
 
@@ -255,9 +214,10 @@ impl Env {
                     return None;
                 }
                 local_env.local_axioms.push(p.clone());
-                let h = self.infer_prop(tt_local_env, local_env, h)?;
+                let mut target = self.infer_prop(tt_local_env, local_env, h)?;
                 let p = local_env.local_axioms.pop().unwrap();
-                Some(Imp { lhs: p, rhs: h }.into())
+                target.guard([p]);
+                Some(target)
             }
             Proof::ImpElim(h) => {
                 let (h1, h2) = &**h;
@@ -282,30 +242,22 @@ impl Env {
                     }
                 }
                 tt_local_env.locals.push((x, t.clone()));
-                let h = self.infer_prop(tt_local_env, local_env, h)?;
+                let mut target = self.infer_prop(tt_local_env, local_env, h)?;
                 let (x, t) = tt_local_env.locals.pop().unwrap();
-                let mut body = h;
-                body.close(x);
-                Some(
-                    Forall {
-                        name: x,
-                        ty: t,
-                        body,
-                    }
-                    .into(),
-                )
+                target.generalize(&[(x, t)]);
+                Some(target)
             }
             Proof::ForallElim(h) => {
                 let (m, h) = &**h;
                 let h = self.infer_prop(tt_local_env, local_env, h)?;
-                let Ok(Forall { name: _, ty, body }) = h.clone().try_into() else {
+                let Ok(Forall { domain, pred }) = h.clone().try_into() else {
                     return None;
                 };
-                if !self.tt_env.check_type(tt_local_env, m, &ty) {
+                if !self.tt_env.check_type(tt_local_env, m, &domain) {
                     return None;
                 }
-                let mut target = body;
-                target.open(m);
+                let mut target = pred;
+                target.apply([m.clone()]);
                 Some(target)
             }
             Proof::Conv(h) => {

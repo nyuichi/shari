@@ -15,13 +15,9 @@ use crate::{
         ExprTake,
     },
     tt::{
-        self, mk_const, mk_fresh_type_hole, mk_local, mk_type_arrow, Kind, Name, Term, TermAbs,
-        TermApp, Type, TypeApp, TypeArrow,
+        self, mk_const, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_prop, Kind, LocalEnv,
+        Name, Term, TermAbs, TermApp, Type, TypeApp, TypeArrow,
     },
-};
-use crate::{
-    proof::{mk_type_prop, Imp},
-    tt::LocalEnv,
 };
 
 #[derive(Debug)]
@@ -250,20 +246,17 @@ impl<'a> Elaborator<'a> {
                 Ok(target.clone())
             }
             Expr::Assume(expr) => {
-                let ExprAssume { target, expr } = Arc::make_mut(expr);
+                let ExprAssume { local_axiom, expr } = Arc::make_mut(expr);
 
-                let target_ty = self.visit_term(target)?;
-                self.add_type_constraint(target_ty, mk_type_prop());
+                let local_axiom_ty = self.visit_term(local_axiom)?;
+                self.add_type_constraint(local_axiom_ty, mk_type_prop());
 
-                self.local_axioms.push(target.clone());
-                let rhs = self.visit_expr(expr)?;
-                self.local_axioms.pop();
+                self.local_axioms.push(local_axiom.clone());
+                let mut target = self.visit_expr(expr)?;
+                let p = self.local_axioms.pop().unwrap();
+                target.guard([p]);
 
-                Ok(Imp {
-                    lhs: target.clone(),
-                    rhs,
-                }
-                .into())
+                Ok(target)
             }
             Expr::App(expr) => {
                 let ExprApp { expr1, expr2 } = Arc::make_mut(expr);
@@ -305,10 +298,8 @@ impl<'a> Elaborator<'a> {
 
                 let pred = self.mk_term_hole(mk_type_arrow(arg_ty.clone(), mk_type_prop()));
 
-                let mut target = pred.clone();
-                let x = Name::fresh();
-                target.apply([mk_local(x)]);
-                target.generalize(&[(x, arg_ty.clone())]);
+                let mut target = mk_const(Name::intern("forall").unwrap(), vec![arg_ty.clone()]);
+                target.apply([pred.clone()]);
                 self.add_term_constraint(self.tt_local_env.clone(), forall, target.clone());
 
                 *expr = mk_expr_change(target, mem::take(expr));

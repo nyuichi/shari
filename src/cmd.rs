@@ -7,10 +7,10 @@ use crate::{
     expr::{self, Expr},
     parse::{AxiomInfo, ConstInfo, Nasmespace, TokenTable},
     print::OpTable,
-    proof::{self, mk_type_prop},
+    proof,
     tt::{
         mk_const, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
-        DefInfo, Kind, LocalEnv, Name, ProjInfo, Term, Type,
+        mk_type_prop, DefInfo, Kind, LocalEnv, Name, ProjInfo, Term, Type,
     },
 };
 

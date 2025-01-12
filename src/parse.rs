@@ -8,10 +8,9 @@ use crate::expr::{
     mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_change, mk_expr_const, mk_expr_inst,
     mk_expr_take, Expr,
 };
-use crate::proof::mk_type_prop;
 use crate::tt::{
     mk_const, mk_fresh_hole, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const,
-    mk_type_local, Kind, Name, Term, Type,
+    mk_type_local, mk_type_prop, Kind, Name, Term, Type,
 };
 
 use crate::lex::{Lex, LexError, SourceInfo, Token, TokenKind};

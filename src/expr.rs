@@ -32,8 +32,8 @@ use crate::tt::{self, Name, Term, Type};
 /// --------------------------------------- (x # Φ)
 /// Γ | Φ ⊢ take (x : u), h : ∀ (x : u), φ
 ///
-/// Γ | Φ ⊢ h : ∀ (x : u), ψ x
-/// --------------------------- (Γ ⊢ m : u)
+/// Γ | Φ ⊢ h : ∀ ψ
+/// ------------------- (Γ ⊢ m : u)
 /// Γ | Φ ⊢ h[m] : ψ m
 ///
 /// -------------------------
@@ -61,7 +61,7 @@ pub struct ExprAssump {
 
 #[derive(Debug, Clone)]
 pub struct ExprAssume {
-    pub target: Term,
+    pub local_axiom: Term,
     pub expr: Expr,
 }
 
@@ -108,7 +108,10 @@ pub fn mk_expr_assump(m: Term) -> Expr {
 }
 
 pub fn mk_expr_assume(h: Term, e: Expr) -> Expr {
-    Expr::Assume(Arc::new(ExprAssume { target: h, expr: e }))
+    Expr::Assume(Arc::new(ExprAssume {
+        local_axiom: h,
+        expr: e,
+    }))
 }
 
 pub fn mk_expr_app(e1: Expr, e2: Expr) -> Expr {
@@ -141,7 +144,7 @@ impl std::fmt::Display for Expr {
                 write!(f, "⟪{}⟫", e.target)
             }
             Expr::Assume(e) => {
-                write!(f, "assume {}, {}", e.target, e.expr)
+                write!(f, "assume {}, {}", e.local_axiom, e.expr)
             }
             Expr::App(e) => {
                 write!(f, "({}) {}", e.expr1, e.expr2)
@@ -179,8 +182,8 @@ impl Expr {
                 target.inst_type_hole(subst)
             }
             Expr::Assume(e) => {
-                let ExprAssume { target, expr } = Arc::make_mut(e);
-                target.inst_type_hole(subst);
+                let ExprAssume { local_axiom, expr } = Arc::make_mut(e);
+                local_axiom.inst_type_hole(subst);
                 expr.inst_type_hole(subst);
             }
             Expr::App(e) => {
@@ -219,8 +222,8 @@ impl Expr {
                 target.inst_hole(subst)
             }
             Expr::Assume(e) => {
-                let ExprAssume { target, expr } = Arc::make_mut(e);
-                target.inst_hole(subst);
+                let ExprAssume { local_axiom, expr } = Arc::make_mut(e);
+                local_axiom.inst_hole(subst);
                 expr.inst_hole(subst);
             }
             Expr::App(e) => {
@@ -257,8 +260,8 @@ impl Expr {
                 target.is_ground()
             }
             Expr::Assume(e) => {
-                let ExprAssume { target, expr } = &**e;
-                target.is_ground() && expr.is_ground()
+                let ExprAssume { local_axiom, expr } = &**e;
+                local_axiom.is_ground() && expr.is_ground()
             }
             Expr::App(e) => {
                 let ExprApp { expr1, expr2 } = &**e;
@@ -291,8 +294,8 @@ impl Expr {
                 target.is_type_ground()
             }
             Expr::Assume(e) => {
-                let ExprAssume { target, expr } = &**e;
-                target.is_type_ground() && expr.is_type_ground()
+                let ExprAssume { local_axiom, expr } = &**e;
+                local_axiom.is_type_ground() && expr.is_type_ground()
             }
             Expr::App(e) => {
                 let ExprApp { expr1, expr2 } = &**e;
@@ -329,67 +332,63 @@ impl<'a> Env<'a> {
     fn run_help(&mut self, expr: &Expr) -> (Proof, Term) {
         match expr {
             Expr::Assump(expr) => {
-                let h = mk_proof_assump(expr.target.clone());
-                (h, expr.target.clone())
+                let ExprAssump { target } = &**expr;
+                let h = mk_proof_assump(target.clone());
+                (h, target.clone())
             }
-            Expr::Assume(inner) => {
-                let (h, p) = self.run_help(&inner.expr);
-                let h = mk_proof_imp_intro(inner.target.clone(), h);
-                (
-                    h,
-                    Imp {
-                        lhs: inner.target.clone(),
-                        rhs: p,
-                    }
-                    .into(),
-                )
+            Expr::Assume(expr) => {
+                let ExprAssume { local_axiom, expr } = &**expr;
+                let (h, mut target) = self.run_help(expr);
+                let h = mk_proof_imp_intro(local_axiom.clone(), h);
+                target.guard([local_axiom.clone()]);
+                (h, target)
             }
-            Expr::App(inner) => {
-                let (h1, p1) = self.run_help(&inner.expr1);
-                let (h2, _) = self.run_help(&inner.expr2);
+            Expr::App(expr) => {
+                let ExprApp { expr1, expr2 } = &**expr;
+                let (h1, p1) = self.run_help(expr1);
+                let (h2, _) = self.run_help(expr2);
                 let h = mk_proof_imp_elim(h1, h2);
                 let Imp { lhs: _lhs, rhs } = p1.try_into().unwrap();
                 (h, rhs)
             }
-            Expr::Take(inner) => {
-                self.tt_local_env
-                    .locals
-                    .push((inner.name, inner.ty.clone()));
-                let (h, mut p) = self.run_help(&inner.expr);
-                self.tt_local_env.locals.pop();
-
-                let h = mk_proof_forall_intro(inner.name, inner.ty.clone(), h);
-
-                p.generalize(&[(inner.name, inner.ty.clone())]);
-
+            Expr::Take(expr) => {
+                let &ExprTake {
+                    name,
+                    ref ty,
+                    ref expr,
+                } = &**expr;
+                self.tt_local_env.locals.push((name, ty.clone()));
+                let (h, mut p) = self.run_help(expr);
+                let (name, ty) = self.tt_local_env.locals.pop().unwrap();
+                let h = mk_proof_forall_intro(name, ty.clone(), h);
+                p.generalize(&[(name, ty)]);
                 (h, p)
             }
-            Expr::Inst(inner) => {
-                let (h, p) = self.run_help(&inner.expr);
-                let h = mk_proof_forall_elim(inner.arg.clone(), h);
-                let Forall {
-                    name: _name,
-                    ty: _ty,
-                    body,
-                } = p.try_into().unwrap();
-                let mut target = body;
-                target.open(&inner.arg);
+            Expr::Inst(expr) => {
+                let ExprInst { expr, arg } = &**expr;
+                let (h, p) = self.run_help(expr);
+                let h = mk_proof_forall_elim(arg.clone(), h);
+                let Forall { domain: _, pred } = p.try_into().unwrap();
+                let mut target = pred;
+                target.apply([arg.clone()]);
                 (h, target)
             }
-            Expr::Const(inner) => {
-                let h = mk_proof_ref(inner.name, inner.ty_args.clone());
-                let (tv, mut target) = self.axioms.get(&inner.name).cloned().unwrap();
+            Expr::Const(expr) => {
+                let &ExprConst { name, ref ty_args } = &**expr;
+                let h = mk_proof_ref(name, ty_args.clone());
+                let (tv, mut target) = self.axioms.get(&name).cloned().unwrap();
                 let mut subst = vec![];
-                for (&x, t) in zip(&tv, &inner.ty_args) {
+                for (&x, t) in zip(&tv, ty_args) {
                     subst.push((x, t.clone()));
                 }
                 target.subst_type(&subst);
                 (h, target)
             }
-            Expr::Change(inner) => {
-                let (h, p) = self.run_help(&inner.expr);
-                let path = self.tt_env.equiv(&p, &inner.target).unwrap();
-                (mk_proof_conv(path, h), inner.target.clone())
+            Expr::Change(expr) => {
+                let ExprChange { target, expr } = &**expr;
+                let (h, p) = self.run_help(expr);
+                let path = self.tt_env.equiv(&p, target).unwrap();
+                (mk_proof_conv(path, h), target.clone())
             }
         }
     }
