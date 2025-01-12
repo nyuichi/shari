@@ -9,8 +9,11 @@ use std::{
 use anyhow::{bail, Context};
 
 use crate::{
-    cmd::{CmdClass, CmdStructure, Const, StructureField},
-    expr::{Expr, ExprApp, ExprAssume, ExprAssump, ExprChange, ExprInst, ExprTake},
+    cmd::{Axiom, CmdClass, CmdStructure, Const, StructureField},
+    expr::{
+        mk_expr_change, mk_expr_inst, Expr, ExprApp, ExprAssume, ExprAssump, ExprChange, ExprInst,
+        ExprTake,
+    },
     tt::{
         self, mk_const, mk_fresh_type_hole, mk_local, mk_type_arrow, Kind, Name, Term, TermAbs,
         TermApp, Type, TypeApp, TypeArrow,
@@ -27,9 +30,8 @@ pub struct Elaborator<'a> {
     tt_local_env: &'a mut tt::LocalEnv,
     structure_table: &'a HashMap<Name, CmdStructure>,
     const_table: &'a HashMap<Name, Const>,
+    axiom_table: &'a HashMap<Name, Axiom>,
     database: &'a Vec<CmdClass>,
-    // Proved or postulated facts
-    axioms: &'a HashMap<Name, (Vec<Name>, Term)>,
     locals: Vec<Term>,
     type_constraints: Vec<(Type, Type)>,
     term_constraints: Vec<(LocalEnv, Term, Term)>,
@@ -40,8 +42,8 @@ impl<'a> Elaborator<'a> {
     pub fn new(
         tt_env: &'a tt::Env,
         tt_local_env: &'a mut tt::LocalEnv,
-        axioms: &'a HashMap<Name, (Vec<Name>, Term)>,
         const_table: &'a HashMap<Name, Const>,
+        axiom_table: &'a HashMap<Name, Axiom>,
         structure_table: &'a HashMap<Name, CmdStructure>,
         database: &'a Vec<CmdClass>,
     ) -> Self {
@@ -49,9 +51,9 @@ impl<'a> Elaborator<'a> {
             tt_env,
             tt_local_env,
             const_table,
+            axiom_table,
             structure_table,
             database,
-            axioms,
             locals: vec![],
             type_constraints: vec![],
             term_constraints: vec![],
@@ -113,6 +115,21 @@ impl<'a> Elaborator<'a> {
             }
             Type::Hole(_) => Ok(Kind::base()),
         }
+    }
+
+    fn mk_term_hole(&mut self, ty: Type) -> Term {
+        let mut hole_ty = ty;
+        hole_ty.arrow(self.tt_local_env.locals.iter().map(|(_, ty)| ty.clone()));
+        let hole = self.tt_local_env.add_new_hole(None, hole_ty);
+        // ?M l₁ ⋯ lₙ
+        let mut target = Term::Hole(hole);
+        target.apply(
+            self.tt_local_env
+                .locals
+                .iter()
+                .map(|&(name, _)| mk_local(name)),
+        );
+        target
     }
 
     fn visit_term(&mut self, m: &mut Term) -> anyhow::Result<Type> {
@@ -190,18 +207,17 @@ impl<'a> Elaborator<'a> {
                 for (&x, t) in zip(local_types, &n.ty_args) {
                     subst.push((x, t.clone()));
                 }
-                let mut class_args = vec![];
-                for (_, class_ty) in local_classes {
-                    let hole = Name::fresh_with_name("d");
-                    let mut hole_ty = class_ty.clone();
-                    hole_ty.subst(&subst);
-                    self.tt_local_env.holes.push((hole, hole_ty));
-                    self.add_class_constraint(Term::Hole(hole));
-                    class_args.push(Term::Hole(hole));
-                }
                 let mut ty = ty.clone();
                 ty.subst(&subst);
 
+                let mut class_args = vec![];
+                for (_, class_ty) in local_classes {
+                    let mut ty = class_ty.clone();
+                    ty.subst(&subst);
+                    let hole = self.tt_local_env.add_new_hole(Some("d"), ty);
+                    self.add_class_constraint(Term::Hole(hole));
+                    class_args.push(Term::Hole(hole));
+                }
                 // C ↦ C d₁ ⋯ dₙ
                 m.apply(class_args);
 
@@ -249,25 +265,20 @@ impl<'a> Elaborator<'a> {
                 .into())
             }
             Expr::App(expr) => {
-                let ExprApp {
-                    expr1,
-                    expr2,
-                    target,
-                } = Arc::make_mut(expr);
+                let ExprApp { expr1, expr2 } = Arc::make_mut(expr);
 
-                let fun_prop = self.visit_expr(expr1)?;
-                let arg_prop = self.visit_expr(expr2)?;
-                let target_ty = self.visit_term(target)?;
-                self.add_type_constraint(target_ty, mk_type_prop());
+                let fun = self.visit_expr(expr1)?;
+                let arg = self.visit_expr(expr2)?;
 
-                let pat: Term = Imp {
-                    lhs: arg_prop,
-                    rhs: target.clone(),
-                }
-                .into();
-                self.add_term_constraint(self.tt_local_env.clone(), pat, fun_prop);
+                let ret = self.mk_term_hole(mk_type_prop());
 
-                Ok(target.clone())
+                let mut target = ret.clone();
+                target.guard([arg]);
+                self.add_term_constraint(self.tt_local_env.clone(), fun, target.clone());
+
+                *expr1 = mk_expr_change(target, mem::take(expr1));
+
+                Ok(ret)
             }
             Expr::Take(expr) => {
                 let ExprTake { name, ty, expr } = Arc::make_mut(expr);
@@ -286,50 +297,66 @@ impl<'a> Elaborator<'a> {
                 Ok(target)
             }
             Expr::Inst(expr) => {
-                let ExprInst {
-                    expr,
-                    arg,
-                    predicate,
-                } = Arc::make_mut(expr);
+                let ExprInst { expr, arg } = Arc::make_mut(expr);
 
+                let forall = self.visit_expr(expr)?;
                 let arg_ty = self.visit_term(arg)?;
-                let predicate_ty = self.visit_term(predicate)?;
-                self.add_type_constraint(
-                    predicate_ty,
-                    mk_type_arrow(arg_ty.clone(), mk_type_prop()),
-                );
 
-                let expr_prop = self.visit_expr(expr)?;
+                let pred = self.mk_term_hole(mk_type_arrow(arg_ty.clone(), mk_type_prop()));
 
-                let mut pat = predicate.clone();
-                let tmp = Name::fresh();
-                pat.apply([mk_local(tmp)]);
-                pat.generalize(&[(tmp, arg_ty.clone())]);
-                self.add_term_constraint(self.tt_local_env.clone(), pat, expr_prop);
+                let mut target = pred.clone();
+                let x = Name::fresh();
+                target.apply([mk_local(x)]);
+                target.generalize(&[(x, arg_ty.clone())]);
+                self.add_term_constraint(self.tt_local_env.clone(), forall, target.clone());
 
-                let mut target = predicate.clone();
-                target.apply([arg.clone()]);
-                Ok(target)
+                *expr = mk_expr_change(target, mem::take(expr));
+
+                let mut ret = pred;
+                ret.apply([arg.clone()]);
+                Ok(ret)
             }
-            Expr::Const(expr) => {
-                let Some((tv, target)) = self.axioms.get(&expr.name) else {
-                    bail!("proposition not found: {}", expr.name);
+            Expr::Const(e) => {
+                let Some(Axiom {
+                    local_types,
+                    local_classes,
+                    target,
+                }) = self.axiom_table.get(&e.name)
+                else {
+                    bail!("proposition not found: {}", e.name);
                 };
-                if tv.len() != expr.ty_args.len() {
+                if local_types.len() != e.ty_args.len() {
                     bail!("number of type variables mismatch");
                 }
-                for ty_arg in &expr.ty_args {
+                for ty_arg in &e.ty_args {
                     let ty_arg_kind = self.visit_type(ty_arg)?;
                     if !ty_arg_kind.is_base() {
                         bail!("expected Type, but got {ty_arg_kind}");
                     }
                 }
                 let mut subst = vec![];
-                for (&x, t) in zip(tv, &expr.ty_args) {
+                for (&x, t) in zip(local_types, &e.ty_args) {
                     subst.push((x, t.clone()));
                 }
                 let mut target = target.clone();
                 target.subst_type(&subst);
+
+                let mut class_args = vec![];
+                for (_, class_ty) in local_classes {
+                    let mut ty = class_ty.clone();
+                    ty.subst(&subst);
+                    let hole = self.tt_local_env.add_new_hole(Some("d"), ty);
+                    self.add_class_constraint(Term::Hole(hole));
+                    class_args.push(Term::Hole(hole));
+                }
+                for class_arg in &class_args {
+                    *expr = mk_expr_inst(mem::take(expr), class_arg.clone());
+                }
+                target.subst(
+                    &zip(local_classes, class_args)
+                        .map(|(&(x, _), a)| (x, a))
+                        .collect::<Vec<_>>(),
+                );
                 Ok(target)
             }
             Expr::Change(expr) => {
@@ -349,10 +376,10 @@ impl<'a> Elaborator<'a> {
         }
     }
 
-    pub fn elaborate_term(mut self, target: &mut Term, target_ty: &Type) -> anyhow::Result<()> {
-        self.visit_type(target_ty)?;
+    // ty is trusted
+    pub fn elaborate_term(mut self, target: &mut Term, ty: &Type) -> anyhow::Result<()> {
         let t = self.visit_term(target)?;
-        self.add_type_constraint(target_ty.clone(), t);
+        self.add_type_constraint(t, ty.clone());
 
         let (subst, type_subst) = Unifier::new(
             self.tt_env,
@@ -368,17 +395,18 @@ impl<'a> Elaborator<'a> {
 
         target.inst_type_hole(&type_subst);
         target.inst_hole(&subst);
-        target.normalize();
 
         Ok(())
     }
 
-    pub fn elaborate_expr(mut self, e: &mut Expr) -> anyhow::Result<()> {
+    // prop is trusted
+    pub fn elaborate_expr(mut self, e: &mut Expr, prop: &Term) -> anyhow::Result<()> {
         #[cfg(debug_assertions)]
         {
             println!("elaborating:\n{e}");
         }
 
+        *e = mk_expr_change(prop.clone(), mem::take(e));
         self.visit_expr(e)?;
 
         let (subst, type_subst) = Unifier::new(
@@ -395,7 +423,6 @@ impl<'a> Elaborator<'a> {
 
         e.inst_type_hole(&type_subst);
         e.inst_hole(&subst);
-        e.normalize();
 
         #[cfg(debug_assertions)]
         {
@@ -1166,12 +1193,14 @@ impl<'a> Unifier<'a> {
             if let Some((t1, t2)) = self.type_stack.pop() {
                 #[cfg(debug_assertions)]
                 {
-                    println!("find conflict in {t1} =?= {t2}");
+                    let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
+                    println!("{sp}find conflict in {t1} =?= {t2}");
                 }
                 if self.find_conflict_in_types(t1, t2).is_some() {
                     #[cfg(debug_assertions)]
                     {
-                        println!("conflict in types");
+                        let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
+                        println!("{sp}conflict in types");
                     }
                     return Some(());
                 }
@@ -1179,12 +1208,14 @@ impl<'a> Unifier<'a> {
             if let Some((local_env, m1, m2)) = self.stack.pop() {
                 #[cfg(debug_assertions)]
                 {
-                    println!("find conflict in {m1} =?= {m2}");
+                    let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
+                    println!("{sp}find conflict in {m1} =?= {m2}");
                 }
                 if self.find_conflict_in_terms(local_env, m1, m2).is_some() {
                     #[cfg(debug_assertions)]
                     {
-                        println!("conflict in terms");
+                        let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
+                        println!("{sp}conflict in terms");
                     }
                     return Some(());
                 }
@@ -1816,6 +1847,12 @@ impl<'a> Unifier<'a> {
                 if !self.backjump() {
                     return None;
                 }
+            }
+            #[cfg(debug_assertions)]
+            {
+                let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
+                println!("{sp}simplification done");
+                self.print_state();
             }
             if !self.decide() {
                 break;

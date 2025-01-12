@@ -20,15 +20,14 @@ static NAME_REV_TABLE: LazyLock<Mutex<HashMap<Name, String>>> = LazyLock::new(De
 
 impl Display for Name {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            NAME_REV_TABLE
-                .lock()
-                .unwrap()
-                .get(self)
-                .unwrap_or(&self.0.to_string())
-        )
+        let Some(nickname) = self.nickname() else {
+            return write!(f, "{}", self.0);
+        };
+        if Name::intern(&nickname).unwrap() == *self {
+            write!(f, "{}", nickname)
+        } else {
+            write!(f, "{}{}", nickname, self.0)
+        }
     }
 }
 
@@ -87,6 +86,10 @@ impl Name {
             .unwrap()
             .insert(name, value.to_owned());
         Ok(name)
+    }
+
+    fn nickname(&self) -> Option<String> {
+        NAME_REV_TABLE.lock().unwrap().get(self).cloned()
     }
 }
 
@@ -497,7 +500,7 @@ pub fn mk_var(i: usize) -> Term {
 }
 
 pub fn mk_fresh_hole() -> Term {
-    Term::Hole(Name::fresh_with_name("X"))
+    Term::Hole(Name::fresh())
 }
 
 #[derive(Debug, Clone)]
@@ -1368,6 +1371,15 @@ impl LocalEnv {
             .find(|&&(n, _)| n == name)
             .map(|(_, t)| t)
     }
+
+    pub fn add_new_hole(&mut self, nickname: Option<&str>, ty: Type) -> Name {
+        let name = match nickname {
+            Some(nickname) => Name::fresh_with_name(nickname),
+            None => Name::fresh(),
+        };
+        self.holes.push((name, ty));
+        name
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -1489,7 +1501,7 @@ impl Env {
                 let h1 = self.infer_conv(local_env, &mut inner.0)?;
                 let h2 = self.infer_conv(local_env, &mut inner.1)?;
                 if !h1.right.typed_eq(&h2.left) {
-                    bail!("transitivity mismatch");
+                    bail!("transitivity mismatch: {} ≡ {}", h1.right, h2.left);
                 }
                 // h1.right == h2.left means the types in the both sides match.
                 Ok(Conv {

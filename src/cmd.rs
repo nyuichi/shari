@@ -4,7 +4,7 @@ use anyhow::bail;
 
 use crate::{
     elab,
-    expr::{self, mk_expr_app, mk_expr_assume, mk_expr_assump, Expr},
+    expr::{self, Expr},
     parse::{AxiomInfo, ConstInfo, Nasmespace, TokenTable},
     print::OpTable,
     proof::{self, mk_type_prop},
@@ -463,11 +463,12 @@ impl Eval {
                     self.proof_env.tt_env.ensure_wft(&local_env, t)?;
                     local_env.locals.push((x, t.clone()));
                 }
+                self.proof_env.tt_env.ensure_wft(&local_env, &ty)?;
                 elab::Elaborator::new(
                     &self.proof_env.tt_env,
                     &mut local_env,
-                    &self.proof_env.axioms,
                     &self.const_table,
+                    &self.axiom_table,
                     &self.structure_table,
                     &self.database,
                 )
@@ -542,7 +543,7 @@ impl Eval {
                     mut local_types,
                     mut target,
                     holes,
-                    expr,
+                    mut expr,
                 } = inner;
                 if self.has_axiom(name) {
                     bail!("already defined");
@@ -575,21 +576,15 @@ impl Eval {
                     &mut target,
                     &mut mk_type_prop(),
                 )?;
-                // auto insert 'change'
-                let mut expr = mk_expr_app(
-                    mk_expr_assume(target.clone(), mk_expr_assump(target.clone())),
-                    expr,
-                    target.clone(),
-                );
                 elab::Elaborator::new(
                     &self.proof_env.tt_env,
                     &mut local_env,
-                    &self.proof_env.axioms,
                     &self.const_table,
+                    &self.axiom_table,
                     &self.structure_table,
                     &self.database,
                 )
-                .elaborate_expr(&mut expr)?;
+                .elaborate_expr(&mut expr, &target)?;
                 local_env
                     .holes
                     .truncate(local_env.holes.len() - holes.len());
@@ -1673,7 +1668,7 @@ impl Eval {
                         name: ref field_name,
                         target,
                         ref holes,
-                        ref expr,
+                        ref mut expr,
                     }) = field
                     else {
                         bail!("lemma expected");
@@ -1690,28 +1685,22 @@ impl Eval {
                         target,
                         &mut mk_type_prop(),
                     )?;
-                    // auto insert 'change'
-                    let mut expr = mk_expr_app(
-                        mk_expr_assume(target.clone(), mk_expr_assump(target.clone())),
-                        expr.clone(),
-                        target.clone(),
-                    );
                     local_env.holes.extend(holes.iter().cloned());
                     elab::Elaborator::new(
                         &self.proof_env.tt_env,
                         &mut local_env,
-                        &self.proof_env.axioms,
                         &self.const_table,
+                        &self.axiom_table,
                         &self.structure_table,
                         &self.database,
                     )
-                    .elaborate_expr(&mut expr)?;
+                    .elaborate_expr(expr, &*target)?;
                     let mut h = expr::Env {
                         axioms: &self.proof_env.axioms,
                         tt_env: &self.proof_env.tt_env,
                         tt_local_env: &mut local_env,
                     }
-                    .run(&expr);
+                    .run(&*expr);
                     local_env
                         .holes
                         .truncate(local_env.holes.len() - holes.len());

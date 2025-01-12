@@ -1,11 +1,12 @@
 use std::iter::zip;
+use std::sync::LazyLock;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::proof::{
     mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro, mk_proof_imp_elim,
     mk_proof_imp_intro, mk_proof_ref, Forall, Imp, Proof,
 };
-use crate::tt::{self, mk_local, Name, Term, Type};
+use crate::tt::{self, Name, Term, Type};
 
 /// p ::= ⟪φ⟫
 ///     | assume φ, p
@@ -23,16 +24,16 @@ use crate::tt::{self, mk_local, Name, Term, Type};
 /// ----------------------------
 /// Γ | Φ ⊢ assume φ, h : φ → ψ
 ///
-/// Γ | Φ ⊢ h₁ : φ    Γ | Φ ⊢ h₂ : ψ    φ ≈ ψ → ξ
-/// ----------------------------------------------
+/// Γ | Φ ⊢ h₁ : ψ → ξ    Γ | Φ ⊢ h₂ : ψ
+/// -------------------------------------
 /// Γ | Φ ⊢ h₁ h₂ : ξ
 ///
 /// Γ, x : u | Φ ⊢ h : φ
 /// --------------------------------------- (x # Φ)
 /// Γ | Φ ⊢ take (x : u), h : ∀ (x : u), φ
 ///
-/// Γ | Φ ⊢ h : φ    φ ≈ ∀ (x : u), ψ x
-/// ------------------------------------ (Γ ⊢ m : u)
+/// Γ | Φ ⊢ h : ∀ (x : u), ψ x
+/// --------------------------- (Γ ⊢ m : u)
 /// Γ | Φ ⊢ h[m] : ψ m
 ///
 /// -------------------------
@@ -68,8 +69,6 @@ pub struct ExprAssume {
 pub struct ExprApp {
     pub expr1: Expr,
     pub expr2: Expr,
-    // ξ : Prop
-    pub target: Term,
 }
 
 #[derive(Debug, Clone)]
@@ -83,8 +82,6 @@ pub struct ExprTake {
 pub struct ExprInst {
     pub expr: Expr,
     pub arg: Term,
-    // P : u → Prop
-    pub predicate: Term,
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +96,13 @@ pub struct ExprChange {
     pub expr: Expr,
 }
 
+impl Default for Expr {
+    fn default() -> Self {
+        static DEFAULT: LazyLock<Expr> = LazyLock::new(|| mk_expr_assump(Default::default()));
+        DEFAULT.clone()
+    }
+}
+
 pub fn mk_expr_assump(m: Term) -> Expr {
     Expr::Assump(Arc::new(ExprAssump { target: m }))
 }
@@ -107,11 +111,10 @@ pub fn mk_expr_assume(h: Term, e: Expr) -> Expr {
     Expr::Assume(Arc::new(ExprAssume { target: h, expr: e }))
 }
 
-pub fn mk_expr_app(e1: Expr, e2: Expr, target: Term) -> Expr {
+pub fn mk_expr_app(e1: Expr, e2: Expr) -> Expr {
     Expr::App(Arc::new(ExprApp {
         expr1: e1,
         expr2: e2,
-        target,
     }))
 }
 
@@ -119,12 +122,8 @@ pub fn mk_expr_take(name: Name, ty: Type, e: Expr) -> Expr {
     Expr::Take(Arc::new(ExprTake { name, ty, expr: e }))
 }
 
-pub fn mk_expr_inst(e: Expr, m: Term, p: Term) -> Expr {
-    Expr::Inst(Arc::new(ExprInst {
-        expr: e,
-        arg: m,
-        predicate: p,
-    }))
+pub fn mk_expr_inst(e: Expr, m: Term) -> Expr {
+    Expr::Inst(Arc::new(ExprInst { expr: e, arg: m }))
 }
 
 pub fn mk_expr_const(name: Name, ty_args: Vec<Type>) -> Expr {
@@ -185,14 +184,9 @@ impl Expr {
                 expr.inst_type_hole(subst);
             }
             Expr::App(e) => {
-                let ExprApp {
-                    expr1,
-                    expr2,
-                    target,
-                } = Arc::make_mut(e);
+                let ExprApp { expr1, expr2 } = Arc::make_mut(e);
                 expr1.inst_type_hole(subst);
                 expr2.inst_type_hole(subst);
-                target.inst_type_hole(subst);
             }
             Expr::Take(e) => {
                 let ExprTake { name: _, ty, expr } = Arc::make_mut(e);
@@ -200,14 +194,9 @@ impl Expr {
                 expr.inst_type_hole(subst);
             }
             Expr::Inst(e) => {
-                let ExprInst {
-                    expr,
-                    arg,
-                    predicate,
-                } = Arc::make_mut(e);
+                let ExprInst { expr, arg } = Arc::make_mut(e);
                 expr.inst_type_hole(subst);
                 arg.inst_type_hole(subst);
-                predicate.inst_type_hole(subst);
             }
             Expr::Const(e) => {
                 let ExprConst { name: _, ty_args } = Arc::make_mut(e);
@@ -235,14 +224,9 @@ impl Expr {
                 expr.inst_hole(subst);
             }
             Expr::App(e) => {
-                let ExprApp {
-                    expr1,
-                    expr2,
-                    target,
-                } = Arc::make_mut(e);
+                let ExprApp { expr1, expr2 } = Arc::make_mut(e);
                 expr1.inst_hole(subst);
                 expr2.inst_hole(subst);
-                target.inst_hole(subst);
             }
             Expr::Take(e) => {
                 let ExprTake {
@@ -253,14 +237,9 @@ impl Expr {
                 expr.inst_hole(subst);
             }
             Expr::Inst(e) => {
-                let ExprInst {
-                    expr,
-                    arg,
-                    predicate,
-                } = Arc::make_mut(e);
+                let ExprInst { expr, arg } = Arc::make_mut(e);
                 expr.inst_hole(subst);
                 arg.inst_hole(subst);
-                predicate.inst_hole(subst);
             }
             Expr::Const(_) => {}
             Expr::Change(e) => {
@@ -283,14 +262,9 @@ impl Expr {
                 expr.normalize();
             }
             Expr::App(e) => {
-                let ExprApp {
-                    expr1,
-                    expr2,
-                    target,
-                } = Arc::make_mut(e);
+                let ExprApp { expr1, expr2 } = Arc::make_mut(e);
                 expr1.normalize();
                 expr2.normalize();
-                target.normalize();
             }
             Expr::Take(e) => {
                 let ExprTake {
@@ -301,14 +275,9 @@ impl Expr {
                 expr.normalize();
             }
             Expr::Inst(e) => {
-                let ExprInst {
-                    expr,
-                    arg,
-                    predicate,
-                } = Arc::make_mut(e);
+                let ExprInst { expr, arg } = Arc::make_mut(e);
                 expr.normalize();
                 arg.normalize();
-                predicate.normalize();
             }
             Expr::Const(_) => {}
             Expr::Change(e) => {
@@ -348,18 +317,9 @@ impl<'a> Env<'a> {
             }
             Expr::App(inner) => {
                 let (h1, p1) = self.run_help(&inner.expr1);
-                let (h2, p2) = self.run_help(&inner.expr2);
-
-                let pat: Term = Imp {
-                    lhs: p2,
-                    rhs: inner.target.clone(),
-                }
-                .into();
-
-                let path = self.tt_env.equiv(&p1, &pat).unwrap();
-                let h = mk_proof_imp_elim(mk_proof_conv(path, h1), h2);
-
-                let Imp { lhs: _lhs, rhs } = pat.try_into().unwrap();
+                let (h2, _) = self.run_help(&inner.expr2);
+                let h = mk_proof_imp_elim(h1, h2);
+                let Imp { lhs: _lhs, rhs } = p1.try_into().unwrap();
                 (h, rhs)
             }
             Expr::Take(inner) => {
@@ -377,26 +337,14 @@ impl<'a> Env<'a> {
             }
             Expr::Inst(inner) => {
                 let (h, p) = self.run_help(&inner.expr);
-
-                let mut arg = inner.arg.clone();
-                let ty = self.tt_env.infer_type(self.tt_local_env, &mut arg).unwrap();
-
-                let mut pat = inner.predicate.clone();
-                let tmp = Name::fresh_with_name("x");
-                pat.apply([mk_local(tmp)]);
-                pat.generalize(&[(tmp, ty.clone())]);
-
-                let path = self.tt_env.equiv(&p, &pat).unwrap();
-                let h = mk_proof_forall_elim(arg.clone(), mk_proof_conv(path, h));
-
+                let h = mk_proof_forall_elim(inner.arg.clone(), h);
                 let Forall {
                     name: _name,
                     ty: _ty,
                     body,
-                } = pat.try_into().unwrap();
+                } = p.try_into().unwrap();
                 let mut target = body;
-                target.open(&arg);
-
+                target.open(&inner.arg);
                 (h, target)
             }
             Expr::Const(inner) => {

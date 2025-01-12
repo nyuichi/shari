@@ -5,7 +5,8 @@ use crate::cmd::{
     InstanceLemma, Operator, StructureAxiom, StructureConst, StructureField,
 };
 use crate::expr::{
-    mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_const, mk_expr_inst, mk_expr_take, Expr,
+    mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_change, mk_expr_const, mk_expr_inst,
+    mk_expr_take, Expr,
 };
 use crate::proof::mk_type_prop;
 use crate::tt::{
@@ -671,7 +672,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         let mut expr = mk_expr_const(name, ty_args);
         if auto_inst {
             for _ in 0..axiom_info.num_params {
-                expr = mk_expr_inst(expr, self.mk_term_hole(), self.mk_term_hole());
+                expr = mk_expr_inst(expr, self.mk_term_hole());
             }
         }
         Ok(expr)
@@ -719,7 +720,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let m = self.term()?;
                     self.expect_symbol(",")?;
                     let e = self.expr()?;
-                    mk_expr_app(mk_expr_assume(m.clone(), mk_expr_assump(m.clone())), e, m)
+                    mk_expr_change(m, e)
                 }
                 "have" => {
                     let m = self.term()?;
@@ -727,7 +728,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let e1 = self.expr()?;
                     self.expect_symbol(",")?;
                     let e2 = self.expr()?;
-                    mk_expr_app(mk_expr_assume(m.clone(), e2), e1, self.mk_term_hole())
+                    mk_expr_app(mk_expr_assume(m.clone(), e2), e1)
                 }
                 "obtain" => {
                     self.expect_symbol("(")?;
@@ -748,12 +749,12 @@ impl<'a, 'b> Parser<'a, 'b> {
 
                     // Expand[obtain (x : τ), p := e1, e2] := exists.ind.{τ}[_, _] e1 (take (x : τ), assume p, e2)
                     let e = mk_expr_const(Name::intern("exists.ind").unwrap(), vec![ty.clone()]);
-                    let e = mk_expr_inst(e, self.mk_term_hole(), self.mk_term_hole());
-                    let e = mk_expr_inst(e, self.mk_term_hole(), self.mk_term_hole());
-                    let e = mk_expr_app(e, e1, self.mk_term_hole());
+                    let e = mk_expr_inst(e, self.mk_term_hole());
+                    let e = mk_expr_inst(e, self.mk_term_hole());
+                    let e = mk_expr_app(e, e1);
                     let e_body = mk_expr_assume(p, e2);
                     let e_body = mk_expr_take(name, ty, e_body);
-                    mk_expr_app(e, e_body, self.mk_term_hole())
+                    mk_expr_app(e, e_body)
                 }
                 _ => self.expr_const(token, true)?,
             }
@@ -782,7 +783,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             match led {
                 ExprLed::App => {
                     let right = self.subexpr(1024)?;
-                    left = mk_expr_app(left, right, self.mk_term_hole());
+                    left = mk_expr_app(left, right);
                 }
                 ExprLed::Inst => {
                     self.advance();
@@ -796,7 +797,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     self.expect_symbol("]")?;
                     let mut e = left;
                     for arg in args {
-                        e = mk_expr_inst(e, arg, self.mk_term_hole());
+                        e = mk_expr_inst(e, arg);
                     }
                     left = e;
                 }
