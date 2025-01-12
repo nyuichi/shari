@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{bail, Context};
+use anyhow::{bail, ensure, Context};
 
 use crate::{
     cmd::{Axiom, CmdClass, CmdStructure, Const, StructureField},
@@ -376,6 +376,15 @@ impl<'a> Elaborator<'a> {
         }
     }
 
+    pub fn elaborate_type(self, target: &Type, kind: Kind) -> anyhow::Result<()> {
+        let k = self.visit_type(target)?;
+        ensure!(k == kind);
+
+        ensure!(target.is_ground());
+
+        Ok(())
+    }
+
     // ty is trusted
     pub fn elaborate_term(mut self, target: &mut Term, ty: &Type) -> anyhow::Result<()> {
         let t = self.visit_term(target)?;
@@ -395,6 +404,9 @@ impl<'a> Elaborator<'a> {
 
         target.inst_type_hole(&type_subst);
         target.inst_hole(&subst);
+
+        ensure!(target.is_ground());
+        ensure!(target.is_type_ground());
 
         Ok(())
     }
@@ -423,6 +435,9 @@ impl<'a> Elaborator<'a> {
 
         e.inst_type_hole(&type_subst);
         e.inst_hole(&subst);
+
+        ensure!(e.is_ground());
+        ensure!(e.is_type_ground());
 
         #[cfg(debug_assertions)]
         {

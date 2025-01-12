@@ -249,6 +249,73 @@ impl Expr {
             }
         }
     }
+
+    pub fn is_ground(&self) -> bool {
+        match self {
+            Expr::Assump(e) => {
+                let ExprAssump { target } = &**e;
+                target.is_ground()
+            }
+            Expr::Assume(e) => {
+                let ExprAssume { target, expr } = &**e;
+                target.is_ground() && expr.is_ground()
+            }
+            Expr::App(e) => {
+                let ExprApp { expr1, expr2 } = &**e;
+                expr1.is_ground() && expr2.is_ground()
+            }
+            Expr::Take(e) => {
+                let ExprTake {
+                    name: _,
+                    ty: _,
+                    expr,
+                } = &**e;
+                expr.is_ground()
+            }
+            Expr::Inst(e) => {
+                let ExprInst { expr, arg } = &**e;
+                expr.is_ground() && arg.is_ground()
+            }
+            Expr::Const(_) => true,
+            Expr::Change(e) => {
+                let ExprChange { target, expr } = &**e;
+                target.is_ground() && expr.is_ground()
+            }
+        }
+    }
+
+    pub fn is_type_ground(&self) -> bool {
+        match self {
+            Expr::Assump(e) => {
+                let ExprAssump { target } = &**e;
+                target.is_type_ground()
+            }
+            Expr::Assume(e) => {
+                let ExprAssume { target, expr } = &**e;
+                target.is_type_ground() && expr.is_type_ground()
+            }
+            Expr::App(e) => {
+                let ExprApp { expr1, expr2 } = &**e;
+                expr1.is_type_ground() && expr2.is_type_ground()
+            }
+            Expr::Take(e) => {
+                let ExprTake { name: _, ty, expr } = &**e;
+                ty.is_ground() && expr.is_type_ground()
+            }
+            Expr::Inst(e) => {
+                let ExprInst { expr, arg } = &**e;
+                expr.is_type_ground() && arg.is_ground()
+            }
+            Expr::Const(e) => {
+                let ExprConst { name: _, ty_args } = &**e;
+                ty_args.iter().all(|t| t.is_ground())
+            }
+            Expr::Change(e) => {
+                let ExprChange { target, expr } = &**e;
+                target.is_type_ground() && expr.is_type_ground()
+            }
+        }
+    }
 }
 
 #[derive(Debug)]

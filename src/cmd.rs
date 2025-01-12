@@ -336,6 +336,23 @@ impl Eval {
         self.proof_env.tt_env.type_consts.contains_key(&name)
     }
 
+    fn elaborate_type(
+        &self,
+        local_env: &mut LocalEnv,
+        ty: &Type,
+        kind: Kind,
+    ) -> anyhow::Result<()> {
+        elab::Elaborator::new(
+            &self.proof_env.tt_env,
+            local_env,
+            &self.const_table,
+            &self.axiom_table,
+            &self.structure_table,
+            &self.database,
+        )
+        .elaborate_type(ty, kind)
+    }
+
     fn elaborate_term(
         &self,
         local_env: &mut LocalEnv,
@@ -494,10 +511,10 @@ impl Eval {
                     }
                 }
                 for &(x, ref t) in &local_classes {
-                    self.proof_env.tt_env.ensure_wft(&local_env, t)?;
+                    self.elaborate_type(&mut local_env, t, Kind::base())?;
                     local_env.locals.push((x, t.clone()));
                 }
-                self.proof_env.tt_env.ensure_wft(&local_env, &ty)?;
+                self.elaborate_type(&mut local_env, &ty, Kind::base())?;
                 self.elaborate_term(&mut local_env, &mut target, &ty)?;
                 // well-formedness check is completed.
                 self.add_const(
@@ -645,12 +662,12 @@ impl Eval {
                     }
                     local_types.insert(0, *local_type_const);
                 }
-                let local_env = LocalEnv {
+                let mut local_env = LocalEnv {
                     local_types,
                     locals: vec![],
                     holes: vec![],
                 };
-                self.proof_env.tt_env.ensure_wft(&local_env, &ty)?;
+                self.elaborate_type(&mut local_env, &ty, Kind::base())?;
                 self.add_const(
                     name,
                     local_env.local_types,
@@ -730,10 +747,10 @@ impl Eval {
                     }
                 }
                 for &(x, ref t) in &params {
-                    self.proof_env.tt_env.ensure_wft(&local_env, t)?;
+                    self.elaborate_type(&mut local_env, t, Kind::base())?;
                     local_env.locals.push((x, t.clone()));
                 }
-                self.proof_env.tt_env.ensure_wft(&local_env, &ty)?;
+                self.elaborate_type(&mut local_env, &ty, Kind::base())?;
                 self.elaborate_term(&mut local_env, &mut target, &ty)?;
                 for rule in &self.database {
                     let ty = {
@@ -809,7 +826,7 @@ impl Eval {
             if self.has_const(ctor_spec_name) {
                 bail!("already defined");
             }
-            self.proof_env.tt_env.ensure_wft(&local_env, &ctor.ty)?;
+            self.elaborate_type(&mut local_env, &ctor.ty, Kind::base())?;
             let mut t = ctor.ty.clone();
             let args = t.unarrow();
             if t != mk_type_local(name) {
@@ -1127,10 +1144,12 @@ impl Eval {
                     bail!("duplicate parameters");
                 }
             }
-            self.proof_env.tt_env.ensure_wft(&local_env, &params[i].1)?;
-            local_env.locals.push((params[i].0, params[i].1.clone()));
         }
-        self.proof_env.tt_env.ensure_wft(&local_env, &target_ty)?;
+        for &(x, ref t) in &params {
+            self.elaborate_type(&mut local_env, t, Kind::base())?;
+            local_env.locals.push((x, t.clone()));
+        }
+        self.elaborate_type(&mut local_env, &target_ty, Kind::base())?;
         if target_ty.target() != &mk_type_prop() {
             bail!("the target type of an inductive predicate must be Prop");
         }
@@ -1368,7 +1387,7 @@ impl Eval {
                         bail!("duplicate const field");
                     }
                     const_field_names.push(field_name);
-                    self.proof_env.tt_env.ensure_wft(&local_env, field_ty)?;
+                    self.elaborate_type(&mut local_env, field_ty, Kind::base())?;
                     local_env.locals.push((*field_name, field_ty.clone()));
                 }
                 StructureField::Axiom(field) => {
@@ -1611,10 +1630,12 @@ impl Eval {
                     bail!("duplicate parameters");
                 }
             }
-            self.proof_env.tt_env.ensure_wft(&local_env, &params[i].1)?;
-            local_env.locals.push((params[i].0, params[i].1.clone()));
         }
-        self.proof_env.tt_env.ensure_wft(&local_env, &target_ty)?;
+        for &(x, ref t) in &params {
+            self.elaborate_type(&mut local_env, t, Kind::base())?;
+            local_env.locals.push((x, t.clone()));
+        }
+        self.elaborate_type(&mut local_env, &target_ty, Kind::base())?;
         let Type::Const(structure_name) = target_ty.head() else {
             bail!("type of instance must be a structure");
         };
@@ -1654,7 +1675,7 @@ impl Eval {
                     if structure_field.name != *field_name {
                         bail!("field name mismatch");
                     }
-                    self.proof_env.tt_env.ensure_wft(&local_env, ty)?;
+                    self.elaborate_type(&mut local_env, ty, Kind::base())?;
                     self.elaborate_term(&mut local_env, target, ty)?;
                     let mut structure_field_ty = structure_field.ty.clone();
                     structure_field_ty.subst(&type_subst);
