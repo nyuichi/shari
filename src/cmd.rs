@@ -202,7 +202,7 @@ pub struct CmdClass {
     pub target: Term,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Const {
     pub local_types: Vec<Name>,
     pub local_classes: Vec<(Name, Type)>,
@@ -210,7 +210,7 @@ pub struct Const {
     pub ty: Type,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Axiom {
     pub local_types: Vec<Name>,
     pub local_classes: Vec<(Name, Type)>,
@@ -321,7 +321,47 @@ impl Eval {
 
     fn add_type_const(&mut self, name: Name, kind: Kind) {
         self.ns.type_consts.insert(name);
-        self.proof_env.tt_env.type_consts.insert(name, kind);
+        self.proof_env.tt_env.type_consts.insert(name, kind.clone());
+    }
+
+    fn add_delta(
+        &mut self,
+        name: Name,
+        local_types: Vec<Name>,
+        local_classes: Vec<(Name, Type)>,
+        target: Term,
+    ) {
+        let mut target = target.clone();
+        target.abs(&local_classes, false);
+        self.proof_env.tt_env.delta_table.insert(
+            name,
+            Delta {
+                local_types,
+                target,
+                hint: self.proof_env.tt_env.delta_table.len(),
+            },
+        );
+    }
+
+    fn add_iota(
+        &mut self,
+        rec_name: Name,
+        ctor_name: Name,
+        local_types: Vec<Name>,
+        local_classes: Vec<(Name, Type)>,
+        params: Vec<Name>,
+        target: Term,
+    ) {
+        assert!(local_classes.is_empty());
+        self.proof_env.tt_env.add_iota(
+            rec_name,
+            ctor_name,
+            Iota {
+                local_types,
+                params,
+                target,
+            },
+        );
     }
 
     fn has_const(&self, name: Name) -> bool {
@@ -466,7 +506,7 @@ impl Eval {
                     name,
                     mut local_types,
                     local_classes,
-                    mut ty,
+                    ty,
                     mut target,
                 } = inner;
                 if self.has_const(name) {
@@ -495,7 +535,7 @@ impl Eval {
                     local_types.insert(0, *local_type_const);
                 }
                 let mut local_env = LocalEnv {
-                    local_types,
+                    local_types: local_types.clone(),
                     locals: vec![],
                     holes: vec![],
                 };
@@ -513,22 +553,8 @@ impl Eval {
                 self.elaborate_type(&mut local_env, &ty, Kind::base())?;
                 self.elaborate_term(&mut local_env, &mut target, &ty)?;
                 // well-formedness check is completed.
-                self.add_const(
-                    name,
-                    local_env.local_types.clone(),
-                    local_classes.clone(),
-                    ty.clone(),
-                );
-                ty.arrow(local_classes.iter().map(|(_, t)| t.clone()));
-                target.abs(&local_classes, false);
-                self.proof_env.tt_env.delta_table.insert(
-                    name,
-                    Delta {
-                        local_types: local_env.local_types,
-                        target,
-                        hint: self.proof_env.tt_env.delta_table.len(),
-                    },
-                );
+                self.add_const(name, local_types.clone(), local_classes.clone(), ty.clone());
+                self.add_delta(name, local_types, local_classes, target);
                 Ok(())
             }
             Cmd::Axiom(inner) => {
@@ -564,6 +590,7 @@ impl Eval {
                     holes: vec![],
                 };
                 self.elaborate_term(&mut local_env, &mut target, &mk_type_prop())?;
+                // well-formedness check is completed.
                 self.add_axiom(
                     name,
                     local_env.local_types,
@@ -1618,7 +1645,7 @@ impl Eval {
             }
         }
         let mut local_env = LocalEnv {
-            local_types,
+            local_types: local_types.clone(),
             locals: vec![],
             holes: vec![],
         };
@@ -1737,7 +1764,7 @@ impl Eval {
         }
         self.add_const(
             name,
-            local_env.local_types.clone(),
+            local_types.clone(),
             vec![], /* TODO(typeclass) */
             instance_ty,
         );
@@ -1764,30 +1791,27 @@ impl Eval {
                     };
                     self.add_const(
                         fullname,
-                        local_env.local_types.clone(),
+                        local_types.clone(),
                         vec![], /* TODO(typeclass) */
                         def_target_ty,
                     );
-                    self.proof_env.tt_env.delta_table.insert(
+                    self.add_delta(
                         name,
-                        Delta {
-                            local_types: local_env.local_types.clone(),
-                            target: def_target,
-                            hint: self.proof_env.tt_env.delta_table.len(),
-                        },
+                        local_types.clone(),
+                        vec![], /* TODO(typeclass) */
+                        def_target,
                     );
 
                     // e.g. example rep_of_power.{u} (A : set u) : inhab.rep (power.inhab A) = power A := eq.refl
                     let proj_name =
                         Name::intern(&format!("{}.{}", structure_name, field_name)).unwrap();
-                    self.proof_env.tt_env.add_iota(
+                    self.add_iota(
                         proj_name,
                         name,
-                        Iota {
-                            local_types: local_env.local_types.clone(),
-                            params: params.iter().map(|&(x, _)| x).collect(),
-                            target: target.clone(),
-                        },
+                        local_types.clone(),
+                        vec![], /* TODO(typeclass) */
+                        params.iter().map(|&(x, _)| x).collect(),
+                        target.clone(),
                     );
                 }
                 InstanceField::Lemma(field) => {
@@ -1803,7 +1827,7 @@ impl Eval {
                     target.generalize(&params);
                     self.add_axiom(
                         fullname,
-                        local_env.local_types.clone(),
+                        local_types.clone(),
                         vec![], /* TODO(typeclass) */
                         target,
                     );
