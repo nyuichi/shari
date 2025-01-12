@@ -1689,12 +1689,19 @@ impl Env {
                     p = mk_path_congr_app(p_fun, p_arg);
                 } else if let Term::Const(fun) = &mut inner.fun {
                     self.get_proj_rules(fun.name)?;
-                    let p_fun = mk_path_refl(inner.fun.clone());
-                    let p_arg = self
-                        .weak_reduce(&mut inner.arg)
-                        .unwrap_or_else(|| mk_path_refl(inner.arg.clone()));
-                    let p_proj = self.proj_reduce(m)?;
-                    p = mk_path_trans(mk_path_congr_app(p_fun, p_arg), p_proj);
+                    match self.weak_reduce(&mut inner.arg) {
+                        Some(p_arg) => {
+                            let p_fun = mk_path_refl(Term::Const(fun.clone()));
+                            let p_app = mk_path_congr_app(p_fun, p_arg);
+                            let p_proj = self
+                                .proj_reduce(m)
+                                .unwrap_or_else(|| mk_path_refl(m.clone()));
+                            p = mk_path_trans(p_app, p_proj);
+                        }
+                        None => {
+                            p = self.proj_reduce(m)?;
+                        }
+                    }
                 } else if let Some(p_beta) = m.beta_reduce() {
                     p = p_beta;
                 } else {
