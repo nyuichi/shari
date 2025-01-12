@@ -394,11 +394,7 @@ impl Eval {
             locals: vec![],
             holes: vec![],
         };
-        let mut target = target.clone();
-        self.proof_env
-            .tt_env
-            .check_type(&mut local_env, &mut target, &mut mk_type_prop())
-            .is_ok()
+        self.proof_env.tt_env.is_wff(&mut local_env, target)
     }
 
     pub fn run_cmd(&mut self, cmd: Cmd) -> anyhow::Result<()> {
@@ -615,18 +611,20 @@ impl Eval {
                 local_env
                     .holes
                     .truncate(local_env.holes.len() - holes.len());
-                let mut h = expr::Env {
+                let h = expr::Env {
                     axioms: &self.proof_env.axioms,
                     tt_env: &self.proof_env.tt_env,
                     tt_local_env: &mut local_env,
                 }
                 .run(&expr);
-                self.proof_env.check_prop(
+                if !self.proof_env.check_prop(
                     &mut local_env,
-                    &mut proof::Context::default(),
-                    &mut h,
+                    &mut proof::LocalEnv::default(),
+                    &h,
                     &target,
-                )?;
+                ) {
+                    bail!("proof failed");
+                }
                 self.add_axiom(
                     name,
                     local_env.local_types,
@@ -1704,7 +1702,7 @@ impl Eval {
                     self.elaborate_term(&mut local_env, target, &mk_type_prop())?;
                     local_env.holes.extend(holes.iter().cloned());
                     self.elaborate_expr(&mut local_env, expr, target)?;
-                    let mut h = expr::Env {
+                    let h = expr::Env {
                         axioms: &self.proof_env.axioms,
                         tt_env: &self.proof_env.tt_env,
                         tt_local_env: &mut local_env,
@@ -1713,12 +1711,14 @@ impl Eval {
                     local_env
                         .holes
                         .truncate(local_env.holes.len() - holes.len());
-                    self.proof_env.check_prop(
+                    if !self.proof_env.check_prop(
                         &mut local_env,
-                        &mut proof::Context::default(),
-                        &mut h,
+                        &mut proof::LocalEnv::default(),
+                        &h,
                         target,
-                    )?;
+                    ) {
+                        bail!("proof failed");
+                    }
                     let mut structure_field_target = structure_field.target.clone();
                     structure_field_target.subst_type(&type_subst);
                     structure_field_target.subst(&subst);

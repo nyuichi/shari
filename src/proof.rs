@@ -2,10 +2,9 @@
 
 use std::{collections::HashMap, iter::zip, sync::Arc, vec};
 
-use anyhow::bail;
 use std::sync::LazyLock;
 
-use crate::tt::{self, mk_abs, mk_const, mk_type_const, LocalEnv, Name, Path, Term, TermAbs, Type};
+use crate::tt::{self, mk_abs, mk_const, mk_type_const, Name, Path, Term, TermAbs, Type};
 
 #[derive(Debug, Clone)]
 pub enum Proof {
@@ -216,118 +215,125 @@ pub struct Env {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct Context {
-    pub props: Vec<Term>,
+pub struct LocalEnv {
+    pub local_axioms: Vec<Term>,
 }
 
 impl Env {
-    /// prop must be certified.
+    // prop is trusted
     pub fn check_prop(
         &self,
+        tt_local_env: &mut tt::LocalEnv,
         local_env: &mut LocalEnv,
-        context: &mut Context,
-        h: &mut Proof,
+        h: &Proof,
         prop: &Term,
-    ) -> anyhow::Result<()> {
-        let p = self.infer_prop(local_env, context, h)?;
-        if !p.typed_eq(prop) {
-            bail!("propositions mismatch: {p} is not equal to {prop}");
+    ) -> bool {
+        let Some(p) = self.infer_prop(tt_local_env, local_env, h) else {
+            return false;
         };
-        Ok(())
+        p.typed_eq(prop)
     }
 
     pub fn infer_prop(
         &self,
+        tt_local_env: &mut tt::LocalEnv,
         local_env: &mut LocalEnv,
-        context: &mut Context,
-        h: &mut Proof,
-    ) -> anyhow::Result<Term> {
+        h: &Proof,
+    ) -> Option<Term> {
         match h {
             Proof::Assump(p) => {
-                self.tt_env.check_type(local_env, p, &mut mk_type_prop())?;
-                for c in &context.props {
-                    if p.typed_eq(c) {
-                        return Ok(p.clone());
+                for local_axiom in &local_env.local_axioms {
+                    if p.typed_eq(local_axiom) {
+                        return Some(p.clone());
                     }
                 }
-                bail!("assumption not found");
+                None
             }
-            Proof::ImpIntro(inner) => {
-                let (p, h) = Arc::make_mut(inner);
-                self.tt_env.check_type(local_env, p, &mut mk_type_prop())?;
-                context.props.push(p.clone());
-                let h = self.infer_prop(local_env, context, h)?;
-                let p = context.props.pop().unwrap();
-                Ok(Imp { lhs: p, rhs: h }.into())
+            Proof::ImpIntro(h) => {
+                let (p, h) = &**h;
+                if !self.tt_env.is_wff(tt_local_env, p) {
+                    return None;
+                }
+                local_env.local_axioms.push(p.clone());
+                let h = self.infer_prop(tt_local_env, local_env, h)?;
+                let p = local_env.local_axioms.pop().unwrap();
+                Some(Imp { lhs: p, rhs: h }.into())
             }
-            Proof::ImpElim(inner) => {
-                let (h1, h2) = Arc::make_mut(inner);
-                let h1 = self.infer_prop(local_env, context, h1)?;
+            Proof::ImpElim(h) => {
+                let (h1, h2) = &**h;
+                let h1 = self.infer_prop(tt_local_env, local_env, h1)?;
                 let Ok(Imp { lhs, rhs }) = h1.clone().try_into() else {
-                    bail!("not an implication: {}", h1);
+                    return None;
                 };
-                self.check_prop(local_env, context, h2, &lhs)?;
-                Ok(rhs)
+                if !self.check_prop(tt_local_env, local_env, h2, &lhs) {
+                    return None;
+                }
+                Some(rhs)
             }
-            Proof::ForallIntro(inner) => {
-                let (x, t, h) = Arc::make_mut(inner);
-                self.tt_env.ensure_wft(local_env, t)?;
-                for c in &context.props {
-                    if !c.is_fresh(&[*x]) {
-                        bail!("eigenvariable condition fails");
+            Proof::ForallIntro(h) => {
+                let &(x, ref t, ref h) = &**h;
+                if !self.tt_env.is_wft(tt_local_env, t) {
+                    return None;
+                }
+                for c in &local_env.local_axioms {
+                    if !c.is_fresh(&[x]) {
+                        // eigenvariable condition fails
+                        return None;
                     }
                 }
-                local_env.locals.push((*x, t.clone()));
-                let h = self.infer_prop(local_env, context, h)?;
-                let (x, t) = local_env.locals.pop().unwrap();
+                tt_local_env.locals.push((x, t.clone()));
+                let h = self.infer_prop(tt_local_env, local_env, h)?;
+                let (x, t) = tt_local_env.locals.pop().unwrap();
                 let mut body = h;
                 body.close(x);
-                Ok(Forall {
-                    name: x,
-                    ty: t,
-                    body,
-                }
-                .into())
+                Some(
+                    Forall {
+                        name: x,
+                        ty: t,
+                        body,
+                    }
+                    .into(),
+                )
             }
-            Proof::ForallElim(inner) => {
-                let (m, h) = Arc::make_mut(inner);
-                let h = self.infer_prop(local_env, context, h)?;
-                let Ok(Forall {
-                    name: _,
-                    mut ty,
-                    body,
-                }) = h.clone().try_into()
-                else {
-                    bail!("not a forall: {}", h);
+            Proof::ForallElim(h) => {
+                let (m, h) = &**h;
+                let h = self.infer_prop(tt_local_env, local_env, h)?;
+                let Ok(Forall { name: _, ty, body }) = h.clone().try_into() else {
+                    return None;
                 };
-                self.tt_env.check_type(local_env, m, &mut ty)?;
+                if !self.tt_env.check_type(tt_local_env, m, &ty) {
+                    return None;
+                }
                 let mut target = body;
                 target.open(m);
-                Ok(target)
+                Some(target)
             }
-            Proof::Conv(inner) => {
-                let (h1, h2) = Arc::make_mut(inner);
-                let h1 = self.tt_env.infer_conv(local_env, h1)?;
-                self.check_prop(local_env, context, h2, &h1.left)?;
-                Ok(h1.right)
-            }
-            Proof::Ref(inner) => {
-                let (name, ty_args) = Arc::make_mut(inner);
-                let Some((tv, mut target)) = self.axioms.get(name).cloned() else {
-                    bail!("proposition not found");
-                };
-                if ty_args.len() != tv.len() {
-                    bail!("wrong number of type arguments supplied");
+            Proof::Conv(h) => {
+                let (h1, h2) = &**h;
+                let h1 = self.tt_env.infer_conv(tt_local_env, h1)?;
+                if !self.check_prop(tt_local_env, local_env, h2, &h1.left) {
+                    return None;
                 }
-                for ty_arg in &mut *ty_args {
-                    self.tt_env.ensure_wft(local_env, ty_arg)?;
+                Some(h1.right)
+            }
+            Proof::Ref(h) => {
+                let (name, ty_args) = &**h;
+                let (tv, target) = self.axioms.get(name)?;
+                if ty_args.len() != tv.len() {
+                    return None;
+                }
+                for ty_arg in ty_args {
+                    if !self.tt_env.is_wft(tt_local_env, ty_arg) {
+                        return None;
+                    }
                 }
                 let mut subst = vec![];
-                for (&x, t) in zip(&tv, &*ty_args) {
+                for (&x, t) in zip(tv, ty_args) {
                     subst.push((x, t.clone()))
                 }
+                let mut target = target.clone();
                 target.subst_type(&subst);
-                Ok(target)
+                Some(target)
             }
         }
     }

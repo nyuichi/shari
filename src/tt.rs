@@ -183,6 +183,11 @@ pub fn mk_type_const(name: Name) -> Type {
     Type::Const(name)
 }
 
+pub fn mk_type_prop() -> Type {
+    static T_PROP: LazyLock<Type> = LazyLock::new(|| mk_type_const(Name::intern("Prop").unwrap()));
+    T_PROP.clone()
+}
+
 /// See [Barendregt+, 06](https://ftp.science.ru.nl/CSI/CompMath.Found/I.pdf).
 impl Type {
     /// t.arrow([t1, t2]);
@@ -1367,225 +1372,243 @@ impl Env {
         }
     }
 
-    fn infer_kind(&self, local_env: &LocalEnv, t: &Type) -> anyhow::Result<Kind> {
+    pub fn infer_kind(&self, local_env: &LocalEnv, t: &Type) -> Option<Kind> {
         match t {
-            Type::Const(name) => {
-                let Some(kind) = self.type_consts.get(name) else {
-                    bail!("constant type not found");
-                };
-                Ok(kind.clone())
-            }
+            Type::Const(name) => Some(self.type_consts.get(name)?.clone()),
             Type::Arrow(inner) => {
-                self.check_kind(local_env, &inner.dom, &Kind::base())?;
-                self.check_kind(local_env, &inner.cod, &Kind::base())?;
-                Ok(Kind::base())
+                if !self.check_kind(local_env, &inner.dom, Kind::base()) {
+                    return None;
+                }
+                if !self.check_kind(local_env, &inner.cod, Kind::base()) {
+                    return None;
+                }
+                Some(Kind::base())
             }
             Type::App(inner) => {
                 let fun_kind = self.infer_kind(local_env, &inner.fun)?;
                 if fun_kind.0 == 0 {
-                    bail!("too many type arguments");
+                    return None;
                 }
-                self.check_kind(local_env, &inner.arg, &Kind::base())?;
-                Ok(Kind(fun_kind.0 - 1))
+                if !self.check_kind(local_env, &inner.arg, Kind::base()) {
+                    return None;
+                }
+                Some(Kind(fun_kind.0 - 1))
             }
             Type::Local(x) => {
                 for local_type in &local_env.local_types {
                     if local_type == x {
-                        return Ok(Kind::base());
+                        return Some(Kind::base());
                     }
                 }
-                bail!("unbound local type: {x}");
+                None
             }
-            // no higher-kinded polymorphism
-            Type::Hole(_) => Ok(Kind::base()),
+            Type::Hole(_) => None,
         }
     }
 
-    fn check_kind(&self, local_env: &LocalEnv, t: &Type, kind: &Kind) -> anyhow::Result<()> {
-        let my_kind = self.infer_kind(local_env, t)?;
-        if &my_kind != kind {
-            bail!("expected {kind}, but got {my_kind}");
-        }
-        Ok(())
-    }
-
-    pub fn ensure_wft(&self, local_env: &LocalEnv, t: &Type) -> anyhow::Result<()> {
-        self.check_kind(local_env, t, &Kind::base())?;
-        if !t.is_ground() {
-            bail!("an uninstantiated type hole found");
-        }
-        Ok(())
-    }
-
-    pub fn infer_type(&self, local_env: &mut LocalEnv, m: &mut Term) -> anyhow::Result<Type> {
-        let mut target = mk_fresh_type_hole();
-        self.check_type(local_env, m, &mut target)?;
-        Ok(target)
-    }
-
-    /// Unification-based type inference.
-    /// Errors if
-    /// - types mismatch,
-    /// - uninstantiated meta type variables remain,
-    /// - self is not locally closed,
-    /// - an unknown constant is found, or
-    /// - kind checking failed.
-    pub fn check_type(
-        &self,
-        local_env: &mut LocalEnv,
-        m: &mut Term,
-        target: &mut Type,
-    ) -> anyhow::Result<()> {
-        let local_env = Infer {
-            env: self,
-            local_env,
-            eq_set: EqSet::default(),
+    pub fn check_kind(&self, local_env: &LocalEnv, t: &Type, kind: Kind) -> bool {
+        let Some(k) = self.infer_kind(local_env, t) else {
+            return false;
         };
-        local_env.check_type(m, target)?;
-        Ok(())
+        k == kind
     }
 
-    pub fn infer_conv(&self, local_env: &mut LocalEnv, path: &mut Path) -> anyhow::Result<Conv> {
+    pub fn is_wft(&self, local_env: &LocalEnv, t: &Type) -> bool {
+        self.check_kind(local_env, t, Kind::base())
+    }
+
+    pub fn infer_type(&self, local_env: &mut LocalEnv, m: &Term) -> Option<Type> {
+        match m {
+            Term::Var(_) => None,
+            Term::Abs(m) => {
+                if !self.is_wft(local_env, &m.binder_type) {
+                    return None;
+                }
+                let x = Name::fresh_from(m.binder_name);
+                local_env.locals.push((x, m.binder_type.clone()));
+                let mut n = m.body.clone();
+                n.open(&mk_local(x));
+                let cod = self.infer_type(local_env, &n)?;
+                let (_, dom) = local_env.locals.pop().unwrap();
+                Some(mk_type_arrow(dom, cod))
+            }
+            Term::App(m) => {
+                let fun_ty = self.infer_type(local_env, &m.fun)?;
+                match fun_ty {
+                    Type::Arrow(fun_ty) => {
+                        if !self.check_type(local_env, &m.arg, &fun_ty.dom) {
+                            return None;
+                        }
+                        Some(fun_ty.cod.clone())
+                    }
+                    _ => None,
+                }
+            }
+            Term::Local(x) => {
+                for (n, t) in local_env.locals.iter().rev() {
+                    if n == x {
+                        return Some(t.clone());
+                    }
+                }
+                None
+            }
+            Term::Const(m) => {
+                let (tv, ty) = self.consts.get(&m.name)?;
+                let mut subst = vec![];
+                if tv.len() != m.ty_args.len() {
+                    return None;
+                }
+                for ty_arg in &m.ty_args {
+                    if !self.is_wft(local_env, ty_arg) {
+                        return None;
+                    }
+                }
+                for (&x, t) in tv.iter().zip(&m.ty_args) {
+                    subst.push((x, t.clone()));
+                }
+                let mut ty = ty.clone();
+                ty.subst(&subst);
+                Some(ty)
+            }
+            Term::Hole(_) => None,
+        }
+    }
+
+    pub fn check_type(&self, local_env: &mut LocalEnv, m: &Term, target: &Type) -> bool {
+        let Some(t) = self.infer_type(local_env, m) else {
+            return false;
+        };
+        t == *target
+    }
+
+    pub fn is_wff(&self, local_env: &mut LocalEnv, m: &Term) -> bool {
+        self.check_type(local_env, m, &mk_type_prop())
+    }
+
+    pub fn infer_conv(&self, local_env: &mut LocalEnv, path: &Path) -> Option<Conv> {
         match path {
             Path::Refl(m) => {
-                self.infer_type(local_env, m)?;
-                Ok(Conv {
+                let _ty = self.infer_type(local_env, m)?;
+                Some(Conv {
                     left: m.clone(),
                     right: m.clone(),
                 })
             }
-            Path::Symm(inner) => {
-                let inner = Arc::make_mut(inner);
-                let h = self.infer_conv(local_env, inner)?;
-                Ok(Conv {
+            Path::Symm(path) => {
+                let h = self.infer_conv(local_env, path)?;
+                Some(Conv {
                     left: h.right,
                     right: h.left,
                 })
             }
-            Path::Trans(inner) => {
-                let inner = Arc::make_mut(inner);
-                let h1 = self.infer_conv(local_env, &mut inner.0)?;
-                let h2 = self.infer_conv(local_env, &mut inner.1)?;
+            Path::Trans(path) => {
+                let h1 = self.infer_conv(local_env, &path.0)?;
+                let h2 = self.infer_conv(local_env, &path.1)?;
                 if !h1.right.typed_eq(&h2.left) {
-                    bail!("transitivity mismatch: {} ≡ {}", h1.right, h2.left);
+                    return None;
                 }
                 // h1.right == h2.left means the types in the both sides match.
-                Ok(Conv {
+                Some(Conv {
                     left: h1.left,
                     right: h2.right,
                 })
             }
-            Path::CongrApp(inner) => {
-                let inner = Arc::make_mut(inner);
-                let h1 = self.infer_conv(local_env, &mut inner.0)?;
-                let h2 = self.infer_conv(local_env, &mut inner.1)?;
-                let mut m1 = h1.left;
-                m1.apply([h2.left]);
-                let mut m2 = h1.right;
-                m2.apply([h2.right]);
-                self.infer_type(local_env, &mut m1)?;
-                Ok(Conv {
-                    left: m1,
-                    right: m2,
-                })
+            Path::CongrApp(path) => {
+                let mut h1 = self.infer_conv(local_env, &path.0)?;
+                let h2 = self.infer_conv(local_env, &path.1)?;
+                h1.left.apply([h2.left]);
+                h1.right.apply([h2.right]);
+                let _ty = self.infer_type(local_env, &h1.left)?;
+                Some(h1)
             }
-            Path::CongrAbs(inner) => {
-                let inner = Arc::make_mut(inner);
-                let (x, t, h) = (inner.0, inner.1.clone(), &mut inner.2);
-                local_env.locals.push((x, t));
-                let h = self.infer_conv(local_env, h)?;
+            Path::CongrAbs(path) => {
+                if !self.is_wft(local_env, &path.1) {
+                    return None;
+                }
+                local_env.locals.push((path.0, path.1.clone()));
+                let mut h = self.infer_conv(local_env, &path.2)?;
                 let (x, t) = local_env.locals.pop().unwrap();
-                let mut m1 = h.left;
-                let mut m2 = h.right;
-                m1.abs(&[(x, t.clone())], true);
-                m2.abs(&[(x, t.clone())], true);
-                Ok(Conv {
-                    left: m1,
-                    right: m2,
-                })
+                h.left.abs(&[(x, t.clone())], true);
+                h.right.abs(&[(x, t.clone())], true);
+                Some(h)
             }
             Path::Beta(m) => {
-                self.infer_type(local_env, m)?;
-                let m = m.clone();
-                let Term::App(mut inner) = m.clone() else {
-                    bail!("not a beta redex");
+                let _ty = self.infer_type(local_env, m)?;
+                let left = m.clone();
+                let Term::App(m) = m else {
+                    return None;
                 };
-                let inner = Arc::make_mut(&mut inner);
-                let arg = &inner.arg;
-                let Term::Abs(inner) = &mut inner.fun else {
-                    bail!("not a beta redex");
+                let Term::Abs(fun) = &m.fun else {
+                    return None;
                 };
-                let mut n = mem::take(&mut Arc::make_mut(inner).body);
-                n.open(arg);
-                Ok(Conv { left: m, right: n })
+                let mut right = fun.body.clone();
+                right.open(&m.arg);
+                Some(Conv { left, right })
             }
-            Path::Delta(inner) => {
-                let (name, ty_args) = Arc::make_mut(inner);
-                let Some(def) = self.defs.get(name).cloned() else {
-                    bail!("definition not found: {name}");
-                };
+            Path::Delta(path) => {
+                let left = mk_const(path.0, path.1.clone());
                 let DefInfo {
                     local_types,
-                    mut target,
+                    target,
                     hint: _,
-                } = def;
-                if local_types.len() != ty_args.len() {
-                    bail!("number of type arguments mismatch");
+                } = self.defs.get(&path.0)?;
+                if local_types.len() != path.1.len() {
+                    return None;
                 }
                 let mut subst = vec![];
-                for (&x, t) in zip(&local_types, &*ty_args) {
-                    self.check_kind(local_env, t, &Kind::base())?;
+                for (&x, t) in zip(local_types, &path.1) {
+                    if !self.is_wft(local_env, t) {
+                        return None;
+                    }
                     subst.push((x, t.clone()));
                 }
+                let mut target = target.clone();
                 target.subst_type(&subst);
-                let c = mk_const(*name, ty_args.clone());
-                Ok(Conv {
-                    left: c,
+                Some(Conv {
+                    left,
                     right: target,
                 })
             }
             Path::Proj(m) => {
-                self.infer_type(local_env, m)?;
-                let mut r = m.clone();
-                let mut args = r.unapply();
-                let Term::Const(prj) = r else {
-                    bail!("not a proj redex");
+                let _ty = self.infer_type(local_env, m)?;
+                let Term::Const(head) = m.head() else {
+                    return None;
                 };
-                let Some(proj_rules) = self.get_proj_rules(prj.name) else {
-                    bail!("not a projection: {}", prj.name);
-                };
+                let proj_rules = self.get_proj_rules(head.name).expect("not a projection");
+                let mut args = m.args();
                 if args.len() != 1 {
-                    bail!("not a proj redex");
+                    return None;
                 }
-                let mut a = args.pop().unwrap();
-                let args = a.unapply();
-                let Term::Const(ctor) = a else {
-                    bail!("not a proj redex");
+                let arg = args.pop().unwrap();
+                drop(args);
+                let Term::Const(ctor) = arg.head() else {
+                    return None;
                 };
-                let Some((_, proj_info)) = proj_rules.iter().find(|red| red.0 == ctor.name) else {
-                    bail!("projection rule not found: {}, {}", prj.name, ctor.name);
-                };
+                let ctor_args = arg.args();
+                let (_, proj_info) = proj_rules.iter().find(|red| red.0 == ctor.name)?;
                 let ProjInfo {
                     local_types,
                     params,
                     target,
                 } = proj_info;
-                if params.len() != args.len() {
-                    bail!("number of constructor arguments mismatch");
+                if local_types.len() != ctor.ty_args.len() {
+                    return None;
+                }
+                if params.len() != ctor_args.len() {
+                    return None;
                 }
                 let mut target = target.clone();
-                let mut subst = vec![];
+                let mut type_subst = vec![];
                 for (&x, t) in zip(local_types, &ctor.ty_args) {
+                    type_subst.push((x, t.clone()));
+                }
+                target.subst_type(&type_subst);
+                let mut subst = vec![];
+                for (&x, t) in zip(params, ctor_args) {
                     subst.push((x, t.clone()));
                 }
-                target.subst_type(&subst);
-
-                let mut subst = vec![];
-                for (&x, t) in zip(params, args) {
-                    subst.push((x, t));
-                }
                 target.subst(&subst);
-                Ok(Conv {
+                Some(Conv {
                     left: m.clone(),
                     right: target,
                 })
@@ -1600,7 +1623,7 @@ impl Env {
     // proj_reduce[prj (mk m₁ ⋯ mₙ)] := [m₁/x₁, ⋯ mₙ/xₙ]n
     //
     // Note that this method does not reduce the argument.
-    pub fn proj_reduce(&self, m: &mut Term) -> Option<Path> {
+    fn proj_reduce(&self, m: &mut Term) -> Option<Path> {
         let orig_m = m.clone();
         let Term::App(inner) = m else {
             return None;
@@ -1685,7 +1708,7 @@ impl Env {
     // assert_eq!(m, c.{u₁, ⋯, uₙ})
     // self.delta_reduce(m);
     // assert_eq!(m, n)
-    pub fn delta_reduce(&self, m: &mut Term) -> Option<Path> {
+    fn delta_reduce(&self, m: &mut Term) -> Option<Path> {
         let Term::Const(inner) = m else {
             return None;
         };
@@ -1906,220 +1929,6 @@ impl Env {
         let mut m2 = m2.clone();
         self.equiv_help(&mut m1, &mut m2)
     }
-
-    // path is trusted
-    pub fn get_conv(&self, path: &Path) -> Conv {
-        match path {
-            Path::Refl(m) => Conv {
-                left: m.clone(),
-                right: m.clone(),
-            },
-            Path::Symm(path) => {
-                let h = self.get_conv(path);
-                Conv {
-                    left: h.right,
-                    right: h.left,
-                }
-            }
-            Path::Trans(path) => {
-                let h1 = self.get_conv(&path.0);
-                let h2 = self.get_conv(&path.1);
-                assert!(
-                    h1.right.typed_eq(&h2.left),
-                    "transitivity mismatch: {} ≢ {}",
-                    h1.right,
-                    h2.left
-                );
-                Conv {
-                    left: h1.left,
-                    right: h2.right,
-                }
-            }
-            Path::CongrApp(path) => {
-                let mut h1 = self.get_conv(&path.0);
-                let h2 = self.get_conv(&path.1);
-                h1.left.apply([h2.left]);
-                h1.right.apply([h2.right]);
-                h1
-            }
-            Path::CongrAbs(path) => {
-                let mut h = self.get_conv(&path.2);
-                h.left.abs(&[(path.0, path.1.clone())], true);
-                h.right.abs(&[(path.0, path.1.clone())], true);
-                h
-            }
-            Path::Beta(m) => {
-                let left = m.clone();
-                let Term::App(m) = m else {
-                    panic!("not a beta redex");
-                };
-                let arg = &m.arg;
-                let Term::Abs(fun) = &m.fun else {
-                    panic!("not a beta redex");
-                };
-                let mut right = fun.body.clone();
-                right.open(arg);
-                Conv { left, right }
-            }
-            Path::Delta(path) => {
-                let DefInfo {
-                    local_types,
-                    target,
-                    hint: _,
-                } = self.defs.get(&path.0).expect("definition not found");
-                assert_eq!(
-                    local_types.len(),
-                    path.1.len(),
-                    "number of type arguments mismatch"
-                );
-                let mut subst = vec![];
-                for (&x, t) in zip(local_types, &path.1) {
-                    subst.push((x, t.clone()));
-                }
-                let mut target = target.clone();
-                target.subst_type(&subst);
-                let c = mk_const(path.0, path.1.clone());
-                Conv {
-                    left: c,
-                    right: target,
-                }
-            }
-            Path::Proj(m) => {
-                let Term::Const(head) = m.head() else {
-                    panic!("not a π redex");
-                };
-                let proj_rules = self.get_proj_rules(head.name).expect("not a projection");
-                let mut args = m.args();
-                assert_eq!(args.len(), 1, "not a π redex");
-                let arg = args.pop().unwrap();
-                let Term::Const(ctor) = arg.head() else {
-                    panic!("not a π redex");
-                };
-                let ctor_args = arg.args();
-                let Some((_, proj_info)) = proj_rules.iter().find(|red| red.0 == ctor.name) else {
-                    panic!("projection rule not found: {}, {}", head.name, ctor.name);
-                };
-                let ProjInfo {
-                    local_types,
-                    params,
-                    target,
-                } = proj_info;
-                assert_eq!(
-                    local_types.len(),
-                    ctor.ty_args.len(),
-                    "number of constructor type arguments mismatch"
-                );
-                assert_eq!(
-                    params.len(),
-                    ctor_args.len(),
-                    "number of constructor arguments mismatch"
-                );
-                let mut target = target.clone();
-                let mut type_subst = vec![];
-                for (&x, t) in zip(local_types, &ctor.ty_args) {
-                    type_subst.push((x, t.clone()));
-                }
-                target.subst_type(&type_subst);
-                let mut subst = vec![];
-                for (&x, t) in zip(params, ctor_args) {
-                    subst.push((x, t.clone()));
-                }
-                target.subst(&subst);
-                Conv {
-                    left: m.clone(),
-                    right: target,
-                }
-            }
-        }
-    }
-}
-
-struct Infer<'a> {
-    env: &'a Env,
-    local_env: &'a mut LocalEnv,
-    eq_set: EqSet,
-}
-
-impl<'a> Infer<'a> {
-    fn check_type(mut self, m: &mut Term, target: &mut Type) -> anyhow::Result<()> {
-        self.env.check_kind(self.local_env, target, &Kind::base())?;
-        self.check_type_help(m, target)?;
-        let unifier = self.eq_set.solve()?;
-        unifier.apply_term(m)?;
-        unifier.apply_type(target)?;
-        Ok(())
-    }
-
-    fn check_type_help(&mut self, m: &mut Term, target: &Type) -> anyhow::Result<()> {
-        match m {
-            Term::Local(name) => {
-                for (local, ty) in &self.local_env.locals {
-                    if local == name {
-                        self.eq_set.unify(ty.clone(), target.clone());
-                        return Ok(());
-                    }
-                }
-                bail!("unknown local variable");
-            }
-            Term::Hole(name) => {
-                for (local, ty) in &self.local_env.holes {
-                    if local == name {
-                        self.eq_set.unify(ty.clone(), target.clone());
-                        return Ok(());
-                    }
-                }
-                bail!("unknown meta variable");
-            }
-            Term::Var(_) => {
-                bail!("term not locally closed");
-            }
-            Term::Abs(inner) => {
-                let inner = Arc::make_mut(inner);
-                self.env
-                    .check_kind(self.local_env, &inner.binder_type, &Kind::base())?;
-                let x = Name::fresh();
-                let t = inner.binder_type.clone();
-                self.local_env.locals.push((x, t));
-                inner.body.open(&mk_local(x));
-                let body_ty = mk_fresh_type_hole();
-                self.check_type_help(&mut inner.body, &body_ty)?;
-                inner.body.close(x);
-                self.local_env.locals.pop();
-                self.eq_set.unify(
-                    mk_type_arrow(inner.binder_type.clone(), body_ty),
-                    target.clone(),
-                );
-            }
-            Term::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                let fun_ty = mk_fresh_type_hole();
-                self.check_type_help(&mut inner.fun, &fun_ty)?;
-                let arg_ty = mk_fresh_type_hole();
-                self.check_type_help(&mut inner.arg, &arg_ty)?;
-                self.eq_set
-                    .unify(fun_ty, mk_type_arrow(arg_ty, target.clone()));
-            }
-            Term::Const(inner) => {
-                let Some((tv, ty)) = self.env.consts.get(&inner.name) else {
-                    bail!("constant not found");
-                };
-                if tv.len() != inner.ty_args.len() {
-                    bail!("number of type variables mismatch");
-                }
-                for t in &inner.ty_args {
-                    self.env.check_kind(self.local_env, t, &Kind::base())?;
-                }
-                let mut subst = vec![];
-                for (&x, t) in zip(tv, &inner.ty_args) {
-                    subst.push((x, t.clone()));
-                }
-                let mut ty = ty.clone();
-                ty.subst(&subst);
-                self.eq_set.unify(ty, target.clone());
-            }
-        }
-        Ok(())
-    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -2185,54 +1994,3 @@ impl EqSet {
 }
 
 struct TypeUnifier(HashMap<Name, Type>);
-
-impl TypeUnifier {
-    fn apply_type(&self, t: &mut Type) -> anyhow::Result<()> {
-        match t {
-            Type::Const(_) => {}
-            Type::Arrow(inner) => {
-                let inner = Arc::make_mut(inner);
-                self.apply_type(&mut inner.dom)?;
-                self.apply_type(&mut inner.cod)?;
-            }
-            Type::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                self.apply_type(&mut inner.fun)?;
-                self.apply_type(&mut inner.arg)?;
-            }
-            Type::Local(_) => {}
-            Type::Hole(name) => {
-                let Some(ty) = self.0.get(name) else {
-                    bail!("uninstantiated meta type variable");
-                };
-                *t = ty.clone();
-                self.apply_type(t)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn apply_term(&self, m: &mut Term) -> anyhow::Result<()> {
-        match m {
-            Term::Var(_) => {}
-            Term::Abs(inner) => {
-                let inner = Arc::make_mut(inner);
-                self.apply_type(&mut inner.binder_type)?;
-                self.apply_term(&mut inner.body)?;
-            }
-            Term::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                self.apply_term(&mut inner.fun)?;
-                self.apply_term(&mut inner.arg)?;
-            }
-            Term::Local(_) | Term::Hole(_) => {}
-            Term::Const(inner) => {
-                let inner = Arc::make_mut(inner);
-                for ty_arg in &mut inner.ty_args {
-                    self.apply_type(ty_arg)?;
-                }
-            }
-        }
-        Ok(())
-    }
-}

@@ -113,6 +113,7 @@ impl<'a> Elaborator<'a> {
                 }
                 bail!("unbound local type: {t}");
             }
+            // no higher-kinded polymorphism
             Type::Hole(_) => Ok(Kind::base()),
         }
     }
