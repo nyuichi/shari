@@ -249,44 +249,6 @@ impl Expr {
             }
         }
     }
-
-    pub fn normalize(&mut self) {
-        match self {
-            Expr::Assump(e) => {
-                let ExprAssump { target } = Arc::make_mut(e);
-                target.normalize();
-            }
-            Expr::Assume(e) => {
-                let ExprAssume { target, expr } = Arc::make_mut(e);
-                target.normalize();
-                expr.normalize();
-            }
-            Expr::App(e) => {
-                let ExprApp { expr1, expr2 } = Arc::make_mut(e);
-                expr1.normalize();
-                expr2.normalize();
-            }
-            Expr::Take(e) => {
-                let ExprTake {
-                    name: _,
-                    ty: _,
-                    expr,
-                } = Arc::make_mut(e);
-                expr.normalize();
-            }
-            Expr::Inst(e) => {
-                let ExprInst { expr, arg } = Arc::make_mut(e);
-                expr.normalize();
-                arg.normalize();
-            }
-            Expr::Const(_) => {}
-            Expr::Change(e) => {
-                let ExprChange { target, expr } = Arc::make_mut(e);
-                target.normalize();
-                expr.normalize();
-            }
-        }
-    }
 }
 
 #[derive(Debug)]
