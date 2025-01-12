@@ -1940,6 +1940,132 @@ impl Env {
         let mut m2 = m2.clone();
         self.equiv_help(&mut m1, &mut m2)
     }
+
+    // path is trusted
+    pub fn get_conv(&self, path: &Path) -> Conv {
+        match path {
+            Path::Refl(m) => Conv {
+                left: m.clone(),
+                right: m.clone(),
+            },
+            Path::Symm(path) => {
+                let h = self.get_conv(path);
+                Conv {
+                    left: h.right,
+                    right: h.left,
+                }
+            }
+            Path::Trans(path) => {
+                let h1 = self.get_conv(&path.0);
+                let h2 = self.get_conv(&path.1);
+                assert!(
+                    h1.right.typed_eq(&h2.left),
+                    "transitivity mismatch: {} ≢ {}",
+                    h1.right,
+                    h2.left
+                );
+                Conv {
+                    left: h1.left,
+                    right: h2.right,
+                }
+            }
+            Path::CongrApp(path) => {
+                let mut h1 = self.get_conv(&path.0);
+                let h2 = self.get_conv(&path.1);
+                h1.left.apply([h2.left]);
+                h1.right.apply([h2.right]);
+                h1
+            }
+            Path::CongrAbs(path) => {
+                let mut h = self.get_conv(&path.2);
+                h.left.abs(&[(path.0, path.1.clone())], true);
+                h.right.abs(&[(path.0, path.1.clone())], true);
+                h
+            }
+            Path::Beta(m) => {
+                let left = m.clone();
+                let Term::App(m) = m else {
+                    panic!("not a beta redex");
+                };
+                let arg = &m.arg;
+                let Term::Abs(fun) = &m.fun else {
+                    panic!("not a beta redex");
+                };
+                let mut right = fun.body.clone();
+                right.open(arg);
+                Conv { left, right }
+            }
+            Path::Delta(path) => {
+                let DefInfo {
+                    local_types,
+                    target,
+                    hint: _,
+                } = self.defs.get(&path.0).expect("definition not found");
+                assert_eq!(
+                    local_types.len(),
+                    path.1.len(),
+                    "number of type arguments mismatch"
+                );
+                let mut subst = vec![];
+                for (&x, t) in zip(local_types, &path.1) {
+                    subst.push((x, t.clone()));
+                }
+                let mut target = target.clone();
+                target.subst_type(&subst);
+                let c = mk_const(path.0, path.1.clone());
+                Conv {
+                    left: c,
+                    right: target,
+                }
+            }
+            Path::Proj(m) => {
+                let Term::Const(head) = m.head() else {
+                    panic!("not a π redex");
+                };
+                let proj_rules = self.get_proj_rules(head.name).expect("not a projection");
+                let mut args = m.args();
+                assert_eq!(args.len(), 1, "not a π redex");
+                let arg = args.pop().unwrap();
+                let Term::Const(ctor) = arg.head() else {
+                    panic!("not a π redex");
+                };
+                let ctor_args = arg.args();
+                let Some((_, proj_info)) = proj_rules.iter().find(|red| red.0 == ctor.name) else {
+                    panic!("projection rule not found: {}, {}", head.name, ctor.name);
+                };
+                let ProjInfo {
+                    local_types,
+                    params,
+                    target,
+                } = proj_info;
+                assert_eq!(
+                    local_types.len(),
+                    ctor.ty_args.len(),
+                    "number of constructor type arguments mismatch"
+                );
+                assert_eq!(
+                    params.len(),
+                    ctor_args.len(),
+                    "number of constructor arguments mismatch"
+                );
+                let mut target = target.clone();
+                let mut type_subst = vec![];
+                for (&x, t) in zip(local_types, &ctor.ty_args) {
+                    type_subst.push((x, t.clone()));
+                }
+                target.subst_type(&type_subst);
+                let mut subst = vec![];
+                for (&x, t) in zip(params, ctor_args) {
+                    subst.push((x, t.clone()));
+                }
+                target.subst(&subst);
+                Conv {
+                    left: m.clone(),
+                    right: target,
+                }
+            }
+        }
+    }
 }
 
 struct Infer<'a> {
