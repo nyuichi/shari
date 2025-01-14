@@ -1,4 +1,4 @@
-use std::{collections::HashMap, iter::zip};
+use std::{collections::HashMap, iter::zip, slice};
 
 use anyhow::bail;
 
@@ -10,7 +10,7 @@ use crate::{
     proof,
     tt::{
         mk_const, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
-        mk_type_prop, Delta, Iota, Kind, LocalEnv, Name, Term, Type,
+        mk_type_prop, Delta, Iota, Kind, LocalEnv, Name, Parameter, Term, Type,
     },
 };
 
@@ -72,7 +72,7 @@ pub struct CmdNofix {
 pub struct CmdDef {
     pub name: Name,
     pub local_types: Vec<Name>,
-    pub local_classes: Vec<(Name, Type)>,
+    pub local_classes: Vec<Parameter>,
     pub ty: Type,
     pub target: Term,
 }
@@ -128,7 +128,7 @@ pub struct DataConstructor {
 pub struct CmdInductive {
     pub name: Name,
     pub local_types: Vec<Name>,
-    pub params: Vec<(Name, Type)>,
+    pub params: Vec<Parameter>,
     pub target_ty: Type,
     pub ctors: Vec<Constructor>,
 }
@@ -168,7 +168,7 @@ pub struct StructureAxiom {
 pub struct CmdInstance {
     pub name: Name,
     pub local_types: Vec<Name>,
-    pub params: Vec<(Name, Type)>,
+    pub params: Vec<Parameter>,
     pub target_ty: Type,
     pub fields: Vec<InstanceField>,
 }
@@ -197,7 +197,7 @@ pub struct InstanceLemma {
 #[derive(Debug, Clone)]
 pub struct CmdClass {
     pub local_types: Vec<Name>,
-    pub params: Vec<(Name, Type)>,
+    pub params: Vec<Parameter>,
     pub ty: Type,
     pub target: Term,
 }
@@ -205,7 +205,7 @@ pub struct CmdClass {
 #[derive(Debug, Clone)]
 pub struct Const {
     pub local_types: Vec<Name>,
-    pub local_classes: Vec<(Name, Type)>,
+    pub local_classes: Vec<Parameter>,
     // ty is not arrowed by local class types
     pub ty: Type,
 }
@@ -213,7 +213,7 @@ pub struct Const {
 #[derive(Debug, Clone)]
 pub struct Axiom {
     pub local_types: Vec<Name>,
-    pub local_classes: Vec<(Name, Type)>,
+    pub local_classes: Vec<Parameter>,
     // target is not generalized by local classes
     pub target: Term,
 }
@@ -253,7 +253,7 @@ impl Eval {
         &mut self,
         name: Name,
         local_types: Vec<Name>,
-        local_classes: Vec<(Name, Type)>,
+        local_classes: Vec<Parameter>,
         ty: Type,
     ) {
         // TODO: remove and integrate into const_table
@@ -266,7 +266,7 @@ impl Eval {
         // TODO: remove and integrate into const_table
         {
             let mut ty = ty.clone();
-            ty.arrow(local_classes.iter().map(|(_, t)| t.clone()));
+            ty.arrow(local_classes.iter().map(|x| x.ty.clone()));
             self.proof_env
                 .tt_env
                 .consts
@@ -287,7 +287,7 @@ impl Eval {
         &mut self,
         name: Name,
         local_types: Vec<Name>,
-        local_classes: Vec<(Name, Type)>,
+        local_classes: Vec<Parameter>,
         target: Term,
     ) {
         assert!(self.is_wff(&local_types, &target));
@@ -328,7 +328,7 @@ impl Eval {
         &mut self,
         name: Name,
         local_types: Vec<Name>,
-        local_classes: Vec<(Name, Type)>,
+        local_classes: Vec<Parameter>,
         target: Term,
     ) {
         let mut target = target.clone();
@@ -348,7 +348,7 @@ impl Eval {
         rec_name: Name,
         ctor_name: Name,
         local_types: Vec<Name>,
-        local_classes: Vec<(Name, Type)>,
+        local_classes: Vec<Parameter>,
         params: Vec<Name>,
         target: Term,
     ) {
@@ -527,7 +527,7 @@ impl Eval {
                     if !ty.contains_local(local_type_const)
                         && !local_classes
                             .iter()
-                            .any(|(_, t)| t.contains_local(local_type_const))
+                            .any(|x| x.ty.contains_local(local_type_const))
                     {
                         // unused
                         continue;
@@ -541,14 +541,14 @@ impl Eval {
                 };
                 for i in 0..local_classes.len() {
                     for j in i + 1..local_classes.len() {
-                        if local_classes[i].0 == local_classes[j].0 {
+                        if local_classes[i].name == local_classes[j].name {
                             bail!("duplicate local class parameters");
                         }
                     }
                 }
-                for &(x, ref t) in &local_classes {
-                    self.elaborate_type(&mut local_env, t, Kind::base())?;
-                    local_env.locals.push((x, t.clone()));
+                for x in &local_classes {
+                    self.elaborate_type(&mut local_env, &x.ty, Kind::base())?;
+                    local_env.locals.push(x.clone());
                 }
                 self.elaborate_type(&mut local_env, &ty, Kind::base())?;
                 self.elaborate_term(&mut local_env, &mut target, &ty)?;
@@ -750,9 +750,7 @@ impl Eval {
                         continue;
                     }
                     if !ty.contains_local(local_type_const)
-                        && !params
-                            .iter()
-                            .any(|(_, t)| t.contains_local(local_type_const))
+                        && !params.iter().any(|x| x.ty.contains_local(local_type_const))
                     {
                         // unused
                         continue;
@@ -766,14 +764,14 @@ impl Eval {
                 };
                 for i in 0..params.len() {
                     for j in i + 1..params.len() {
-                        if params[i].0 == params[j].0 {
+                        if params[i].name == params[j].name {
                             bail!("duplicate parameter names");
                         }
                     }
                 }
-                for &(x, ref t) in &params {
-                    self.elaborate_type(&mut local_env, t, Kind::base())?;
-                    local_env.locals.push((x, t.clone()));
+                for x in &params {
+                    self.elaborate_type(&mut local_env, &x.ty, Kind::base())?;
+                    local_env.locals.push(x.clone());
                 }
                 self.elaborate_type(&mut local_env, &ty, Kind::base())?;
                 self.elaborate_term(&mut local_env, &mut target, &ty)?;
@@ -923,28 +921,37 @@ impl Eval {
         //           (∀ α, P α → P (succ α)) →
         //           P zero →
         //           P α
-        let motive = Name::fresh_with_name("motive");
+        let motive = Parameter {
+            name: Name::fresh_with_name("motive"),
+            ty: mk_type_arrow(target_ty.clone(), mk_type_prop()),
+        };
         let mut guards = vec![];
         for ctor in &ctors {
             let mut args = vec![];
-            for arg in ctor.ty.clone().unarrow() {
-                args.push((Name::fresh(), arg));
+            for arg_ty in ctor.ty.clone().unarrow() {
+                args.push(Parameter {
+                    name: Name::fresh(),
+                    ty: arg_ty,
+                });
             }
             // induction hypotheses
             let mut ih_list = vec![];
-            for (arg_name, arg_ty) in &args {
-                let mut t = arg_ty.clone();
+            for arg in &args {
+                let mut t = arg.ty.clone();
                 let mut xs = vec![];
                 for x in t.unarrow() {
-                    xs.push((Name::fresh(), x));
+                    xs.push(Parameter {
+                        name: Name::fresh(),
+                        ty: x,
+                    });
                 }
                 if t != mk_type_local(name) {
                     continue;
                 }
                 // ∀ xs, P (a xs)
-                let mut a = mk_local(*arg_name);
-                a.apply(xs.iter().map(|(name, _)| mk_local(*name)));
-                let mut h = mk_local(motive);
+                let mut a = mk_local(arg.name);
+                a.apply(xs.iter().map(|x| mk_local(x.name)));
+                let mut h = mk_local(motive.name);
                 h.apply([a]);
                 h.generalize(&xs);
                 ih_list.push(h);
@@ -955,25 +962,25 @@ impl Eval {
                 ctor_name,
                 local_types.iter().map(|t| mk_type_local(*t)).collect(),
             );
-            a.apply(args.iter().map(|(name, _)| mk_local(*name)));
-            let mut target = mk_local(motive);
+            a.apply(args.iter().map(|arg| mk_local(arg.name)));
+            let mut target = mk_local(motive.name);
             target.apply([a]);
             target.guard(ih_list);
-            for (_, ty) in &mut args {
-                ty.subst(&subst);
+            for arg in &mut args {
+                arg.ty.subst(&subst);
             }
             target.generalize(&args);
             guards.push(target);
         }
         // ∀ x P, {guards} → P x
-        let x = Name::fresh_with_name("x");
-        let mut target = mk_local(motive);
-        target.apply([mk_local(x)]);
+        let x = Parameter {
+            name: Name::fresh_with_name("x"),
+            ty: target_ty.clone(),
+        };
+        let mut target = mk_local(motive.name);
+        target.apply([mk_local(x.name)]);
         target.guard(guards);
-        target.generalize(&[
-            (x, target_ty.clone()),
-            (motive, mk_type_arrow(target_ty.clone(), mk_type_prop())),
-        ]);
+        target.generalize(&[x, motive]);
         self.add_axiom(
             ind_name,
             local_types.clone(),
@@ -1002,7 +1009,10 @@ impl Eval {
             let ctor_param_tys = ctor.ty.clone().unarrow();
             for mut ctor_param_ty in ctor_param_tys {
                 ctor_param_ty.subst(&subst);
-                ctor_params.push((Name::fresh(), ctor_param_ty));
+                ctor_params.push(Parameter {
+                    name: Name::fresh(),
+                    ty: ctor_param_ty,
+                });
             }
             ctor_params_list.push(ctor_params);
         }
@@ -1021,13 +1031,13 @@ impl Eval {
             let mut target = mk_local(*cont);
 
             // pass the constructor arguments through
-            for (param, param_ty) in ctor_params {
-                cont_arg_tys.push(param_ty.clone());
-                target.apply([mk_local(*param)]);
+            for param in ctor_params {
+                cont_arg_tys.push(param.ty.clone());
+                target.apply([mk_local(param.name)]);
             }
             // stepping
             let ctor_arg_tys = ctor.ty.clone().unarrow();
-            for (ctor_arg, (param, _)) in ctor_arg_tys.into_iter().zip(ctor_params.iter()) {
+            for (ctor_arg, param) in zip(ctor_arg_tys, ctor_params) {
                 let mut ctor_arg_target = ctor_arg.clone();
                 let arg_tys = ctor_arg_target.unarrow();
                 if ctor_arg_target != mk_type_local(name) {
@@ -1039,19 +1049,19 @@ impl Eval {
 
                 let binders: Vec<_> = arg_tys
                     .into_iter()
-                    .map(|arg_ty| {
-                        let name = Name::fresh();
-                        (name, arg_ty)
+                    .map(|arg_ty| Parameter {
+                        name: Name::fresh(),
+                        ty: arg_ty,
                     })
                     .collect();
                 let mut m = mk_const(
                     rec_name,
                     rec_local_types.iter().map(|t| mk_type_local(*t)).collect(),
                 );
-                let mut a = mk_local(*param);
-                a.apply(binders.iter().map(|(x, _)| mk_local(*x)));
+                let mut a = mk_local(param.name);
+                a.apply(binders.iter().map(|x| mk_local(x.name)));
                 m.apply([a]);
-                m.apply(cont_params.iter().map(|k| mk_local(*k)));
+                m.apply(cont_params.iter().map(|&k| mk_local(k)));
                 m.abs(&binders, true);
                 target.apply([m]);
             }
@@ -1072,16 +1082,14 @@ impl Eval {
             rec_ty,
         );
 
-        let rhs_binders = cont_params
-            .into_iter()
-            .zip(&cont_param_tys)
-            .map(|(x, t)| (x, t.clone()))
-            .collect::<Vec<_>>();
-        for ((rhs_body, ctor_params), ctor) in rhs_bodies
-            .into_iter()
-            .zip(ctor_params_list.into_iter())
-            .zip(ctors.iter())
-        {
+        let mut rhs_binders = vec![];
+        for (x, t) in zip(cont_params, &cont_param_tys) {
+            rhs_binders.push(Parameter {
+                name: x,
+                ty: t.clone(),
+            });
+        }
+        for ((rhs_body, ctor_params), ctor) in zip(zip(rhs_bodies, ctor_params_list), &ctors) {
             let mut lhs = mk_const(
                 rec_name,
                 rec_local_types.iter().map(|t| mk_type_local(*t)).collect(),
@@ -1091,7 +1099,7 @@ impl Eval {
                 ctor_name,
                 local_types.iter().map(|t| mk_type_local(*t)).collect(),
             );
-            lhs_arg.apply(ctor_params.iter().map(|(x, _)| mk_local(*x)));
+            lhs_arg.apply(ctor_params.iter().map(|x| mk_local(x.name)));
             lhs.apply([lhs_arg]);
 
             let mut rhs = rhs_body;
@@ -1152,7 +1160,7 @@ impl Eval {
             }
             if params
                 .iter()
-                .any(|(_, ty)| ty.contains_local(local_type_const))
+                .any(|param| param.ty.contains_local(local_type_const))
                 || target_ty.contains_local(local_type_const)
             {
                 local_types.insert(0, *local_type_const);
@@ -1165,14 +1173,14 @@ impl Eval {
         };
         for i in 0..params.len() {
             for j in i + 1..params.len() {
-                if params[i].0 == params[j].0 {
+                if params[i].name == params[j].name {
                     bail!("duplicate parameters");
                 }
             }
         }
-        for &(x, ref t) in &params {
-            self.elaborate_type(&mut local_env, t, Kind::base())?;
-            local_env.locals.push((x, t.clone()));
+        for param in &params {
+            self.elaborate_type(&mut local_env, &param.ty, Kind::base())?;
+            local_env.locals.push(param.clone());
         }
         self.elaborate_type(&mut local_env, &target_ty, Kind::base())?;
         if target_ty.target() != &mk_type_prop() {
@@ -1185,7 +1193,13 @@ impl Eval {
                 }
             }
         }
-        local_env.locals.insert(0, (name, target_ty.clone()));
+        local_env.locals.insert(
+            0,
+            Parameter {
+                name,
+                ty: target_ty.clone(),
+            },
+        );
         let mut ctor_params_list = vec![];
         let mut ctor_args_list = vec![];
         let mut ctor_target_list = vec![];
@@ -1246,8 +1260,8 @@ impl Eval {
         // ↦ const P.{u} : τ → σ → Prop
         let mut pred_ty = target_ty.clone();
         let mut param_types = vec![];
-        for (_, t) in &params {
-            param_types.push(t.clone());
+        for param in &params {
+            param_types.push(param.ty.clone());
         }
         pred_ty.arrow(param_types);
         self.add_const(
@@ -1272,7 +1286,7 @@ impl Eval {
                     .map(|name| mk_type_local(*name))
                     .collect(),
             );
-            stash.apply(params.iter().map(|(name, _)| mk_local(*name)));
+            stash.apply(params.iter().map(|param| mk_local(param.name)));
             let subst = [(name, stash)];
             target.subst(&subst);
             target.generalize(&params);
@@ -1292,12 +1306,18 @@ impl Eval {
             .clone()
             .unarrow()
             .into_iter()
-            .map(|t| (Name::fresh(), t))
+            .map(|t| Parameter {
+                name: Name::fresh(),
+                ty: t,
+            })
             .collect::<Vec<_>>();
-        let motive = Name::fresh_with_name("motive");
+        let motive = Parameter {
+            name: Name::fresh_with_name("motive"),
+            ty: target_ty.clone(),
+        };
         // C w
-        let mut target = mk_local(motive);
-        target.apply(indexes.iter().map(|(x, _)| mk_local(*x)));
+        let mut target = mk_local(motive.name);
+        target.apply(indexes.iter().map(|index| mk_local(index.name)));
         let mut guards = vec![];
         // (∀ y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N) → C w
         for (ctor_params, (mut ctor_args, (ctor_target, mut ctor_ind_args))) in zip(
@@ -1305,7 +1325,7 @@ impl Eval {
             zip(ctor_args_list, zip(ctor_target_list, ctor_ind_args_list)),
         ) {
             // P ↦ C
-            let subst_with_motive = [(name, mk_local(motive))];
+            let subst_with_motive = [(name, mk_local(motive.name))];
 
             let mut guard = ctor_target;
 
@@ -1327,7 +1347,7 @@ impl Eval {
                     .map(|name| mk_type_local(*name))
                     .collect(),
             );
-            stash.apply(params.iter().map(|(name, _)| mk_local(*name)));
+            stash.apply(params.iter().map(|param| mk_local(param.name)));
             let subst = [(name, stash)];
 
             // φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
@@ -1351,11 +1371,11 @@ impl Eval {
                 .map(|name| mk_type_local(*name))
                 .collect(),
         );
-        p.apply(params.iter().map(|(name, _)| mk_local(*name)));
-        p.apply(indexes.iter().map(|(x, _)| mk_local(*x)));
+        p.apply(params.iter().map(|param| mk_local(param.name)));
+        p.apply(indexes.iter().map(|index| mk_local(index.name)));
         target.guard([p]);
 
-        target.generalize(&[(motive, target_ty.clone())]);
+        target.generalize(&[motive]);
         target.generalize(&indexes);
         target.generalize(&params);
 
@@ -1400,10 +1420,10 @@ impl Eval {
         for field in &mut fields {
             match field {
                 StructureField::Const(field) => {
-                    let StructureConst {
+                    let &mut StructureConst {
                         name: field_name,
-                        ty: field_ty,
-                    } = &*field;
+                        ty: ref field_ty,
+                    } = field;
                     let fullname = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
                     if self.has_const(fullname) {
                         bail!("already defined");
@@ -1413,12 +1433,15 @@ impl Eval {
                     }
                     const_field_names.push(field_name);
                     self.elaborate_type(&mut local_env, field_ty, Kind::base())?;
-                    local_env.locals.push((*field_name, field_ty.clone()));
+                    local_env.locals.push(Parameter {
+                        name: field_name,
+                        ty: field_ty.clone(),
+                    });
                 }
                 StructureField::Axiom(field) => {
-                    let StructureAxiom {
-                        name: ref field_name,
-                        target,
+                    let &mut StructureAxiom {
+                        name: field_name,
+                        ref mut target,
                     } = field;
                     let fullname = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
                     if self.has_axiom(fullname) {
@@ -1450,11 +1473,13 @@ impl Eval {
             },
         );
         self.add_type_const(name, Kind(local_types.len()));
-        let instance = Name::fresh_with_name("d");
-        let instance_ty = {
-            let mut ty = mk_type_const(name);
-            ty.apply(local_types.iter().map(|x| mk_type_local(*x)));
-            ty
+        let instance = Parameter {
+            name: Name::fresh_with_name("d"),
+            ty: {
+                let mut ty = mk_type_const(name);
+                ty.apply(local_types.iter().map(|x| mk_type_local(*x)));
+                ty
+            },
         };
         let mut subst = vec![];
         for field in &fields {
@@ -1464,7 +1489,7 @@ impl Eval {
                     // ↦ inhab.rep.{u} : inhab u → set u
                     let fullname = Name::intern(&format!("{}.{}", name, field.name)).unwrap();
                     let mut ty = field.ty.clone();
-                    ty.arrow([instance_ty.clone()]);
+                    ty.arrow([instance.ty.clone()]);
                     self.add_const(
                         fullname,
                         local_types.clone(),
@@ -1477,7 +1502,7 @@ impl Eval {
                         fullname,
                         local_types.iter().map(|x| mk_type_local(*x)).collect(),
                     );
-                    target.apply([mk_local(instance)]);
+                    target.apply([mk_local(instance.name)]);
                     subst.push((field.name, target));
                 }
                 StructureField::Axiom(field) => {
@@ -1486,7 +1511,7 @@ impl Eval {
                     let mut target = field.target.clone();
                     target.subst(&subst);
 
-                    target.generalize(&[(instance, instance_ty.clone())]);
+                    target.generalize(slice::from_ref(&instance));
 
                     self.add_axiom(
                         fullname,
@@ -1507,8 +1532,10 @@ impl Eval {
             match field {
                 StructureField::Const(field) => {
                     // (s : set u)
-                    let param = Name::fresh_from(field.name);
-                    params.push((param, field.ty.clone()));
+                    let param = Parameter {
+                        name: Name::fresh_from(field.name),
+                        ty: field.ty.clone(),
+                    };
 
                     // inhab.rep d
                     let fullname = Name::intern(&format!("{}.{}", name, field.name)).unwrap();
@@ -1516,15 +1543,17 @@ impl Eval {
                         fullname,
                         local_types.iter().map(|x| mk_type_local(*x)).collect(),
                     );
-                    rhs.apply([mk_local(instance)]);
+                    rhs.apply([mk_local(instance.name)]);
 
                     // s = inhab.rep d
                     let mut char = mk_const(Name::intern("eq").unwrap(), vec![field.ty.clone()]);
-                    char.apply([mk_local(param), rhs]);
+                    char.apply([mk_local(param.name), rhs]);
                     chars.push(char);
 
                     // rep ↦ s
-                    subst.push((field.name, mk_local(param)));
+                    subst.push((field.name, mk_local(param.name)));
+
+                    params.push(param);
                 }
                 StructureField::Axiom(field) => {
                     let mut target = field.target.clone();
@@ -1534,7 +1563,7 @@ impl Eval {
                 }
             }
         }
-        let mut abs = mk_const(Name::intern("exists").unwrap(), vec![instance_ty.clone()]);
+        let mut abs = mk_const(Name::intern("exists").unwrap(), vec![instance.ty.clone()]);
         abs.apply([{
             let mut char = chars
                 .into_iter()
@@ -1544,7 +1573,7 @@ impl Eval {
                     conj
                 })
                 .unwrap_or_else(|| mk_const(Name::intern("true").unwrap(), vec![]));
-            char.abs(&[(instance, instance_ty.clone())], true);
+            char.abs(slice::from_ref(&instance), true);
             char
         }]);
         abs.guard(guards);
@@ -1558,8 +1587,14 @@ impl Eval {
 
         // generate extensionality
         // axiom inhab.ext.{u} (d₁ d₂ : inhab u) : inhab.rep d₁ = inhab.rep d₂ → d₁ = d₂
-        let instance1 = Name::fresh_with_name("d₁");
-        let instance2 = Name::fresh_with_name("d₂");
+        let instance1 = Parameter {
+            name: Name::fresh_with_name("d₁"),
+            ty: instance.ty.clone(),
+        };
+        let instance2 = Parameter {
+            name: Name::fresh_with_name("d₂"),
+            ty: instance.ty.clone(),
+        };
         let mut guards = vec![];
         for field in &fields {
             match field {
@@ -1571,9 +1606,9 @@ impl Eval {
                     );
 
                     let mut lhs = proj.clone();
-                    lhs.apply([mk_local(instance1)]);
+                    lhs.apply([mk_local(instance1.name)]);
                     let mut rhs = proj;
-                    rhs.apply([mk_local(instance2)]);
+                    rhs.apply([mk_local(instance2.name)]);
 
                     let mut guard = mk_const(Name::intern("eq").unwrap(), vec![field.ty.clone()]);
                     guard.apply([lhs, rhs]);
@@ -1582,13 +1617,10 @@ impl Eval {
                 StructureField::Axiom(_) => {}
             }
         }
-        let mut target = mk_const(Name::intern("eq").unwrap(), vec![instance_ty.clone()]);
-        target.apply([mk_local(instance1), mk_local(instance2)]);
+        let mut target = mk_const(Name::intern("eq").unwrap(), vec![instance.ty.clone()]);
+        target.apply([mk_local(instance1.name), mk_local(instance2.name)]);
         target.guard(guards);
-        target.generalize(&[
-            (instance1, instance_ty.clone()),
-            (instance2, instance_ty.clone()),
-        ]);
+        target.generalize(&[instance1, instance2]);
         self.add_axiom(
             ext_name,
             local_types.clone(),
@@ -1638,7 +1670,7 @@ impl Eval {
             }
             if params
                 .iter()
-                .any(|(_, ty)| ty.contains_local(local_type_const))
+                .any(|param| param.ty.contains_local(local_type_const))
                 || target_ty.contains_local(local_type_const)
             {
                 local_types.insert(0, *local_type_const);
@@ -1651,14 +1683,14 @@ impl Eval {
         };
         for i in 0..params.len() {
             for j in i + 1..params.len() {
-                if params[i].0 == params[j].0 {
+                if params[i].name == params[j].name {
                     bail!("duplicate parameters");
                 }
             }
         }
-        for &(x, ref t) in &params {
-            self.elaborate_type(&mut local_env, t, Kind::base())?;
-            local_env.locals.push((x, t.clone()));
+        for param in &params {
+            self.elaborate_type(&mut local_env, &param.ty, Kind::base())?;
+            local_env.locals.push(param.clone());
         }
         self.elaborate_type(&mut local_env, &target_ty, Kind::base())?;
         let Type::Const(structure_name) = target_ty.head() else {
@@ -1759,8 +1791,8 @@ impl Eval {
 
         // e.g. const power.inhab.{u} : set u → inhab (set u)
         let mut instance_ty = target_ty.clone();
-        for (_, t) in params.iter().rev() {
-            instance_ty.arrow([t.clone()]);
+        for param in params.iter().rev() {
+            instance_ty.arrow([param.ty.clone()]);
         }
         self.add_const(
             name,
@@ -1781,7 +1813,7 @@ impl Eval {
                     let fullname = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
                     let def_target_ty = {
                         let mut t = ty.clone();
-                        t.arrow(params.iter().map(|(_, t)| t.clone()));
+                        t.arrow(params.iter().map(|param| param.ty.clone()));
                         t
                     };
                     let def_target = {
@@ -1810,7 +1842,7 @@ impl Eval {
                         name,
                         local_types.clone(),
                         vec![], /* TODO(typeclass) */
-                        params.iter().map(|&(x, _)| x).collect(),
+                        params.iter().map(|param| param.name).collect(),
                         target.clone(),
                     );
                 }

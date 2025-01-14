@@ -10,13 +10,13 @@ use crate::expr::{
 };
 use crate::tt::{
     mk_const, mk_fresh_hole, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const,
-    mk_type_local, mk_type_prop, Kind, Name, Term, Type,
+    mk_type_local, mk_type_prop, Kind, Name, Parameter, Term, Type,
 };
 
 use crate::lex::{Lex, LexError, SourceInfo, Token, TokenKind};
 use anyhow::bail;
 use std::collections::{HashMap, HashSet};
-use std::mem;
+use std::{mem, slice};
 use thiserror::Error;
 
 #[derive(Default, Debug, Clone)]
@@ -407,12 +407,15 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     /// e.g. `"(x y : T) (z : U)"`
-    fn typed_parameters(&mut self) -> Result<Vec<(Name, Type)>, ParseError> {
+    fn typed_parameters(&mut self) -> Result<Vec<Parameter>, ParseError> {
         let mut params = vec![];
         while let Some(token) = self.expect_symbol_opt("(") {
-            let (names, t) = self.typed_parameter(token)?;
+            let (names, ty) = self.typed_parameter(token)?;
             for name in names {
-                params.push((name, t.clone()));
+                params.push(Parameter {
+                    name,
+                    ty: ty.clone(),
+                });
             }
         }
         Ok(params)
@@ -436,14 +439,14 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     /// e.g. `"[x : T] [y : U]"`
-    fn local_class_parameters(&mut self) -> Result<Vec<(Name, Type)>, ParseError> {
+    fn local_class_parameters(&mut self) -> Result<Vec<Parameter>, ParseError> {
         let mut params = vec![];
         while let Some(_token) = self.expect_symbol_opt("[") {
             let name = self.name()?;
             self.expect_symbol(":")?;
-            let t = self.ty()?;
+            let ty = self.ty()?;
             self.expect_symbol("]")?;
-            params.push((name, t));
+            params.push(Parameter { name, ty });
         }
         Ok(params)
     }
@@ -468,18 +471,14 @@ impl<'a, 'b> Parser<'a, 'b> {
                 Some(ty) => ty,
                 None => mk_fresh_type_hole(),
             };
-            binders.push((name, ty));
+            binders.push(Parameter { name, ty });
         }
-        for (name, _) in &binders {
-            self.locals.push(*name);
+        for x in &binders {
+            self.locals.push(x.name);
         }
         let mut m = self.subterm(0)?;
-        for _ in 0..binders.len() {
-            self.locals.pop();
-        }
-        for (name, t) in binders.into_iter().rev() {
-            m.abs(&[(name, t)], true);
-        }
+        self.locals.truncate(self.locals.len() - binders.len());
+        m.abs(&binders, true);
         Ok(m)
     }
 
@@ -495,19 +494,17 @@ impl<'a, 'b> Parser<'a, 'b> {
                 Some(ty) => ty,
                 None => mk_fresh_type_hole(),
             };
-            binders.push((name, ty));
+            binders.push(Parameter { name, ty });
         }
-        for (name, _) in &binders {
-            self.locals.push(*name);
+        for x in &binders {
+            self.locals.push(x.name);
         }
         let mut m = self.subterm(0)?;
-        for _ in 0..binders.len() {
-            self.locals.pop();
-        }
-        for (name, t) in binders.into_iter().rev() {
-            m.abs(&[(name, t.clone())], true);
+        self.locals.truncate(self.locals.len() - binders.len());
+        for x in binders.into_iter().rev() {
+            m.abs(slice::from_ref(&x), true);
             let f = mem::take(&mut m);
-            m = mk_const(Name::try_from(binder).unwrap(), vec![t]);
+            m = mk_const(Name::try_from(binder).unwrap(), vec![x.ty]);
             m.apply(vec![f]);
         }
         Ok(m)
@@ -515,17 +512,18 @@ impl<'a, 'b> Parser<'a, 'b> {
 
     fn term_sep(&mut self, _token: Token<'a>) -> Result<Term, ParseError> {
         let name = self.name()?;
-        let t;
+        let ty;
         if let Some(_token) = self.expect_symbol_opt(":") {
-            t = self.ty()?;
+            ty = self.ty()?;
         } else {
-            t = mk_fresh_type_hole();
+            ty = mk_fresh_type_hole();
         }
+        let x = Parameter { name, ty };
         self.expect_symbol("|")?;
-        self.locals.push(name);
+        self.locals.push(x.name);
         let mut m = self.subterm(0)?;
         self.locals.pop();
-        m.abs(&[(name, t)], true);
+        m.abs(&[x], true);
         self.expect_symbol("}")?;
         Ok(m)
     }
@@ -1003,12 +1001,12 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.type_locals.push(*ty);
         }
         let local_classes = self.local_class_parameters()?;
-        for (x, _) in &local_classes {
-            self.locals.push(*x);
+        for local_class in &local_classes {
+            self.locals.push(local_class.name);
         }
         let params = self.typed_parameters()?;
-        for (x, _) in &params {
-            self.locals.push(*x);
+        for param in &params {
+            self.locals.push(param.name);
         }
         self.expect_symbol(":")?;
         let mut t = self.ty()?;
@@ -1019,9 +1017,9 @@ impl<'a, 'b> Parser<'a, 'b> {
             .truncate(self.locals.len() - params.len() - local_classes.len());
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
-        for (x, ty) in params.into_iter().rev() {
-            t.arrow([ty.clone()]);
-            m.abs(&[(x, ty)], true);
+        for param in params.into_iter().rev() {
+            t.arrow([param.ty.clone()]);
+            m.abs(&[param], true);
         }
         Ok(CmdDef {
             name,
@@ -1039,8 +1037,8 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.type_locals.push(*ty);
         }
         let params = self.typed_parameters()?;
-        for (x, _) in &params {
-            self.locals.push(*x);
+        for param in &params {
+            self.locals.push(param.name);
         }
         self.expect_symbol(":")?;
         let mut target = self.term()?;
@@ -1063,8 +1061,8 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.type_locals.push(*ty);
         }
         let params = self.typed_parameters()?;
-        for (x, _) in &params {
-            self.locals.push(*x);
+        for param in &params {
+            self.locals.push(param.name);
         }
         self.expect_symbol(":")?;
         let mut p = self.term()?;
@@ -1075,8 +1073,8 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
         p.generalize(&params);
-        for (x, ty) in params.into_iter().rev() {
-            e = mk_expr_take(x, ty, e);
+        for param in params.into_iter().rev() {
+            e = mk_expr_take(param.name, param.ty, e);
         }
         let holes = self.holes.drain(..).collect();
         Ok(CmdLemma {
@@ -1171,8 +1169,8 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.type_locals.push(*ty);
         }
         let params = self.typed_parameters()?;
-        for (x, _) in &params {
-            self.locals.push(*x);
+        for param in &params {
+            self.locals.push(param.name);
         }
         self.expect_symbol(":")?;
         let target_ty = self.ty()?;
@@ -1186,8 +1184,8 @@ impl<'a, 'b> Parser<'a, 'b> {
                 }
             }
             let ctor_params = self.typed_parameters()?;
-            for (x, _) in &ctor_params {
-                self.locals.push(*x);
+            for ctor_param in &ctor_params {
+                self.locals.push(ctor_param.name);
             }
             self.expect_symbol(":")?;
             let mut target = self.term()?;
@@ -1247,8 +1245,8 @@ impl<'a, 'b> Parser<'a, 'b> {
                 "axiom" => {
                     let field_name = self.name()?;
                     let params = self.typed_parameters()?;
-                    for (x, _) in &params {
-                        self.locals.push(*x);
+                    for param in &params {
+                        self.locals.push(param.name);
                     }
                     self.expect_symbol(":")?;
                     let mut target = self.term()?;
@@ -1281,8 +1279,8 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.type_locals.push(*ty);
         }
         let params = self.typed_parameters()?;
-        for (x, _) in &params {
-            self.locals.push(*x);
+        for param in &params {
+            self.locals.push(param.name);
         }
         self.expect_symbol(":")?;
         let target_ty = self.ty()?;
@@ -1295,17 +1293,17 @@ impl<'a, 'b> Parser<'a, 'b> {
                 "def" => {
                     let field_name = self.name()?;
                     let field_params = self.typed_parameters()?;
-                    for (x, _) in &field_params {
-                        self.locals.push(*x);
+                    for field_param in &field_params {
+                        self.locals.push(field_param.name);
                     }
                     self.expect_symbol(":")?;
                     let mut field_ty = self.ty()?;
                     self.expect_symbol(":=")?;
                     let mut field_target = self.term()?;
                     self.locals.truncate(self.locals.len() - field_params.len());
-                    for (x, t) in field_params.into_iter().rev() {
-                        field_ty.arrow([t.clone()]);
-                        field_target.abs(&[(x, t.clone())], true);
+                    for field_param in field_params.into_iter().rev() {
+                        field_ty.arrow([field_param.ty.clone()]);
+                        field_target.abs(&[field_param], true);
                     }
                     fields.push(InstanceField::Def(InstanceDef {
                         name: field_name,
@@ -1316,8 +1314,8 @@ impl<'a, 'b> Parser<'a, 'b> {
                 "lemma" => {
                     let field_name = self.name()?;
                     let field_params = self.typed_parameters()?;
-                    for (x, _) in &field_params {
-                        self.locals.push(*x);
+                    for field_param in &field_params {
+                        self.locals.push(field_param.name);
                     }
                     self.expect_symbol(":")?;
                     let mut field_target = self.term()?;
@@ -1325,8 +1323,8 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let mut expr = self.expr()?;
                     self.locals.truncate(self.locals.len() - field_params.len());
                     field_target.generalize(&field_params);
-                    for (x, ty) in field_params.into_iter().rev() {
-                        expr = mk_expr_take(x, ty, expr);
+                    for field_param in field_params.into_iter().rev() {
+                        expr = mk_expr_take(field_param.name, field_param.ty, expr);
                     }
                     let holes = self.holes.drain(..).collect();
                     fields.push(InstanceField::Lemma(InstanceLemma {
@@ -1362,8 +1360,8 @@ impl<'a, 'b> Parser<'a, 'b> {
         let mut params = vec![];
         if let Some(_token) = self.expect_symbol_opt(":-") {
             params = self.local_class_parameters()?;
-            for &(x, _) in &params {
-                self.locals.push(x);
+            for param in &params {
+                self.locals.push(param.name);
             }
         }
         self.expect_symbol(":=")?;

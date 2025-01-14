@@ -16,7 +16,7 @@ use crate::{
     },
     tt::{
         self, mk_const, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_prop, Kind, LocalEnv,
-        Name, Term, TermAbs, TermApp, Type, TypeApp, TypeArrow,
+        Name, Parameter, Term, TermAbs, TermApp, Type, TypeApp, TypeArrow,
     },
 };
 
@@ -116,7 +116,12 @@ impl<'a> Elaborator<'a> {
 
     fn mk_term_hole(&mut self, ty: Type) -> Term {
         let mut hole_ty = ty;
-        hole_ty.arrow(self.tt_local_env.locals.iter().map(|(_, ty)| ty.clone()));
+        hole_ty.arrow(
+            self.tt_local_env
+                .locals
+                .iter()
+                .map(|local| local.ty.clone()),
+        );
         let hole = self.tt_local_env.add_new_hole(None, hole_ty);
         // ?M l₁ ⋯ lₙ
         let mut target = Term::Hole(hole);
@@ -124,17 +129,17 @@ impl<'a> Elaborator<'a> {
             self.tt_local_env
                 .locals
                 .iter()
-                .map(|&(name, _)| mk_local(name)),
+                .map(|local| mk_local(local.name)),
         );
         target
     }
 
     fn visit_term(&mut self, m: &mut Term) -> anyhow::Result<Type> {
         match m {
-            Term::Local(m) => {
-                for (local, ty) in &self.tt_local_env.locals {
-                    if local == m {
-                        return Ok(ty.clone());
+            &mut Term::Local(m) => {
+                for local in &self.tt_local_env.locals {
+                    if local.name == m {
+                        return Ok(local.ty.clone());
                     }
                 }
                 bail!("unknown local variable: {m}");
@@ -162,12 +167,15 @@ impl<'a> Elaborator<'a> {
                     bail!("expected Type, but got {arg_ty_kind}");
                 }
 
-                let x = Name::fresh_from(binder_name);
-                self.tt_local_env.locals.push((x, arg_ty.clone()));
-                body.open(&mk_local(x));
+                let x = Parameter {
+                    name: Name::fresh_from(binder_name),
+                    ty: arg_ty.clone(),
+                };
+                body.open(&mk_local(x.name));
+                self.tt_local_env.locals.push(x);
                 let body_ty = self.visit_term(body)?;
-                body.close(x);
-                self.tt_local_env.locals.pop();
+                let x = self.tt_local_env.locals.pop().unwrap();
+                body.close(x.name);
 
                 Ok(mk_type_arrow(arg_ty.clone(), body_ty))
             }
@@ -208,8 +216,8 @@ impl<'a> Elaborator<'a> {
                 ty.subst(&subst);
 
                 let mut class_args = vec![];
-                for (_, class_ty) in local_classes {
-                    let mut ty = class_ty.clone();
+                for local_class in local_classes {
+                    let mut ty = local_class.ty.clone();
                     ty.subst(&subst);
                     let hole = self.tt_local_env.add_new_hole(Some("d"), ty);
                     self.add_class_constraint(Term::Hole(hole));
@@ -275,18 +283,26 @@ impl<'a> Elaborator<'a> {
                 Ok(ret)
             }
             Expr::Take(expr) => {
-                let ExprTake { name, ty, expr } = Arc::make_mut(expr);
+                let &mut ExprTake {
+                    name,
+                    ref mut ty,
+                    ref mut expr,
+                } = Arc::make_mut(expr);
 
                 let ty_kind = self.visit_type(ty)?;
                 if !ty_kind.is_base() {
                     bail!("expected Type, but got {ty_kind}");
                 }
 
-                self.tt_local_env.locals.push((*name, ty.clone()));
+                let x = Parameter {
+                    name,
+                    ty: ty.clone(),
+                };
+                self.tt_local_env.locals.push(x);
                 let mut target = self.visit_expr(expr)?;
-                self.tt_local_env.locals.pop();
+                let x = self.tt_local_env.locals.pop().unwrap();
 
-                target.generalize(&[(*name, ty.clone())]);
+                target.generalize(&[x]);
 
                 Ok(target)
             }
@@ -334,8 +350,8 @@ impl<'a> Elaborator<'a> {
                 target.subst_type(&subst);
 
                 let mut class_args = vec![];
-                for (_, class_ty) in local_classes {
-                    let mut ty = class_ty.clone();
+                for local_class in local_classes {
+                    let mut ty = local_class.ty.clone();
                     ty.subst(&subst);
                     let hole = self.tt_local_env.add_new_hole(Some("d"), ty);
                     self.add_class_constraint(Term::Hole(hole));
@@ -346,7 +362,7 @@ impl<'a> Elaborator<'a> {
                 }
                 target.subst(
                     &zip(local_classes, class_args)
-                        .map(|(&(x, _), a)| (x, a))
+                        .map(|(local_class, class_arg)| (local_class.name, class_arg))
                         .collect::<Vec<_>>(),
                 );
                 Ok(target)
@@ -881,15 +897,18 @@ impl<'a> Unifier<'a> {
         match target {
             Term::Var(_) => unreachable!(),
             Term::Abs(target) => {
-                let x = Name::fresh();
-                let mut dom = target.binder_type.clone();
-                self.inst_type(&mut dom);
-                local_env.locals.push((x, dom.clone()));
+                let mut dom_ty = target.binder_type.clone();
+                self.inst_type(&mut dom_ty);
+                let x = Parameter {
+                    name: Name::fresh(),
+                    ty: dom_ty,
+                };
                 let mut body = target.body.clone();
-                body.open(&mk_local(x));
+                body.open(&mk_local(x.name));
+                local_env.locals.push(x);
                 let mut cod = self.get_type(local_env, &body);
-                local_env.locals.pop();
-                cod.arrow([dom]);
+                let x = local_env.locals.pop().unwrap();
+                cod.arrow([x.ty]);
                 cod
             }
             Term::App(target) => {
@@ -968,13 +987,14 @@ impl<'a> Unifier<'a> {
             return None;
         }
         if let (Term::Abs(l), Term::Abs(r)) = (&mut left, &mut right) {
-            let x = Name::fresh();
-            Arc::make_mut(l).body.open(&mk_local(x));
-            Arc::make_mut(r).body.open(&mk_local(x));
             self.add_type_constraint(l.binder_type.clone(), r.binder_type.clone());
-            local_env
-                .locals
-                .push((x, mem::take(&mut Arc::make_mut(l).binder_type)));
+            let x = Parameter {
+                name: Name::fresh(),
+                ty: mem::take(&mut Arc::make_mut(l).binder_type),
+            };
+            Arc::make_mut(l).body.open(&mk_local(x.name));
+            Arc::make_mut(r).body.open(&mk_local(x.name));
+            local_env.locals.push(x);
             let left = mem::take(&mut Arc::make_mut(l).body);
             let right = mem::take(&mut Arc::make_mut(r).body);
             self.stack.push((local_env, left, right));
@@ -1017,11 +1037,14 @@ impl<'a> Unifier<'a> {
                 // but in our implementation (1) is solved by choice_fr which always solves it
                 // by assigning ?M := λ x, f x, so we don't need to worry about that.
                 let right = Arc::unwrap_or_clone(right);
-                let x = Name::fresh_from(right.binder_name);
-                local_env.locals.push((x, right.binder_type));
+                let x = Parameter {
+                    name: Name::fresh_from(right.binder_name),
+                    ty: right.binder_type,
+                };
                 let mut right = right.body;
-                right.open(&mk_local(x));
-                left.apply([mk_local(x)]);
+                right.open(&mk_local(x.name));
+                left.apply([mk_local(x.name)]);
+                local_env.locals.push(x);
                 self.stack.push((local_env, left, right));
                 return None;
             } else {
@@ -1039,7 +1062,10 @@ impl<'a> Unifier<'a> {
                 if self.inst(&mut left, right_head) {
                     let binders = args
                         .into_iter()
-                        .map(|n| (n, local_env.get_local(n).unwrap().clone()))
+                        .map(|arg| Parameter {
+                            name: arg,
+                            ty: local_env.get_local(arg).unwrap().clone(),
+                        })
                         .collect::<Vec<_>>();
                     if left.abs(&binders, false) {
                         self.add_subst(right_head, left.clone());
@@ -1055,7 +1081,10 @@ impl<'a> Unifier<'a> {
                 if self.inst(&mut right, left_head) {
                     let binders = args
                         .into_iter()
-                        .map(|n| (n, local_env.get_local(n).unwrap().clone()))
+                        .map(|arg| Parameter {
+                            name: arg,
+                            ty: local_env.get_local(arg).unwrap().clone(),
+                        })
                         .collect::<Vec<_>>();
                     if right.abs(&binders, false) {
                         self.add_subst(left_head, right.clone());
@@ -1409,7 +1438,10 @@ impl<'a> Unifier<'a> {
             .components()
             .iter()
             .take(left_args.len())
-            .map(|&t| (Name::fresh(), t.clone()))
+            .map(|&t| Parameter {
+                name: Name::fresh(),
+                ty: t.clone(),
+            })
             .collect::<Vec<_>>();
         assert_eq!(new_binders.len(), left_args.len());
 
@@ -1419,7 +1451,7 @@ impl<'a> Unifier<'a> {
         //
         // where τ(z[i]) = t₁ → ⋯ → tₘ → τ(@ u[1] .. u[q]).
         // We try projection first because projection yields more general solutions.
-        for &(z, ref z_ty) in &new_binders {
+        for z in &new_binders {
             // TODO: this implementation is incompolete!
             //
             // When the target of the type of z[i] is a hole, we cannot determine the number m of Y[i]s.
@@ -1451,26 +1483,26 @@ impl<'a> Unifier<'a> {
             // - [1] Tobias Nipkow. Higher-Order Unification, Polymorphism and Subsort, 1990.
             // - [2] Ullrich Hustadt. A complete transformation system for polymorphic higher-order unification, 1991.
 
-            if z_ty.components().len() < left_ty.components().len() {
+            if z.ty.components().len() < left_ty.components().len() {
                 continue;
             }
-            let m = z_ty.components().len() - left_ty.components().len();
+            let m = z.ty.components().len() - left_ty.components().len();
 
-            let mut t = z_ty.target().clone();
-            t.arrow(z_ty.components().into_iter().skip(m).cloned());
+            let mut t = z.ty.target().clone();
+            t.arrow(z.ty.components().into_iter().skip(m).cloned());
 
             // Y[1] .. Y[m]
-            let arg_holes = z_ty
-                .components()
-                .iter()
-                .take(m)
-                .map(|&arg_ty| {
-                    let new_hole = Name::fresh();
-                    let mut ty = arg_ty.clone();
-                    ty.arrow(new_binders.iter().map(|(_, t)| t.clone()));
-                    (new_hole, ty)
-                })
-                .collect::<Vec<_>>();
+            let arg_holes =
+                z.ty.components()
+                    .iter()
+                    .take(m)
+                    .map(|&arg_ty| {
+                        let new_hole = Name::fresh();
+                        let mut ty = arg_ty.clone();
+                        ty.arrow(new_binders.iter().map(|z| z.ty.clone()));
+                        (new_hole, ty)
+                    })
+                    .collect::<Vec<_>>();
 
             for &(x, ref t) in &arg_holes {
                 self.add_hole_type(x, t.clone());
@@ -1481,13 +1513,13 @@ impl<'a> Unifier<'a> {
                 .iter()
                 .map(|&(hole, _)| {
                     let mut arg = Term::Hole(hole);
-                    arg.apply(new_binders.iter().map(|&(x, _)| mk_local(x)));
+                    arg.apply(new_binders.iter().map(|z| mk_local(z.name)));
                     arg
                 })
                 .collect::<Vec<_>>();
 
             // TODO: try eta equal condidates when the hole ?M is used twice or more among the whole set of constraints.
-            let mut target = mk_local(z);
+            let mut target = mk_local(z.name);
             target.apply(new_args);
             target.abs(&new_binders, false);
             nodes.push(Node {
@@ -1530,7 +1562,7 @@ impl<'a> Unifier<'a> {
                 .map(|arg_ty| {
                     let new_hole = Name::fresh();
                     let mut ty = arg_ty.clone();
-                    ty.arrow(new_binders.iter().map(|(_, t)| t.clone()));
+                    ty.arrow(new_binders.iter().map(|z| z.ty.clone()));
                     (new_hole, ty)
                 })
                 .collect::<Vec<_>>();
@@ -1544,7 +1576,7 @@ impl<'a> Unifier<'a> {
                 .iter()
                 .map(|&(hole, _)| {
                     let mut arg = Term::Hole(hole);
-                    arg.apply(new_binders.iter().map(|&(x, _)| mk_local(x)));
+                    arg.apply(new_binders.iter().map(|z| mk_local(z.name)));
                     arg
                 })
                 .collect::<Vec<_>>();
@@ -1565,9 +1597,9 @@ impl<'a> Unifier<'a> {
         //   M ↦ λ z[1] .. z[p], π (z[i] (Y[1] z[1] .. z[p]) .. (Y[m] z[1] .. z[p])) (W[1] z[1] .. z[p]) (W[k] z[1] .. z[p])
         //
         // where τ(z[i]) = t₁ → ⋯ → tₘ → (S σ₁ ⋯ σₙ) and target(τ(π)) = τ(@ u[1] .. u[q]).
-        for &(z, ref z_ty) in &new_binders {
+        for z in &new_binders {
             // Note that z_ty is already instantiated.
-            let mut z_ty_target = z_ty.target().clone();
+            let mut z_ty_target = z.ty.target().clone();
             let ty_args = z_ty_target.unapply();
             // We assume type variables will never be instantiated with structure types or arrow types.
             // In the most general situation z[i] : (τᵢ) → α is instantiated into (τᵢ) → (σⱼ) → S,
@@ -1597,16 +1629,16 @@ impl<'a> Unifier<'a> {
 
                 let struct_obj = {
                     // Y[1] .. Y[m]
-                    let arg_holes = z_ty
-                        .components()
-                        .iter()
-                        .map(|&arg_ty| {
-                            let new_hole = Name::fresh();
-                            let mut ty = arg_ty.clone();
-                            ty.arrow(new_binders.iter().map(|(_, t)| t.clone()));
-                            (new_hole, ty)
-                        })
-                        .collect::<Vec<_>>();
+                    let arg_holes =
+                        z.ty.components()
+                            .iter()
+                            .map(|&arg_ty| {
+                                let new_hole = Name::fresh();
+                                let mut ty = arg_ty.clone();
+                                ty.arrow(new_binders.iter().map(|z| z.ty.clone()));
+                                (new_hole, ty)
+                            })
+                            .collect::<Vec<_>>();
 
                     for &(x, ref t) in &arg_holes {
                         self.add_hole_type(x, t.clone());
@@ -1617,13 +1649,13 @@ impl<'a> Unifier<'a> {
                         .iter()
                         .map(|&(hole, _)| {
                             let mut arg = Term::Hole(hole);
-                            arg.apply(new_binders.iter().map(|&(x, _)| mk_local(x)));
+                            arg.apply(new_binders.iter().map(|z| mk_local(z.name)));
                             arg
                         })
                         .collect::<Vec<_>>();
 
                     // z[i] (Y[1] z[1] .. z[p]) .. (Y[m] z[1] .. z[p])
-                    let mut struct_obj = mk_local(z);
+                    let mut struct_obj = mk_local(z.name);
                     struct_obj.apply(new_args);
                     struct_obj.abs(&new_binders, false);
                     struct_obj
@@ -1644,7 +1676,7 @@ impl<'a> Unifier<'a> {
                     .map(|&arg_ty| {
                         let new_hole = Name::fresh();
                         let mut ty = arg_ty.clone();
-                        ty.arrow(new_binders.iter().map(|(_, t)| t.clone()));
+                        ty.arrow(new_binders.iter().map(|z| z.ty.clone()));
                         (new_hole, ty)
                     })
                     .collect::<Vec<_>>();
@@ -1658,7 +1690,7 @@ impl<'a> Unifier<'a> {
                     .iter()
                     .map(|&(hole, _)| {
                         let mut arg = Term::Hole(hole);
-                        arg.apply(new_binders.iter().map(|&(x, _)| mk_local(x)));
+                        arg.apply(new_binders.iter().map(|z| mk_local(z.name)));
                         arg
                     })
                     .collect::<Vec<_>>();
@@ -1708,14 +1740,14 @@ impl<'a> Unifier<'a> {
                 .all(|local| type_subst.iter().any(|(x, _)| x == local)));
             let mut subst = vec![];
             let mut success = true;
-            for &(x, ref t) in params {
-                let mut subgoal = t.clone();
+            for param in params {
+                let mut subgoal = param.ty.clone();
                 subgoal.subst(&type_subst);
                 let Some(arg) = self.synthesize_instance(&subgoal) else {
                     success = false;
                     break;
                 };
-                subst.push((x, arg));
+                subst.push((param.name, arg));
             }
             if !success {
                 continue;

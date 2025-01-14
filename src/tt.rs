@@ -8,7 +8,7 @@ use std::iter::zip;
 use std::sync::atomic::AtomicUsize;
 use std::sync::LazyLock;
 use std::sync::{Arc, Mutex, RwLock};
-use std::{mem, vec};
+use std::{mem, slice, vec};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
@@ -530,6 +530,12 @@ impl TryFrom<Term> for Ctor {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct Parameter {
+    pub name: Name,
+    pub ty: Type,
+}
+
 impl Term {
     /// self.open(x) == [x/0]self
     pub fn open(&mut self, x: &Term) {
@@ -785,7 +791,7 @@ impl Term {
 
     // λ x₁ ⋯ xₙ, m ↦ [x₁, ⋯ , xₙ]
     // Fresh names are generated on the fly.
-    pub fn unabs(&mut self) -> Vec<(Name, Type)> {
+    pub fn unabs(&mut self) -> Vec<Parameter> {
         let mut xs = vec![];
         while let Term::Abs(inner) = self {
             let &mut TermAbs {
@@ -793,7 +799,10 @@ impl Term {
                 binder_name,
                 ref mut body,
             } = Arc::make_mut(inner);
-            xs.push((Name::fresh_from(binder_name), mem::take(binder_type)));
+            xs.push(Parameter {
+                name: Name::fresh_from(binder_name),
+                ty: mem::take(binder_type),
+            });
             *self = mem::take(body);
         }
         self.unabs_help(&xs, 0);
@@ -801,7 +810,7 @@ impl Term {
         xs
     }
 
-    fn unabs_help(&mut self, xs: &[(Name, Type)], level: usize) {
+    fn unabs_help(&mut self, xs: &[Parameter], level: usize) {
         match self {
             Self::Local(_) => {}
             Self::Var(i) => {
@@ -809,7 +818,7 @@ impl Term {
                     return;
                 }
                 if *i - level < xs.len() {
-                    *self = mk_local(xs[xs.len() - 1 - (*i - level)].0);
+                    *self = mk_local(xs[xs.len() - 1 - (*i - level)].name);
                 }
             }
             Self::Abs(inner) => {
@@ -831,24 +840,24 @@ impl Term {
     //
     // If allow_free is true, this function always succeeds and returns true.
     // If allow_free is false and self contains extra free variables, abs returns false and the state of self is restored.
-    pub fn abs(&mut self, xs: &[(Name, Type)], allow_free: bool) -> bool {
+    pub fn abs(&mut self, xs: &[Parameter], allow_free: bool) -> bool {
         if !self.abs_help(xs, 0, allow_free) {
             self.unabs_help(xs, 0);
             return false;
         }
         let mut m = mem::take(self);
-        for &(x, ref t) in xs.iter().rev() {
-            m = mk_abs(x, t.clone(), m);
+        for x in xs.iter().rev() {
+            m = mk_abs(x.name, x.ty.clone(), m);
         }
         *self = m;
         true
     }
 
-    fn abs_help(&mut self, xs: &[(Name, Type)], level: usize, allow_free: bool) -> bool {
+    fn abs_help(&mut self, xs: &[Parameter], level: usize, allow_free: bool) -> bool {
         match self {
-            Self::Local(x) => {
-                for (i, (y, _)) in xs.iter().rev().enumerate() {
-                    if x == y {
+            &mut Self::Local(l) => {
+                for (i, x) in xs.iter().rev().enumerate() {
+                    if l == x.name {
                         *self = Self::Var(level + i);
                         return true;
                     }
@@ -872,15 +881,15 @@ impl Term {
         }
     }
 
-    pub fn generalize(&mut self, xs: &[(Name, Type)]) {
+    pub fn generalize(&mut self, xs: &[Parameter]) {
         static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall").unwrap());
 
         self.abs_help(xs, 0, true);
 
         let mut m = mem::take(self);
-        for &(x, ref t) in xs.iter().rev() {
-            m = mk_abs(x, t.clone(), m);
-            let mut c = mk_const(*FORALL, vec![t.clone()]);
+        for x in xs.iter().rev() {
+            m = mk_abs(x.name, x.ty.clone(), m);
+            let mut c = mk_const(*FORALL, vec![x.ty.clone()]);
             c.apply([m]);
             m = c;
         }
@@ -890,15 +899,15 @@ impl Term {
     // ∀ x₁ ⋯ xₙ, m ↦ [x₁, ⋯ , xₙ]
     // Fresh names are generated on the fly.
     // Does not check ty_args of forall.
-    pub fn ungeneralize(&mut self) -> Vec<(Name, Type)> {
+    pub fn ungeneralize(&mut self) -> Vec<Parameter> {
         let mut acc = vec![];
-        while let Some((name, ty)) = self.ungeneralize1() {
-            acc.push((name, ty));
+        while let Some(x) = self.ungeneralize1() {
+            acc.push(x);
         }
         acc
     }
 
-    fn ungeneralize1(&mut self) -> Option<(Name, Type)> {
+    fn ungeneralize1(&mut self) -> Option<Parameter> {
         static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall").unwrap());
 
         let Term::App(m) = self else {
@@ -921,7 +930,10 @@ impl Term {
         } = Arc::make_mut(abs);
         let name = Name::fresh_from(*binder_name);
         body.open(&mk_local(name));
-        let ret = (name, mem::take(binder_type));
+        let ret = Parameter {
+            name,
+            ty: mem::take(binder_type),
+        };
         *self = mem::take(body);
         Some(ret)
     }
@@ -1317,16 +1329,19 @@ impl Path {
 #[derive(Debug, Default, Clone)]
 pub struct LocalEnv {
     pub local_types: Vec<Name>,
-    pub locals: Vec<(Name, Type)>,
+    pub locals: Vec<Parameter>,
     pub holes: Vec<(Name, Type)>,
 }
 
 impl LocalEnv {
     pub fn get_local(&self, name: Name) -> Option<&Type> {
-        self.locals
-            .iter()
-            .find(|&&(n, _)| n == name)
-            .map(|(_, t)| t)
+        self.locals.iter().find_map(|local| {
+            if local.name == name {
+                Some(&local.ty)
+            } else {
+                None
+            }
+        })
     }
 
     pub fn add_new_hole(&mut self, nickname: Option<&str>, ty: Type) -> Name {
@@ -1414,13 +1429,16 @@ impl Env {
                 if !self.is_wft(local_env, &m.binder_type) {
                     return None;
                 }
-                let x = Name::fresh_from(m.binder_name);
-                local_env.locals.push((x, m.binder_type.clone()));
+                let x = Parameter {
+                    name: Name::fresh_from(m.binder_name),
+                    ty: m.binder_type.clone(),
+                };
                 let mut n = m.body.clone();
-                n.open(&mk_local(x));
-                let cod = self.infer_type(local_env, &n)?;
-                let (_, dom) = local_env.locals.pop().unwrap();
-                Some(mk_type_arrow(dom, cod))
+                n.open(&mk_local(x.name));
+                local_env.locals.push(x);
+                let target = self.infer_type(local_env, &n)?;
+                let x = local_env.locals.pop().unwrap();
+                Some(mk_type_arrow(x.ty, target))
             }
             Term::App(m) => {
                 let fun_ty = self.infer_type(local_env, &m.fun)?;
@@ -1434,10 +1452,10 @@ impl Env {
                     _ => None,
                 }
             }
-            Term::Local(x) => {
-                for (n, t) in local_env.locals.iter().rev() {
-                    if n == x {
-                        return Some(t.clone());
+            &Term::Local(x) => {
+                for y in local_env.locals.iter().rev() {
+                    if x == y.name {
+                        return Some(y.ty.clone());
                     }
                 }
                 None
@@ -1515,11 +1533,14 @@ impl Env {
                 if !self.is_wft(local_env, &path.1) {
                     return None;
                 }
-                local_env.locals.push((path.0, path.1.clone()));
+                local_env.locals.push(Parameter {
+                    name: path.0,
+                    ty: path.1.clone(),
+                });
                 let mut h = self.infer_conv(local_env, &path.2)?;
-                let (x, t) = local_env.locals.pop().unwrap();
-                h.left.abs(&[(x, t.clone())], true);
-                h.right.abs(&[(x, t.clone())], true);
+                let x = local_env.locals.pop().unwrap();
+                h.left.abs(slice::from_ref(&x), true);
+                h.right.abs(slice::from_ref(&x), true);
                 Some(h)
             }
             Path::Beta(m) => {

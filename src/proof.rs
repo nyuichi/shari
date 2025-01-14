@@ -4,7 +4,7 @@ use std::{collections::HashMap, iter::zip, sync::Arc, vec};
 
 use std::sync::LazyLock;
 
-use crate::tt::{self, Name, Path, Term, Type};
+use crate::tt::{self, Name, Parameter, Path, Term, Type};
 
 #[derive(Debug, Clone)]
 pub enum Proof {
@@ -231,20 +231,24 @@ impl Env {
                 Some(rhs)
             }
             Proof::ForallIntro(h) => {
-                let &(x, ref t, ref h) = &**h;
-                if !self.tt_env.is_wft(tt_local_env, t) {
+                let &(name, ref ty, ref h) = &**h;
+                if !self.tt_env.is_wft(tt_local_env, ty) {
                     return None;
                 }
                 for c in &local_env.local_axioms {
-                    if !c.is_fresh(&[x]) {
+                    if !c.is_fresh(&[name]) {
                         // eigenvariable condition fails
                         return None;
                     }
                 }
-                tt_local_env.locals.push((x, t.clone()));
+                let x = Parameter {
+                    name,
+                    ty: ty.clone(),
+                };
+                tt_local_env.locals.push(x);
                 let mut target = self.infer_prop(tt_local_env, local_env, h)?;
-                let (x, t) = tt_local_env.locals.pop().unwrap();
-                target.generalize(&[(x, t)]);
+                let x = tt_local_env.locals.pop().unwrap();
+                target.generalize(&[x]);
                 Some(target)
             }
             Proof::ForallElim(h) => {

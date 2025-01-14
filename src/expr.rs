@@ -6,7 +6,7 @@ use crate::proof::{
     mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro, mk_proof_imp_elim,
     mk_proof_imp_intro, mk_proof_ref, Forall, Imp, Proof,
 };
-use crate::tt::{self, Name, Term, Type};
+use crate::tt::{self, Name, Parameter, Term, Type};
 
 /// p ::= ⟪φ⟫
 ///     | assume φ, p
@@ -357,11 +357,15 @@ impl<'a> Env<'a> {
                     ref ty,
                     ref expr,
                 } = &**expr;
-                self.tt_local_env.locals.push((name, ty.clone()));
+                let x = Parameter {
+                    name,
+                    ty: ty.clone(),
+                };
+                self.tt_local_env.locals.push(x);
                 let (h, mut p) = self.run_help(expr);
-                let (name, ty) = self.tt_local_env.locals.pop().unwrap();
+                let x = self.tt_local_env.locals.pop().unwrap();
                 let h = mk_proof_forall_intro(name, ty.clone(), h);
-                p.generalize(&[(name, ty)]);
+                p.generalize(&[x]);
                 (h, p)
             }
             Expr::Inst(expr) => {
