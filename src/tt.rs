@@ -1823,7 +1823,7 @@ impl Env {
     }
 
     fn equiv_help(&self, m1: &mut Term, m2: &mut Term) -> Option<Path> {
-        if m1.untyped_eq(m2) {
+        if m1.typed_eq(m2) {
             return Some(mk_path_refl(m1.clone()));
         }
         if let (Term::Abs(inner1), Term::Abs(inner2)) = (&mut *m1, &mut *m2) {
@@ -1845,7 +1845,7 @@ impl Env {
         };
         // TODO: optimize this condition check
         if !h1.is_refl() || !h2.is_refl() {
-            if m1.untyped_eq(m2) {
+            if m1.typed_eq(m2) {
                 return Some(mk_path_trans(h1, h2));
             }
             if let (Term::Abs(inner1), Term::Abs(inner2)) = (&mut *m1, &mut *m2) {
