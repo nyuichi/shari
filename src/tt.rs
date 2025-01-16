@@ -1263,7 +1263,7 @@ pub enum Path {
     /// ------------------------------------------------------------ (c.{u₁ ⋯ uₙ} : τ :≡ m)
     /// Γ ⊢ delta_reduce c.{t₁ ⋯ tₙ} : c.{t₁ ⋯ tₙ} ≡ [t₁/u₁ ⋯ tₙ/uₙ]m
     /// ```
-    Delta(Arc<(Name, Vec<Type>)>),
+    Delta(Term),
     /// ```text
     ///
     /// -----------------------------------------------------------------------
@@ -1283,17 +1283,8 @@ impl Display for Path {
                 write!(f, "(congr_abs ({} : {}), {})", inner.0, inner.1, inner.2)
             }
             Path::Beta(m) => write!(f, "(beta {m})"),
-            Path::Delta(inner) => {
-                write!(f, "{}", inner.0)?;
-                if !inner.1.is_empty() {
-                    let mut iter = inner.1.iter();
-                    write!(f, ".{{{}", iter.next().unwrap())?;
-                    for ty in iter {
-                        write!(f, ", {}", ty)?;
-                    }
-                    write!(f, "}}")?;
-                }
-                Ok(())
+            Path::Delta(m) => {
+                write!(f, "(delta {m})")
             }
             Path::Iota(m) => {
                 write!(f, "(iota {m})")
@@ -1326,8 +1317,8 @@ pub fn mk_path_beta(m: Term) -> Path {
     Path::Beta(m)
 }
 
-pub fn mk_path_delta(name: Name, ty_args: Vec<Type>) -> Path {
-    Path::Delta(Arc::new((name, ty_args)))
+pub fn mk_path_delta(m: Term) -> Path {
+    Path::Delta(m)
 }
 
 pub fn mk_path_iota(m: Term) -> Path {
@@ -1591,21 +1582,19 @@ impl Env {
                 right.open(&m.arg);
                 Some(Conv { left, right })
             }
-            Path::Delta(path) => {
-                let left = mk_const(path.0, path.1.clone());
+            Path::Delta(m) => {
+                let _ty = self.infer_type(local_env, m)?;
+                let left = m.clone();
+                let Term::Const(m) = m else {
+                    return None;
+                };
                 let Delta {
                     local_types,
                     target,
                     hint: _,
-                } = self.delta_table.get(&path.0)?;
-                if local_types.len() != path.1.len() {
-                    return None;
-                }
+                } = self.delta_table.get(&m.name)?;
                 let mut subst = vec![];
-                for (&x, t) in zip(local_types, &path.1) {
-                    if !self.is_wft(local_env, t) {
-                        return None;
-                    }
+                for (&x, t) in zip(local_types, &m.ty_args) {
                     subst.push((x, t.clone()));
                 }
                 let mut target = target.clone();
@@ -1755,6 +1744,7 @@ impl Env {
     // self.delta_reduce(m);
     // assert_eq!(m, n)
     fn delta_reduce(&self, m: &mut Term) -> Option<Path> {
+        let orig_m = m.clone();
         let Term::Const(inner) = m else {
             return None;
         };
@@ -1772,9 +1762,8 @@ impl Env {
             subst.push((x, t.clone()));
         }
         target.subst_type(&subst);
-        let path = mk_path_delta(*name, mem::take(ty_args));
         *m = target;
-        Some(path)
+        Some(mk_path_delta(orig_m))
     }
 
     pub fn unfold_head(&self, m: &mut Term) -> Option<Path> {
