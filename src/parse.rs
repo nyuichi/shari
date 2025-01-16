@@ -438,17 +438,15 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(params)
     }
 
-    /// e.g. `"[x : T] [y : U]"`
-    fn local_class_parameters(&mut self) -> Result<Vec<Parameter>, ParseError> {
-        let mut params = vec![];
+    /// e.g. `"[T] [U]"`
+    fn local_class_parameters(&mut self) -> Result<Vec<Type>, ParseError> {
+        let mut class_params = vec![];
         while let Some(_token) = self.expect_symbol_opt("[") {
-            let name = self.name()?;
-            self.expect_symbol(":")?;
             let ty = self.ty()?;
             self.expect_symbol("]")?;
-            params.push(Parameter { name, ty });
+            class_params.push(ty);
         }
-        Ok(params)
+        Ok(class_params)
     }
 
     pub fn term(&mut self) -> Result<Term, ParseError> {
@@ -1001,9 +999,6 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.type_locals.push(*ty);
         }
         let local_classes = self.local_class_parameters()?;
-        for local_class in &local_classes {
-            self.locals.push(local_class.name);
-        }
         let params = self.typed_parameters()?;
         for param in &params {
             self.locals.push(param.name);
@@ -1013,8 +1008,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.expect_symbol(":=")?;
         let mut m = self.term()?;
         // Parsing finished.
-        self.locals
-            .truncate(self.locals.len() - params.len() - local_classes.len());
+        self.locals.truncate(self.locals.len() - params.len());
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
         for param in params.into_iter().rev() {
@@ -1036,6 +1030,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
+        let local_classes = self.local_class_parameters()?;
         let params = self.typed_parameters()?;
         for param in &params {
             self.locals.push(param.name);
@@ -1050,6 +1045,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(CmdAxiom {
             name,
             local_types,
+            local_classes,
             target,
         })
     }
@@ -1060,6 +1056,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
+        let local_classes = self.local_class_parameters()?;
         let params = self.typed_parameters()?;
         for param in &params {
             self.locals.push(param.name);
@@ -1080,6 +1077,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(CmdLemma {
             name,
             local_types,
+            local_classes,
             target: p,
             holes,
             expr: e,
@@ -1092,6 +1090,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
+        let local_classes = self.local_class_parameters()?;
         self.expect_symbol(":")?;
         let t = self.ty()?;
         // Parsing finished.
@@ -1100,6 +1099,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(CmdConst {
             name,
             local_types,
+            local_classes,
             ty: t,
         })
     }
@@ -1168,6 +1168,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
+        let local_classes = self.local_class_parameters()?;
         let params = self.typed_parameters()?;
         for param in &params {
             self.locals.push(param.name);
@@ -1204,6 +1205,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(CmdInductive {
             name,
             local_types,
+            local_classes,
             ctors,
             params,
             target_ty,
@@ -1278,6 +1280,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
+        let local_classes = self.local_class_parameters()?;
         let params = self.typed_parameters()?;
         for param in &params {
             self.locals.push(param.name);
@@ -1344,6 +1347,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(CmdInstance {
             name,
             local_types,
+            local_classes,
             params,
             target_ty,
             fields,
@@ -1357,22 +1361,18 @@ impl<'a, 'b> Parser<'a, 'b> {
             self.type_locals.push(ty);
         }
         let ty = self.ty()?;
-        let mut params = vec![];
+        let mut local_classes = vec![];
         if let Some(_token) = self.expect_symbol_opt(":-") {
-            params = self.local_class_parameters()?;
-            for param in &params {
-                self.locals.push(param.name);
-            }
+            local_classes = self.local_class_parameters()?;
         }
         self.expect_symbol(":=")?;
         let target = self.term()?;
         // parsing finished.
-        self.locals.truncate(self.locals.len() - params.len());
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
         Ok(CmdClass {
             local_types,
-            params,
+            local_classes,
             ty,
             target,
         })

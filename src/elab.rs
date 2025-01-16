@@ -20,6 +20,16 @@ use crate::{
     },
 };
 
+// TODO: use a more sophisticated method
+pub fn mk_local_instance(target: &Type, local_classes: &[Type]) -> Name {
+    for (index, local_class) in local_classes.iter().enumerate() {
+        if target == local_class {
+            return Name::intern(&format!("{}", index)).unwrap();
+        }
+    }
+    panic!("local class not found");
+}
+
 #[derive(Debug)]
 pub struct Elaborator<'a> {
     const_table: &'a HashMap<Name, Const>,
@@ -27,6 +37,7 @@ pub struct Elaborator<'a> {
     structure_table: &'a HashMap<Name, CmdStructure>,
     database: &'a Vec<CmdClass>,
     tt_env: &'a tt::Env,
+    local_classes: &'a [Type],
     tt_local_env: &'a mut tt::LocalEnv,
     local_axioms: Vec<Term>,
     type_constraints: Vec<(Type, Type)>,
@@ -36,20 +47,22 @@ pub struct Elaborator<'a> {
 
 impl<'a> Elaborator<'a> {
     pub fn new(
-        tt_env: &'a tt::Env,
-        tt_local_env: &'a mut tt::LocalEnv,
         const_table: &'a HashMap<Name, Const>,
         axiom_table: &'a HashMap<Name, Axiom>,
         structure_table: &'a HashMap<Name, CmdStructure>,
         database: &'a Vec<CmdClass>,
+        tt_env: &'a tt::Env,
+        local_classes: &'a [Type],
+        tt_local_env: &'a mut tt::LocalEnv,
     ) -> Self {
         Elaborator {
-            tt_env,
-            tt_local_env,
             const_table,
             axiom_table,
             structure_table,
             database,
+            tt_env,
+            local_classes,
+            tt_local_env,
             local_axioms: vec![],
             type_constraints: vec![],
             term_constraints: vec![],
@@ -114,6 +127,7 @@ impl<'a> Elaborator<'a> {
         }
     }
 
+    // generate a fresh hole of form `?M l₁ ⋯ lₙ` where l₁ ⋯ lₙ are the local variables
     fn mk_term_hole(&mut self, ty: Type) -> Term {
         let mut hole_ty = ty;
         hole_ty.arrow(
@@ -123,13 +137,30 @@ impl<'a> Elaborator<'a> {
                 .map(|local| local.ty.clone()),
         );
         let hole = self.tt_local_env.add_new_hole(None, hole_ty);
-        // ?M l₁ ⋯ lₙ
         let mut target = Term::Hole(hole);
         target.apply(
             self.tt_local_env
                 .locals
                 .iter()
                 .map(|local| mk_local(local.name)),
+        );
+        target
+    }
+
+    fn mk_local_instance(&self, target: &Type) -> Term {
+        mk_local(mk_local_instance(target, self.local_classes))
+    }
+
+    // generate a fresh hole of form `?M l₁ ⋯ lₙ` where l₁ ⋯ lₙ are the local class instances.
+    fn mk_instance_hole(&mut self, ty: Type) -> Term {
+        let mut hole_ty = ty;
+        hole_ty.arrow(self.local_classes.iter().cloned());
+        let hole = self.tt_local_env.add_new_hole(None, hole_ty);
+        let mut target = Term::Hole(hole);
+        target.apply(
+            self.local_classes
+                .iter()
+                .map(|local_class| self.mk_local_instance(local_class)),
         );
         target
     }
@@ -217,11 +248,11 @@ impl<'a> Elaborator<'a> {
 
                 let mut class_args = vec![];
                 for local_class in local_classes {
-                    let mut ty = local_class.ty.clone();
+                    let mut ty = local_class.clone();
                     ty.subst(&subst);
-                    let hole = self.tt_local_env.add_new_hole(Some("d"), ty);
-                    self.add_class_constraint(Term::Hole(hole));
-                    class_args.push(Term::Hole(hole));
+                    let hole = self.mk_instance_hole(ty);
+                    self.add_class_constraint(hole.clone());
+                    class_args.push(hole);
                 }
                 // C ↦ C d₁ ⋯ dₙ
                 m.apply(class_args);
@@ -351,18 +382,20 @@ impl<'a> Elaborator<'a> {
 
                 let mut class_args = vec![];
                 for local_class in local_classes {
-                    let mut ty = local_class.ty.clone();
+                    let mut ty = local_class.clone();
                     ty.subst(&subst);
-                    let hole = self.tt_local_env.add_new_hole(Some("d"), ty);
-                    self.add_class_constraint(Term::Hole(hole));
-                    class_args.push(Term::Hole(hole));
+                    let hole = self.mk_instance_hole(ty);
+                    self.add_class_constraint(hole.clone());
+                    class_args.push(hole);
                 }
                 for class_arg in &class_args {
                     *expr = mk_expr_inst(mem::take(expr), class_arg.clone());
                 }
                 target.subst(
                     &zip(local_classes, class_args)
-                        .map(|(local_class, class_arg)| (local_class.name, class_arg))
+                        .map(|(local_class, class_arg)| {
+                            (mk_local_instance(local_class, local_classes), class_arg)
+                        })
                         .collect::<Vec<_>>(),
                 );
                 Ok(target)
@@ -1718,7 +1751,7 @@ impl<'a> Unifier<'a> {
         for clause in self.database {
             let CmdClass {
                 local_types,
-                params,
+                local_classes,
                 ty,
                 target,
             } = clause;
@@ -1740,14 +1773,14 @@ impl<'a> Unifier<'a> {
                 .all(|local| type_subst.iter().any(|(x, _)| x == local)));
             let mut subst = vec![];
             let mut success = true;
-            for param in params {
-                let mut subgoal = param.ty.clone();
-                subgoal.subst(&type_subst);
-                let Some(arg) = self.synthesize_instance(&subgoal) else {
+            for local_class in local_classes {
+                let mut ty = local_class.clone();
+                ty.subst(&type_subst);
+                let Some(instance) = self.synthesize_instance(&ty) else {
                     success = false;
                     break;
                 };
-                subst.push((param.name, arg));
+                subst.push((mk_local_instance(local_class, local_classes), instance));
             }
             if !success {
                 continue;
