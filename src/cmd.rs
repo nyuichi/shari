@@ -3,7 +3,7 @@ use std::{collections::HashMap, iter::zip, slice};
 use anyhow::bail;
 
 use crate::{
-    elab::{self, mk_local_instance},
+    elab,
     expr::{self, Expr},
     parse::{AxiomInfo, ConstInfo, Nasmespace, TokenTable},
     print::OpTable,
@@ -312,7 +312,7 @@ impl Eval {
                 &local_classes
                     .iter()
                     .map(|local_class| Parameter {
-                        name: mk_local_instance(local_class, &local_classes),
+                        name: local_class.local_instance_name(),
                         ty: local_class.clone(),
                     })
                     .collect::<Vec<_>>(),
@@ -349,7 +349,7 @@ impl Eval {
             &local_classes
                 .iter()
                 .map(|local_class| Parameter {
-                    name: mk_local_instance(local_class, &local_classes),
+                    name: local_class.local_instance_name(),
                     ty: local_class.clone(),
                 })
                 .collect::<Vec<_>>(),
@@ -401,7 +401,6 @@ impl Eval {
     fn elaborate_type(
         &self,
         local_env: &mut LocalEnv,
-        local_classes: &[Type],
         ty: &Type,
         kind: Kind,
     ) -> anyhow::Result<()> {
@@ -411,7 +410,6 @@ impl Eval {
             &self.structure_table,
             &self.database,
             &self.proof_env.tt_env,
-            local_classes,
             local_env,
         )
         .elaborate_type(ty, kind)
@@ -420,7 +418,6 @@ impl Eval {
     fn elaborate_term(
         &self,
         local_env: &mut LocalEnv,
-        local_classes: &[Type],
         target: &mut Term,
         ty: &Type,
     ) -> anyhow::Result<()> {
@@ -430,7 +427,6 @@ impl Eval {
             &self.structure_table,
             &self.database,
             &self.proof_env.tt_env,
-            local_classes,
             local_env,
         )
         .elaborate_term(target, ty)
@@ -439,7 +435,6 @@ impl Eval {
     fn elaborate_expr(
         &self,
         local_env: &mut LocalEnv,
-        local_classes: &[Type],
         expr: &mut Expr,
         target: &Term,
     ) -> anyhow::Result<()> {
@@ -449,7 +444,6 @@ impl Eval {
             &self.structure_table,
             &self.database,
             &self.proof_env.tt_env,
-            local_classes,
             local_env,
         )
         .elaborate_expr(expr, target)
@@ -459,6 +453,7 @@ impl Eval {
     fn is_wff(&self, local_types: &[Name], target: &Term) -> bool {
         let mut local_env = LocalEnv {
             local_types: local_types.to_vec(),
+            local_classes: vec![], // FIXME
             locals: vec![],
             holes: vec![],
         };
@@ -564,14 +559,16 @@ impl Eval {
                 }
                 let mut local_env = LocalEnv {
                     local_types: local_types.clone(),
+                    local_classes: vec![],
                     locals: vec![],
                     holes: vec![],
                 };
                 for local_class in &local_classes {
-                    self.elaborate_type(&mut local_env, &local_classes, local_class, Kind::base())?;
+                    self.elaborate_type(&mut local_env, local_class, Kind::base())?;
+                    local_env.local_classes.push(local_class.clone());
                 }
-                self.elaborate_type(&mut local_env, &local_classes, &ty, Kind::base())?;
-                self.elaborate_term(&mut local_env, &local_classes, &mut target, &ty)?;
+                self.elaborate_type(&mut local_env, &ty, Kind::base())?;
+                self.elaborate_term(&mut local_env, &mut target, &ty)?;
                 // well-formedness check is completed.
                 self.add_const(name, local_types.clone(), local_classes.clone(), ty.clone());
                 self.add_delta(name, local_types, local_classes, target);
@@ -611,13 +608,15 @@ impl Eval {
                 }
                 let mut local_env = LocalEnv {
                     local_types: local_types.clone(),
+                    local_classes: vec![],
                     locals: vec![],
                     holes: vec![],
                 };
                 for local_class in &local_classes {
-                    self.elaborate_type(&mut local_env, &local_classes, local_class, Kind::base())?;
+                    self.elaborate_type(&mut local_env, local_class, Kind::base())?;
+                    local_env.local_classes.push(local_class.clone());
                 }
-                self.elaborate_term(&mut local_env, &local_classes, &mut target, &mk_type_prop())?;
+                self.elaborate_term(&mut local_env, &mut target, &mk_type_prop())?;
                 // well-formedness check is completed.
                 self.add_axiom(name, local_types, local_classes, target);
                 Ok(())
@@ -658,14 +657,16 @@ impl Eval {
                 }
                 let mut local_env = LocalEnv {
                     local_types: local_types.clone(),
+                    local_classes: vec![],
                     locals: vec![],
                     holes: holes.clone(),
                 };
                 for local_class in &local_classes {
-                    self.elaborate_type(&mut local_env, &local_classes, local_class, Kind::base())?;
+                    self.elaborate_type(&mut local_env, local_class, Kind::base())?;
+                    local_env.local_classes.push(local_class.clone());
                 }
-                self.elaborate_term(&mut local_env, &local_classes, &mut target, &mk_type_prop())?;
-                self.elaborate_expr(&mut local_env, &local_classes, &mut expr, &target)?;
+                self.elaborate_term(&mut local_env, &mut target, &mk_type_prop())?;
+                self.elaborate_expr(&mut local_env, &mut expr, &target)?;
                 local_env
                     .holes
                     .truncate(local_env.holes.len() - holes.len());
@@ -720,13 +721,15 @@ impl Eval {
                 }
                 let mut local_env = LocalEnv {
                     local_types: local_types.clone(),
+                    local_classes: vec![],
                     locals: vec![],
                     holes: vec![],
                 };
                 for local_class in &local_classes {
-                    self.elaborate_type(&mut local_env, &local_classes, local_class, Kind::base())?;
+                    self.elaborate_type(&mut local_env, local_class, Kind::base())?;
+                    local_env.local_classes.push(local_class.clone());
                 }
-                self.elaborate_type(&mut local_env, &local_classes, &ty, Kind::base())?;
+                self.elaborate_type(&mut local_env, &ty, Kind::base())?;
                 self.add_const(name, local_types, local_classes, ty);
                 Ok(())
             }
@@ -790,14 +793,16 @@ impl Eval {
                 }
                 let mut local_env = LocalEnv {
                     local_types: local_types.clone(),
+                    local_classes: vec![],
                     locals: vec![],
                     holes: vec![],
                 };
                 for local_class in &local_classes {
-                    self.elaborate_type(&mut local_env, &local_classes, local_class, Kind::base())?;
+                    self.elaborate_type(&mut local_env, local_class, Kind::base())?;
+                    local_env.local_classes.push(local_class.clone());
                 }
-                self.elaborate_type(&mut local_env, &local_classes, &ty, Kind::base())?;
-                self.elaborate_term(&mut local_env, &local_classes, &mut target, &ty)?;
+                self.elaborate_type(&mut local_env, &ty, Kind::base())?;
+                self.elaborate_term(&mut local_env, &mut target, &ty)?;
                 for rule in &self.database {
                     let ty = {
                         let mut subst = vec![];
@@ -821,7 +826,6 @@ impl Eval {
                         bail!("overlapping instances are disallowed");
                     }
                 }
-                // TODO(typeclass): detect cycles
                 // well-formedness check is completed
                 self.database.push(CmdClass {
                     local_types,
@@ -852,6 +856,7 @@ impl Eval {
         }
         let mut local_env = LocalEnv {
             local_types: local_types.clone(),
+            local_classes: vec![],
             locals: vec![],
             holes: vec![],
         };
@@ -872,12 +877,7 @@ impl Eval {
             if self.has_const(ctor_spec_name) {
                 bail!("already defined");
             }
-            self.elaborate_type(
-                &mut local_env,
-                &[], /* TODO(typeclass) */
-                &ctor.ty,
-                Kind::base(),
-            )?;
+            self.elaborate_type(&mut local_env, &ctor.ty, Kind::base())?;
             let mut t = ctor.ty.clone();
             let args = t.unarrow();
             if t != mk_type_local(name) {
@@ -925,12 +925,7 @@ impl Eval {
             cs.push((ctor_name, ty));
         }
         for (name, ty) in cs {
-            self.add_const(
-                name,
-                local_types.clone(),
-                vec![], /* TODO(typeclass) */
-                ty,
-            );
+            self.add_const(name, local_types.clone(), vec![], ty);
         }
 
         // generate the induction principle
@@ -1009,12 +1004,7 @@ impl Eval {
         target.apply([mk_local(x.name)]);
         target.guard(guards);
         target.generalize(&[x, motive]);
-        self.add_axiom(
-            ind_name,
-            local_types.clone(),
-            vec![], /* TODO(typeclass) */
-            target,
-        );
+        self.add_axiom(ind_name, local_types.clone(), vec![], target);
 
         // generate the recursion principle
         //
@@ -1103,12 +1093,7 @@ impl Eval {
         let mut rec_ty = mk_type_local(rec_ty_var);
         rec_ty.arrow(cont_param_tys.clone());
         rec_ty.arrow([target_ty]);
-        self.add_const(
-            rec_name,
-            rec_local_types.clone(),
-            vec![], /* TODO(typeclass) */
-            rec_ty,
-        );
+        self.add_const(rec_name, rec_local_types.clone(), vec![], rec_ty);
 
         let mut rhs_binders = vec![];
         for (x, t) in zip(cont_params, &cont_param_tys) {
@@ -1141,12 +1126,7 @@ impl Eval {
             spec.generalize(&ctor_params);
 
             let ctor_spec_name = Name::intern(&format!("{}.spec", ctor_name)).unwrap();
-            self.add_axiom(
-                ctor_spec_name,
-                rec_local_types.clone(),
-                vec![], /* TODO(typeclass) */
-                spec,
-            );
+            self.add_axiom(ctor_spec_name, rec_local_types.clone(), vec![], spec);
         }
         Ok(())
     }
@@ -1202,11 +1182,13 @@ impl Eval {
         }
         let mut local_env = LocalEnv {
             local_types: local_types.clone(),
+            local_classes: vec![],
             locals: vec![],
             holes: vec![],
         };
         for local_class in &local_classes {
-            self.elaborate_type(&mut local_env, &local_classes, local_class, Kind::base())?;
+            self.elaborate_type(&mut local_env, local_class, Kind::base())?;
+            local_env.local_classes.push(local_class.clone());
         }
         for i in 0..params.len() {
             for j in i + 1..params.len() {
@@ -1216,10 +1198,10 @@ impl Eval {
             }
         }
         for param in &params {
-            self.elaborate_type(&mut local_env, &local_classes, &param.ty, Kind::base())?;
+            self.elaborate_type(&mut local_env, &param.ty, Kind::base())?;
             local_env.locals.push(param.clone());
         }
-        self.elaborate_type(&mut local_env, &local_classes, &target_ty, Kind::base())?;
+        self.elaborate_type(&mut local_env, &target_ty, Kind::base())?;
         if target_ty.target() != &mk_type_prop() {
             bail!("the target type of an inductive predicate must be Prop");
         }
@@ -1246,12 +1228,7 @@ impl Eval {
             if self.has_axiom(ctor_name) {
                 bail!("already defined");
             }
-            self.elaborate_term(
-                &mut local_env,
-                &local_classes,
-                &mut ctor.target,
-                &mk_type_prop(),
-            )?;
+            self.elaborate_term(&mut local_env, &mut ctor.target, &mk_type_prop())?;
 
             let mut m = ctor.target.clone();
             let ctor_params = m.ungeneralize();
@@ -1441,6 +1418,7 @@ impl Eval {
         }
         let mut local_env = LocalEnv {
             local_types: local_types.clone(),
+            local_classes: vec![],
             locals: vec![],
             holes: vec![],
         };
@@ -1461,12 +1439,7 @@ impl Eval {
                         bail!("duplicate const field");
                     }
                     const_field_names.push(field_name);
-                    self.elaborate_type(
-                        &mut local_env,
-                        &[], /* TODO(typeclass) */
-                        field_ty,
-                        Kind::base(),
-                    )?;
+                    self.elaborate_type(&mut local_env, field_ty, Kind::base())?;
                     local_env.locals.push(Parameter {
                         name: field_name,
                         ty: field_ty.clone(),
@@ -1485,12 +1458,7 @@ impl Eval {
                         bail!("duplicate axiom field");
                     }
                     axiom_field_names.push(field_name);
-                    self.elaborate_term(
-                        &mut local_env,
-                        &[], /* TODO(typeclass) */
-                        target,
-                        &mk_type_prop(),
-                    )?;
+                    self.elaborate_term(&mut local_env, target, &mk_type_prop())?;
                 }
             }
         }
@@ -1529,12 +1497,7 @@ impl Eval {
                     let fullname = Name::intern(&format!("{}.{}", name, field.name)).unwrap();
                     let mut ty = field.ty.clone();
                     ty.arrow([instance.ty.clone()]);
-                    self.add_const(
-                        fullname,
-                        local_types.clone(),
-                        vec![], /* TODO(typeclass) */
-                        ty,
-                    );
+                    self.add_const(fullname, local_types.clone(), vec![], ty);
 
                     // rep ↦ inhab.rep.{u} d
                     let mut target = mk_const(
@@ -1552,12 +1515,7 @@ impl Eval {
 
                     target.generalize(slice::from_ref(&instance));
 
-                    self.add_axiom(
-                        fullname,
-                        local_types.clone(),
-                        vec![], /* TODO(typeclass) */
-                        target,
-                    );
+                    self.add_axiom(fullname, local_types.clone(), vec![], target);
                 }
             }
         }
@@ -1617,12 +1575,7 @@ impl Eval {
         }]);
         abs.guard(guards);
         abs.generalize(&params);
-        self.add_axiom(
-            abs_name,
-            local_types.clone(),
-            vec![], /* TODO(typeclass) */
-            abs,
-        );
+        self.add_axiom(abs_name, local_types.clone(), vec![], abs);
 
         // generate extensionality
         // axiom inhab.ext.{u} (d₁ d₂ : inhab u) : inhab.rep d₁ = inhab.rep d₂ → d₁ = d₂
@@ -1660,12 +1613,7 @@ impl Eval {
         target.apply([mk_local(instance1.name), mk_local(instance2.name)]);
         target.guard(guards);
         target.generalize(&[instance1, instance2]);
-        self.add_axiom(
-            ext_name,
-            local_types.clone(),
-            vec![], /* TODO(typeclass) */
-            target,
-        );
+        self.add_axiom(ext_name, local_types.clone(), vec![], target);
         Ok(())
     }
 
@@ -1723,11 +1671,13 @@ impl Eval {
         }
         let mut local_env = LocalEnv {
             local_types: local_types.clone(),
+            local_classes: vec![],
             locals: vec![],
             holes: vec![],
         };
         for local_class in &local_classes {
-            self.elaborate_type(&mut local_env, &local_classes, local_class, Kind::base())?;
+            self.elaborate_type(&mut local_env, local_class, Kind::base())?;
+            local_env.local_classes.push(local_class.clone());
         }
         for i in 0..params.len() {
             for j in i + 1..params.len() {
@@ -1737,10 +1687,10 @@ impl Eval {
             }
         }
         for param in &params {
-            self.elaborate_type(&mut local_env, &local_classes, &param.ty, Kind::base())?;
+            self.elaborate_type(&mut local_env, &param.ty, Kind::base())?;
             local_env.locals.push(param.clone());
         }
-        self.elaborate_type(&mut local_env, &local_classes, &target_ty, Kind::base())?;
+        self.elaborate_type(&mut local_env, &target_ty, Kind::base())?;
         let Type::Const(structure_name) = target_ty.head() else {
             bail!("type of instance must be a structure");
         };
@@ -1780,8 +1730,8 @@ impl Eval {
                     if structure_field.name != *field_name {
                         bail!("field name mismatch");
                     }
-                    self.elaborate_type(&mut local_env, &local_classes, ty, Kind::base())?;
-                    self.elaborate_term(&mut local_env, &local_classes, target, ty)?;
+                    self.elaborate_type(&mut local_env, ty, Kind::base())?;
+                    self.elaborate_term(&mut local_env, target, ty)?;
                     let mut structure_field_ty = structure_field.ty.clone();
                     structure_field_ty.subst(&type_subst);
                     if structure_field_ty != *ty {
@@ -1806,9 +1756,9 @@ impl Eval {
                     if structure_field.name != *field_name {
                         bail!("field name mismatch");
                     }
-                    self.elaborate_term(&mut local_env, &local_classes, target, &mk_type_prop())?;
+                    self.elaborate_term(&mut local_env, target, &mk_type_prop())?;
                     local_env.holes.extend(holes.iter().cloned());
-                    self.elaborate_expr(&mut local_env, &local_classes, expr, target)?;
+                    self.elaborate_expr(&mut local_env, expr, target)?;
                     let h = expr::Env {
                         axioms: &self.proof_env.axioms,
                         tt_env: &self.proof_env.tt_env,

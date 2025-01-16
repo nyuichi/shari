@@ -20,16 +20,6 @@ use crate::{
     },
 };
 
-// TODO: use a more sophisticated method
-pub fn mk_local_instance(target: &Type, local_classes: &[Type]) -> Name {
-    for (index, local_class) in local_classes.iter().enumerate() {
-        if target == local_class {
-            return Name::intern(&format!("{}", index)).unwrap();
-        }
-    }
-    panic!("local class not found");
-}
-
 #[derive(Debug)]
 pub struct Elaborator<'a> {
     const_table: &'a HashMap<Name, Const>,
@@ -37,7 +27,6 @@ pub struct Elaborator<'a> {
     structure_table: &'a HashMap<Name, CmdStructure>,
     database: &'a Vec<CmdClass>,
     tt_env: &'a tt::Env,
-    local_classes: &'a [Type],
     tt_local_env: &'a mut tt::LocalEnv,
     local_axioms: Vec<Term>,
     type_constraints: Vec<(Type, Type)>,
@@ -52,7 +41,6 @@ impl<'a> Elaborator<'a> {
         structure_table: &'a HashMap<Name, CmdStructure>,
         database: &'a Vec<CmdClass>,
         tt_env: &'a tt::Env,
-        local_classes: &'a [Type],
         tt_local_env: &'a mut tt::LocalEnv,
     ) -> Self {
         Elaborator {
@@ -61,7 +49,6 @@ impl<'a> Elaborator<'a> {
             structure_table,
             database,
             tt_env,
-            local_classes,
             tt_local_env,
             local_axioms: vec![],
             type_constraints: vec![],
@@ -147,21 +134,15 @@ impl<'a> Elaborator<'a> {
         target
     }
 
-    fn mk_local_instance(&self, target: &Type) -> Term {
-        mk_local(mk_local_instance(target, self.local_classes))
-    }
-
     // generate a fresh hole of form `?M l₁ ⋯ lₙ` where l₁ ⋯ lₙ are the local class instances.
     fn mk_instance_hole(&mut self, ty: Type) -> Term {
         let mut hole_ty = ty;
-        hole_ty.arrow(self.local_classes.iter().cloned());
+        hole_ty.arrow(self.tt_local_env.local_classes.iter().cloned());
         let hole = self.tt_local_env.add_new_hole(None, hole_ty);
         let mut target = Term::Hole(hole);
-        target.apply(
-            self.local_classes
-                .iter()
-                .map(|local_class| self.mk_local_instance(local_class)),
-        );
+        target.apply(self.tt_local_env.local_classes.iter().map(|local_class| {
+            Term::Local(self.tt_local_env.get_local_instance(local_class).unwrap())
+        }));
         target
     }
 
@@ -394,7 +375,7 @@ impl<'a> Elaborator<'a> {
                 target.subst(
                     &zip(local_classes, class_args)
                         .map(|(local_class, class_arg)| {
-                            (mk_local_instance(local_class, local_classes), class_arg)
+                            (local_class.local_instance_name(), class_arg)
                         })
                         .collect::<Vec<_>>(),
                 );
@@ -1780,7 +1761,7 @@ impl<'a> Unifier<'a> {
                     success = false;
                     break;
                 };
-                subst.push((mk_local_instance(local_class, local_classes), instance));
+                subst.push((local_class.local_instance_name(), instance));
             }
             if !success {
                 continue;

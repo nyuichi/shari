@@ -2,12 +2,13 @@
 
 use anyhow::bail;
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
+use std::hash::Hash;
 use std::iter::zip;
 use std::sync::atomic::AtomicUsize;
 use std::sync::LazyLock;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::{mem, slice, vec};
 use thiserror::Error;
 
@@ -15,7 +16,7 @@ use thiserror::Error;
 pub struct Name(pub usize);
 
 static NAME_COUNTER: AtomicUsize = AtomicUsize::new(0);
-static NAME_TABLE: LazyLock<RwLock<HashMap<String, Name>>> = LazyLock::new(Default::default);
+static NAME_TABLE: LazyLock<Mutex<HashMap<String, Name>>> = LazyLock::new(Default::default);
 static NAME_REV_TABLE: LazyLock<Mutex<HashMap<Name, String>>> = LazyLock::new(Default::default);
 
 impl Display for Name {
@@ -72,7 +73,7 @@ impl Name {
         if !RE.is_match(value) {
             return Err(InvalidNameError);
         }
-        let mut name_table = NAME_TABLE.write().unwrap();
+        let mut name_table = NAME_TABLE.lock().unwrap();
         if let Some(&name) = name_table.get(value) {
             return Ok(name);
         }
@@ -396,6 +397,19 @@ impl Type {
                 }
             }
         }
+    }
+
+    // local instances with the same type are given the same name.
+    pub fn local_instance_name(&self) -> Name {
+        static INSTANCE_NAMES: LazyLock<Mutex<BTreeMap<Type, Name>>> =
+            LazyLock::new(Default::default);
+        let mut table = INSTANCE_NAMES.lock().unwrap();
+        if let Some(name) = table.get(self) {
+            return *name;
+        }
+        let name = Name::fresh();
+        table.insert(self.clone(), name);
+        name
     }
 }
 
@@ -1329,6 +1343,7 @@ impl Path {
 #[derive(Debug, Default, Clone)]
 pub struct LocalEnv {
     pub local_types: Vec<Name>,
+    pub local_classes: Vec<Type>,
     pub locals: Vec<Parameter>,
     pub holes: Vec<(Name, Type)>,
 }
@@ -1338,6 +1353,22 @@ impl LocalEnv {
         self.locals.iter().find_map(|local| {
             if local.name == name {
                 Some(&local.ty)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn get_local_class(&self, name: Name) -> Option<&Type> {
+        self.local_classes
+            .iter()
+            .find(|local_class| name == local_class.local_instance_name())
+    }
+
+    pub fn get_local_instance(&self, ty: &Type) -> Option<Name> {
+        self.local_classes.iter().find_map(|local_class| {
+            if local_class == ty {
+                Some(local_class.local_instance_name())
             } else {
                 None
             }
@@ -1457,6 +1488,10 @@ impl Env {
                     if x == y.name {
                         return Some(y.ty.clone());
                     }
+                }
+                // TODO: check this in the clause of Term::Const and never do this here.
+                if let Some(ty) = local_env.get_local_class(x) {
+                    return Some(ty.clone());
                 }
                 None
             }
