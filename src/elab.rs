@@ -254,7 +254,7 @@ impl<'a> Elaborator<'a> {
                 let mut found = false;
                 for local in &self.local_axioms {
                     // use literal equality by intention
-                    if local.untyped_eq(target) {
+                    if local.maybe_alpha_eq(target) {
                         found = true;
                         break;
                     }
@@ -855,7 +855,7 @@ impl<'a> Unifier<'a> {
         if let Some(constraints) = self.watch_list.get(&name) {
             for c in constraints.iter().rev() {
                 // skip constraints already resolved anyway
-                if c.left.head().typed_eq(&Term::Hole(name)) {
+                if c.left.head().alpha_eq(&Term::Hole(name)) {
                     if let Term::Hole(name) = c.right.head() {
                         if self.subst_map.contains_key(name) {
                             continue;
@@ -997,7 +997,7 @@ impl<'a> Unifier<'a> {
         mut left: Term,
         mut right: Term,
     ) -> Option<()> {
-        if left.typed_eq(&right) {
+        if left.alpha_eq(&right) {
             return None;
         }
         if let (Term::Abs(l), Term::Abs(r)) = (&mut left, &mut right) {

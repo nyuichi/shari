@@ -1116,14 +1116,14 @@ impl Term {
         }
     }
 
-    pub fn typed_eq(&self, other: &Term) -> bool {
+    pub fn alpha_eq(&self, other: &Term) -> bool {
         match (self, other) {
             (Term::Var(index1), Term::Var(index2)) => index1 == index2,
             (Term::Abs(inner1), Term::Abs(inner2)) => {
-                inner1.binder_type == inner2.binder_type && inner1.body.typed_eq(&inner2.body)
+                inner1.binder_type == inner2.binder_type && inner1.body.alpha_eq(&inner2.body)
             }
             (Term::App(inner1), Term::App(inner2)) => {
-                inner1.fun.typed_eq(&inner2.fun) && inner1.arg.typed_eq(&inner2.arg)
+                inner1.fun.alpha_eq(&inner2.fun) && inner1.arg.alpha_eq(&inner2.arg)
             }
             (Term::Local(name1), Term::Local(name2)) => name1 == name2,
             (Term::Const(inner1), Term::Const(inner2)) => {
@@ -1134,12 +1134,12 @@ impl Term {
         }
     }
 
-    pub fn untyped_eq(&self, other: &Term) -> bool {
+    pub fn maybe_alpha_eq(&self, other: &Term) -> bool {
         match (self, other) {
             (Term::Var(index1), Term::Var(index2)) => index1 == index2,
-            (Term::Abs(inner1), Term::Abs(inner2)) => inner1.body.untyped_eq(&inner2.body),
+            (Term::Abs(inner1), Term::Abs(inner2)) => inner1.body.maybe_alpha_eq(&inner2.body),
             (Term::App(inner1), Term::App(inner2)) => {
-                inner1.fun.untyped_eq(&inner2.fun) && inner1.arg.untyped_eq(&inner2.arg)
+                inner1.fun.maybe_alpha_eq(&inner2.fun) && inner1.arg.maybe_alpha_eq(&inner2.arg)
             }
             (Term::Local(name1), Term::Local(name2)) => name1 == name2,
             (Term::Const(inner1), Term::Const(inner2)) => inner1.name == inner2.name,
@@ -1539,7 +1539,7 @@ impl Env {
             Path::Trans(path) => {
                 let h1 = self.infer_conv(local_env, &path.0)?;
                 let h2 = self.infer_conv(local_env, &path.1)?;
-                if !h1.right.typed_eq(&h2.left) {
+                if !h1.right.alpha_eq(&h2.left) {
                     return None;
                 }
                 // h1.right == h2.left means the types in the both sides match.
@@ -1813,7 +1813,7 @@ impl Env {
     }
 
     fn equiv_help(&self, m1: &mut Term, m2: &mut Term) -> Option<Path> {
-        if m1.typed_eq(m2) {
+        if m1.alpha_eq(m2) {
             return Some(mk_path_refl(m1.clone()));
         }
         if let (Term::Abs(inner1), Term::Abs(inner2)) = (&mut *m1, &mut *m2) {
@@ -1835,7 +1835,7 @@ impl Env {
         };
         // TODO: optimize this condition check
         if !h1.is_refl() || !h2.is_refl() {
-            if m1.typed_eq(m2) {
+            if m1.alpha_eq(m2) {
                 return Some(mk_path_trans(h1, h2));
             }
             if let (Term::Abs(inner1), Term::Abs(inner2)) = (&mut *m1, &mut *m2) {

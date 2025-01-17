@@ -190,7 +190,7 @@ impl Env {
         let Some(p) = self.infer_prop(tt_local_env, local_env, h) else {
             return false;
         };
-        p.typed_eq(prop)
+        p.alpha_eq(prop)
     }
 
     pub fn infer_prop(
@@ -202,7 +202,7 @@ impl Env {
         match h {
             Proof::Assump(p) => {
                 for local_axiom in &local_env.local_axioms {
-                    if p.typed_eq(local_axiom) {
+                    if p.alpha_eq(local_axiom) {
                         return Some(p.clone());
                     }
                 }

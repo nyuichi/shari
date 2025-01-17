@@ -1235,7 +1235,7 @@ impl Eval {
             ctor_params_list.push(ctor_params);
             let ctor_args = m.unguard();
             ctor_args_list.push(ctor_args.clone());
-            if !m.head().typed_eq(&mk_local(name)) {
+            if !m.head().alpha_eq(&mk_local(name)) {
                 bail!("invalid constructor. Currently only Horn clauses are supported in inductive clauses: {m}");
             }
             for a in m.args() {
@@ -1255,7 +1255,7 @@ impl Eval {
                     }
                 }
                 if m.contains_local(&name) {
-                    if !m.head().typed_eq(&mk_local(name)) {
+                    if !m.head().alpha_eq(&mk_local(name)) {
                         bail!("invalid target");
                     }
                     for a in m.args() {
@@ -1779,7 +1779,7 @@ impl Eval {
                     let mut structure_field_target = structure_field.target.clone();
                     structure_field_target.subst_type(&type_subst);
                     structure_field_target.subst(&subst);
-                    if !structure_field_target.typed_eq(target) {
+                    if !structure_field_target.alpha_eq(target) {
                         bail!("target mismatch");
                     }
                 }
