@@ -414,6 +414,7 @@ impl Type {
 }
 
 /// Locally nameless representation. See [Charguéraud, 2012].
+/// Use syn's convention [https://docs.rs/syn/latest/syn/enum.Expr.html#syntax-tree-enums].
 #[derive(Clone, Debug)]
 pub enum Term {
     Var(usize),
