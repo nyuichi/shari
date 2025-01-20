@@ -322,7 +322,14 @@ impl Eval {
         local_classes: Vec<Class>,
         target: Term,
     ) {
-        assert!(self.is_wff(&local_types, &local_classes, &target));
+        assert!(self.tt_env().is_wff(
+            &mut LocalEnv {
+                local_types: local_types.clone(),
+                local_classes: local_classes.clone(),
+                locals: vec![],
+            },
+            &target,
+        ));
 
         // TODO: remove and integrate into axiom_table
         self.ns.axioms.insert(
@@ -373,18 +380,28 @@ impl Eval {
         });
     }
 
-    fn add_delta(
-        &mut self,
-        name: Name,
-        local_classes: Vec<Class>,
-        local_types: Vec<Name>,
-        target: Term,
-    ) {
+    fn add_delta(&mut self, name: Name, target: Term) {
+        let Const {
+            local_types,
+            local_classes,
+            ty,
+        } = self.const_table.get(&name).unwrap();
+
+        assert!(self.tt_env().check_type(
+            &mut LocalEnv {
+                local_types: local_types.clone(),
+                local_classes: local_classes.clone(),
+                locals: vec![],
+            },
+            &target,
+            ty
+        ));
+
         self.delta_table.insert(
             name,
             Delta {
-                local_types,
-                local_classes,
+                local_types: local_types.clone(),
+                local_classes: local_classes.clone(),
                 target,
                 hint: self.delta_table.len(),
             },
@@ -459,15 +476,6 @@ impl Eval {
     ) -> anyhow::Result<()> {
         elab::Elaborator::new(self.proof_env(), &self.structure_table, local_env, holes)
             .elaborate_expr(expr, target)
-    }
-
-    fn is_wff(&self, local_types: &[Name], local_classes: &[Class], target: &Term) -> bool {
-        let mut local_env = LocalEnv {
-            local_types: local_types.to_vec(),
-            local_classes: local_classes.to_vec(),
-            locals: vec![],
-        };
-        self.tt_env().is_wff(&mut local_env, target)
     }
 
     fn tt_env(&self) -> tt::Env {
@@ -598,7 +606,7 @@ impl Eval {
                 self.elaborate_term(&mut local_env, &mut target, &ty)?;
                 // well-formedness check is completed.
                 self.add_const(name, local_types.clone(), local_classes.clone(), ty.clone());
-                self.add_delta(name, local_classes, local_types, target);
+                self.add_delta(name, target);
                 Ok(())
             }
             Cmd::Axiom(inner) => {
@@ -1402,6 +1410,10 @@ impl Eval {
                 }
             }
         }
+        let rec_name = Name::intern(&format!("{}.rec", name)).unwrap();
+        if self.has_const(rec_name) {
+            bail!("already defined");
+        }
         let abs_name = Name::intern(&format!("{}.abs", name)).unwrap();
         if self.has_axiom(abs_name) {
             bail!("already defined");
@@ -1420,48 +1432,88 @@ impl Eval {
             },
         );
         self.add_type_const(name, Kind(local_types.len()));
-        let instance = Parameter {
-            name: Name::fresh_with_name("d"),
+
+        // inhab u
+        let this = Parameter {
+            name: Name::fresh_with_name("this"),
             ty: {
                 let mut ty = mk_type_const(name);
-                ty.apply(local_types.iter().map(|x| mk_type_local(*x)));
+                ty.apply(local_types.iter().map(|&x| mk_type_local(x)));
                 ty
             },
         };
+
+        let mut const_fields = vec![];
+        for field in &fields {
+            if let StructureField::Const(field) = field {
+                const_fields.push(Parameter {
+                    name: field.name,
+                    ty: field.ty.clone(),
+                });
+            }
+        }
+
+        // generate recursor
+        //   rec.{u, α} : inhab u → (set u → α) → α
+        let ret_ty = Name::fresh();
+        let mut rec_local_types = local_types.clone();
+        rec_local_types.push(ret_ty);
+        let mut rec_ty = mk_type_local(ret_ty);
+        rec_ty.arrow([this.ty.clone(), {
+            let mut ty = mk_type_local(ret_ty);
+            ty.arrow(const_fields.iter().map(|field| field.ty.clone()));
+            ty
+        }]);
+        self.add_const(rec_name, rec_local_types, vec![], rec_ty);
+
         let mut subst = vec![];
         for field in &fields {
             match field {
                 StructureField::Const(field) => {
                     // rep : set u
-                    // ↦ inhab.rep.{u} : inhab u → set u
+                    // ↦ def inhab.rep.{u} : inhab u → set u := λ (this : inhab u), inhab.rec.{u, set u} this (λ (rep : set u), rep)
                     let fullname = Name::intern(&format!("{}.{}", name, field.name)).unwrap();
                     let mut ty = field.ty.clone();
-                    ty.arrow([instance.ty.clone()]);
+                    ty.arrow([this.ty.clone()]);
                     self.add_const(fullname, local_types.clone(), vec![], ty);
 
-                    // rep ↦ inhab.rep.{u} d
                     let mut target = mk_const(
-                        fullname,
-                        local_types.iter().map(|x| mk_type_local(*x)).collect(),
+                        rec_name,
+                        local_types
+                            .iter()
+                            .map(|&x| mk_type_local(x))
+                            .chain([field.ty.clone()])
+                            .collect(),
                         vec![],
                     );
-                    target.apply([mk_local(instance.name)]);
+                    target.apply([mk_local(this.name), {
+                        let mut target = mk_local(field.name);
+                        target.abs(&const_fields, false);
+                        target
+                    }]);
+                    target.abs(slice::from_ref(&this), false);
+                    self.add_delta(fullname, target);
+
+                    // rep ↦ inhab.rep.{u} this
+                    let mut target = mk_const(
+                        fullname,
+                        local_types.iter().map(|&x| mk_type_local(x)).collect(),
+                        vec![],
+                    );
+                    target.apply([mk_local(this.name)]);
                     subst.push((field.name, target));
                 }
                 StructureField::Axiom(field) => {
                     let fullname = Name::intern(&format!("{}.{}", name, field.name)).unwrap();
-
                     let mut target = field.target.clone();
                     target.subst(&subst);
-
-                    target.generalize(slice::from_ref(&instance));
-
+                    target.generalize(slice::from_ref(&this));
                     self.add_axiom(fullname, local_types.clone(), vec![], target);
                 }
             }
         }
         // generate abstraction principle
-        // axiom inhab.abs.{u} (s : set u) : (∃ x, x ∈ s) → ∃ d, s = inhab.rep d
+        // axiom inhab.abs.{u} (s : set u) : (∃ x, x ∈ s) → ∃ this, s = inhab.rep this
         let mut params = vec![];
         let mut guards = vec![];
         let mut chars = vec![];
@@ -1475,16 +1527,16 @@ impl Eval {
                         ty: field.ty.clone(),
                     };
 
-                    // inhab.rep d
+                    // inhab.rep this
                     let fullname = Name::intern(&format!("{}.{}", name, field.name)).unwrap();
                     let mut rhs = mk_const(
                         fullname,
                         local_types.iter().map(|x| mk_type_local(*x)).collect(),
                         vec![],
                     );
-                    rhs.apply([mk_local(instance.name)]);
+                    rhs.apply([mk_local(this.name)]);
 
-                    // s = inhab.rep d
+                    // s = inhab.rep this
                     let mut char =
                         mk_const(Name::intern("eq").unwrap(), vec![field.ty.clone()], vec![]);
                     char.apply([mk_local(param.name), rhs]);
@@ -1505,7 +1557,7 @@ impl Eval {
         }
         let mut abs = mk_const(
             Name::intern("exists").unwrap(),
-            vec![instance.ty.clone()],
+            vec![this.ty.clone()],
             vec![],
         );
         abs.apply([{
@@ -1517,7 +1569,7 @@ impl Eval {
                     conj
                 })
                 .unwrap_or_else(|| mk_const(Name::intern("true").unwrap(), vec![], vec![]));
-            char.abs(slice::from_ref(&instance), true);
+            char.abs(slice::from_ref(&this), true);
             char
         }]);
         abs.guard(guards);
@@ -1525,47 +1577,37 @@ impl Eval {
         self.add_axiom(abs_name, local_types.clone(), vec![], abs);
 
         // generate extensionality
-        // axiom inhab.ext.{u} (d₁ d₂ : inhab u) : inhab.rep d₁ = inhab.rep d₂ → d₁ = d₂
-        let instance1 = Parameter {
-            name: Name::fresh_with_name("d₁"),
-            ty: instance.ty.clone(),
+        // axiom inhab.ext.{u} (this₁ this₂ : inhab u) : inhab.rep this₁ = inhab.rep this₂ → this₁ = this₂
+        let this1 = Parameter {
+            name: Name::fresh_with_name("this₁"),
+            ty: this.ty.clone(),
         };
-        let instance2 = Parameter {
-            name: Name::fresh_with_name("d₂"),
-            ty: instance.ty.clone(),
+        let this2 = Parameter {
+            name: Name::fresh_with_name("this₂"),
+            ty: this.ty.clone(),
         };
         let mut guards = vec![];
-        for field in &fields {
-            match field {
-                StructureField::Const(field) => {
-                    let fullname = Name::intern(&format!("{}.{}", name, field.name)).unwrap();
-                    let proj = mk_const(
-                        fullname,
-                        local_types.iter().map(|x| mk_type_local(*x)).collect(),
-                        vec![],
-                    );
+        for field in &const_fields {
+            let fullname = Name::intern(&format!("{}.{}", name, field.name)).unwrap();
+            let proj = mk_const(
+                fullname,
+                local_types.iter().map(|x| mk_type_local(*x)).collect(),
+                vec![],
+            );
 
-                    let mut lhs = proj.clone();
-                    lhs.apply([mk_local(instance1.name)]);
-                    let mut rhs = proj;
-                    rhs.apply([mk_local(instance2.name)]);
+            let mut lhs = proj.clone();
+            lhs.apply([mk_local(this1.name)]);
+            let mut rhs = proj;
+            rhs.apply([mk_local(this2.name)]);
 
-                    let mut guard =
-                        mk_const(Name::intern("eq").unwrap(), vec![field.ty.clone()], vec![]);
-                    guard.apply([lhs, rhs]);
-                    guards.push(guard);
-                }
-                StructureField::Axiom(_) => {}
-            }
+            let mut guard = mk_const(Name::intern("eq").unwrap(), vec![field.ty.clone()], vec![]);
+            guard.apply([lhs, rhs]);
+            guards.push(guard);
         }
-        let mut target = mk_const(
-            Name::intern("eq").unwrap(),
-            vec![instance.ty.clone()],
-            vec![],
-        );
-        target.apply([mk_local(instance1.name), mk_local(instance2.name)]);
+        let mut target = mk_const(Name::intern("eq").unwrap(), vec![this.ty.clone()], vec![]);
+        target.apply([mk_local(this1.name), mk_local(this2.name)]);
         target.guard(guards);
-        target.generalize(&[instance1, instance2]);
+        target.generalize(&[this1, this2]);
         self.add_axiom(ext_name, local_types.clone(), vec![], target);
         Ok(())
     }
@@ -1581,10 +1623,7 @@ impl Eval {
         //   const power.inhab.{u} : set u → inhab (set u)
         //   def power.inhab.rep.{u} (A : set u) : set (set u) := power A
         //   lemma power.inhab.inhabited.{u} : ∃ a, a ∈ power x := (..)
-        //
-        // with a definitional equality
-        //
-        //  inhab.rep (power.inhab A) ≡ power A
+        //   axiom power.inhab.spec.{u} (A : set u) : inhab.rec (power.inhab A) = λ f, f (power.inhab.rep A)
         //
         let CmdInstance {
             name,
@@ -1732,19 +1771,18 @@ impl Eval {
                 }
             }
         }
+        let spec_name = Name::intern(&format!("{}.spec", name)).unwrap();
+        if self.has_axiom(spec_name) {
+            bail!("already defined");
+        }
         // well-formedness check is completed.
 
         // e.g. const power.inhab.{u} : set u → inhab (set u)
-        let mut instance_ty = target_ty.clone();
+        let mut target = target_ty.clone();
         for param in params.iter().rev() {
-            instance_ty.arrow([param.ty.clone()]);
+            target.arrow([param.ty.clone()]);
         }
-        self.add_const(
-            name,
-            local_types.clone(),
-            local_classes.clone(),
-            instance_ty,
-        );
+        self.add_const(name, local_types.clone(), local_classes.clone(), target);
 
         for field in &fields {
             match field {
@@ -1772,18 +1810,7 @@ impl Eval {
                         local_classes.clone(),
                         def_target_ty,
                     );
-                    self.add_delta(name, local_classes.clone(), local_types.clone(), def_target);
-
-                    // e.g. example rep_of_power.{u} (A : set u) : inhab.rep (power.inhab A) = power A := eq.refl
-                    let proj_name =
-                        Name::intern(&format!("{}.{}", structure_name, field_name)).unwrap();
-                    self.add_iota(
-                        proj_name,
-                        name,
-                        local_types.clone(),
-                        params.iter().map(|param| param.name).collect(),
-                        target.clone(),
-                    );
+                    self.add_delta(fullname, def_target);
                 }
                 InstanceField::Lemma(field) => {
                     let InstanceLemma {
@@ -1800,6 +1827,67 @@ impl Eval {
                 }
             }
         }
+        // generate spec
+        //   axiom power.inhab.spec.{u, α} (A : set u) : inhab.rec.{set u, α} (power.inhab A) = λ (f : set (set u) → α), f (power.inhab.rep A)
+        let ret_ty = Name::fresh();
+        let mut left = mk_const(
+            Name::intern(&format!("{}.rec", structure_name)).unwrap(),
+            target_ty
+                .args()
+                .into_iter()
+                .cloned()
+                .chain([mk_type_local(ret_ty)])
+                .collect(),
+            vec![],
+        );
+        left.apply([{
+            let mut target = mk_const(
+                name,
+                local_types.iter().map(|&x| mk_type_local(x)).collect(),
+                vec![],
+            );
+            target.apply(params.iter().map(|param| mk_local(param.name)));
+            target
+        }]);
+        let f = Parameter {
+            name: Name::fresh_with_name("f"),
+            ty: {
+                let mut target = mk_type_local(ret_ty);
+                target.arrow(fields.iter().filter_map(|field| match field {
+                    InstanceField::Def(field) => Some(field.ty.clone()),
+                    InstanceField::Lemma(_) => None,
+                }));
+                target
+            },
+        };
+        let mut right = mk_local(f.name);
+        right.apply(fields.iter().filter_map(|field| match field {
+            InstanceField::Def(field) => {
+                let mut target = mk_const(
+                    Name::intern(&format!("{}.{}", name, field.name)).unwrap(),
+                    local_types.iter().map(|&x| mk_type_local(x)).collect(),
+                    vec![],
+                );
+                target.apply(params.iter().map(|param| mk_local(param.name)));
+                Some(target)
+            }
+            InstanceField::Lemma(_) => None,
+        }));
+        right.abs(slice::from_ref(&f), true);
+        let mut target = mk_const(
+            Name::intern("eq").unwrap(),
+            vec![{
+                let mut ty = mk_type_local(ret_ty);
+                ty.arrow([f.ty.clone()]);
+                ty
+            }],
+            vec![],
+        );
+        target.apply([left, right]);
+        target.generalize(&params);
+        let mut local_types = local_types.clone();
+        local_types.push(ret_ty);
+        self.add_axiom(spec_name, local_types, local_classes, target);
         Ok(())
     }
 
@@ -1907,7 +1995,6 @@ impl Eval {
                     let fullname = Name::intern(&format!("{}.{}", name, field.name)).unwrap();
                     let mut target = field.target.clone();
                     target.subst(&subst);
-                    println!("{target}");
                     self.add_axiom(
                         fullname,
                         local_types.clone(),

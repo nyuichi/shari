@@ -1270,7 +1270,7 @@ impl Term {
                 inner1.fun.alpha_eq(&inner2.fun) && inner1.arg.alpha_eq(&inner2.arg)
             }
             (Term::Local(name1), Term::Local(name2)) => name1 == name2,
-            (Term::Const(inner1), Term::Const(inner2)) => inner1.alpha_eq(&inner2),
+            (Term::Const(inner1), Term::Const(inner2)) => inner1.alpha_eq(inner2),
             (Term::Hole(name1), Term::Hole(name2)) => name1 == name2,
             _ => false,
         }
@@ -1531,7 +1531,9 @@ pub struct Const {
 
 #[derive(Debug, Clone)]
 pub struct Delta {
+    // TODO: remove this?
     pub local_types: Vec<Name>,
+    // TODO: remove this?
     pub local_classes: Vec<Class>,
     pub target: Term,
     pub hint: usize,

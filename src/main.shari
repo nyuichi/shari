@@ -452,8 +452,9 @@ contradiction ⟪⊤ = ⊥⟫ true_ne_false
 -- The command is desugared into the following set of declarations.
 --
 --   type const inhab : Type → Type
---   const inhab.rep.{u} : inhab u → set u
---   axiom inhab.inhabited.{u} (d : inhab u) : ∃ x, x ∈ inhab.rep d
+--   const inhab.rec.{u, α} : inhab u → (set u → α) → α
+--   def inhab.rep.{u} : inhab u → set u := λ (this : inhab u), inhab.rec.{u, set u} this (λ (rep : set u), rep)
+--   axiom inhab.inhabited.{u} (this : inhab u) : ∃ x, x ∈ inhab.rep this
 --   axiom inhab.abs.{u} (s : set u) : (∃ x, x ∈ s) → ∃ d, s = inhab.rep d
 --   axiom inhab.ext.{u} (d₁ d₂ : inhab u) : inhab.rep d₁ = inhab.rep d₂ → d₁ = d₂
 --
@@ -461,21 +462,6 @@ structure inhab u := {
   const rep : set u
   axiom inhabited : ∃ x, x ∈ rep
 }
-
--- type const nat : Type
--- const nat.zero : nat
--- const nat.succ : nat → nat
--- axiom nat.ind : ∀ x, ∀ P, P nat.zero → (∀ n, P n → P (nat.succ n)) → P x
--- const nat.rec.{u} : nat → u → (nat → u → u) → u
--- axiom nat.zero.spec.{u} : nat.rec nat.zero = (λ x f, x)
--- axiom nat.succ.spec.{u} : ∀ n, nat.rec (nat.succ n) = λ x f, f n (nat.rec n x f)
---
--- type const inhab : Type → Type
--- const inhab.rec.{u, α} : inhab u → (set u → α) → α
--- def inhab.rep.{u} : inhab u → set u := inhab.rec.{u, set u} (λ (rep : set u), rep)
--- axiom inhab.inhabited.{u} (d : inhab u) : ∃ x, x ∈ inhab.rep d
--- axiom inhab.abs.{u} (s : set u) : (∃ x, x ∈ s) → ∃ d, s = inhab.rep d
--- axiom inhab.ext.{u} (d₁ d₂ : inhab u) : inhab.rec d₁ = inhab.rec d₂ → d₁ = d₂
 
 lemma inhab.uabs.{u} (s : set u) : (∃ x, x ∈ s) → ∃! c, s = inhab.rep c :=
 assume ∃ x, x ∈ s,
@@ -494,11 +480,7 @@ uexists.intro
 --   const power.inhab.{u} : set u → inhab (set u)
 --   def power.inhab.rep.{u} (A : set u) : set (set u) := power A
 --   lemma power.inhab.inhabited.{u} (A : set u) : ∃ a, a ∈ power x := (..)
---
--- and a definitional equality
---
---  axiom (A : set u) : inhab.rec (power.inhab A) = λ f, f (power A)
---   example _.{u} (A : set u) : inhab.rep (power.inhab A) ≡ power A := eq.refl
+--   axiom power.inhab.spec.{u} (A : set u) : inhab.rec (power.inhab A) = λ f, f (power.inhab.rep A)
 --
 instance power.inhab.{u} (A : set u) : inhab (set u) := {
   def rep : set (set u) := power A
