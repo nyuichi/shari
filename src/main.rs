@@ -1,7 +1,8 @@
 use lex::Lex;
 use parse::{ParseError, Parser};
 use print::Pretty;
-use tt::Name;
+use proof::Axiom;
+use tt::{Const, Name};
 
 mod cmd;
 mod elab;
@@ -13,7 +14,11 @@ mod proof;
 mod tt;
 
 fn print_const(eval: &cmd::Eval, name: Name) {
-    let (local_types, ty) = eval.proof_env.tt_env.consts.get(&name).unwrap();
+    let Const {
+        local_types,
+        local_classes,
+        ty,
+    } = eval.const_table.get(&name).unwrap();
     print!("const {}.{{", name);
     let mut first = true;
     for local_type in local_types {
@@ -23,11 +28,19 @@ fn print_const(eval: &cmd::Eval, name: Name) {
         print!("{}", local_type);
         first = false;
     }
-    println!("}} : {}", Pretty::new(&eval.pp, ty));
+    print!("}}");
+    for local_class in local_classes {
+        println!(" [{}]", Pretty::new(&eval.pp, local_class));
+    }
+    println!(": {}", Pretty::new(&eval.pp, ty));
 }
 
 fn print_axiom(eval: &cmd::Eval, name: Name) {
-    let (local_types, m) = eval.proof_env.axioms.get(&name).unwrap();
+    let Axiom {
+        local_types,
+        local_classes,
+        target,
+    } = eval.axiom_table.get(&name).unwrap();
     print!("axiom {}.{{", name);
     let mut first = true;
     for local_type in local_types {
@@ -37,7 +50,11 @@ fn print_axiom(eval: &cmd::Eval, name: Name) {
         print!("{}", local_type);
         first = false;
     }
-    println!("}} : {}", Pretty::new(&eval.pp, m));
+    print!("}}");
+    for local_class in local_classes {
+        print!(" [{}]", Pretty::new(&eval.pp, local_class));
+    }
+    println!(": {}", Pretty::new(&eval.pp, target));
 }
 
 fn main() -> anyhow::Result<()> {

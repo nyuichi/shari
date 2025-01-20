@@ -4,7 +4,7 @@ use std::{collections::HashMap, iter::zip, sync::Arc, vec};
 
 use std::sync::LazyLock;
 
-use crate::tt::{self, Name, Parameter, Path, Term, Type};
+use crate::tt::{self, Class, Instance, Name, Parameter, Path, Term, Type};
 
 #[derive(Debug, Clone)]
 pub enum Proof {
@@ -49,7 +49,7 @@ pub enum Proof {
     /// -------------------------- (c.{uᵢ} :⇔ φ)
     /// Γ | Φ ⊢ c.{tᵢ} : [τᵢ/uᵢ]φ
     /// ```
-    Ref(Arc<(Name, Vec<Type>)>),
+    Ref(Arc<(Name, Vec<Type>, Vec<Instance>)>),
 }
 
 impl std::fmt::Display for Proof {
@@ -107,8 +107,8 @@ pub fn mk_proof_conv(h1: Path, h2: Proof) -> Proof {
     Proof::Conv(Arc::new((h1, h2)))
 }
 
-pub fn mk_proof_ref(name: Name, ty_args: Vec<Type>) -> Proof {
-    Proof::Ref(Arc::new((name, ty_args)))
+pub fn mk_proof_ref(name: Name, ty_args: Vec<Type>, instances: Vec<Instance>) -> Proof {
+    Proof::Ref(Arc::new((name, ty_args, instances)))
 }
 
 static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp").unwrap());
@@ -166,11 +166,18 @@ impl TryFrom<Term> for Forall {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct Env {
-    pub tt_env: tt::Env,
+#[derive(Debug, Clone)]
+pub struct Axiom {
+    pub local_types: Vec<Name>,
+    pub local_classes: Vec<Class>,
+    pub target: Term,
+}
+
+#[derive(Debug, Clone)]
+pub struct Env<'a> {
+    pub tt_env: tt::Env<'a>,
     // Proved or postulated facts
-    pub axioms: HashMap<Name, (Vec<Name>, Term)>,
+    pub axiom_table: &'a HashMap<Name, Axiom>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -178,7 +185,7 @@ pub struct LocalEnv {
     pub local_axioms: Vec<Term>,
 }
 
-impl Env {
+impl<'a> Env<'a> {
     // prop is trusted
     pub fn check_prop(
         &self,
@@ -273,9 +280,13 @@ impl Env {
                 Some(h1.right)
             }
             Proof::Ref(h) => {
-                let (name, ty_args) = &**h;
-                let (tv, target) = self.axioms.get(name)?;
-                if ty_args.len() != tv.len() {
+                let (name, ty_args, instances) = &**h;
+                let Axiom {
+                    local_types,
+                    local_classes,
+                    target,
+                } = self.axiom_table.get(name)?;
+                if ty_args.len() != local_types.len() {
                     return None;
                 }
                 for ty_arg in ty_args {
@@ -283,12 +294,25 @@ impl Env {
                         return None;
                     }
                 }
-                let mut subst = vec![];
-                for (&x, t) in zip(tv, ty_args) {
-                    subst.push((x, t.clone()))
+                let mut type_subst = vec![];
+                for (&x, t) in zip(local_types, ty_args) {
+                    type_subst.push((x, t.clone()))
+                }
+                if local_classes.len() != instances.len() {
+                    return None;
+                }
+                for (local_class, instance) in zip(local_classes, instances) {
+                    let mut local_class = local_class.clone();
+                    local_class.subst(&type_subst);
+                    if !self
+                        .tt_env
+                        .check_class(tt_local_env, instance, &local_class)
+                    {
+                        return None;
+                    }
                 }
                 let mut target = target.clone();
-                target.subst_type(&subst);
+                target.subst_type(&type_subst);
                 Some(target)
             }
         }

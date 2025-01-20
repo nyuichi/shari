@@ -1,8 +1,10 @@
 use crate::cmd::{
-    Cmd, CmdAxiom, CmdClass, CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr,
-    CmdInstance, CmdLemma, CmdLocalTypeConst, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst,
-    CmdTypeInductive, Constructor, DataConstructor, Fixity, InstanceDef, InstanceField,
-    InstanceLemma, Operator, StructureAxiom, StructureConst, StructureField,
+    ClassInstanceDef, ClassInstanceField, ClassInstanceLemma, ClassStructureAxiom,
+    ClassStructureConst, ClassStructureField, Cmd, CmdAxiom, CmdClassInstance, CmdClassStructure,
+    CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdInstance, CmdLemma,
+    CmdLocalTypeConst, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive,
+    Constructor, DataConstructor, Fixity, InstanceDef, InstanceField, InstanceLemma, Operator,
+    StructureAxiom, StructureConst, StructureField,
 };
 use crate::expr::{
     mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_change, mk_expr_const, mk_expr_inst,
@@ -10,7 +12,7 @@ use crate::expr::{
 };
 use crate::tt::{
     mk_const, mk_fresh_hole, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const,
-    mk_type_local, mk_type_prop, Kind, Name, Parameter, Term, Type,
+    mk_type_local, mk_type_prop, Class, Instance, Kind, Name, Parameter, Term, Type,
 };
 
 use crate::lex::{Lex, LexError, SourceInfo, Token, TokenKind};
@@ -136,11 +138,13 @@ pub enum ParseError {
 pub struct AxiomInfo {
     pub type_arity: usize,
     pub num_params: usize,
+    pub num_local_classes: usize,
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct ConstInfo {
     pub type_arity: usize,
+    pub num_local_classes: usize,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -149,6 +153,7 @@ pub struct Nasmespace {
     pub consts: HashMap<Name, ConstInfo>,
     pub axioms: HashMap<Name, AxiomInfo>,
     pub type_locals: Vec<Name>,
+    pub class_predicates: HashSet<Name>,
     // mapping name to type arity
     pub locals: Vec<Name>,
 }
@@ -438,15 +443,44 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(params)
     }
 
-    /// e.g. `"[T] [U]"`
-    fn local_class_parameters(&mut self) -> Result<Vec<Type>, ParseError> {
+    fn class(&mut self) -> Result<Class, ParseError> {
+        let token = self.any_token()?;
+        if !token.is_ident() {
+            return Self::fail(token, "expected class name");
+        }
+        let name = Name::try_from(token.as_str()).expect("logic flaw");
+        if !self.ns.class_predicates.contains(&name) {
+            return Self::fail(token, "unknown class");
+        }
+        let mut args = vec![];
+        while let Some(t) = self.optional(|this| this.subty(1024)) {
+            args.push(t);
+        }
+        Ok(Class { name, args })
+    }
+
+    /// e.g. `"[C] [D]"`
+    fn local_class_parameters(&mut self) -> Result<Vec<Class>, ParseError> {
         let mut class_params = vec![];
         while let Some(_token) = self.expect_symbol_opt("[") {
-            let ty = self.ty()?;
+            let class = self.class()?;
             self.expect_symbol("]")?;
-            class_params.push(ty);
+            class_params.push(class);
         }
         Ok(class_params)
+    }
+
+    /// e.g. `C ⇒ D ⇒`
+    fn class_context(&mut self) -> Result<Vec<Class>, ParseError> {
+        let mut class_context = vec![];
+        while let Some(class) = self.optional(|this| {
+            let class = this.class()?;
+            this.expect_symbol("⇒")?;
+            Ok(class)
+        }) {
+            class_context.push(class);
+        }
+        Ok(class_context)
     }
 
     pub fn term(&mut self) -> Result<Term, ParseError> {
@@ -502,7 +536,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         for x in binders.into_iter().rev() {
             m.abs(slice::from_ref(&x), true);
             let f = mem::take(&mut m);
-            m = mk_const(Name::try_from(binder).unwrap(), vec![x.ty]);
+            m = mk_const(Name::try_from(binder).unwrap(), vec![x.ty], vec![]);
             m.apply(vec![f]);
         }
         Ok(m)
@@ -544,7 +578,10 @@ impl<'a, 'b> Parser<'a, 'b> {
         let Some(const_info) = self.ns.consts.get(&name).cloned() else {
             return Self::fail(token, "unknown variable");
         };
-        let ConstInfo { type_arity } = const_info;
+        let ConstInfo {
+            type_arity,
+            num_local_classes,
+        } = const_info;
         let mut ty_args = vec![];
         if let Some(_token) = self.expect_symbol_opt(".{") {
             if self.expect_symbol_opt("}").is_none() {
@@ -561,7 +598,11 @@ impl<'a, 'b> Parser<'a, 'b> {
                 ty_args.push(mk_fresh_type_hole());
             }
         }
-        Ok(mk_const(name, ty_args))
+        let mut instances = vec![];
+        for _ in 0..num_local_classes {
+            instances.push(Instance::Hole(Name::fresh()));
+        }
+        Ok(mk_const(name, ty_args, instances))
     }
 
     fn subterm(&mut self, rbp: usize) -> Result<Term, ParseError> {
@@ -664,7 +705,11 @@ impl<'a, 'b> Parser<'a, 'b> {
                 ty_args.push(mk_fresh_type_hole());
             }
         }
-        let mut expr = mk_expr_const(name, ty_args);
+        let mut instances = vec![];
+        for _ in 0..axiom_info.num_local_classes {
+            instances.push(Instance::Hole(Name::fresh()));
+        }
+        let mut expr = mk_expr_const(name, ty_args, instances);
         if auto_inst {
             for _ in 0..axiom_info.num_params {
                 expr = mk_expr_inst(expr, self.mk_term_hole());
@@ -743,7 +788,11 @@ impl<'a, 'b> Parser<'a, 'b> {
                     self.locals.pop();
 
                     // Expand[obtain (x : τ), p := e1, e2] := exists.ind.{τ}[_, _] e1 (take (x : τ), assume p, e2)
-                    let e = mk_expr_const(Name::intern("exists.ind").unwrap(), vec![ty.clone()]);
+                    let e = mk_expr_const(
+                        Name::intern("exists.ind").unwrap(),
+                        vec![ty.clone()],
+                        vec![],
+                    );
                     let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_app(e, e1);
@@ -898,8 +947,20 @@ impl<'a, 'b> Parser<'a, 'b> {
                 Cmd::Instance(instance_cmd)
             }
             "class" => {
-                let class_cmd = self.class_cmd(keyword)?;
-                Cmd::Class(class_cmd)
+                let keyword2 = self.keyword()?;
+                match keyword2.as_str() {
+                    "structure" => {
+                        let class_structure_cmd = self.class_structure_cmd(keyword)?;
+                        Cmd::ClassStructure(class_structure_cmd)
+                    }
+                    "instance" => {
+                        let class_instance_cmd = self.class_instance_cmd(keyword)?;
+                        Cmd::ClassInstance(class_instance_cmd)
+                    }
+                    _ => {
+                        return Self::fail(keyword, "unknown command");
+                    }
+                }
             }
             "local" => {
                 self.expect_keyword("type")?;
@@ -1090,7 +1151,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
-        let local_classes = self.local_class_parameters()?;
+        let local_classes = self.class_context()?;
         self.expect_symbol(":")?;
         let t = self.ty()?;
         // Parsing finished.
@@ -1168,7 +1229,6 @@ impl<'a, 'b> Parser<'a, 'b> {
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
-        let local_classes = self.local_class_parameters()?;
         let params = self.typed_parameters()?;
         for param in &params {
             self.locals.push(param.name);
@@ -1205,7 +1265,6 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(CmdInductive {
             name,
             local_types,
-            local_classes,
             ctors,
             params,
             target_ty,
@@ -1227,7 +1286,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         }
         self.expect_symbol(":=")?;
         self.expect_symbol("{")?;
-        let mut fields: Vec<StructureField> = vec![];
+        let mut fields = vec![];
         let mut num_consts = 0;
         while self.expect_symbol_opt("}").is_none() {
             let keyword = self.keyword()?;
@@ -1294,6 +1353,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             let keyword = self.keyword()?;
             match keyword.as_str() {
                 "def" => {
+                    // TODO: allow to refer to preceding definitions in the same instance.
                     let field_name = self.name()?;
                     let field_params = self.typed_parameters()?;
                     for field_param in &field_params {
@@ -1315,6 +1375,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     }));
                 }
                 "lemma" => {
+                    // TODO: allow to refer to preceding lemmas in the same instance.
                     let field_name = self.name()?;
                     let field_params = self.typed_parameters()?;
                     for field_param in &field_params {
@@ -1354,27 +1415,138 @@ impl<'a, 'b> Parser<'a, 'b> {
         })
     }
 
-    fn class_cmd(&mut self, _token: Token<'a>) -> Result<CmdClass, ParseError> {
-        // TODO: remove type parameters
+    fn class_structure_cmd(&mut self, _token: Token<'a>) -> Result<CmdClassStructure, ParseError> {
+        let name = self.name()?;
+        let mut local_types = vec![];
+        while let Some(token) = self.ident_opt() {
+            let tv = Name::intern(token.as_str()).unwrap();
+            for v in &local_types {
+                if &tv == v {
+                    return Self::fail(token, "duplicate type variable")?;
+                }
+            }
+            local_types.push(tv);
+            self.type_locals.push(tv);
+        }
+        self.expect_symbol(":=")?;
+        self.expect_symbol("{")?;
+        let mut fields = vec![];
+        let mut num_consts = 0;
+        while self.expect_symbol_opt("}").is_none() {
+            let keyword = self.keyword()?;
+            match keyword.as_str() {
+                "const" => {
+                    let field_name = self.name()?;
+                    self.expect_symbol(":")?;
+                    let field_ty = self.ty()?;
+                    fields.push(ClassStructureField::Const(ClassStructureConst {
+                        name: field_name,
+                        ty: field_ty,
+                    }));
+
+                    self.locals.push(field_name);
+                    num_consts += 1;
+                }
+                "axiom" => {
+                    let field_name = self.name()?;
+                    let params = self.typed_parameters()?;
+                    for param in &params {
+                        self.locals.push(param.name);
+                    }
+                    self.expect_symbol(":")?;
+                    let mut target = self.term()?;
+                    self.locals.truncate(self.locals.len() - params.len());
+                    target.generalize(&params);
+                    fields.push(ClassStructureField::Axiom(ClassStructureAxiom {
+                        name: field_name,
+                        target,
+                    }))
+                }
+                _ => {
+                    return Self::fail(keyword, "expected const or axiom");
+                }
+            }
+        }
+        self.locals.truncate(self.locals.len() - num_consts);
+        self.type_locals
+            .truncate(self.type_locals.len() - local_types.len());
+        Ok(CmdClassStructure {
+            name,
+            local_types,
+            fields,
+        })
+    }
+
+    fn class_instance_cmd(&mut self, _token: Token<'a>) -> Result<CmdClassInstance, ParseError> {
         let local_types = self.local_type_parameters()?;
         for &ty in &local_types {
             self.type_locals.push(ty);
         }
-        let ty = self.ty()?;
-        let mut local_classes = vec![];
-        if let Some(_token) = self.expect_symbol_opt(":-") {
-            local_classes = self.local_class_parameters()?;
-        }
+        let local_classes = self.class_context()?;
+        let target = self.class()?;
         self.expect_symbol(":=")?;
-        let target = self.term()?;
+        let mut fields = vec![];
+        self.expect_symbol("{")?;
+        while self.expect_symbol_opt("}").is_none() {
+            let keyword = self.keyword()?;
+            match keyword.as_str() {
+                "def" => {
+                    // TODO: allow to refer to preceding definitions in the same instance.
+                    let field_name = self.name()?;
+                    let field_params = self.typed_parameters()?;
+                    for field_param in &field_params {
+                        self.locals.push(field_param.name);
+                    }
+                    self.expect_symbol(":")?;
+                    let mut field_ty = self.ty()?;
+                    self.expect_symbol(":=")?;
+                    let mut field_target = self.term()?;
+                    self.locals.truncate(self.locals.len() - field_params.len());
+                    for field_param in field_params.into_iter().rev() {
+                        field_ty.arrow([field_param.ty.clone()]);
+                        field_target.abs(&[field_param], true);
+                    }
+                    fields.push(ClassInstanceField::Def(ClassInstanceDef {
+                        name: field_name,
+                        ty: field_ty,
+                        target: field_target,
+                    }));
+                }
+                "lemma" => {
+                    // TODO: allow to refer to preceding lemmas in the same instance.
+                    let field_name = self.name()?;
+                    let field_params = self.typed_parameters()?;
+                    for field_param in &field_params {
+                        self.locals.push(field_param.name);
+                    }
+                    self.expect_symbol(":")?;
+                    let mut field_target = self.term()?;
+                    self.expect_symbol(":=")?;
+                    let mut expr = self.expr()?;
+                    self.locals.truncate(self.locals.len() - field_params.len());
+                    field_target.generalize(&field_params);
+                    for field_param in field_params.into_iter().rev() {
+                        expr = mk_expr_take(field_param.name, field_param.ty, expr);
+                    }
+                    let holes = self.holes.drain(..).collect();
+                    fields.push(ClassInstanceField::Lemma(ClassInstanceLemma {
+                        name: field_name,
+                        target: field_target,
+                        holes,
+                        expr,
+                    }))
+                }
+                _ => Self::fail(keyword, "unknown command in instance")?,
+            }
+        }
         // parsing finished.
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
-        Ok(CmdClass {
+        Ok(CmdClassInstance {
             local_types,
             local_classes,
-            ty,
             target,
+            fields,
         })
     }
 }

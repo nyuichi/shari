@@ -1,8 +1,7 @@
 //! [Type] and [Term] may be ill-formed.
 
-use anyhow::bail;
 use regex::Regex;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::iter::zip;
@@ -305,23 +304,23 @@ impl Type {
         }
     }
 
-    pub fn contains_local(&self, name: &Name) -> bool {
+    pub fn contains_local(&self, name: Name) -> bool {
         match self {
             Type::Const(_) => false,
             Type::Arrow(t) => t.dom.contains_local(name) || t.cod.contains_local(name),
             Type::App(t) => t.fun.contains_local(name) || t.arg.contains_local(name),
-            Type::Local(t) => t == name,
+            &Type::Local(t) => t == name,
             Type::Hole(_) => false,
         }
     }
 
-    pub fn contains_hole(&self, name: &Name) -> bool {
+    pub fn contains_hole(&self, name: Name) -> bool {
         match self {
             Type::Const(_) => false,
             Type::Arrow(t) => t.dom.contains_hole(name) || t.cod.contains_hole(name),
             Type::App(t) => t.fun.contains_hole(name) || t.arg.contains_hole(name),
             Type::Local(_) => false,
-            Type::Hole(n) => n == name,
+            &Type::Hole(n) => n == name,
         }
     }
 
@@ -352,24 +351,6 @@ impl Type {
         args
     }
 
-    pub fn unify(&self, other: &Type) -> Option<Vec<(Name, Type)>> {
-        let mut eq_set = EqSet::default();
-        eq_set.equations.push((self.clone(), other.clone()));
-        eq_set
-            .solve()
-            .ok()
-            .map(|subst| subst.0.into_iter().collect())
-    }
-
-    pub fn matches(&self, pattern: &Type) -> Option<Vec<(Name, Type)>> {
-        let mut subst = vec![];
-        if self.matches_help(pattern, &mut subst) {
-            Some(subst)
-        } else {
-            None
-        }
-    }
-
     fn matches_help(&self, pattern: &Type, subst: &mut Vec<(Name, Type)>) -> bool {
         match pattern {
             Type::Const(_) => self == pattern,
@@ -398,18 +379,149 @@ impl Type {
             }
         }
     }
+}
 
-    // local instances with the same type are given the same name.
-    pub fn local_instance_name(&self) -> Name {
-        static INSTANCE_NAMES: LazyLock<Mutex<BTreeMap<Type, Name>>> =
-            LazyLock::new(Default::default);
-        let mut table = INSTANCE_NAMES.lock().unwrap();
-        if let Some(name) = table.get(self) {
-            return *name;
+#[derive(Debug, Clone)]
+pub struct ClassType {
+    pub arity: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Class {
+    pub name: Name,
+    pub args: Vec<Type>,
+}
+
+impl Class {
+    pub fn contains_local(&self, name: Name) -> bool {
+        self.args.iter().any(|t| t.contains_local(name))
+    }
+
+    pub fn subst(&mut self, subst: &[(Name, Type)]) {
+        for t in &mut self.args {
+            t.subst(subst);
         }
-        let name = Name::fresh();
-        table.insert(self.clone(), name);
-        name
+    }
+
+    pub fn inst_hole(&mut self, subst: &[(Name, Type)]) {
+        for t in &mut self.args {
+            t.inst_hole(subst);
+        }
+    }
+
+    pub fn is_ground(&self) -> bool {
+        self.args.iter().all(|t| t.is_ground())
+    }
+
+    pub fn matches(&self, pattern: &Class) -> Option<Vec<(Name, Type)>> {
+        if self.name != pattern.name || self.args.len() != pattern.args.len() {
+            return None;
+        }
+        let mut subst = vec![];
+        for (t, p) in zip(&self.args, &pattern.args) {
+            if !t.matches_help(p, &mut subst) {
+                return None;
+            }
+        }
+        Some(subst)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Instance {
+    Local(Class),
+    Global(Arc<InstanceGlobal>),
+    Hole(Name),
+}
+
+#[derive(Debug, Clone)]
+pub struct InstanceGlobal {
+    pub rule_id: usize,
+    pub ty_args: Vec<Type>,
+    pub args: Vec<Instance>,
+}
+
+pub fn mk_instance_local(class: Class) -> Instance {
+    Instance::Local(class)
+}
+
+pub fn mk_instance_global(rule_id: usize, ty_args: Vec<Type>, args: Vec<Instance>) -> Instance {
+    Instance::Global(Arc::new(InstanceGlobal {
+        rule_id,
+        ty_args,
+        args,
+    }))
+}
+
+impl Instance {
+    fn contains_local_type(&self, name: Name) -> bool {
+        match self {
+            Instance::Local(c) => c.contains_local(name),
+            Instance::Global(i) => {
+                i.ty_args.iter().any(|t| t.contains_local(name))
+                    || i.args.iter().any(|i| i.contains_local_type(name))
+            }
+            Instance::Hole(_) => false,
+        }
+    }
+
+    fn subst_type(&mut self, subst: &[(Name, Type)]) {
+        match self {
+            Instance::Local(c) => c.subst(subst),
+            Instance::Global(i) => {
+                for t in &mut Arc::make_mut(i).ty_args {
+                    t.subst(subst);
+                }
+                for i in &mut Arc::make_mut(i).args {
+                    i.subst_type(subst);
+                }
+            }
+            Instance::Hole(_) => {}
+        }
+    }
+
+    pub fn inst_type_hole(&mut self, subst: &[(Name, Type)]) {
+        match self {
+            Instance::Local(c) => c.inst_hole(subst),
+            Instance::Global(i) => {
+                for t in &mut Arc::make_mut(i).ty_args {
+                    t.inst_hole(subst);
+                }
+                for i in &mut Arc::make_mut(i).args {
+                    i.inst_type_hole(subst);
+                }
+            }
+            Instance::Hole(_) => {}
+        }
+    }
+
+    pub fn is_type_ground(&self) -> bool {
+        match self {
+            Instance::Local(c) => c.is_ground(),
+            Instance::Global(i) => {
+                i.ty_args.iter().all(|t| t.is_ground()) && i.args.iter().all(|i| i.is_type_ground())
+            }
+            Instance::Hole(_) => true,
+        }
+    }
+
+    fn subst(&mut self, subst: &[(Class, Instance)]) {
+        match self {
+            Instance::Local(c) => {
+                for (u, i) in subst {
+                    if c == u {
+                        *self = i.clone();
+                        break;
+                    }
+                }
+            }
+            Instance::Global(i) => {
+                for i in &mut Arc::make_mut(i).args {
+                    i.subst(subst);
+                }
+            }
+            Instance::Hole(_) => {}
+        }
     }
 }
 
@@ -433,21 +545,37 @@ pub struct TermAbs {
     pub body: Term,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct TermApp {
     pub fun: Term,
     pub arg: Term,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct TermConst {
     pub name: Name,
     pub ty_args: Vec<Type>,
+    pub instances: Vec<Instance>,
 }
 
 impl From<TermConst> for Term {
     fn from(value: TermConst) -> Self {
         Term::Const(Arc::new(value))
+    }
+}
+
+impl TermConst {
+    fn alpha_eq(&self, other: &TermConst) -> bool {
+        if self.name != other.name || self.ty_args.len() != other.ty_args.len() {
+            return false;
+        }
+        for (t, u) in zip(&self.ty_args, &other.ty_args) {
+            if t != u {
+                return false;
+            }
+        }
+        // don't need to compare instances because of the coherency.
+        true
     }
 }
 
@@ -507,8 +635,12 @@ pub fn mk_app(fun: Term, arg: Term) -> Term {
     Term::App(Arc::new(TermApp { fun, arg }))
 }
 
-pub fn mk_const(name: Name, ty_args: Vec<Type>) -> Term {
-    Term::Const(Arc::new(TermConst { name, ty_args }))
+pub fn mk_const(name: Name, ty_args: Vec<Type>, instances: Vec<Instance>) -> Term {
+    Term::Const(Arc::new(TermConst {
+        name,
+        ty_args,
+        instances,
+    }))
 }
 
 pub fn mk_local(name: Name) -> Term {
@@ -767,13 +899,16 @@ impl Term {
         true
     }
 
-    pub fn contains_local_type(&self, name: &Name) -> bool {
+    pub fn contains_local_type(&self, name: Name) -> bool {
         match self {
             Term::Var(_) => false,
             Term::Abs(m) => m.binder_type.contains_local(name) || m.body.contains_local_type(name),
             Term::App(m) => m.fun.contains_local_type(name) || m.arg.contains_local_type(name),
             Term::Local(_) => false,
-            Term::Const(m) => m.ty_args.iter().any(|t| t.contains_local(name)),
+            Term::Const(m) => {
+                m.ty_args.iter().any(|t| t.contains_local(name))
+                    || m.instances.iter().any(|i| i.contains_local_type(name))
+            }
             Term::Hole(_) => false,
         }
     }
@@ -904,7 +1039,7 @@ impl Term {
         let mut m = mem::take(self);
         for x in xs.iter().rev() {
             m = mk_abs(x.name, x.ty.clone(), m);
-            let mut c = mk_const(*FORALL, vec![x.ty.clone()]);
+            let mut c = mk_const(*FORALL, vec![x.ty.clone()], vec![]);
             c.apply([m]);
             m = c;
         }
@@ -963,7 +1098,7 @@ impl Term {
         if let Some(guard) = guards.next() {
             self.guard_help(guards);
             let target = mem::take(self);
-            let mut m = mk_const(*IMP, vec![]);
+            let mut m = mk_const(*IMP, vec![], vec![]);
             m.apply([guard, target]);
             *self = m;
         }
@@ -1000,28 +1135,6 @@ impl Term {
         Some(left)
     }
 
-    pub fn inst_hole(&mut self, subst: &[(Name, Term)]) {
-        match self {
-            Term::Var(_) => {}
-            Term::Local(_) => {}
-            Term::Const(_) => {}
-            Term::Hole(x) => {
-                if let Some((_, m)) = subst.iter().find(|(y, _)| y == x) {
-                    *self = m.clone();
-                }
-            }
-            Term::Abs(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.body.inst_hole(subst);
-            }
-            Term::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.fun.inst_hole(subst);
-                inner.arg.inst_hole(subst);
-            }
-        }
-    }
-
     pub fn subst_type(&mut self, subst: &[(Name, Type)]) {
         match self {
             Term::Var(_) => {}
@@ -1039,6 +1152,9 @@ impl Term {
             Term::Const(inner) => {
                 for s in &mut Arc::make_mut(inner).ty_args {
                     s.subst(subst);
+                }
+                for i in &mut Arc::make_mut(inner).instances {
+                    i.subst_type(subst);
                 }
             }
             Term::Hole(_) => {}
@@ -1088,8 +1204,33 @@ impl Term {
                 for s in &mut Arc::make_mut(inner).ty_args {
                     s.inst_hole(subst);
                 }
+                for i in &mut Arc::make_mut(inner).instances {
+                    i.inst_type_hole(subst);
+                }
             }
             Term::Hole(_) => {}
+        }
+    }
+
+    pub fn inst_hole(&mut self, subst: &[(Name, Term)]) {
+        match self {
+            Term::Var(_) => {}
+            Term::Local(_) => {}
+            Term::Const(_) => {}
+            Term::Hole(x) => {
+                if let Some((_, m)) = subst.iter().find(|(y, _)| y == x) {
+                    *self = m.clone();
+                }
+            }
+            Term::Abs(inner) => {
+                let inner = Arc::make_mut(inner);
+                inner.body.inst_hole(subst);
+            }
+            Term::App(inner) => {
+                let inner = Arc::make_mut(inner);
+                inner.fun.inst_hole(subst);
+                inner.arg.inst_hole(subst);
+            }
         }
     }
 
@@ -1111,7 +1252,10 @@ impl Term {
             Term::Abs(inner) => inner.binder_type.is_ground() && inner.body.is_type_ground(),
             Term::App(inner) => inner.fun.is_type_ground() && inner.arg.is_type_ground(),
             Term::Local(_) => true,
-            Term::Const(inner) => inner.ty_args.iter().all(Type::is_ground),
+            Term::Const(inner) => {
+                inner.ty_args.iter().all(Type::is_ground)
+                    && inner.instances.iter().all(Instance::is_type_ground)
+            }
             Term::Hole(_) => true,
         }
     }
@@ -1126,9 +1270,7 @@ impl Term {
                 inner1.fun.alpha_eq(&inner2.fun) && inner1.arg.alpha_eq(&inner2.arg)
             }
             (Term::Local(name1), Term::Local(name2)) => name1 == name2,
-            (Term::Const(inner1), Term::Const(inner2)) => {
-                inner1.name == inner2.name && inner1.ty_args == inner2.ty_args
-            }
+            (Term::Const(inner1), Term::Const(inner2)) => inner1.alpha_eq(&inner2),
             (Term::Hole(name1), Term::Hole(name2)) => name1 == name2,
             _ => false,
         }
@@ -1188,14 +1330,35 @@ impl Term {
         }
     }
 
-    pub fn contains_local(&self, name: &Name) -> bool {
+    pub fn contains_local(&self, name: Name) -> bool {
         match self {
             Term::Var(_) => false,
             Term::Abs(m) => m.body.contains_local(name),
             Term::App(m) => m.fun.contains_local(name) || m.arg.contains_local(name),
-            Term::Local(m) => m == name,
+            &Term::Local(m) => m == name,
             Term::Const(_) => false,
             Term::Hole(_) => false,
+        }
+    }
+
+    pub fn subst_instance(&mut self, subst: &[(Class, Instance)]) {
+        match self {
+            Term::Var(_) => {}
+            Term::Abs(inner) => {
+                Arc::make_mut(inner).body.subst_instance(subst);
+            }
+            Term::App(inner) => {
+                let inner = Arc::make_mut(inner);
+                inner.fun.subst_instance(subst);
+                inner.arg.subst_instance(subst);
+            }
+            Term::Local(_) => {}
+            Term::Const(inner) => {
+                for i in &mut Arc::make_mut(inner).instances {
+                    i.subst(subst);
+                }
+            }
+            Term::Hole(_) => {}
         }
     }
 }
@@ -1261,8 +1424,8 @@ pub enum Path {
     Beta(Term),
     /// ```text
     ///
-    /// ------------------------------------------------------------ (c.{u₁ ⋯ uₙ} : τ :≡ m)
-    /// Γ ⊢ delta_reduce c.{t₁ ⋯ tₙ} : c.{t₁ ⋯ tₙ} ≡ [t₁/u₁ ⋯ tₙ/uₙ]m
+    /// --------------------------------------------------------------------------------------- (c.{u₁ ⋯ uₙ} :≡ m)
+    /// Γ ⊢ delta_reduce c.{t₁ ⋯ tₙ}[i₁ ⋯ iₘ] : c.{t₁ ⋯ tₙ}[i₁ ⋯ iₘ] ≡ [i₁ ⋯ iₘ][t₁/u₁ ⋯ tₙ/uₙ]m
     /// ```
     Delta(Term),
     /// ```text
@@ -1271,6 +1434,7 @@ pub enum Path {
     /// Γ ⊢ iota_reduce (rec (mk m₁ ⋯ mₙ)) : rec (mk m₁ ⋯ mₙ) ≡ [m₁/x₁ ⋯ mₙ/xₙ]n
     /// ```
     Iota(Term),
+    Kappa(Term),
 }
 
 impl Display for Path {
@@ -1289,6 +1453,9 @@ impl Display for Path {
             }
             Path::Iota(m) => {
                 write!(f, "(iota {m})")
+            }
+            Path::Kappa(m) => {
+                write!(f, "(kappa {m})")
             }
         }
     }
@@ -1326,6 +1493,10 @@ pub fn mk_path_iota(m: Term) -> Path {
     Path::Iota(m)
 }
 
+pub fn mk_path_kappa(m: Term) -> Path {
+    Path::Kappa(m)
+}
+
 impl Path {
     pub fn is_refl(&self) -> bool {
         matches!(self, Path::Refl(_))
@@ -1335,14 +1506,13 @@ impl Path {
 #[derive(Debug, Default, Clone)]
 pub struct LocalEnv {
     pub local_types: Vec<Name>,
-    pub local_classes: Vec<Type>,
+    pub local_classes: Vec<Class>,
     pub locals: Vec<Parameter>,
-    pub holes: Vec<(Name, Type)>,
 }
 
 impl LocalEnv {
     pub fn get_local(&self, name: Name) -> Option<&Type> {
-        self.locals.iter().find_map(|local| {
+        self.locals.iter().rev().find_map(|local| {
             if local.name == name {
                 Some(&local.ty)
             } else {
@@ -1350,36 +1520,19 @@ impl LocalEnv {
             }
         })
     }
+}
 
-    pub fn get_local_class(&self, name: Name) -> Option<&Type> {
-        self.local_classes
-            .iter()
-            .find(|local_class| name == local_class.local_instance_name())
-    }
-
-    pub fn get_local_instance(&self, ty: &Type) -> Option<Name> {
-        self.local_classes.iter().find_map(|local_class| {
-            if local_class == ty {
-                Some(local_class.local_instance_name())
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn add_new_hole(&mut self, nickname: Option<&str>, ty: Type) -> Name {
-        let name = match nickname {
-            Some(nickname) => Name::fresh_with_name(nickname),
-            None => Name::fresh(),
-        };
-        self.holes.push((name, ty));
-        name
-    }
+#[derive(Debug, Clone)]
+pub struct Const {
+    pub local_types: Vec<Name>,
+    pub local_classes: Vec<Class>,
+    pub ty: Type,
 }
 
 #[derive(Debug, Clone)]
 pub struct Delta {
     pub local_types: Vec<Name>,
+    pub local_classes: Vec<Class>,
     pub target: Term,
     pub hint: usize,
 }
@@ -1391,18 +1544,28 @@ pub struct Iota {
     pub target: Term,
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct Env {
-    pub type_consts: HashMap<Name, Kind>,
-    pub consts: HashMap<Name, (Vec<Name>, Type)>,
-    pub delta_table: HashMap<Name, Delta>,
-    pub iota_table: HashMap<Name, HashMap<Name, Iota>>,
+#[derive(Debug, Clone)]
+pub struct ClassRule {
+    pub local_types: Vec<Name>,
+    pub local_classes: Vec<Class>,
+    pub target: Class,
+    pub method_table: HashMap<Name, Term>,
 }
 
-impl Env {
+#[derive(Debug, Clone)]
+pub struct Env<'a> {
+    pub type_const_table: &'a HashMap<Name, Kind>,
+    pub const_table: &'a HashMap<Name, Const>,
+    pub delta_table: &'a HashMap<Name, Delta>,
+    pub iota_table: &'a HashMap<Name, HashMap<Name, Iota>>,
+    pub class_predicate_table: &'a HashMap<Name, ClassType>,
+    pub class_database: &'a [ClassRule],
+}
+
+impl<'a> Env<'a> {
     pub fn infer_kind(&self, local_env: &LocalEnv, t: &Type) -> Option<Kind> {
         match t {
-            Type::Const(name) => Some(self.type_consts.get(name)?.clone()),
+            Type::Const(name) => Some(self.type_const_table.get(name)?.clone()),
             Type::Arrow(inner) => {
                 if !self.check_kind(local_env, &inner.dom, Kind::base()) {
                     return None;
@@ -1445,6 +1608,81 @@ impl Env {
         self.check_kind(local_env, t, Kind::base())
     }
 
+    pub fn is_wfc(&self, local_env: &LocalEnv, c: &Class) -> bool {
+        let Some(class_type) = self.class_predicate_table.get(&c.name) else {
+            return false;
+        };
+        if class_type.arity != c.args.len() {
+            return false;
+        }
+        for arg in &c.args {
+            if !self.is_wft(local_env, arg) {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn infer_class(&self, local_env: &LocalEnv, i: &Instance) -> Option<Class> {
+        match i {
+            Instance::Local(i) => {
+                for local_class in &local_env.local_classes {
+                    if local_class == i {
+                        return Some(i.clone());
+                    }
+                }
+                None
+            }
+            Instance::Global(i) => {
+                let &InstanceGlobal {
+                    rule_id,
+                    ref ty_args,
+                    ref args,
+                } = &**i;
+                let ClassRule {
+                    local_types,
+                    local_classes,
+                    target,
+                    method_table: _,
+                } = self.class_database.get(rule_id)?;
+                if local_types.len() != ty_args.len() {
+                    return None;
+                }
+                for ty_arg in ty_args {
+                    if !self.is_wft(local_env, ty_arg) {
+                        return None;
+                    }
+                }
+                let mut type_subst = vec![];
+                for (&x, t) in zip(local_types, ty_args) {
+                    type_subst.push((x, t.clone()));
+                }
+                if local_classes.len() != args.len() {
+                    return None;
+                }
+                for (local_class, arg) in zip(local_classes, args) {
+                    let mut local_class = local_class.clone();
+                    local_class.subst(&type_subst);
+                    if !self.check_class(local_env, arg, &local_class) {
+                        return None;
+                    }
+                }
+                let mut target = target.clone();
+                target.subst(&type_subst);
+                Some(target)
+            }
+            Instance::Hole(_) => None,
+        }
+    }
+
+    // t is trusted
+    pub fn check_class(&self, local_env: &LocalEnv, i: &Instance, class: &Class) -> bool {
+        let Some(c) = self.infer_class(local_env, i) else {
+            return false;
+        };
+        c == *class
+    }
+
     pub fn infer_type(&self, local_env: &mut LocalEnv, m: &Term) -> Option<Type> {
         match m {
             Term::Var(_) => None,
@@ -1481,16 +1719,15 @@ impl Env {
                         return Some(y.ty.clone());
                     }
                 }
-                // TODO: check this in the clause of Term::Const and never do this here.
-                if let Some(ty) = local_env.get_local_class(x) {
-                    return Some(ty.clone());
-                }
                 None
             }
             Term::Const(m) => {
-                let (tv, ty) = self.consts.get(&m.name)?;
-                let mut subst = vec![];
-                if tv.len() != m.ty_args.len() {
+                let Const {
+                    local_types,
+                    local_classes,
+                    ty,
+                } = self.const_table.get(&m.name)?;
+                if local_types.len() != m.ty_args.len() {
                     return None;
                 }
                 for ty_arg in &m.ty_args {
@@ -1498,11 +1735,25 @@ impl Env {
                         return None;
                     }
                 }
-                for (&x, t) in tv.iter().zip(&m.ty_args) {
-                    subst.push((x, t.clone()));
+                let mut type_subst = vec![];
+                for (&x, t) in zip(local_types, &m.ty_args) {
+                    type_subst.push((x, t.clone()));
+                }
+                if local_classes.len() != m.instances.len() {
+                    return None;
+                }
+                for (local_class, instance) in zip(local_classes, &m.instances) {
+                    let mut local_class = local_class.clone();
+                    local_class.subst(&type_subst);
+                    if !self.is_wfc(local_env, &local_class) {
+                        return None;
+                    }
+                    if !self.check_class(local_env, instance, &local_class) {
+                        return None;
+                    }
                 }
                 let mut ty = ty.clone();
-                ty.subst(&subst);
+                ty.subst(&type_subst);
                 Some(ty)
             }
             Term::Hole(_) => None,
@@ -1591,15 +1842,23 @@ impl Env {
                 };
                 let Delta {
                     local_types,
+                    local_classes,
                     target,
                     hint: _,
                 } = self.delta_table.get(&m.name)?;
-                let mut subst = vec![];
+                let mut type_subst = vec![];
                 for (&x, t) in zip(local_types, &m.ty_args) {
-                    subst.push((x, t.clone()));
+                    type_subst.push((x, t.clone()));
+                }
+                let mut instance_subst = vec![];
+                for (local_class, instance) in zip(local_classes, &m.instances) {
+                    let mut local_class = local_class.clone();
+                    local_class.subst(&type_subst);
+                    instance_subst.push((local_class, instance.clone()));
                 }
                 let mut target = target.clone();
-                target.subst_type(&subst);
+                target.subst_type(&type_subst);
+                target.subst_instance(&instance_subst);
                 Some(Conv {
                     left,
                     right: target,
@@ -1624,7 +1883,7 @@ impl Env {
                     local_types,
                     params,
                     target,
-                } = self.get_iota(head.name)?.get(&ctor.name)?;
+                } = self.iota_table.get(&head.name)?.get(&ctor.name)?;
                 if local_types.len() != ctor.ty_args.len() {
                     return None;
                 }
@@ -1647,15 +1906,51 @@ impl Env {
                     right: target,
                 })
             }
+            Path::Kappa(m) => {
+                let _ty = self.infer_type(local_env, m)?;
+                let left = m.clone();
+                let Term::Const(n) = m else {
+                    return None;
+                };
+                if n.instances.is_empty() {
+                    return None;
+                }
+                let Instance::Global(recv) = &n.instances[0] else {
+                    return None;
+                };
+                let &InstanceGlobal {
+                    rule_id,
+                    ref ty_args,
+                    ref args,
+                } = &**recv;
+                // assert_eq!(ty_args, &n.ty_args);
+                // assert_eq!(&args[..], &n.instances[1..]);
+                let ClassRule {
+                    local_types,
+                    local_classes,
+                    target: _,
+                    method_table,
+                } = &self.class_database[rule_id];
+                let target = method_table.get(&n.name)?;
+                let mut type_subst = vec![];
+                for (&x, t) in zip(local_types, ty_args) {
+                    type_subst.push((x, t.clone()));
+                }
+                let mut instance_subst = vec![];
+                for (local_class, instance) in zip(local_classes, args) {
+                    let mut local_class = local_class.clone();
+                    local_class.subst(&type_subst);
+                    instance_subst.push((local_class, instance.clone()));
+                }
+                let mut target = target.clone();
+                target.subst_type(&type_subst);
+                target.subst_instance(&instance_subst);
+                Some(Conv {
+                    left,
+                    right: target,
+                })
+            }
         }
-    }
-
-    pub fn add_iota(&mut self, rec: Name, ctor: Name, iota: Iota) {
-        self.iota_table.entry(rec).or_default().insert(ctor, iota);
-    }
-
-    pub fn get_iota(&self, rec: Name) -> Option<&HashMap<Name, Iota>> {
-        self.iota_table.get(&rec)
     }
 
     // iota_reduce[rec (mk m₁ ⋯ mₙ)] := [m₁/x₁, ⋯ mₙ/xₙ]n
@@ -1677,7 +1972,7 @@ impl Env {
             local_types,
             params,
             target,
-        } = self.get_iota(fun.name)?.get(&arg_head.name)?;
+        } = self.iota_table.get(&fun.name)?.get(&arg_head.name)?;
         if params.len() != arg.args().len() {
             // this case is impossible unless the term is type incorrect.
             return None;
@@ -1713,7 +2008,9 @@ impl Env {
                     let p_arg = mk_path_refl(inner.arg.clone());
                     p = mk_path_congr_app(p_fun, p_arg);
                 } else if let Term::Const(fun) = &mut inner.fun {
-                    self.get_iota(fun.name)?;
+                    if !self.iota_table.contains_key(&fun.name) {
+                        return None;
+                    }
                     match self.weak_reduce(&mut inner.arg) {
                         Some(p_arg) => {
                             let p_fun = mk_path_refl(Term::Const(fun.clone()));
@@ -1746,31 +2043,78 @@ impl Env {
     // assert_eq!(m, n)
     fn delta_reduce(&self, m: &mut Term) -> Option<Path> {
         let orig_m = m.clone();
-        let Term::Const(inner) = m else {
+        let Term::Const(n) = m else {
             return None;
         };
-        let TermConst { name, ty_args } = Arc::make_mut(inner);
         let Delta {
             local_types,
-            mut target,
+            local_classes,
+            target,
             hint: _,
-        } = self.delta_table.get(name).cloned()?;
-        if local_types.len() != ty_args.len() {
-            return None;
+        } = self.delta_table.get(&n.name)?;
+        let mut type_subst = vec![];
+        for (&x, t) in zip(local_types, &n.ty_args) {
+            type_subst.push((x, t.clone()));
         }
-        let mut subst = vec![];
-        for (&x, t) in zip(&local_types, &*ty_args) {
-            subst.push((x, t.clone()));
+        let mut instance_subst = vec![];
+        for (local_class, instance) in zip(local_classes, &n.instances) {
+            let mut local_class = local_class.clone();
+            local_class.subst(&type_subst);
+            instance_subst.push((local_class, instance.clone()));
         }
-        target.subst_type(&subst);
+        let mut target = target.clone();
+        target.subst_type(&type_subst);
+        target.subst_instance(&instance_subst);
         *m = target;
         Some(mk_path_delta(orig_m))
+    }
+
+    fn kappa_reduce(&self, m: &mut Term) -> Option<Path> {
+        let orig_m = m.clone();
+        let Term::Const(n) = m else {
+            return None;
+        };
+        if n.instances.is_empty() {
+            return None;
+        }
+        let Instance::Global(recv) = &n.instances[0] else {
+            return None;
+        };
+        let &InstanceGlobal {
+            rule_id,
+            ref ty_args,
+            ref args,
+        } = &**recv;
+        // assert_eq!(ty_args, &n.ty_args);
+        // assert_eq!(&args[..], &n.instances[1..]);
+        let ClassRule {
+            local_types,
+            local_classes,
+            target: _,
+            method_table,
+        } = &self.class_database[rule_id];
+        let target = method_table.get(&n.name)?;
+        let mut type_subst = vec![];
+        for (&x, t) in zip(local_types, ty_args) {
+            type_subst.push((x, t.clone()));
+        }
+        let mut instance_subst = vec![];
+        for (local_class, instance) in zip(local_classes, args) {
+            let mut local_class = local_class.clone();
+            local_class.subst(&type_subst);
+            instance_subst.push((local_class, instance.clone()));
+        }
+        let mut target = target.clone();
+        target.subst_type(&type_subst);
+        target.subst_instance(&instance_subst);
+        *m = target;
+        Some(mk_path_kappa(orig_m))
     }
 
     pub fn unfold_head(&self, m: &mut Term) -> Option<Path> {
         match m {
             Term::Var(_) | Term::Local(_) | Term::Abs(_) | Term::Hole(_) => None,
-            Term::Const(_) => self.delta_reduce(m),
+            Term::Const(_) => self.delta_reduce(m).or_else(|| self.kappa_reduce(m)),
             Term::App(inner) => {
                 let TermApp { fun, arg } = Arc::make_mut(inner);
                 let h_fun = self.unfold_head(fun)?;
@@ -1780,14 +2124,10 @@ impl Env {
         }
     }
 
-    fn is_recursor(&self, name: Name) -> bool {
-        self.get_iota(name).is_some()
-    }
-
     fn unfold_stuck(&self, m: &mut Term) -> Option<Path> {
         match m {
             Term::Var(_) | Term::Local(_) | Term::Abs(_) | Term::Hole(_) => None,
-            Term::Const(_) => self.delta_reduce(m),
+            Term::Const(_) => self.unfold_head(m),
             Term::App(m) => {
                 let TermApp { fun, arg } = Arc::make_mut(m);
                 if let Some(h_fun) = self.unfold_stuck(fun) {
@@ -1797,7 +2137,7 @@ impl Env {
                 let Term::Const(fun) = fun else {
                     return None;
                 };
-                if !self.is_recursor(fun.name) {
+                if !self.iota_table.contains_key(&fun.name) {
                     return None;
                 }
                 let h_arg = self.unfold_stuck(arg)?;
@@ -1896,7 +2236,7 @@ impl Env {
             panic!("holes found");
         };
         // optimization
-        if head1 == head2 {
+        if head1.alpha_eq(head2) {
             let args1 = m1.args();
             let args2 = m2.args();
             if args1.len() == args2.len() {
@@ -1965,67 +2305,3 @@ impl Env {
         self.equiv_help(&mut m1, &mut m2)
     }
 }
-
-#[derive(Clone, Debug, Default)]
-struct EqSet {
-    equations: Vec<(Type, Type)>,
-    parents: HashMap<Name, Type>,
-}
-
-impl EqSet {
-    fn unify(&mut self, t1: Type, t2: Type) {
-        self.equations.push((t1, t2));
-    }
-
-    fn find(&mut self, ty: Type) -> Type {
-        let Type::Hole(name) = ty else {
-            return ty;
-        };
-        let Some(ty) = self.parents.get(&name).cloned() else {
-            return ty;
-        };
-        // During calling `find` parents[name] will NOT be updated
-        // because a unification solution is not cyclic.
-        let ty = self.find(ty);
-        self.parents.insert(name, ty.clone());
-        ty
-    }
-
-    fn solve(mut self) -> anyhow::Result<TypeUnifier> {
-        while let Some((t1, t2)) = self.equations.pop() {
-            let t1 = self.find(t1);
-            let t2 = self.find(t2);
-            if t1 == t2 {
-                continue;
-            }
-            match (t1, t2) {
-                (Type::Arrow(inner1), Type::Arrow(inner2)) => {
-                    let inner1 = Arc::try_unwrap(inner1).unwrap_or_else(|arc| (*arc).clone());
-                    let inner2 = Arc::try_unwrap(inner2).unwrap_or_else(|arc| (*arc).clone());
-                    self.unify(inner1.dom, inner2.dom);
-                    self.unify(inner1.cod, inner2.cod);
-                }
-                (Type::App(inner1), Type::App(inner2)) => {
-                    // Since we have no higher-kinded polymorphism, holes will only be typed as `Type`,
-                    // it is illegal to match the following two types:
-                    //  ?M₁ t =?= ?M₂ t₁ t₂
-                    // But such a case is checked and ruled out in the kind checking phase that runs before
-                    // this unificaiton phase.
-                    let inner1 = Arc::try_unwrap(inner1).unwrap_or_else(|arc| (*arc).clone());
-                    let inner2 = Arc::try_unwrap(inner2).unwrap_or_else(|arc| (*arc).clone());
-                    self.unify(inner1.fun, inner2.fun);
-                    self.unify(inner1.arg, inner2.arg);
-                }
-                (Type::Hole(name), t) | (t, Type::Hole(name)) => {
-                    self.parents.insert(name, t);
-                }
-                (t1, t2) => {
-                    bail!("type mismatch: {t1} =/= {t2}");
-                }
-            }
-        }
-        Ok(TypeUnifier(self.parents))
-    }
-}
-
-struct TypeUnifier(HashMap<Name, Type>);

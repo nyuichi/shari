@@ -9,47 +9,42 @@ use std::{
 use anyhow::{bail, ensure, Context};
 
 use crate::{
-    cmd::{Axiom, CmdClass, CmdStructure, Const, StructureField},
-    expr::{
-        mk_expr_change, mk_expr_inst, Expr, ExprApp, ExprAssume, ExprAssump, ExprChange, ExprInst,
-        ExprTake,
-    },
+    cmd::{CmdStructure, StructureField},
+    expr::{mk_expr_change, Expr, ExprApp, ExprAssume, ExprAssump, ExprChange, ExprInst, ExprTake},
+    proof::{self, Axiom},
     tt::{
-        self, mk_const, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_prop, Kind, LocalEnv,
-        Name, Parameter, Term, TermAbs, TermApp, Type, TypeApp, TypeArrow,
+        self, mk_const, mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_prop, Class,
+        ClassRule, ClassType, Const, Instance, InstanceGlobal, Kind, LocalEnv, Name, Parameter,
+        Term, TermAbs, TermApp, Type, TypeApp, TypeArrow,
     },
 };
 
 #[derive(Debug)]
 pub struct Elaborator<'a> {
-    const_table: &'a HashMap<Name, Const>,
-    axiom_table: &'a HashMap<Name, Axiom>,
+    proof_env: proof::Env<'a>,
     structure_table: &'a HashMap<Name, CmdStructure>,
-    database: &'a Vec<CmdClass>,
-    tt_env: &'a tt::Env,
     tt_local_env: &'a mut tt::LocalEnv,
+    term_holes: Vec<(Name, Type)>,
+    instance_holes: Vec<(Name, Class)>,
     local_axioms: Vec<Term>,
     type_constraints: Vec<(Type, Type)>,
     term_constraints: Vec<(LocalEnv, Term, Term)>,
-    class_constraints: Vec<Term>,
+    class_constraints: Vec<(LocalEnv, Name, Class)>,
 }
 
 impl<'a> Elaborator<'a> {
     pub fn new(
-        const_table: &'a HashMap<Name, Const>,
-        axiom_table: &'a HashMap<Name, Axiom>,
+        proof_env: proof::Env<'a>,
         structure_table: &'a HashMap<Name, CmdStructure>,
-        database: &'a Vec<CmdClass>,
-        tt_env: &'a tt::Env,
         tt_local_env: &'a mut tt::LocalEnv,
+        term_holes: Vec<(Name, Type)>,
     ) -> Self {
         Elaborator {
-            const_table,
-            axiom_table,
+            proof_env,
             structure_table,
-            database,
-            tt_env,
             tt_local_env,
+            term_holes,
+            instance_holes: vec![],
             local_axioms: vec![],
             type_constraints: vec![],
             term_constraints: vec![],
@@ -65,14 +60,14 @@ impl<'a> Elaborator<'a> {
         self.term_constraints.push((local_env, m1, m2));
     }
 
-    fn add_class_constraint(&mut self, m: Term) {
-        self.class_constraints.push(m);
+    fn add_class_constraint(&mut self, local_env: LocalEnv, hole: Name, c: Class) {
+        self.class_constraints.push((local_env, hole, c));
     }
 
     fn visit_type(&self, t: &Type) -> anyhow::Result<Kind> {
         match t {
             Type::Const(t) => {
-                let Some(kind) = self.tt_env.type_consts.get(t) else {
+                let Some(kind) = self.proof_env.tt_env.type_const_table.get(t) else {
                     bail!("constant type not found");
                 };
                 Ok(kind.clone())
@@ -123,7 +118,8 @@ impl<'a> Elaborator<'a> {
                 .iter()
                 .map(|local| local.ty.clone()),
         );
-        let hole = self.tt_local_env.add_new_hole(None, hole_ty);
+        let hole = Name::fresh();
+        self.term_holes.push((hole, hole_ty));
         let mut target = Term::Hole(hole);
         target.apply(
             self.tt_local_env
@@ -131,18 +127,6 @@ impl<'a> Elaborator<'a> {
                 .iter()
                 .map(|local| mk_local(local.name)),
         );
-        target
-    }
-
-    // generate a fresh hole of form `?M l₁ ⋯ lₙ` where l₁ ⋯ lₙ are the local class instances.
-    fn mk_instance_hole(&mut self, ty: Type) -> Term {
-        let mut hole_ty = ty;
-        hole_ty.arrow(self.tt_local_env.local_classes.iter().cloned());
-        let hole = self.tt_local_env.add_new_hole(None, hole_ty);
-        let mut target = Term::Hole(hole);
-        target.apply(self.tt_local_env.local_classes.iter().map(|local_class| {
-            Term::Local(self.tt_local_env.get_local_instance(local_class).unwrap())
-        }));
         target
     }
 
@@ -157,7 +141,7 @@ impl<'a> Elaborator<'a> {
                 bail!("unknown local variable: {m}");
             }
             Term::Hole(m) => {
-                for (local, ty) in &self.tt_local_env.holes {
+                for (local, ty) in &self.term_holes {
                     if local == m {
                         return Ok(ty.clone());
                     }
@@ -207,7 +191,7 @@ impl<'a> Elaborator<'a> {
                     local_types,
                     local_classes,
                     ty,
-                }) = self.const_table.get(&n.name)
+                }) = self.proof_env.tt_env.const_table.get(&n.name)
                 else {
                     bail!("constant not found");
                 };
@@ -220,25 +204,94 @@ impl<'a> Elaborator<'a> {
                         bail!("expected Type, but got {ty_arg_kind}");
                     }
                 }
-                let mut subst = vec![];
+                let mut type_subst = vec![];
                 for (&x, t) in zip(local_types, &n.ty_args) {
-                    subst.push((x, t.clone()));
+                    type_subst.push((x, t.clone()));
+                }
+                if local_classes.len() != n.instances.len() {
+                    bail!("number of class instances mismatch");
+                }
+                for (instance, local_class) in zip(&n.instances, local_classes) {
+                    let mut local_class = local_class.clone();
+                    local_class.subst(&type_subst);
+                    self.visit_instance(instance, &local_class)?;
                 }
                 let mut ty = ty.clone();
-                ty.subst(&subst);
-
-                let mut class_args = vec![];
-                for local_class in local_classes {
-                    let mut ty = local_class.clone();
-                    ty.subst(&subst);
-                    let hole = self.mk_instance_hole(ty);
-                    self.add_class_constraint(hole.clone());
-                    class_args.push(hole);
-                }
-                // C ↦ C d₁ ⋯ dₙ
-                m.apply(class_args);
-
+                ty.subst(&type_subst);
                 Ok(ty)
+            }
+        }
+    }
+
+    // class is trusted
+    fn visit_instance(&mut self, instance: &Instance, class: &Class) -> anyhow::Result<()> {
+        match instance {
+            Instance::Local(instance) => {
+                if !self.tt_local_env.local_classes.contains(instance) {
+                    bail!("local class not found");
+                }
+                if instance != class {
+                    bail!("class mismatch");
+                }
+                Ok(())
+            }
+            Instance::Global(instance) => {
+                let &InstanceGlobal {
+                    rule_id,
+                    ref ty_args,
+                    ref args,
+                } = &**instance;
+                let Some(ClassRule {
+                    local_types,
+                    local_classes,
+                    target,
+                    method_table: _,
+                }) = self.proof_env.tt_env.class_database.get(rule_id)
+                else {
+                    bail!("class rule not found");
+                };
+                if ty_args.len() != local_types.len() {
+                    bail!("number of type variables mismatch");
+                }
+                for ty_arg in ty_args {
+                    let ty_arg_kind = self.visit_type(ty_arg)?;
+                    if !ty_arg_kind.is_base() {
+                        bail!("expected Type, but got {ty_arg_kind}");
+                    }
+                }
+                let mut type_subst = vec![];
+                for (&x, t) in zip(local_types, ty_args) {
+                    type_subst.push((x, t.clone()));
+                }
+                if args.len() != local_classes.len() {
+                    bail!("number of class instances mismatch");
+                }
+                for (instance, local_class) in zip(args, local_classes) {
+                    let mut local_class = local_class.clone();
+                    local_class.subst(&type_subst);
+                    self.visit_instance(instance, &local_class)?;
+                }
+                let mut target = target.clone();
+                target.subst(&type_subst);
+                if target != *class {
+                    bail!("class mismatch");
+                }
+                Ok(())
+            }
+            &Instance::Hole(instance) => {
+                if let Some((_, c)) = self
+                    .instance_holes
+                    .iter()
+                    .find(|&&(hole, _)| hole == instance)
+                {
+                    if c != class {
+                        bail!("class mismatch");
+                    }
+                    return Ok(());
+                }
+                self.instance_holes.push((instance, class.clone()));
+                self.add_class_constraint(self.tt_local_env.clone(), instance, class.clone());
+                Ok(())
             }
         }
     }
@@ -253,7 +306,7 @@ impl<'a> Elaborator<'a> {
 
                 let mut found = false;
                 for local in &self.local_axioms {
-                    // use literal equality by intention
+                    // don't need strict check here
                     if local.maybe_alpha_eq(target) {
                         found = true;
                         break;
@@ -326,7 +379,11 @@ impl<'a> Elaborator<'a> {
 
                 let pred = self.mk_term_hole(mk_type_arrow(arg_ty.clone(), mk_type_prop()));
 
-                let mut target = mk_const(Name::intern("forall").unwrap(), vec![arg_ty.clone()]);
+                let mut target = mk_const(
+                    Name::intern("forall").unwrap(),
+                    vec![arg_ty.clone()],
+                    vec![],
+                );
                 target.apply([pred.clone()]);
                 self.add_term_constraint(self.tt_local_env.clone(), forall, target.clone());
 
@@ -341,7 +398,7 @@ impl<'a> Elaborator<'a> {
                     local_types,
                     local_classes,
                     target,
-                }) = self.axiom_table.get(&e.name)
+                }) = self.proof_env.axiom_table.get(&e.name)
                 else {
                     bail!("proposition not found: {}", e.name);
                 };
@@ -354,31 +411,20 @@ impl<'a> Elaborator<'a> {
                         bail!("expected Type, but got {ty_arg_kind}");
                     }
                 }
-                let mut subst = vec![];
+                let mut type_subst = vec![];
                 for (&x, t) in zip(local_types, &e.ty_args) {
-                    subst.push((x, t.clone()));
+                    type_subst.push((x, t.clone()));
+                }
+                if local_classes.len() != e.instances.len() {
+                    bail!("number of class instances mismatch");
+                }
+                for (instance, local_class) in zip(&e.instances, local_classes) {
+                    let mut local_class = local_class.clone();
+                    local_class.subst(&type_subst);
+                    self.visit_instance(instance, &local_class)?;
                 }
                 let mut target = target.clone();
-                target.subst_type(&subst);
-
-                let mut class_args = vec![];
-                for local_class in local_classes {
-                    let mut ty = local_class.clone();
-                    ty.subst(&subst);
-                    let hole = self.mk_instance_hole(ty);
-                    self.add_class_constraint(hole.clone());
-                    class_args.push(hole);
-                }
-                for class_arg in &class_args {
-                    *expr = mk_expr_inst(mem::take(expr), class_arg.clone());
-                }
-                target.subst(
-                    &zip(local_classes, class_args)
-                        .map(|(local_class, class_arg)| {
-                            (local_class.local_instance_name(), class_arg)
-                        })
-                        .collect::<Vec<_>>(),
-                );
+                target.subst_type(&type_subst);
                 Ok(target)
             }
             Expr::Change(expr) => {
@@ -398,7 +444,7 @@ impl<'a> Elaborator<'a> {
         }
     }
 
-    pub fn elaborate_type(self, target: &Type, kind: Kind) -> anyhow::Result<()> {
+    pub fn elaborate_type(&self, target: &Type, kind: Kind) -> anyhow::Result<()> {
         let k = self.visit_type(target)?;
         ensure!(k == kind);
 
@@ -413,13 +459,12 @@ impl<'a> Elaborator<'a> {
         self.add_type_constraint(t, ty.clone());
 
         let (subst, type_subst) = Unifier::new(
-            self.tt_env,
+            self.proof_env.tt_env,
             self.structure_table,
-            self.tt_local_env.holes.clone(),
+            self.term_holes,
             self.term_constraints,
             self.type_constraints,
             self.class_constraints,
-            self.database,
         )
         .solve()
         .context("unification failed")?;
@@ -444,13 +489,12 @@ impl<'a> Elaborator<'a> {
         self.visit_expr(e)?;
 
         let (subst, type_subst) = Unifier::new(
-            self.tt_env,
+            self.proof_env.tt_env,
             self.structure_table,
-            self.tt_local_env.holes.clone(),
+            self.term_holes,
             self.term_constraints,
             self.type_constraints,
             self.class_constraints,
-            self.database,
         )
         .solve()
         .context("unification failed")?;
@@ -466,6 +510,21 @@ impl<'a> Elaborator<'a> {
             println!("elaborated:\n{e}");
         }
 
+        Ok(())
+    }
+
+    pub fn elaborate_class(&self, class: &Class) -> anyhow::Result<()> {
+        let Some(&ClassType { arity }) =
+            self.proof_env.tt_env.class_predicate_table.get(&class.name)
+        else {
+            bail!("class not found");
+        };
+        if class.args.len() != arity {
+            bail!("number of arguments mismatch");
+        }
+        for arg in &class.args {
+            self.elaborate_type(arg, Kind::base())?;
+        }
         Ok(())
     }
 }
@@ -488,7 +547,10 @@ struct EqConstraint {
 
 #[derive(Debug, Clone)]
 struct ClassConstraint {
-    target: Term,
+    // TODO: only the local_classes field is used. Use a more efficient data structure.
+    local_env: LocalEnv,
+    hole: Name,
+    class: Class,
 }
 
 #[derive(Debug, Clone)]
@@ -517,10 +579,9 @@ enum TrailElement {
 }
 
 struct Unifier<'a> {
-    tt_env: &'a tt::Env,
+    tt_env: tt::Env<'a>,
     structure_table: &'a HashMap<Name, CmdStructure>,
     term_holes: Vec<(Name, Type)>,
-    database: &'a [CmdClass],
     queue_delta: VecDeque<Rc<EqConstraint>>,
     queue_qp: VecDeque<Rc<EqConstraint>>,
     queue_fr: VecDeque<Rc<EqConstraint>>,
@@ -531,6 +592,8 @@ struct Unifier<'a> {
     subst_map: HashMap<Name, Term>,
     type_subst: Vec<(Name, Type)>,
     type_subst_map: HashMap<Name, Type>,
+    instance_subst: Vec<(Name, Instance)>,
+    instance_subst_map: HashMap<Name, Instance>,
     decisions: Vec<Branch<'a>>,
     // for backjumping.
     // It extends when a new constraint is queued or a decision is made.
@@ -538,40 +601,40 @@ struct Unifier<'a> {
     // only used in find_conflict
     stack: Vec<(LocalEnv, Term, Term)>,
     type_stack: Vec<(Type, Type)>,
+    class_stack: Vec<(LocalEnv, Name, Class)>,
 }
 
 impl<'a> Unifier<'a> {
     fn new(
-        tt_env: &'a tt::Env,
+        tt_env: tt::Env<'a>,
         structure_table: &'a HashMap<Name, CmdStructure>,
         term_holes: Vec<(Name, Type)>,
         constraints: Vec<(LocalEnv, Term, Term)>,
         type_constraints: Vec<(Type, Type)>,
-        class_constraints: Vec<Term>,
-        database: &'a [CmdClass],
+        class_constraints: Vec<(LocalEnv, Name, Class)>,
     ) -> Self {
+        assert!(class_constraints.is_empty());
         Self {
             tt_env,
             structure_table,
             term_holes,
-            database,
             queue_delta: Default::default(),
             queue_qp: Default::default(),
             queue_fr: Default::default(),
             queue_ff: Default::default(),
-            queue_class: class_constraints
-                .into_iter()
-                .map(|target| Rc::new(ClassConstraint { target }))
-                .collect(),
+            queue_class: Default::default(),
             watch_list: Default::default(),
             subst: Default::default(),
             subst_map: Default::default(),
             type_subst: vec![],
             type_subst_map: Default::default(),
+            instance_subst: Default::default(),
+            instance_subst_map: Default::default(),
             decisions: Default::default(),
             trail: Default::default(),
             stack: constraints,
             type_stack: type_constraints,
+            class_stack: class_constraints,
         }
     }
 
@@ -685,7 +748,7 @@ impl<'a> Unifier<'a> {
         let Term::Const(m_head) = m.head() else {
             return false;
         };
-        if self.tt_env.get_iota(m_head.name).is_none() {
+        if !self.tt_env.iota_table.contains_key(&m_head.name) {
             return false;
         };
         let mut args = m.args_mut();
@@ -702,7 +765,7 @@ impl<'a> Unifier<'a> {
         let Term::Const(m_head) = m.head() else {
             return false;
         };
-        if self.tt_env.get_iota(m_head.name).is_none() {
+        if !self.tt_env.iota_table.contains_key(&m_head.name) {
             return false;
         };
         let mut args = m.args_mut();
@@ -933,15 +996,19 @@ impl<'a> Unifier<'a> {
                 t
             }
             Term::Const(target) => {
-                let (args, t) = self.tt_env.consts.get(&target.name).unwrap();
+                let Const {
+                    local_types,
+                    local_classes: _,
+                    ty,
+                } = self.tt_env.const_table.get(&target.name).unwrap();
                 let mut subst = vec![];
-                for (&x, t) in zip(args, &target.ty_args) {
+                for (&x, t) in zip(local_types, &target.ty_args) {
                     subst.push((x, t.clone()));
                 }
-                let mut t = t.clone();
-                t.subst(&subst);
-                self.inst_type(&mut t);
-                t
+                let mut ty = ty.clone();
+                ty.subst(&subst);
+                self.inst_type(&mut ty);
+                ty
             }
             &Term::Local(name) => local_env.get_local(name).unwrap().clone(),
             &Term::Hole(name) => self.get_hole_type(name).unwrap().clone(),
@@ -979,7 +1046,7 @@ impl<'a> Unifier<'a> {
             (Type::Hole(name), t) | (t, Type::Hole(name)) => {
                 let mut t = t.clone();
                 self.inst_type(&mut t); // TODO: avoid instantiation
-                if t.contains_hole(&name) {
+                if t.contains_hole(name) {
                     return Some(());
                 }
                 self.add_type_subst(name, t);
@@ -1239,7 +1306,8 @@ impl<'a> Unifier<'a> {
         {
             self.print_state();
         }
-        while !self.type_stack.is_empty() || !self.stack.is_empty() {
+        while !self.type_stack.is_empty() || !self.class_stack.is_empty() || !self.stack.is_empty()
+        {
             if let Some((t1, t2)) = self.type_stack.pop() {
                 #[cfg(debug_assertions)]
                 {
@@ -1254,6 +1322,7 @@ impl<'a> Unifier<'a> {
                     }
                     return Some(());
                 }
+                continue;
             }
             if let Some((local_env, m1, m2)) = self.stack.pop() {
                 #[cfg(debug_assertions)]
@@ -1551,15 +1620,19 @@ impl<'a> Unifier<'a> {
         if let Term::Const(right_head) = right_head {
             // τ(C)
             let right_head_ty = {
-                let (args, t) = self.tt_env.consts.get(&right_head.name).unwrap();
+                let Const {
+                    local_types,
+                    local_classes: _,
+                    ty,
+                } = self.tt_env.const_table.get(&right_head.name).unwrap();
                 let mut subst = vec![];
-                for (&x, t) in zip(args, &right_head.ty_args) {
+                for (&x, t) in zip(local_types, &right_head.ty_args) {
                     subst.push((x, t.clone()));
                 }
-                let mut t = t.clone();
-                t.subst(&subst);
-                self.inst_type(&mut t); // TODO: avoid full instantiation
-                t
+                let mut ty = ty.clone();
+                ty.subst(&subst);
+                self.inst_type(&mut ty); // TODO: avoid full instantiation
+                ty
             };
 
             // τ(u[1]) ⋯ τ(u[q])
@@ -1712,7 +1785,7 @@ impl<'a> Unifier<'a> {
                 // TODO: try eta equal condidates when the hole ?M is used twice or more among the whole set of constraints.
                 let proj_name =
                     Name::intern(&format!("{}.{}", structure.name, field.name)).unwrap();
-                let mut target = mk_const(proj_name, ty_args.clone());
+                let mut target = mk_const(proj_name, ty_args.clone(), vec![]);
                 target.apply([struct_obj]);
                 target.apply(new_args);
                 target.abs(&new_binders, false);
@@ -1725,74 +1798,6 @@ impl<'a> Unifier<'a> {
         }
 
         nodes
-    }
-
-    fn synthesize_instance(&self, goal: &Type) -> Option<Term> {
-        // TODO(typeclass): support local class constraints
-        for clause in self.database {
-            let CmdClass {
-                local_types,
-                local_classes,
-                ty,
-                target,
-            } = clause;
-            let pattern = {
-                let mut subst = vec![];
-                for &name in local_types {
-                    subst.push((name, mk_fresh_type_hole()));
-                }
-                let mut ty = ty.clone();
-                ty.subst(&subst);
-                ty
-            };
-            let Some(type_subst) = goal.matches(&pattern) else {
-                continue;
-            };
-            // TODO(typeclass): allow the params to contain its own local types.
-            assert!(local_types
-                .iter()
-                .all(|local| type_subst.iter().any(|(x, _)| x == local)));
-            let mut subst = vec![];
-            let mut success = true;
-            for local_class in local_classes {
-                let mut ty = local_class.clone();
-                ty.subst(&type_subst);
-                let Some(instance) = self.synthesize_instance(&ty) else {
-                    success = false;
-                    break;
-                };
-                subst.push((local_class.local_instance_name(), instance));
-            }
-            if !success {
-                continue;
-            }
-            let mut target = target.clone();
-            target.subst_type(&type_subst);
-            target.subst(&subst);
-            // TODO(typeclass):
-            // Our language does not support overlapping instances so we generally don't need to check other instances.
-            // However, if we try to synthesize for a non-ground goal like `H a ?b`, we will possibly find more than one solutions,
-            // and we may want to report an error to tell the user so.
-            return Some(target);
-        }
-        None
-    }
-
-    fn choice_class(&mut self, c: &ClassConstraint) -> Vec<Node> {
-        // TODO(typeclass): if hole is already assigned, check if the synthesized term is an instance.
-        // TODO(typeclass): solve c early when the type of c is known.
-        let mut t = self.get_type(&mut LocalEnv::default(), &c.target);
-        self.inst_type(&mut t);
-        assert!(t.is_ground());
-        let Some(instance) = self.synthesize_instance(&t) else {
-            return vec![];
-        };
-        let node = Node {
-            subst: vec![],
-            type_constraints: vec![],
-            term_constraints: vec![(LocalEnv::default(), c.target.clone(), instance)],
-        };
-        vec![node]
     }
 
     fn is_resolved_constraint(&self, c: &EqConstraint) -> bool {
@@ -1858,16 +1863,6 @@ impl<'a> Unifier<'a> {
                         );
                     }
                     break 'next self.choice_fr(&c);
-                }
-            }
-            for i in 0..self.queue_class.len() {
-                let mut t = self.get_type(&mut LocalEnv::default(), &self.queue_class[i].target);
-                self.inst_type(&mut t);
-                // TODO(typeclass): synthesize instances for constraints with type holes (e.g. ?M : C a ?b)
-                if t.is_ground() {
-                    let c = self.queue_class.swap_remove_back(i).unwrap();
-                    self.trail.push(TrailElement::ClassConstraint(c.clone()));
-                    break 'next self.choice_class(&c);
                 }
             }
             return false;

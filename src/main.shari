@@ -315,6 +315,7 @@ def well_founded.{u} (R : u → u → Prop) : Prop := ∀ x, acc R x
 
 -- The following declarations are introduced.
 --
+-- type const nat : Type
 -- const nat.zero : nat
 -- const nat.succ : nat → nat
 -- axiom nat.ind : ∀ x, ∀ P, P nat.zero → (∀ n, P n → P (nat.succ n)) → P x
@@ -461,6 +462,21 @@ structure inhab u := {
   axiom inhabited : ∃ x, x ∈ rep
 }
 
+-- type const nat : Type
+-- const nat.zero : nat
+-- const nat.succ : nat → nat
+-- axiom nat.ind : ∀ x, ∀ P, P nat.zero → (∀ n, P n → P (nat.succ n)) → P x
+-- const nat.rec.{u} : nat → u → (nat → u → u) → u
+-- axiom nat.zero.spec.{u} : nat.rec nat.zero = (λ x f, x)
+-- axiom nat.succ.spec.{u} : ∀ n, nat.rec (nat.succ n) = λ x f, f n (nat.rec n x f)
+--
+-- type const inhab : Type → Type
+-- const inhab.rec.{u, α} : inhab u → (set u → α) → α
+-- def inhab.rep.{u} : inhab u → set u := inhab.rec.{u, set u} (λ (rep : set u), rep)
+-- axiom inhab.inhabited.{u} (d : inhab u) : ∃ x, x ∈ inhab.rep d
+-- axiom inhab.abs.{u} (s : set u) : (∃ x, x ∈ s) → ∃ d, s = inhab.rep d
+-- axiom inhab.ext.{u} (d₁ d₂ : inhab u) : inhab.rec d₁ = inhab.rec d₂ → d₁ = d₂
+
 lemma inhab.uabs.{u} (s : set u) : (∃ x, x ∈ s) → ∃! c, s = inhab.rep c :=
 assume ∃ x, x ∈ s,
 obtain (c : inhab u), s = inhab.rep c := inhab.abs ⟪∃ x, x ∈ s⟫,
@@ -481,6 +497,7 @@ uexists.intro
 --
 -- and a definitional equality
 --
+--  axiom (A : set u) : inhab.rec (power.inhab A) = λ f, f (power A)
 --   example _.{u} (A : set u) : inhab.rep (power.inhab A) ≡ power A := eq.refl
 --
 instance power.inhab.{u} (A : set u) : inhab (set u) := {
@@ -633,7 +650,7 @@ structure monoid u := {
 }
 
 /-
-structure monoid.hom u v := {
+class structure monoid.hom u v := {
   class monoid u
   class monoid v
   const f : u → v
@@ -713,23 +730,29 @@ instance space.mk.{u} (subbase : set (set u)) : space u := {
 }
 
 /-
-structure show u := {
-  const show : u → string
+class structure has_wedge u := {
+  const wedge : u → u → u
 }
 
-instance nat.show : show nat := {
-  def show : nat → string := show_nat
+class instance has_wedge Prop := {
+  def wedge : Prop → Prop → Prop := and
 }
 
-instance list.show.{α} (a : show α) : show (list α) := {
-  def show : list α → string := (..)
+-- then ⊢ wedge ≡ and : Prop → Prop → Prop
+
+def wedge [has_wedge u] : u → u → u := has_wedge.wedge
+
+class structure group u := {
+  class monoid u
+  const inv : u → u
+  axiom left_inv (x : u) : mult (inv x) x = unit
+  axiom right_inv (x : u) : mult x (inv x) = unit
 }
 
-class show (list α) :- [a : show α] := list.show a
+class type const has_wedge u : u → u → u
+class def has_wedge Prop : Prop → Prop → Prop := and
+class const has_wedge (Prop → Prop)
 
-def show.{α} [d : show α] : α → string := show.show d
-
-class monoid α :- [g : group α] := group.to_monoid g
-
-def summon.{α} [x : α] : α := x
+class const wedge.{u} : u → u → u
+class def wedge.{Prop} : Prop → Prop → Prop := and
 -/

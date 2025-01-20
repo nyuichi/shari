@@ -1,11 +1,12 @@
 use std::iter::zip;
+use std::sync::Arc;
 use std::sync::LazyLock;
-use std::{collections::HashMap, sync::Arc};
 
 use crate::proof::{
-    mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro, mk_proof_imp_elim,
-    mk_proof_imp_intro, mk_proof_ref, Forall, Imp, Proof,
+    self, mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro,
+    mk_proof_imp_elim, mk_proof_imp_intro, mk_proof_ref, Axiom, Forall, Imp, Proof,
 };
+use crate::tt::Instance;
 use crate::tt::{self, Name, Parameter, Term, Type};
 
 /// p ::= ⟪φ⟫
@@ -88,6 +89,7 @@ pub struct ExprInst {
 pub struct ExprConst {
     pub name: Name,
     pub ty_args: Vec<Type>,
+    pub instances: Vec<Instance>,
 }
 
 #[derive(Debug, Clone)]
@@ -129,8 +131,12 @@ pub fn mk_expr_inst(e: Expr, m: Term) -> Expr {
     Expr::Inst(Arc::new(ExprInst { expr: e, arg: m }))
 }
 
-pub fn mk_expr_const(name: Name, ty_args: Vec<Type>) -> Expr {
-    Expr::Const(Arc::new(ExprConst { name, ty_args }))
+pub fn mk_expr_const(name: Name, ty_args: Vec<Type>, instances: Vec<Instance>) -> Expr {
+    Expr::Const(Arc::new(ExprConst {
+        name,
+        ty_args,
+        instances,
+    }))
 }
 
 pub fn mk_expr_change(target: Term, expr: Expr) -> Expr {
@@ -202,9 +208,16 @@ impl Expr {
                 arg.inst_type_hole(subst);
             }
             Expr::Const(e) => {
-                let ExprConst { name: _, ty_args } = Arc::make_mut(e);
+                let ExprConst {
+                    name: _,
+                    ty_args,
+                    instances,
+                } = Arc::make_mut(e);
                 for ty_arg in ty_args {
                     ty_arg.inst_hole(subst);
+                }
+                for instance in instances {
+                    instance.inst_type_hole(subst);
                 }
             }
             Expr::Change(e) => {
@@ -310,8 +323,13 @@ impl Expr {
                 expr.is_type_ground() && arg.is_ground()
             }
             Expr::Const(e) => {
-                let ExprConst { name: _, ty_args } = &**e;
+                let ExprConst {
+                    name: _,
+                    ty_args,
+                    instances,
+                } = &**e;
                 ty_args.iter().all(|t| t.is_ground())
+                    && instances.iter().all(|i| i.is_type_ground())
             }
             Expr::Change(e) => {
                 let ExprChange { target, expr } = &**e;
@@ -323,8 +341,7 @@ impl Expr {
 
 #[derive(Debug)]
 pub struct Env<'a> {
-    pub axioms: &'a HashMap<Name, (Vec<Name>, Term)>,
-    pub tt_env: &'a tt::Env,
+    pub proof_env: proof::Env<'a>,
     pub tt_local_env: &'a mut tt::LocalEnv,
 }
 
@@ -378,20 +395,36 @@ impl<'a> Env<'a> {
                 (h, target)
             }
             Expr::Const(expr) => {
-                let &ExprConst { name, ref ty_args } = &**expr;
-                let h = mk_proof_ref(name, ty_args.clone());
-                let (tv, mut target) = self.axioms.get(&name).cloned().unwrap();
-                let mut subst = vec![];
-                for (&x, t) in zip(&tv, ty_args) {
-                    subst.push((x, t.clone()));
+                let &ExprConst {
+                    name,
+                    ref ty_args,
+                    ref instances,
+                } = &**expr;
+                let h = mk_proof_ref(name, ty_args.clone(), instances.clone());
+                let Axiom {
+                    local_types,
+                    local_classes,
+                    target,
+                } = self.proof_env.axiom_table.get(&name).cloned().unwrap();
+                let mut type_subst = vec![];
+                for (&x, t) in zip(&local_types, ty_args) {
+                    type_subst.push((x, t.clone()));
                 }
-                target.subst_type(&subst);
+                let mut instance_subst = vec![];
+                for (local_class, instance) in zip(&local_classes, instances) {
+                    let mut local_class = local_class.clone();
+                    local_class.subst(&type_subst);
+                    instance_subst.push((local_class, instance.clone()));
+                }
+                let mut target = target.clone();
+                target.subst_type(&type_subst);
+                target.subst_instance(&instance_subst);
                 (h, target)
             }
             Expr::Change(expr) => {
                 let ExprChange { target, expr } = &**expr;
                 let (h, p) = self.run_help(expr);
-                let path = self.tt_env.equiv(&p, target).unwrap();
+                let path = self.proof_env.tt_env.equiv(&p, target).unwrap();
                 (mk_proof_conv(path, h), target.clone())
             }
         }
