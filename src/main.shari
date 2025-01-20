@@ -641,6 +641,11 @@ def bit1 (n : ℕ) : ℕ := succ (bit0 n)
  - (some) algebras
  -/
 
+class structure semigroup u := {
+  const mult : u → u → u
+  axiom assoc (x₁ x₂ x₃ : u) : mult (mult x₁ x₂) x₃ = mult x₁ (mult x₂ x₃)
+}
+
 structure monoid u := {
   const mult : u → u → u
   const unit : u

@@ -322,7 +322,7 @@ impl Eval {
         local_classes: Vec<Class>,
         target: Term,
     ) {
-        assert!(self.is_wff(&local_types, &target));
+        assert!(self.is_wff(&local_types, &local_classes, &target));
 
         // TODO: remove and integrate into axiom_table
         self.ns.axioms.insert(
@@ -461,11 +461,10 @@ impl Eval {
             .elaborate_expr(expr, target)
     }
 
-    // TODO: move to Term
-    fn is_wff(&self, local_types: &[Name], target: &Term) -> bool {
+    fn is_wff(&self, local_types: &[Name], local_classes: &[Class], target: &Term) -> bool {
         let mut local_env = LocalEnv {
             local_types: local_types.to_vec(),
-            local_classes: vec![], // FIXME
+            local_classes: local_classes.to_vec(),
             locals: vec![],
         };
         self.tt_env().is_wff(&mut local_env, target)
@@ -1908,6 +1907,7 @@ impl Eval {
                     let fullname = Name::intern(&format!("{}.{}", name, field.name)).unwrap();
                     let mut target = field.target.clone();
                     target.subst(&subst);
+                    println!("{target}");
                     self.add_axiom(
                         fullname,
                         local_types.clone(),
