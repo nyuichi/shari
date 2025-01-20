@@ -11,7 +11,7 @@ use crate::{
     tt::{
         self, mk_const, mk_fresh_type_hole, mk_instance_local, mk_local, mk_type_arrow,
         mk_type_const, mk_type_local, mk_type_prop, Class, ClassRule, ClassType, Const, Delta,
-        Iota, Kind, LocalEnv, Name, Parameter, Term, Type,
+        Kind, LocalEnv, Name, Parameter, Term, Type,
     },
 };
 
@@ -264,7 +264,6 @@ pub struct Eval {
     pub const_table: HashMap<Name, Const>,
     pub axiom_table: HashMap<Name, Axiom>,
     pub delta_table: HashMap<Name, Delta>,
-    pub iota_table: HashMap<Name, HashMap<Name, Iota>>,
     pub class_predicate_table: HashMap<Name, ClassType>,
     pub class_database: Vec<ClassRule>,
     pub structure_table: HashMap<Name, CmdStructure>,
@@ -408,24 +407,6 @@ impl Eval {
         );
     }
 
-    fn add_iota(
-        &mut self,
-        rec_name: Name,
-        ctor_name: Name,
-        local_types: Vec<Name>,
-        params: Vec<Name>,
-        target: Term,
-    ) {
-        self.iota_table.entry(rec_name).or_default().insert(
-            ctor_name,
-            Iota {
-                local_types,
-                params,
-                target,
-            },
-        );
-    }
-
     fn has_const(&self, name: Name) -> bool {
         self.const_table.contains_key(&name)
     }
@@ -448,13 +429,11 @@ impl Eval {
         ty: &Type,
         kind: Kind,
     ) -> anyhow::Result<()> {
-        elab::Elaborator::new(self.proof_env(), &self.structure_table, local_env, vec![])
-            .elaborate_type(ty, kind)
+        elab::Elaborator::new(self.proof_env(), local_env, vec![]).elaborate_type(ty, kind)
     }
 
     fn elaborate_class(&self, local_env: &mut LocalEnv, c: &Class) -> anyhow::Result<()> {
-        elab::Elaborator::new(self.proof_env(), &self.structure_table, local_env, vec![])
-            .elaborate_class(c)
+        elab::Elaborator::new(self.proof_env(), local_env, vec![]).elaborate_class(c)
     }
 
     fn elaborate_term(
@@ -463,8 +442,7 @@ impl Eval {
         target: &mut Term,
         ty: &Type,
     ) -> anyhow::Result<()> {
-        elab::Elaborator::new(self.proof_env(), &self.structure_table, local_env, vec![])
-            .elaborate_term(target, ty)
+        elab::Elaborator::new(self.proof_env(), local_env, vec![]).elaborate_term(target, ty)
     }
 
     fn elaborate_expr(
@@ -474,8 +452,7 @@ impl Eval {
         expr: &mut Expr,
         target: &Term,
     ) -> anyhow::Result<()> {
-        elab::Elaborator::new(self.proof_env(), &self.structure_table, local_env, holes)
-            .elaborate_expr(expr, target)
+        elab::Elaborator::new(self.proof_env(), local_env, holes).elaborate_expr(expr, target)
     }
 
     fn tt_env(&self) -> tt::Env {
@@ -483,7 +460,6 @@ impl Eval {
             type_const_table: &self.type_const_table,
             const_table: &self.const_table,
             delta_table: &self.delta_table,
-            iota_table: &self.iota_table,
             class_predicate_table: &self.class_predicate_table,
             class_database: &self.class_database,
         }

@@ -1310,7 +1310,7 @@ impl Term {
         Some(path)
     }
 
-    fn whnf(&mut self) -> Option<Path> {
+    pub fn whnf(&mut self) -> Option<Path> {
         match self {
             Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) | Term::Abs(_) => None,
             Term::App(inner) => {
@@ -1428,12 +1428,6 @@ pub enum Path {
     /// Γ ⊢ delta_reduce c.{t₁ ⋯ tₙ}[i₁ ⋯ iₘ] : c.{t₁ ⋯ tₙ}[i₁ ⋯ iₘ] ≡ [i₁ ⋯ iₘ][t₁/u₁ ⋯ tₙ/uₙ]m
     /// ```
     Delta(Term),
-    /// ```text
-    ///
-    /// -----------------------------------------------------------------------
-    /// Γ ⊢ iota_reduce (rec (mk m₁ ⋯ mₙ)) : rec (mk m₁ ⋯ mₙ) ≡ [m₁/x₁ ⋯ mₙ/xₙ]n
-    /// ```
-    Iota(Term),
     Kappa(Term),
 }
 
@@ -1450,9 +1444,6 @@ impl Display for Path {
             Path::Beta(m) => write!(f, "(beta {m})"),
             Path::Delta(m) => {
                 write!(f, "(delta {m})")
-            }
-            Path::Iota(m) => {
-                write!(f, "(iota {m})")
             }
             Path::Kappa(m) => {
                 write!(f, "(kappa {m})")
@@ -1487,10 +1478,6 @@ pub fn mk_path_beta(m: Term) -> Path {
 
 pub fn mk_path_delta(m: Term) -> Path {
     Path::Delta(m)
-}
-
-pub fn mk_path_iota(m: Term) -> Path {
-    Path::Iota(m)
 }
 
 pub fn mk_path_kappa(m: Term) -> Path {
@@ -1540,13 +1527,6 @@ pub struct Delta {
 }
 
 #[derive(Debug, Clone)]
-pub struct Iota {
-    pub local_types: Vec<Name>,
-    pub params: Vec<Name>,
-    pub target: Term,
-}
-
-#[derive(Debug, Clone)]
 pub struct ClassRule {
     pub local_types: Vec<Name>,
     pub local_classes: Vec<Class>,
@@ -1559,7 +1539,6 @@ pub struct Env<'a> {
     pub type_const_table: &'a HashMap<Name, Kind>,
     pub const_table: &'a HashMap<Name, Const>,
     pub delta_table: &'a HashMap<Name, Delta>,
-    pub iota_table: &'a HashMap<Name, HashMap<Name, Iota>>,
     pub class_predicate_table: &'a HashMap<Name, ClassType>,
     pub class_database: &'a [ClassRule],
 }
@@ -1866,48 +1845,6 @@ impl<'a> Env<'a> {
                     right: target,
                 })
             }
-            Path::Iota(m) => {
-                let _ty = self.infer_type(local_env, m)?;
-                let Term::Const(head) = m.head() else {
-                    return None;
-                };
-                let mut args = m.args();
-                if args.len() != 1 {
-                    return None;
-                }
-                let arg = args.pop().unwrap();
-                drop(args);
-                let Term::Const(ctor) = arg.head() else {
-                    return None;
-                };
-                let ctor_args = arg.args();
-                let Iota {
-                    local_types,
-                    params,
-                    target,
-                } = self.iota_table.get(&head.name)?.get(&ctor.name)?;
-                if local_types.len() != ctor.ty_args.len() {
-                    return None;
-                }
-                if params.len() != ctor_args.len() {
-                    return None;
-                }
-                let mut target = target.clone();
-                let mut type_subst = vec![];
-                for (&x, t) in zip(local_types, &ctor.ty_args) {
-                    type_subst.push((x, t.clone()));
-                }
-                target.subst_type(&type_subst);
-                let mut subst = vec![];
-                for (&x, t) in zip(params, ctor_args) {
-                    subst.push((x, t.clone()));
-                }
-                target.subst(&subst);
-                Some(Conv {
-                    left: m.clone(),
-                    right: target,
-                })
-            }
             Path::Kappa(m) => {
                 let _ty = self.infer_type(local_env, m)?;
                 let left = m.clone();
@@ -1951,90 +1888,6 @@ impl<'a> Env<'a> {
                     left,
                     right: target,
                 })
-            }
-        }
-    }
-
-    // iota_reduce[rec (mk m₁ ⋯ mₙ)] := [m₁/x₁, ⋯ mₙ/xₙ]n
-    //
-    // Note that this method does not reduce the argument.
-    fn iota_reduce(&self, m: &mut Term) -> Option<Path> {
-        let orig_m = m.clone();
-        let Term::App(inner) = m else {
-            return None;
-        };
-        let TermApp { fun, arg } = Arc::make_mut(inner);
-        let Term::Const(fun) = fun else {
-            return None;
-        };
-        let Term::Const(arg_head) = arg.head() else {
-            return None;
-        };
-        let Iota {
-            local_types,
-            params,
-            target,
-        } = self.iota_table.get(&fun.name)?.get(&arg_head.name)?;
-        if params.len() != arg.args().len() {
-            // this case is impossible unless the term is type incorrect.
-            return None;
-        }
-        let args = arg.unapply();
-        let Term::Const(arg) = arg else {
-            unreachable!()
-        };
-        let mut target = target.clone();
-        let mut subst = vec![];
-        for (&ty_param, ty_arg) in zip(local_types, &arg.ty_args) {
-            subst.push((ty_param, ty_arg.clone()));
-        }
-        target.subst_type(&subst);
-        let mut subst = vec![];
-        for (&param, arg) in zip(params, args) {
-            subst.push((param, arg));
-        }
-        target.subst(&subst);
-        *m = target;
-        Some(mk_path_iota(orig_m))
-    }
-
-    // Run head β-reduction and ι-reduction until it's stuck
-    pub fn weak_reduce(&self, m: &mut Term) -> Option<Path> {
-        match m {
-            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) | Term::Abs(_) => None,
-            Term::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                // try reduce one step
-                let p;
-                if let Some(p_fun) = self.weak_reduce(&mut inner.fun) {
-                    let p_arg = mk_path_refl(inner.arg.clone());
-                    p = mk_path_congr_app(p_fun, p_arg);
-                } else if let Term::Const(fun) = &mut inner.fun {
-                    if !self.iota_table.contains_key(&fun.name) {
-                        return None;
-                    }
-                    match self.weak_reduce(&mut inner.arg) {
-                        Some(p_arg) => {
-                            let p_fun = mk_path_refl(Term::Const(fun.clone()));
-                            let p_app = mk_path_congr_app(p_fun, p_arg);
-                            let p_proj = self
-                                .iota_reduce(m)
-                                .unwrap_or_else(|| mk_path_refl(m.clone()));
-                            p = mk_path_trans(p_app, p_proj);
-                        }
-                        None => {
-                            p = self.iota_reduce(m)?;
-                        }
-                    }
-                } else if let Some(p_beta) = m.beta_reduce() {
-                    p = p_beta;
-                } else {
-                    return None;
-                }
-                match self.weak_reduce(m) {
-                    Some(p_next) => Some(mk_path_trans(p, p_next)),
-                    None => Some(p),
-                }
             }
         }
     }
@@ -2126,29 +1979,6 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn unfold_stuck(&self, m: &mut Term) -> Option<Path> {
-        match m {
-            Term::Var(_) | Term::Local(_) | Term::Abs(_) | Term::Hole(_) => None,
-            Term::Const(_) => self.unfold_head(m),
-            Term::App(m) => {
-                let TermApp { fun, arg } = Arc::make_mut(m);
-                if let Some(h_fun) = self.unfold_stuck(fun) {
-                    let h_arg = mk_path_refl(arg.clone());
-                    return Some(mk_path_congr_app(h_fun, h_arg));
-                }
-                let Term::Const(fun) = fun else {
-                    return None;
-                };
-                if !self.iota_table.contains_key(&fun.name) {
-                    return None;
-                }
-                let h_arg = self.unfold_stuck(arg)?;
-                let h_fun = mk_path_refl(Term::Const(fun.clone()));
-                Some(mk_path_congr_app(h_fun, h_arg))
-            }
-        }
-    }
-
     pub fn def_hint(&self, name: Name) -> Option<usize> {
         let def = self.delta_table.get(&name)?;
         Some(def.hint + 1)
@@ -2168,10 +1998,8 @@ impl<'a> Env<'a> {
             let h = self.equiv_help(&mut inner1.body, &mut inner2.body)?;
             return Some(mk_path_congr_abs(x, inner1.binder_type.clone(), h));
         }
-        let h1 = self
-            .weak_reduce(m1)
-            .unwrap_or_else(|| mk_path_refl(m1.clone()));
-        let h2 = match self.weak_reduce(m2) {
+        let h1 = m1.whnf().unwrap_or_else(|| mk_path_refl(m1.clone()));
+        let h2 = match m2.whnf() {
             Some(h) => mk_path_symm(h),
             None => mk_path_refl(m2.clone()),
         };
@@ -2198,7 +2026,7 @@ impl<'a> Env<'a> {
         }
         if let Term::Abs(_) = m2 {
             // m1 must be unfoldable
-            let h = self.unfold_stuck(m1)?;
+            let h = self.unfold_head(m1)?;
             let h1 = mk_path_trans(h1, h);
             let h = self.equiv_help(m1, m2)?;
             return Some(mk_path_trans(h1, mk_path_trans(h, h2)));
@@ -2229,7 +2057,7 @@ impl<'a> Env<'a> {
         }
         if let Term::Local(_) = head2 {
             // m1 must be unfoldable
-            let h = self.unfold_stuck(m1)?;
+            let h = self.unfold_head(m1)?;
             let h1 = mk_path_trans(h1, h);
             let h = self.equiv_help(m1, m2)?;
             return Some(mk_path_trans(h1, mk_path_trans(h, h2)));
@@ -2282,20 +2110,6 @@ impl<'a> Env<'a> {
                     return Some(mk_path_trans(h1, mk_path_trans(h3, mk_path_trans(h4, h2))));
                 }
             }
-        }
-        if let Some(h_stuck) = self.unfold_stuck(m1) {
-            let h = self.equiv_help(m1, m2)?;
-            return Some(mk_path_trans(
-                h1,
-                mk_path_trans(h_stuck, mk_path_trans(h, h2)),
-            ));
-        }
-        if let Some(h_stuck) = self.unfold_stuck(m2) {
-            let h = self.equiv_help(m1, m2)?;
-            return Some(mk_path_trans(
-                h1,
-                mk_path_trans(h, mk_path_trans(mk_path_symm(h_stuck), h2)),
-            ));
         }
         None
     }
