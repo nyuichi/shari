@@ -750,13 +750,14 @@ impl Term {
     }
 
     /// FV(self) ⊆ {x₁, ⋯, xₙ}
-    pub fn is_closed_in(&self, free_list: &[Name]) -> bool {
+    /// The term is borrowed from nominal set theory.
+    pub fn is_supported_by(&self, free_list: &[Name]) -> bool {
         match self {
             Self::Local(x) => free_list.contains(x),
             Self::Var(_) => true,
-            Self::Abs(inner) => inner.body.is_closed_in(free_list),
+            Self::Abs(inner) => inner.body.is_supported_by(free_list),
             Self::App(inner) => {
-                inner.fun.is_closed_in(free_list) && inner.arg.is_closed_in(free_list)
+                inner.fun.is_supported_by(free_list) && inner.arg.is_supported_by(free_list)
             }
             Self::Const(_) => true,
             Self::Hole(_) => true,
@@ -764,14 +765,7 @@ impl Term {
     }
 
     pub fn is_closed(&self) -> bool {
-        match self {
-            Self::Local(_) => false,
-            Self::Var(_) => true,
-            Self::Abs(inner) => inner.body.is_closed(),
-            Self::App(inner) => inner.fun.is_closed() && inner.arg.is_closed(),
-            Self::Const(_) => true,
-            Self::Hole(_) => true,
-        }
+        self.is_supported_by(&[])
     }
 
     pub fn is_lclosed(&self) -> bool {
@@ -990,51 +984,41 @@ impl Term {
     //
     // If allow_free is true, this function always succeeds and returns true.
     // If allow_free is false and self contains extra free variables, abs returns false and the state of self is restored.
-    pub fn abs(&mut self, xs: &[Parameter], allow_free: bool) -> bool {
-        if !self.abs_help(xs, 0, allow_free) {
-            self.unabs_help(xs, 0);
-            return false;
-        }
+    pub fn abs(&mut self, xs: &[Parameter]) {
+        self.abs_help(xs, 0);
         let mut m = mem::take(self);
         for x in xs.iter().rev() {
             m = mk_abs(x.name, x.ty.clone(), m);
         }
         *self = m;
-        true
     }
 
-    fn abs_help(&mut self, xs: &[Parameter], level: usize, allow_free: bool) -> bool {
+    fn abs_help(&mut self, xs: &[Parameter], level: usize) {
         match self {
             &mut Self::Local(l) => {
                 for (i, x) in xs.iter().rev().enumerate() {
                     if l == x.name {
                         *self = Self::Var(level + i);
-                        return true;
+                        return;
                     }
                 }
-                if !allow_free {
-                    return false;
-                }
-                true
             }
-            Self::Var(_) => true,
-            Self::Abs(inner) => Arc::make_mut(inner)
-                .body
-                .abs_help(xs, level + 1, allow_free),
+            Self::Var(_) => {}
+            Self::Abs(inner) => Arc::make_mut(inner).body.abs_help(xs, level + 1),
             Self::App(inner) => {
                 let inner = Arc::make_mut(inner);
-                inner.fun.abs_help(xs, level, allow_free)
-                    && inner.arg.abs_help(xs, level, allow_free)
+                inner.fun.abs_help(xs, level);
+                inner.arg.abs_help(xs, level);
             }
-            Self::Const(_) => true,
-            Self::Hole(_) => true,
+            Self::Const(_) => {}
+            Self::Hole(_) => {}
         }
     }
 
     pub fn generalize(&mut self, xs: &[Parameter]) {
         static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall").unwrap());
 
-        self.abs_help(xs, 0, true);
+        self.abs_help(xs, 0);
 
         let mut m = mem::take(self);
         for x in xs.iter().rev() {
@@ -1798,8 +1782,8 @@ impl<'a> Env<'a> {
                 });
                 let mut h = self.infer_conv(local_env, &path.2)?;
                 let x = local_env.locals.pop().unwrap();
-                h.left.abs(slice::from_ref(&x), true);
-                h.right.abs(slice::from_ref(&x), true);
+                h.left.abs(slice::from_ref(&x));
+                h.right.abs(slice::from_ref(&x));
                 Some(h)
             }
             Path::Beta(m) => {

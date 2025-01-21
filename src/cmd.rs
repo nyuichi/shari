@@ -1014,7 +1014,7 @@ impl Eval {
                 a.apply(binders.iter().map(|x| mk_local(x.name)));
                 m.apply([a]);
                 m.apply(cont_params.iter().map(|&k| mk_local(k)));
-                m.abs(&binders, true);
+                m.abs(&binders);
                 target.apply([m]);
             }
 
@@ -1052,7 +1052,7 @@ impl Eval {
             lhs.apply([lhs_arg]);
 
             let mut rhs = rhs_body;
-            rhs.abs(&rhs_binders, true);
+            rhs.abs(&rhs_binders);
 
             let mut eq_ty = mk_type_local(rec_ty_var);
             eq_ty.arrow(cont_param_tys.clone());
@@ -1464,10 +1464,10 @@ impl Eval {
                     );
                     target.apply([mk_local(this.name), {
                         let mut target = mk_local(field.name);
-                        target.abs(&const_fields, false);
+                        target.abs(&const_fields);
                         target
                     }]);
-                    target.abs(slice::from_ref(&this), false);
+                    target.abs(slice::from_ref(&this));
                     self.add_delta(fullname, target);
 
                     // rep ↦ inhab.rep.{u} this
@@ -1545,7 +1545,7 @@ impl Eval {
                     conj
                 })
                 .unwrap_or_else(|| mk_const(Name::intern("true").unwrap(), vec![], vec![]));
-            char.abs(slice::from_ref(&this), true);
+            char.abs(slice::from_ref(&this));
             char
         }]);
         abs.guard(guards);
@@ -1777,7 +1777,7 @@ impl Eval {
                     };
                     let def_target = {
                         let mut m = target.clone();
-                        m.abs(&params, true);
+                        m.abs(&params);
                         m
                     };
                     self.add_const(
@@ -1849,7 +1849,7 @@ impl Eval {
             }
             InstanceField::Lemma(_) => None,
         }));
-        right.abs(slice::from_ref(&f), true);
+        right.abs(slice::from_ref(&f));
         let mut target = mk_const(
             Name::intern("eq").unwrap(),
             vec![{

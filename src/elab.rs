@@ -1092,7 +1092,7 @@ impl<'a> Unifier<'a> {
             self.inst_arg_head(&mut right);
             if let Some(args) = right.is_pattern() {
                 // TODO: avoid full instantiation
-                if self.inst(&mut left, right_head) {
+                if self.inst(&mut left, right_head) && left.is_supported_by(&args) {
                     let binders = args
                         .into_iter()
                         .map(|arg| Parameter {
@@ -1100,10 +1100,9 @@ impl<'a> Unifier<'a> {
                             ty: local_env.get_local(arg).unwrap().clone(),
                         })
                         .collect::<Vec<_>>();
-                    if left.abs(&binders, false) {
-                        self.add_subst(right_head, left);
-                        return None;
-                    }
+                    left.abs(&binders);
+                    self.add_subst(right_head, left);
+                    return None;
                 }
             }
         }
@@ -1111,7 +1110,7 @@ impl<'a> Unifier<'a> {
             let left_head = *left_head;
             self.inst_arg_head(&mut left);
             if let Some(args) = left.is_pattern() {
-                if self.inst(&mut right, left_head) {
+                if self.inst(&mut right, left_head) && right.is_supported_by(&args) {
                     let binders = args
                         .into_iter()
                         .map(|arg| Parameter {
@@ -1119,10 +1118,9 @@ impl<'a> Unifier<'a> {
                             ty: local_env.get_local(arg).unwrap().clone(),
                         })
                         .collect::<Vec<_>>();
-                    if right.abs(&binders, false) {
-                        self.add_subst(left_head, right);
-                        return None;
-                    }
+                    right.abs(&binders);
+                    self.add_subst(left_head, right);
+                    return None;
                 }
             }
         }
@@ -1520,7 +1518,7 @@ impl<'a> Unifier<'a> {
             // TODO: try eta equal condidates when the hole ?M is used twice or more among the whole set of constraints.
             let mut target = mk_local(z.name);
             target.apply(new_args);
-            target.abs(&new_binders, false);
+            target.abs(&new_binders);
             nodes.push(Node {
                 subst: vec![(left_head, target)],
                 type_constraints: vec![(t, left_ty.clone())],
@@ -1587,7 +1585,7 @@ impl<'a> Unifier<'a> {
             // TODO: try eta equal condidates when the hole ?M is used twice or more among the whole set of constraints.
             let mut target = Term::Const(right_head.clone());
             target.apply(new_args);
-            target.abs(&new_binders, false);
+            target.abs(&new_binders);
             nodes.push(Node {
                 subst: vec![(left_head, target)],
                 type_constraints: vec![],
