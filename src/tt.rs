@@ -861,6 +861,10 @@ impl Term {
         matches!(self, Term::Const(_))
     }
 
+    pub fn is_local(&self) -> bool {
+        matches!(self, Term::Local(_))
+    }
+
     /// Checks if self ≡ (?M l₁ ⋯ lₙ) where l₁ ⋯ lₙ are pairwise distinct locals.
     pub fn is_pattern(&self) -> Option<Vec<Name>> {
         let mut arg_locals = vec![];

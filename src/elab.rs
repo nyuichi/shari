@@ -1129,90 +1129,77 @@ impl<'a> Unifier<'a> {
             return None;
         }
         // then each of the heads can be a local or a const.
-        if right.head().is_const() {
+        if let (Term::Local(left_head), Term::Local(right_head)) = (left.head(), right.head()) {
+            if left_head != right_head {
+                return Some(());
+            }
+            let left_args = left.unapply();
+            let right_args = right.unapply();
+            if left_args.len() != right_args.len() {
+                return Some(());
+            }
+            for (left_arg, right_arg) in left_args.into_iter().zip(right_args.into_iter()).rev() {
+                self.stack.push((local_env.clone(), left_arg, right_arg));
+            }
+            return None;
+        }
+        if right.head().is_local() {
             mem::swap(&mut left, &mut right);
         }
-        match (left.head(), right.head()) {
-            (Term::Const(left_head), Term::Const(right_head)) => {
-                // Stucks can occur because its main premise is any of the following forms:
-                // 1. f a₁ ⋯ aₙ    stuck can be resolved by δ-reduction
-                // 2. ?M a₁ ⋯ aₙ   stuck can be resolved by instantiation
-                // 3. l a₁ ⋯ aₙ
-                if left_head.name != right_head.name {
-                    let left_hint = self.tt_env.def_hint(left_head.name).unwrap_or(0);
-                    let right_hint = self.tt_env.def_hint(right_head.name).unwrap_or(0);
-                    match left_hint.cmp(&right_hint) {
-                        std::cmp::Ordering::Greater => {
-                            self.tt_env.unfold_head(&mut left).unwrap();
-                            self.stack.push((local_env, left, right));
-                            return None;
-                        }
-                        std::cmp::Ordering::Less => {
-                            self.tt_env.unfold_head(&mut right).unwrap();
-                            self.stack.push((local_env, left, right));
-                            return None;
-                        }
-                        std::cmp::Ordering::Equal => {
-                            if left_hint == 0 {
-                                // (f t₁ ⋯ tₙ) ≈ (g s₁ ⋯ sₘ) where f and g are both irreducible.
-                                return Some(());
-                            }
-                            self.tt_env.unfold_head(&mut left).unwrap();
-                            self.tt_env.unfold_head(&mut right).unwrap();
-                            self.stack.push((local_env, left, right));
-                            return None;
-                        }
-                    }
-                }
-                if self.tt_env.def_hint(left_head.name).is_none() {
-                    // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where f is not unfoldable.
-                    for (t1, t2) in left_head.ty_args.iter().zip(right_head.ty_args.iter()) {
-                        self.add_type_constraint(t1.clone(), t2.clone());
-                    }
-                    let left_args = left.unapply();
-                    let right_args = right.unapply();
-                    if left_args.len() != right_args.len() {
-                        return Some(());
-                    }
-                    for (left_arg, right_arg) in
-                        left_args.into_iter().zip(right_args.into_iter()).rev()
-                    {
-                        self.stack.push((local_env.clone(), left_arg, right_arg));
-                    }
-                    return None;
-                }
+        if let (&Term::Local(left_head), Term::Const(right_head)) = (left.head(), right.head()) {
+            if self.tt_env.def_hint(right_head.name).is_none() {
+                return Some(());
+            }
+            if !right.contains_local(left_head) {
+                return Some(());
+            }
+            self.tt_env.unfold_head(&mut right).unwrap();
+            self.stack.push((local_env, left, right));
+            return None;
+        }
+        let (Term::Const(left_head), Term::Const(right_head)) = (left.head(), right.head()) else {
+            unreachable!()
+        };
+        if left_head.name == right_head.name {
+            if self.tt_env.def_hint(left_head.name).is_some() {
                 // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where f is unfoldable
                 self.add_derived_constraint(local_env, left, right, true);
-                None
+                return None;
             }
-            (Term::Const(left_head), &Term::Local(right_head)) => {
-                if self.tt_env.def_hint(left_head.name).is_none() {
-                    return Some(());
-                }
-                if !left.contains_local(right_head) {
-                    return Some(());
-                }
-                self.tt_env.unfold_head(&mut left).unwrap();
-                self.stack.push((local_env, left, right));
-                None
+            // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where f is not unfoldable.
+            for (t1, t2) in left_head.ty_args.iter().zip(right_head.ty_args.iter()) {
+                self.add_type_constraint(t1.clone(), t2.clone());
             }
-            (Term::Local(left_head), Term::Local(right_head)) => {
-                if left_head != right_head {
-                    return Some(());
-                }
-                let left_args = left.unapply();
-                let right_args = right.unapply();
-                if left_args.len() != right_args.len() {
-                    return Some(());
-                }
-                for (left_arg, right_arg) in left_args.into_iter().zip(right_args.into_iter()).rev()
-                {
-                    self.stack.push((local_env.clone(), left_arg, right_arg));
-                }
-                None
+            let left_args = left.unapply();
+            let right_args = right.unapply();
+            if left_args.len() != right_args.len() {
+                return Some(());
             }
-            _ => unreachable!(),
+            for (left_arg, right_arg) in left_args.into_iter().zip(right_args.into_iter()).rev() {
+                self.stack.push((local_env.clone(), left_arg, right_arg));
+            }
+            return None;
         }
+        let left_hint = self.tt_env.def_hint(left_head.name).unwrap_or(0);
+        let right_hint = self.tt_env.def_hint(right_head.name).unwrap_or(0);
+        if left_hint == 0 && right_hint == 0 {
+            // (f t₁ ⋯ tₙ) ≈ (g s₁ ⋯ sₘ) where f and g are both irreducible.
+            return Some(());
+        }
+        match left_hint.cmp(&right_hint) {
+            std::cmp::Ordering::Greater => {
+                self.tt_env.unfold_head(&mut left).unwrap();
+            }
+            std::cmp::Ordering::Less => {
+                self.tt_env.unfold_head(&mut right).unwrap();
+            }
+            std::cmp::Ordering::Equal => {
+                self.tt_env.unfold_head(&mut left).unwrap();
+                self.tt_env.unfold_head(&mut right).unwrap();
+            }
+        }
+        self.stack.push((local_env, left, right));
+        None
     }
 
     fn find_conflict(&mut self) -> Option<()> {
