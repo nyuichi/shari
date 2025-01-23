@@ -271,28 +271,6 @@ impl Type {
         }
     }
 
-    pub fn inst_hole(&mut self, subst: &[(Name, Type)]) {
-        match self {
-            Type::Const(_) => {}
-            Type::Arrow(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.dom.inst_hole(subst);
-                inner.cod.inst_hole(subst);
-            }
-            Type::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.fun.inst_hole(subst);
-                inner.arg.inst_hole(subst);
-            }
-            Type::Local(_) => {}
-            Type::Hole(name) => {
-                if let Some((_, ty)) = subst.iter().find(|(x, _)| x == name) {
-                    *self = ty.clone();
-                };
-            }
-        }
-    }
-
     /// Returns [true] if [self] contains no meta variables.
     pub fn is_ground(&self) -> bool {
         match self {
@@ -379,6 +357,24 @@ impl Type {
             }
         }
     }
+
+    fn holes(&self, buf: &mut Vec<Name>) {
+        match self {
+            Type::Const(_) => {}
+            Type::Arrow(inner) => {
+                inner.dom.holes(buf);
+                inner.cod.holes(buf);
+            }
+            Type::App(inner) => {
+                inner.fun.holes(buf);
+                inner.arg.holes(buf);
+            }
+            Type::Local(_) => {}
+            Type::Hole(name) => {
+                buf.push(*name);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -392,6 +388,16 @@ pub struct Class {
     pub args: Vec<Type>,
 }
 
+impl Display for Class {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)?;
+        for t in &self.args {
+            write!(f, " {}", t)?;
+        }
+        Ok(())
+    }
+}
+
 impl Class {
     pub fn contains_local(&self, name: Name) -> bool {
         self.args.iter().any(|t| t.contains_local(name))
@@ -400,12 +406,6 @@ impl Class {
     pub fn subst(&mut self, subst: &[(Name, Type)]) {
         for t in &mut self.args {
             t.subst(subst);
-        }
-    }
-
-    pub fn inst_hole(&mut self, subst: &[(Name, Type)]) {
-        for t in &mut self.args {
-            t.inst_hole(subst);
         }
     }
 
@@ -424,6 +424,14 @@ impl Class {
             }
         }
         Some(subst)
+    }
+
+    pub fn holes(&self) -> Vec<Name> {
+        let mut holes = vec![];
+        for t in &self.args {
+            t.holes(&mut holes);
+        }
+        holes
     }
 }
 
@@ -480,21 +488,6 @@ impl Instance {
         }
     }
 
-    pub fn inst_type_hole(&mut self, subst: &[(Name, Type)]) {
-        match self {
-            Instance::Local(c) => c.inst_hole(subst),
-            Instance::Global(i) => {
-                for t in &mut Arc::make_mut(i).ty_args {
-                    t.inst_hole(subst);
-                }
-                for i in &mut Arc::make_mut(i).args {
-                    i.inst_type_hole(subst);
-                }
-            }
-            Instance::Hole(_) => {}
-        }
-    }
-
     pub fn is_type_ground(&self) -> bool {
         match self {
             Instance::Local(c) => c.is_ground(),
@@ -522,6 +515,10 @@ impl Instance {
             }
             Instance::Hole(_) => {}
         }
+    }
+
+    pub fn is_hole(&self) -> bool {
+        matches!(self, Instance::Hole(_))
     }
 }
 
@@ -1174,54 +1171,6 @@ impl Term {
         }
     }
 
-    pub fn inst_type_hole(&mut self, subst: &[(Name, Type)]) {
-        match self {
-            Term::Var(_) => {}
-            Term::Abs(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.binder_type.inst_hole(subst);
-                inner.body.inst_type_hole(subst);
-            }
-            Term::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.fun.inst_type_hole(subst);
-                inner.arg.inst_type_hole(subst);
-            }
-            Term::Local(_) => {}
-            Term::Const(inner) => {
-                for s in &mut Arc::make_mut(inner).ty_args {
-                    s.inst_hole(subst);
-                }
-                for i in &mut Arc::make_mut(inner).instances {
-                    i.inst_type_hole(subst);
-                }
-            }
-            Term::Hole(_) => {}
-        }
-    }
-
-    pub fn inst_hole(&mut self, subst: &[(Name, Term)]) {
-        match self {
-            Term::Var(_) => {}
-            Term::Local(_) => {}
-            Term::Const(_) => {}
-            Term::Hole(x) => {
-                if let Some((_, m)) = subst.iter().find(|(y, _)| y == x) {
-                    *self = m.clone();
-                }
-            }
-            Term::Abs(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.body.inst_hole(subst);
-            }
-            Term::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.fun.inst_hole(subst);
-                inner.arg.inst_hole(subst);
-            }
-        }
-    }
-
     // checks if self has any (term-level) meta variable.
     pub fn is_ground(&self) -> bool {
         match self {
@@ -1511,8 +1460,12 @@ pub struct Delta {
     // TODO: remove this?
     pub local_classes: Vec<Class>,
     pub target: Term,
-    pub hint: usize,
+    // equal to height(target)
+    pub height: usize,
 }
+
+#[derive(Debug, Clone)]
+pub struct Kappa;
 
 #[derive(Debug, Clone)]
 pub struct ClassRule {
@@ -1527,6 +1480,7 @@ pub struct Env<'a> {
     pub type_const_table: &'a HashMap<Name, Kind>,
     pub const_table: &'a HashMap<Name, Const>,
     pub delta_table: &'a HashMap<Name, Delta>,
+    pub kappa_table: &'a HashMap<Name, Kappa>,
     pub class_predicate_table: &'a HashMap<Name, ClassType>,
     pub class_database: &'a [ClassRule],
 }
@@ -1813,7 +1767,7 @@ impl<'a> Env<'a> {
                     local_types,
                     local_classes,
                     target,
-                    hint: _,
+                    height: _,
                 } = self.delta_table.get(&m.name)?;
                 let mut type_subst = vec![];
                 for (&x, t) in zip(local_types, &m.ty_args) {
@@ -1893,7 +1847,7 @@ impl<'a> Env<'a> {
             local_types,
             local_classes,
             target,
-            hint: _,
+            height: _,
         } = self.delta_table.get(&n.name)?;
         let mut type_subst = vec![];
         for (&x, t) in zip(local_types, &n.ty_args) {
@@ -1917,6 +1871,7 @@ impl<'a> Env<'a> {
         let Term::Const(n) = m else {
             return None;
         };
+        let Kappa = self.kappa_table.get(&n.name)?;
         if n.instances.is_empty() {
             return None;
         }
@@ -1958,8 +1913,8 @@ impl<'a> Env<'a> {
         match m {
             Term::Var(_) | Term::Local(_) | Term::Abs(_) | Term::Hole(_) => None,
             Term::Const(_) => self.delta_reduce(m).or_else(|| self.kappa_reduce(m)),
-            Term::App(inner) => {
-                let TermApp { fun, arg } = Arc::make_mut(inner);
+            Term::App(m) => {
+                let TermApp { fun, arg } = Arc::make_mut(m);
                 let h_fun = self.unfold_head(fun)?;
                 let h_arg = mk_path_refl(arg.clone());
                 Some(mk_path_congr_app(h_fun, h_arg))
@@ -1967,9 +1922,31 @@ impl<'a> Env<'a> {
         }
     }
 
-    pub fn def_hint(&self, name: Name) -> Option<usize> {
-        let def = self.delta_table.get(&name)?;
-        Some(def.hint + 1)
+    pub fn delta_height(&self, name: Name) -> usize {
+        match self.delta_table.get(&name) {
+            Some(delta) => delta.height + 1,
+            None => 0,
+        }
+    }
+
+    // NB: does not take kappa-reductions into account.
+    pub fn height(&self, m: &Term) -> usize {
+        match m {
+            Term::Var(_) => 0,
+            Term::Abs(m) => self.height(&m.body),
+            Term::App(m) => std::cmp::max(self.height(&m.fun), self.height(&m.arg)),
+            Term::Local(_) => 0,
+            Term::Const(m) => self.delta_height(m.name),
+            Term::Hole(_) => 0,
+        }
+    }
+
+    pub fn has_kappa(&self, name: Name) -> bool {
+        self.kappa_table.contains_key(&name)
+    }
+
+    pub fn has_delta(&self, name: Name) -> bool {
+        self.delta_table.contains_key(&name)
     }
 
     fn equiv_help(&self, m1: &mut Term, m2: &mut Term) -> Option<Path> {
@@ -2072,34 +2049,43 @@ impl<'a> Env<'a> {
                 }
             }
         }
-        let def1 = self.def_hint(head1.name);
-        let def2 = self.def_hint(head2.name);
-        if def1.is_some() || def2.is_some() {
-            let height1 = def1.unwrap_or(0);
-            let height2 = def2.unwrap_or(0);
-            match height1.cmp(&height2) {
-                std::cmp::Ordering::Less => {
-                    let h3 = mk_path_symm(self.unfold_head(m2).unwrap());
-                    let h4 = self.equiv_help(m1, m2)?;
-                    return Some(mk_path_trans(h1, mk_path_trans(h4, mk_path_trans(h3, h2))));
-                }
-                std::cmp::Ordering::Equal => {
-                    let h3 = self.unfold_head(m1).unwrap();
-                    let h4 = mk_path_symm(self.unfold_head(m2).unwrap());
-                    let h5 = self.equiv_help(m1, m2)?;
-                    return Some(mk_path_trans(
-                        h1,
-                        mk_path_trans(h3, mk_path_trans(h5, mk_path_trans(h4, h2))),
-                    ));
-                }
-                std::cmp::Ordering::Greater => {
-                    let h3 = self.unfold_head(m1).unwrap();
-                    let h4 = self.equiv_help(m1, m2)?;
-                    return Some(mk_path_trans(h1, mk_path_trans(h3, mk_path_trans(h4, h2))));
-                }
+        if self.has_kappa(head1.name) || self.has_kappa(head2.name) {
+            let h;
+            if let Some(h3) = self.unfold_head(m1) {
+                let h4 = self.equiv_help(m1, m2)?;
+                h = mk_path_trans(h3, h4);
+            } else if let Some(h3) = self.unfold_head(m2) {
+                let h4 = self.equiv_help(m1, m2)?;
+                h = mk_path_trans(h4, mk_path_symm(h3));
+            } else {
+                return None;
             }
+            return Some(mk_path_trans(h1, mk_path_trans(h, h2)));
         }
-        None
+        let height1 = self.delta_height(head1.name);
+        let height2 = self.delta_height(head2.name);
+        if height1 == 0 && height2 == 0 {
+            return None;
+        }
+        let h = match height1.cmp(&height2) {
+            std::cmp::Ordering::Less => {
+                let h3 = mk_path_symm(self.unfold_head(m2).unwrap());
+                let h4 = self.equiv_help(m1, m2)?;
+                mk_path_trans(h4, h3)
+            }
+            std::cmp::Ordering::Equal => {
+                let h3 = self.unfold_head(m1).unwrap();
+                let h4 = mk_path_symm(self.unfold_head(m2).unwrap());
+                let h5 = self.equiv_help(m1, m2)?;
+                mk_path_trans(h3, mk_path_trans(h5, h4))
+            }
+            std::cmp::Ordering::Greater => {
+                let h3 = self.unfold_head(m1).unwrap();
+                let h4 = self.equiv_help(m1, m2)?;
+                mk_path_trans(h3, h4)
+            }
+        };
+        Some(mk_path_trans(h1, mk_path_trans(h, h2)))
     }
 
     // Both terms must be ground

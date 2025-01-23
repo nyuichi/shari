@@ -11,7 +11,7 @@ use crate::{
     tt::{
         self, mk_const, mk_fresh_type_hole, mk_instance_local, mk_local, mk_type_arrow,
         mk_type_const, mk_type_local, mk_type_prop, Class, ClassRule, ClassType, Const, Delta,
-        Kind, LocalEnv, Name, Parameter, Term, Type,
+        Kappa, Kind, LocalEnv, Name, Parameter, Term, Type,
     },
 };
 
@@ -264,6 +264,7 @@ pub struct Eval {
     pub const_table: HashMap<Name, Const>,
     pub axiom_table: HashMap<Name, Axiom>,
     pub delta_table: HashMap<Name, Delta>,
+    pub kappa_table: HashMap<Name, Kappa>,
     pub class_predicate_table: HashMap<Name, ClassType>,
     pub class_database: Vec<ClassRule>,
     pub structure_table: HashMap<Name, CmdStructure>,
@@ -308,7 +309,7 @@ impl Eval {
             name,
             Const {
                 local_types,
-                local_classes,
+                local_classes, // TODO: shrink
                 ty,
             },
         );
@@ -401,10 +402,14 @@ impl Eval {
             Delta {
                 local_types: local_types.clone(),
                 local_classes: local_classes.clone(),
+                height: self.tt_env().height(&target),
                 target,
-                hint: self.delta_table.len(),
             },
         );
+    }
+
+    fn add_kappa(&mut self, name: Name) {
+        self.kappa_table.insert(name, Kappa);
     }
 
     fn has_const(&self, name: Name) -> bool {
@@ -429,11 +434,11 @@ impl Eval {
         ty: &Type,
         kind: Kind,
     ) -> anyhow::Result<()> {
-        elab::Elaborator::new(self.proof_env(), local_env, vec![]).elaborate_type(ty, kind)
+        elab::elaborate_type(self.proof_env(), local_env, ty, kind)
     }
 
     fn elaborate_class(&self, local_env: &mut LocalEnv, c: &Class) -> anyhow::Result<()> {
-        elab::Elaborator::new(self.proof_env(), local_env, vec![]).elaborate_class(c)
+        elab::elaborate_class(self.proof_env(), local_env, c)
     }
 
     fn elaborate_term(
@@ -442,7 +447,7 @@ impl Eval {
         target: &mut Term,
         ty: &Type,
     ) -> anyhow::Result<()> {
-        elab::Elaborator::new(self.proof_env(), local_env, vec![]).elaborate_term(target, ty)
+        elab::elaborate_term(self.proof_env(), local_env, target, ty)
     }
 
     fn elaborate_expr(
@@ -452,7 +457,7 @@ impl Eval {
         expr: &mut Expr,
         target: &Term,
     ) -> anyhow::Result<()> {
-        elab::Elaborator::new(self.proof_env(), local_env, holes).elaborate_expr(expr, target)
+        elab::elaborate_expr(self.proof_env(), local_env, holes, expr, target)
     }
 
     fn tt_env(&self) -> tt::Env {
@@ -460,6 +465,7 @@ impl Eval {
             type_const_table: &self.type_const_table,
             const_table: &self.const_table,
             delta_table: &self.delta_table,
+            kappa_table: &self.kappa_table,
             class_predicate_table: &self.class_predicate_table,
             class_database: &self.class_database,
         }
@@ -1959,6 +1965,7 @@ impl Eval {
                         vec![this_class.clone()],
                         field.ty.clone(),
                     );
+                    self.add_kappa(fullname);
 
                     let target = mk_const(
                         fullname,
@@ -2101,7 +2108,9 @@ impl Eval {
                         ty: _,
                         ref target,
                     } = field;
-                    method_table.insert(field_name, target.clone());
+                    let fullname =
+                        Name::intern(&format!("{}.{}", cmd_structure.name, field_name)).unwrap();
+                    method_table.insert(fullname, target.clone());
                 }
                 ClassInstanceField::Lemma(_) => {}
             }
