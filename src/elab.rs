@@ -1978,6 +1978,11 @@ pub fn elaborate_term(
     target: &mut Term,
     ty: &Type,
 ) -> anyhow::Result<()> {
+    #[cfg(debug_assertions)]
+    {
+        println!("elaborating:\n{target}");
+    }
+
     let mut elab = Elaborator::new(proof_env, local_env, vec![]);
 
     let t = elab.visit_term(target)?;
@@ -1991,6 +1996,11 @@ pub fn elaborate_term(
 
     ensure!(target.is_ground());
     ensure!(target.is_type_ground());
+
+    #[cfg(debug_assertions)]
+    {
+        println!("elaborated:\n{target}");
+    }
 
     Ok(())
 }

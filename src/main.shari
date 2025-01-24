@@ -5,7 +5,7 @@
  - [x] inductive types
  - [x] inductive predicates
  - [x] structures and instances
- - [ ] type class
+ - [x] type class
  - [ ] namespace
  - [ ] calc environment
  - [ ] extension by new symbol
@@ -21,13 +21,72 @@ const forall.{u} : (u → Prop) → Prop
 
 infixr → : 25 := imp
 infix = : 50 := eq
-nofix ⊤ := true
-infixl ∧ : 35 := and
-nofix ⊥ := false
-infixl ∨ : 30 := or
-prefix ¬ : 40 := not
+nofix ⊤ := has_top.top
+infixl ∧ : 35 := has_wedge.wedge
+nofix ⊥ := has_bot.bot
+infixl ∨ : 30 := has_vee.vee
+prefix ¬ : 40 := has_neg.neg
 infix ↔ : 20 := iff
 infix ≠ : 50 := ne
+
+-- The kernel and higher-order unifier recognize three reduction rules as the definitional equivalence:
+--
+-- 1. β-reduction: (λ x, M) N ↦ [N/x]M
+-- 2. δ-reduction: c ↦ M  where there is a definition somewhere `def c := M`.
+-- 3. κ-reduction: c ↦ N  where c is a method from a class `C u₁ ⋯ uₙ` and c is assigned types so that
+--                              it is resolved to some concrete instance.
+--
+-- Rules 1 and 2 are type agnostic. Also, rule 3 can be applied to partially typed terms as long as its method
+-- can be resolved to a concrete term.
+--
+-- There are basically two approaches to incorporate type classes into a language.
+--
+-- a) Add support for implicit arguments and build type classes on it.
+-- b) Add them natively.
+--
+-- (a) is taken by most languages supporting dependent types including Coq, Agda, Lean, and Scala.
+-- Others such as Haskell and Isabelle use (b). Our choice is (b), because we do not have dependency thus
+-- implicit arguments are not necessary in typing, and using (b) makes it easier to force the coherency of instances.
+-- (While languages using (a) allows overlapping instances and non-deterministic elaboration, coherency is still
+-- important to avoid unintentional behaviours. In fact, in Lean, programmers must be careful not to introduce
+-- _morally incoherent_ instances.)
+--
+-- Because our kernel (nor the unifier) do not implement ι-reduction, we implement class method instantiation by a special
+-- equality rule called κ-reduction. When the elaborator encounters κ-redex it eagerly reduces. So we recommend users to
+-- use as small terms in instance method definitions as possible so that terms may not exponentially blow up.
+--
+-- While use of class instantiations are not lowered to terms representing structure objects, the kernel implicitly generates
+-- instance objects that are invisible in the language surface. This design allows us to easily prove the consistency of the logic,
+-- otherwise it is very error-prone [KP19].
+--
+-- - [KP19] Kunˇcar, and Popescu,  A Consistent Foundation for Isabelle/HOL, 2019
+
+-- This introduces:
+-- 
+-- 1. A class predicate `has_top` with one variable. Class predicates have a separate namespace, but
+--    one should try not to overlap with type names.
+-- 2. A constant with a class constraint: `const top.{u} [has_top u] : u`.
+--    If there is an instance `I` of class `has_top τ`, top.{τ} is κ-reducible to I.top.
+--
+class structure has_top u := {
+  const top : u
+}
+
+class structure has_bot u := {
+  const bot : u
+}
+
+class structure has_wedge u := {
+  const wedge : u → u → u
+}
+
+class structure has_vee u := {
+  const vee : u → u → u
+}
+
+class structure has_neg u := {
+  const neg : u → u
+}
 
 -- A predicative version of Leibniz equality (attributed to Paulin).
 -- The following set of declarations are generated.
@@ -48,10 +107,10 @@ inductive eq.{u} (x : u) : u → Prop
 inductive true : Prop
 | intro : true
 
+inductive false : Prop
+
 inductive and (φ ψ : Prop) : Prop
 | intro : φ → ψ → and
-
-inductive false : Prop
 
 inductive or (φ ψ : Prop) : Prop
 | left : φ → or
@@ -60,7 +119,28 @@ inductive or (φ ψ : Prop) : Prop
 inductive exists.{u} (P : u → Prop) : Prop
 | intro (t : u) : P t → exists
 
+class instance has_top Prop := {
+  def top : Prop := true
+}
+
+class instance has_bot Prop := {
+  def bot : Prop := false
+}
+
+class instance has_wedge Prop := {
+  def wedge : Prop → Prop → Prop := and
+}
+
+class instance has_vee Prop := {
+  def vee : Prop → Prop → Prop := or
+}
+
 def not (φ : Prop) : Prop := φ → ⊥
+
+class instance has_neg Prop := {
+  def neg : Prop → Prop := not
+}
+
 def iff (φ : Prop) (ψ : Prop) : Prop := (φ → ψ) ∧ (ψ → φ)
 def uexists.{u} (P : u → Prop) : Prop := ∃ x, P x ∧ (∀ y, P y → x = y)
 def ne.{u} (x : u) (y : u) : Prop := ¬x = y
@@ -124,9 +204,9 @@ contradiction ⟪φ⟫ ⟪¬φ⟫
 
 -- Internal version of nondegeneracy of topos.
 -- Of course, this lemma holds in any (possibly degenerate) topos.
-lemma true_ne_false : ⊤ ≠ ⊥ :=
-assume ⊤ = ⊥,
-eq.transport ⟪⊤ = ⊥⟫ true.intro
+lemma true_ne_false : true ≠ false :=
+assume true = false,
+eq.transport ⟪true = false⟫ true.intro
 
 -- law of non-contradiction
 lemma nc (φ : Prop) : ¬(φ ∧ ¬φ) :=
@@ -437,12 +517,12 @@ bool.ind (or.left eq.refl) (or.right eq.refl)
 
 lemma bool.tt_ne_ff : tt ≠ ff :=
 assume tt = ff,
-have ⊤ = ⊥ :=
-  have ⊤ = bool.rec tt ⊤ ⊥ := eq.ap (eq.symm bool.tt.spec),
-  have bool.rec tt ⊤ ⊥ = bool.rec ff ⊤ ⊥ := eq.ap ⟪tt = ff⟫,
-  have bool.rec ff ⊤ ⊥ = ⊥ := eq.ap bool.ff.spec,
-  eq.trans ⟪⊤ = bool.rec tt ⊤ ⊥⟫ (eq.trans ⟪bool.rec tt ⊤ ⊥ = bool.rec ff ⊤ ⊥⟫ ⟪bool.rec ff ⊤ ⊥ = ⊥⟫),
-contradiction ⟪⊤ = ⊥⟫ true_ne_false
+have true = false :=
+  have true = bool.rec tt true false := eq.ap (eq.symm bool.tt.spec),
+  have bool.rec tt true false = bool.rec ff true false := eq.ap ⟪tt = ff⟫,
+  have bool.rec ff true false = false := eq.ap bool.ff.spec,
+  eq.trans ⟪true = bool.rec tt true false⟫ (eq.trans ⟪bool.rec tt true false = bool.rec ff true false⟫ ⟪bool.rec ff true false = false⟫),
+contradiction ⟪true = false⟫ true_ne_false
 
 /-
  - choice
@@ -715,31 +795,3 @@ structure space u := {
 instance space.mk.{u} (subbase : set (set u)) : space u := {
   def subbase : set (set u) := subbase
 }
-
-/-
-class structure has_wedge u := {
-  const wedge : u → u → u
-}
-
-class instance has_wedge Prop := {
-  def wedge : Prop → Prop → Prop := and
-}
-
--- then ⊢ wedge ≡ and : Prop → Prop → Prop
-
-def wedge [has_wedge u] : u → u → u := has_wedge.wedge
-
-class structure group u := {
-  class monoid u
-  const inv : u → u
-  axiom left_inv (x : u) : mult (inv x) x = unit
-  axiom right_inv (x : u) : mult x (inv x) = unit
-}
-
-class type const has_wedge u : u → u → u
-class def has_wedge Prop : Prop → Prop → Prop := and
-class const has_wedge (Prop → Prop)
-
-class const wedge.{u} : u → u → u
-class def wedge.{Prop} : Prop → Prop → Prop := and
--/
