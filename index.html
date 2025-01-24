@@ -52,10 +52,6 @@
             padding: 1em;
         }
 
-        #run-btn {
-            margin-bottom: 1em;
-        }
-
         /* 出力エリア */
         #output {
             flex: 1;
@@ -80,7 +76,6 @@
 
         <!-- 右カラム: Runボタン + 出力 -->
         <div id="output-container">
-            <button id="run-btn">Run</button>
             <div id="output"></div>
         </div>
     </div>
@@ -110,18 +105,38 @@
 
     <script type="module">
         import init, { run_process } from "./shari_playground.js";
+        let autoRunTimer = null;
 
         async function main() {
             await init();
 
-            const runBtn = document.getElementById("run-btn");
             const output = document.getElementById("output");
 
-            runBtn.addEventListener("click", () => {
+            function runCode() {
                 const inputCode = window.editor.getValue();
                 const result = run_process(inputCode);
                 output.textContent = result;
-            });
+            }
+
+            // Monaco Editor が作成完了するまでタイミングを待つため少し工夫
+            // (editor がすぐには存在しないことがある)
+            const checkEditor = () => {
+                if (window.editor) {
+                    // エディタのモデルが変更されるたびに実行
+                    window.editor.onDidChangeModelContent(() => {
+                        // 打鍵の最終入力から 500ms 待って自動実行
+                        clearTimeout(autoRunTimer);
+                        autoRunTimer = setTimeout(() => {
+                            runCode();
+                        }, 500);
+                    });
+
+                    runCode(); // 初回実行
+                } else {
+                    setTimeout(checkEditor, 200); // editor がまだ準備できていなければ再試行
+                }
+            };
+            checkEditor();
         }
 
         main();
