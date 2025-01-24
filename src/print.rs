@@ -1,6 +1,6 @@
 use crate::{
     cmd::{Fixity, Operator},
-    tt::{Ctor, Name, Term, Type},
+    tt::{Class, Ctor, Name, Term, Type},
 };
 
 use anyhow::bail;
@@ -133,7 +133,7 @@ impl<'a> Printer<'a> {
                                     .unwrap();
                                 }
                                 for (i, local_name) in local_names.iter().rev().enumerate() {
-                                    if local_name == &x && inner.body.has_var(i + 1) {
+                                    if local_name == &x && inner.body.contains_var(i + 1) {
                                         continue 'refresh;
                                     }
                                 }
@@ -173,7 +173,7 @@ impl<'a> Printer<'a> {
                                     .unwrap();
                                 }
                                 for (i, local_name) in local_names.iter().rev().enumerate() {
-                                    if local_name == &x && inner.body.has_var(i + 1) {
+                                    if local_name == &x && inner.body.contains_var(i + 1) {
                                         continue 'refresh;
                                     }
                                 }
@@ -213,7 +213,7 @@ impl<'a> Printer<'a> {
                                     .unwrap();
                                 }
                                 for (i, local_name) in local_names.iter().rev().enumerate() {
-                                    if local_name == &x && inner.body.has_var(i + 1) {
+                                    if local_name == &x && inner.body.contains_var(i + 1) {
                                         continue 'refresh;
                                     }
                                 }
@@ -288,7 +288,7 @@ impl<'a> Printer<'a> {
                         .unwrap();
                     }
                     for (i, local_name) in local_names.iter().rev().enumerate() {
-                        if local_name == &x && inner.body.has_var(i + 1) {
+                        if local_name == &x && inner.body.contains_var(i + 1) {
                             continue 'refresh;
                         }
                     }
@@ -366,96 +366,18 @@ impl<'a> Printer<'a> {
             Type::Local(name) => write!(f, "{name}"),
         }
     }
+
+    fn fmt_class(&self, f: &mut std::fmt::Formatter, c: &Class) -> std::fmt::Result {
+        write!(f, "{}", c.name)?;
+        if !c.args.is_empty() {
+            for arg in &c.args {
+                write!(f, " ")?;
+                self.fmt_type_help(f, arg, 1023)?;
+            }
+        }
+        Ok(())
+    }
 }
-
-// #[test]
-// fn test_parse_print() {
-//     use crate::env::{DeclConst, TermDecl};
-//     use crate::kernel::proof::mk_type_prop;
-
-//     let ops = [
-//         Operator {
-//             symbol: "⊤".to_owned(),
-//             fixity: Fixity::Nofix,
-//             prec: usize::MAX,
-//             entity: "top".try_into().unwrap(),
-//         },
-//         Operator {
-//             symbol: "∧".to_owned(),
-//             fixity: Fixity::Infixr,
-//             prec: 35,
-//             entity: "and".try_into().unwrap(),
-//         },
-//         Operator {
-//             symbol: "¬".to_owned(),
-//             fixity: Fixity::Prefix,
-//             prec: 40,
-//             entity: "not".try_into().unwrap(),
-//         },
-//     ];
-
-//     let mut env = Env::new_kernel();
-//     for op in ops {
-//         env.add_notation(op).unwrap();
-//     }
-
-//     env.add_term_decl(
-//         "top".try_into().unwrap(),
-//         TermDecl::Const(DeclConst {
-//             local_types: vec![],
-//             ty: mk_type_prop(),
-//         }),
-//     )
-//     .unwrap();
-
-//     env.add_term_decl(
-//         "not".try_into().unwrap(),
-//         TermDecl::Const(DeclConst {
-//             local_types: vec![],
-//             ty: mk_type_arrow(mk_type_prop(), mk_type_prop()),
-//         }),
-//     )
-//     .unwrap();
-
-//     env.add_term_decl(
-//         "and".try_into().unwrap(),
-//         TermDecl::Const(DeclConst {
-//             local_types: vec![],
-//             ty: mk_type_arrow(
-//                 mk_type_prop(),
-//                 mk_type_arrow(mk_type_prop(), mk_type_prop()),
-//             ),
-//         }),
-//     )
-//     .unwrap();
-
-//     struct Display<'a> {
-//         env: &'a Env,
-//         m: Term,
-//     }
-
-//     impl<'a> std::fmt::Display for Display<'a> {
-//         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//             Printer::new(self.env).fmt_term(&self.m, f)
-//         }
-//     }
-
-//     let roundtrip = |s: &str| -> String {
-//         let mut lex = Lex::new(s);
-//         let mut parser = Parser::new(&mut lex, &env, false);
-//         let m = parser.term().unwrap();
-//         parser.eof().unwrap();
-//         Display { env: &env, m }.to_string()
-//     };
-
-//     insta::assert_snapshot!(roundtrip("λ (x : α), x"), @"λ (x : α), x");
-//     insta::assert_snapshot!(roundtrip("λ (p q r : Prop), p q r"), @"λ (p : Prop), λ (q : Prop), λ (r : Prop), p q r");
-//     insta::assert_snapshot!(roundtrip("λ (φ ψ : Prop), (λ (f : Prop → Prop → Prop), f φ ψ) = (λ (f : Prop → Prop → Prop), f ⊤ ⊤)"), @"λ (φ : Prop), λ (ψ : Prop), (λ (f : Prop → Prop → Prop), f φ ψ) = λ (f : Prop → Prop → Prop), f ⊤ ⊤");
-//     insta::assert_snapshot!(roundtrip("λ (p q : Prop), p = (p ∧ q)"), @"λ (p : Prop), λ (q : Prop), p = (p ∧ q)");
-//     insta::assert_snapshot!(roundtrip("λ (a b : Prop), (¬a) = b"), @"λ (a : Prop), λ (b : Prop), (¬a) = b");
-//     insta::assert_snapshot!(roundtrip("λ (a b : Prop), ¬a = b"), @"λ (a : Prop), λ (b : Prop), ¬a = b");
-//     insta::assert_snapshot!(roundtrip("λ (x : w), eq.{u → v} x"), @"λ (x : w), eq.{u → v} x");
-// }
 
 #[derive(Debug)]
 pub struct Pretty<'a, T> {
@@ -490,5 +412,17 @@ impl Display for Pretty<'_, &Term> {
 impl Display for Pretty<'_, Term> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         Printer::new(self.op_table).fmt_term(&self.data, f)
+    }
+}
+
+impl Display for Pretty<'_, &Class> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        Printer::new(self.op_table).fmt_class(f, self.data)
+    }
+}
+
+impl Display for Pretty<'_, Class> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        Printer::new(self.op_table).fmt_class(f, &self.data)
     }
 }
