@@ -718,8 +718,8 @@ structure monoid u := {
 
 /-
 class structure monoid.hom u v := {
-  class monoid u
-  class monoid v
+  class instance dom.monoid : monoid u
+  class instance cod.monoid : monoid v
   const f : u → v
   axiom homomorphic (x₁ x₂ : u) : mult (f x₁) (f x₂) = f (mult x₁ x₂)
 }
