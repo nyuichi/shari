@@ -444,7 +444,7 @@ pub enum Instance {
 
 #[derive(Debug, Clone)]
 pub struct InstanceGlobal {
-    pub rule_id: usize,
+    pub name: Name,
     pub ty_args: Vec<Type>,
     pub args: Vec<Instance>,
 }
@@ -453,9 +453,9 @@ pub fn mk_instance_local(class: Class) -> Instance {
     Instance::Local(class)
 }
 
-pub fn mk_instance_global(rule_id: usize, ty_args: Vec<Type>, args: Vec<Instance>) -> Instance {
+pub fn mk_instance_global(name: Name, ty_args: Vec<Type>, args: Vec<Instance>) -> Instance {
     Instance::Global(Arc::new(InstanceGlobal {
-        rule_id,
+        name,
         ty_args,
         args,
     }))
@@ -1468,7 +1468,7 @@ pub struct Delta {
 pub struct Kappa;
 
 #[derive(Debug, Clone)]
-pub struct ClassRule {
+pub struct ClassInstance {
     pub local_types: Vec<Name>,
     pub local_classes: Vec<Class>,
     pub target: Class,
@@ -1482,7 +1482,7 @@ pub struct Env<'a> {
     pub delta_table: &'a HashMap<Name, Delta>,
     pub kappa_table: &'a HashMap<Name, Kappa>,
     pub class_predicate_table: &'a HashMap<Name, ClassType>,
-    pub class_database: &'a [ClassRule],
+    pub class_instance_table: &'a HashMap<Name, ClassInstance>,
 }
 
 impl<'a> Env<'a> {
@@ -1557,17 +1557,17 @@ impl<'a> Env<'a> {
                 None
             }
             Instance::Global(i) => {
-                let &InstanceGlobal {
-                    rule_id,
-                    ref ty_args,
-                    ref args,
+                let InstanceGlobal {
+                    name,
+                    ty_args,
+                    args,
                 } = &**i;
-                let ClassRule {
+                let ClassInstance {
                     local_types,
                     local_classes,
                     target,
                     method_table: _,
-                } = self.class_database.get(rule_id)?;
+                } = self.class_instance_table.get(name)?;
                 if local_types.len() != ty_args.len() {
                     return None;
                 }
@@ -1799,19 +1799,19 @@ impl<'a> Env<'a> {
                 let Instance::Global(recv) = &n.instances[0] else {
                     return None;
                 };
-                let &InstanceGlobal {
-                    rule_id,
-                    ref ty_args,
-                    ref args,
+                let InstanceGlobal {
+                    name,
+                    ty_args,
+                    args,
                 } = &**recv;
                 // assert_eq!(ty_args, &n.ty_args);
                 // assert_eq!(&args[..], &n.instances[1..]);
-                let ClassRule {
+                let ClassInstance {
                     local_types,
                     local_classes,
                     target: _,
                     method_table,
-                } = &self.class_database[rule_id];
+                } = self.class_instance_table.get(name)?;
                 let target = method_table.get(&n.name)?;
                 let mut type_subst = vec![];
                 for (&x, t) in zip(local_types, ty_args) {
@@ -1878,19 +1878,19 @@ impl<'a> Env<'a> {
         let Instance::Global(recv) = &n.instances[0] else {
             return None;
         };
-        let &InstanceGlobal {
-            rule_id,
-            ref ty_args,
-            ref args,
+        let InstanceGlobal {
+            name,
+            ty_args,
+            args,
         } = &**recv;
         // assert_eq!(ty_args, &n.ty_args);
         // assert_eq!(&args[..], &n.instances[1..]);
-        let ClassRule {
+        let ClassInstance {
             local_types,
             local_classes,
             target: _,
             method_table,
-        } = &self.class_database[rule_id];
+        } = &self.class_instance_table.get(name)?;
         let target = method_table.get(&n.name)?;
         let mut type_subst = vec![];
         for (&x, t) in zip(local_types, ty_args) {

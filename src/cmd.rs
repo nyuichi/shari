@@ -10,7 +10,7 @@ use crate::{
     proof::{self, Axiom},
     tt::{
         self, mk_const, mk_fresh_type_hole, mk_instance_local, mk_local, mk_type_arrow,
-        mk_type_const, mk_type_local, mk_type_prop, Class, ClassRule, ClassType, Const, Delta,
+        mk_type_const, mk_type_local, mk_type_prop, Class, ClassInstance, ClassType, Const, Delta,
         Kappa, Kind, LocalEnv, Name, Parameter, Term, Type,
     },
 };
@@ -227,6 +227,7 @@ pub struct ClassStructureAxiom {
 
 #[derive(Debug, Clone)]
 pub struct CmdClassInstance {
+    pub name: Name,
     pub local_types: Vec<Name>,
     pub local_classes: Vec<Class>,
     pub target: Class,
@@ -266,7 +267,7 @@ pub struct Eval {
     pub delta_table: HashMap<Name, Delta>,
     pub kappa_table: HashMap<Name, Kappa>,
     pub class_predicate_table: HashMap<Name, ClassType>,
-    pub class_database: Vec<ClassRule>,
+    pub class_instance_table: HashMap<Name, ClassInstance>,
     pub structure_table: HashMap<Name, CmdStructure>,
     pub class_structure_table: HashMap<Name, CmdClassStructure>,
 }
@@ -365,19 +366,23 @@ impl Eval {
         self.class_predicate_table.insert(name, ty);
     }
 
-    fn add_class_rule(
+    fn add_class_instance(
         &mut self,
+        name: Name,
         local_types: Vec<Name>,
         local_classes: Vec<Class>,
         target: Class,
         method_table: HashMap<Name, Term>,
     ) {
-        self.class_database.push(ClassRule {
-            local_types,
-            local_classes,
-            target,
-            method_table,
-        });
+        self.class_instance_table.insert(
+            name,
+            ClassInstance {
+                local_types,
+                local_classes,
+                target,
+                method_table,
+            },
+        );
     }
 
     fn add_delta(&mut self, name: Name, target: Term) {
@@ -428,6 +433,10 @@ impl Eval {
         self.class_predicate_table.contains_key(&name)
     }
 
+    fn has_class_instance(&self, name: Name) -> bool {
+        self.class_instance_table.contains_key(&name)
+    }
+
     fn elaborate_type(
         &self,
         local_env: &mut LocalEnv,
@@ -467,7 +476,7 @@ impl Eval {
             delta_table: &self.delta_table,
             kappa_table: &self.kappa_table,
             class_predicate_table: &self.class_predicate_table,
-            class_database: &self.class_database,
+            class_instance_table: &self.class_instance_table,
         }
     }
 
@@ -1992,11 +2001,15 @@ impl Eval {
 
     fn run_class_instance_cmd(&mut self, cmd: CmdClassInstance) -> anyhow::Result<()> {
         let CmdClassInstance {
+            name,
             local_types,
             local_classes,
             target,
             mut fields,
         } = cmd;
+        if self.has_class_instance(name) {
+            bail!("already defined");
+        }
         for i in 0..local_types.len() {
             for j in i + 1..local_types.len() {
                 if local_types[i] == local_types[j] {
@@ -2015,17 +2028,17 @@ impl Eval {
         }
         self.elaborate_class(&mut local_env, &target)?;
         // TODO: this implementation is too conservative.
-        for rule in &self.class_database {
-            let rule_head = {
+        for instance in self.class_instance_table.values() {
+            let instance_target = {
                 let mut type_subst = vec![];
-                for &name in &rule.local_types {
+                for &name in &instance.local_types {
                     type_subst.push((name, mk_fresh_type_hole()));
                 }
-                let mut target = rule.target.clone();
+                let mut target = instance.target.clone();
                 target.subst(&type_subst);
                 target
             };
-            if target.matches(&rule_head).is_some() {
+            if target.matches(&instance_target).is_some() {
                 bail!("overlapping instances are disallowed");
             }
         }
@@ -2115,7 +2128,7 @@ impl Eval {
                 ClassInstanceField::Lemma(_) => {}
             }
         }
-        self.add_class_rule(local_types, local_classes, target, method_table);
+        self.add_class_instance(name, local_types, local_classes, target, method_table);
         Ok(())
     }
 }

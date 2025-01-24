@@ -119,25 +119,25 @@ inductive or (φ ψ : Prop) : Prop
 inductive exists.{u} (P : u → Prop) : Prop
 | intro (t : u) : P t → exists
 
-class instance has_top Prop := {
+class instance Prop.has_top : has_top Prop := {
   def top : Prop := true
 }
 
-class instance has_bot Prop := {
+class instance Prop.has_bot : has_bot Prop := {
   def bot : Prop := false
 }
 
-class instance has_wedge Prop := {
+class instance Prop.has_wedge : has_wedge Prop := {
   def wedge : Prop → Prop → Prop := and
 }
 
-class instance has_vee Prop := {
+class instance Prop.has_vee : has_vee Prop := {
   def vee : Prop → Prop → Prop := or
 }
 
 def not (φ : Prop) : Prop := φ → ⊥
 
-class instance has_neg Prop := {
+class instance Prop.has_neg : has_neg Prop := {
   def neg : Prop → Prop := not
 }
 

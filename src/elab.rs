@@ -16,8 +16,8 @@ use crate::{
     proof::{self, Axiom},
     tt::{
         self, mk_const, mk_fresh_type_hole, mk_instance_global, mk_local, mk_type_arrow,
-        mk_type_prop, Class, ClassRule, ClassType, Const, Instance, InstanceGlobal, Kind, LocalEnv,
-        Name, Parameter, Term, TermAbs, TermApp, TermConst, Type, TypeApp, TypeArrow,
+        mk_type_prop, Class, ClassInstance, ClassType, Const, Instance, InstanceGlobal, Kind,
+        LocalEnv, Name, Parameter, Term, TermAbs, TermApp, TermConst, Type, TypeApp, TypeArrow,
     },
 };
 
@@ -319,17 +319,17 @@ impl<'a> Elaborator<'a> {
                 Ok(())
             }
             Instance::Global(instance) => {
-                let &InstanceGlobal {
-                    rule_id,
-                    ref ty_args,
-                    ref args,
+                let InstanceGlobal {
+                    name,
+                    ty_args,
+                    args,
                 } = &**instance;
-                let Some(ClassRule {
+                let Some(ClassInstance {
                     local_types,
                     local_classes,
                     target,
                     method_table: _,
-                }) = self.proof_env.tt_env.class_database.get(rule_id)
+                }) = self.proof_env.tt_env.class_instance_table.get(name)
                 else {
                     bail!("class rule not found");
                 };
@@ -835,7 +835,7 @@ impl<'a> Elaborator<'a> {
             }
             Instance::Global(instance) => {
                 let InstanceGlobal {
-                    rule_id: _,
+                    name: _,
                     ty_args,
                     args,
                 } = Arc::make_mut(instance);
@@ -1380,13 +1380,13 @@ impl<'a> Elaborator<'a> {
                 return Some(Instance::Local(local_class.clone()));
             }
         }
-        'next_rule: for (rule_id, rule) in self.proof_env.tt_env.class_database.iter().enumerate() {
-            let ClassRule {
+        'next_instance: for (&name, instance) in self.proof_env.tt_env.class_instance_table {
+            let ClassInstance {
                 local_types,
                 local_classes,
                 target,
                 method_table: _,
-            } = rule;
+            } = instance;
             let mut type_subst = vec![];
             for &local_type in local_types {
                 type_subst.push((local_type, mk_fresh_type_hole()));
@@ -1413,11 +1413,11 @@ impl<'a> Elaborator<'a> {
                 let mut local_class = local_class.clone();
                 local_class.subst(&subst);
                 let Some(instance) = self.resolve_class(local_env, &local_class) else {
-                    continue 'next_rule;
+                    continue 'next_instance;
                 };
                 args.push(instance);
             }
-            return Some(mk_instance_global(rule_id, ty_args, args));
+            return Some(mk_instance_global(name, ty_args, args));
         }
         None
     }

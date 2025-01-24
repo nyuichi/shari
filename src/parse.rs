@@ -470,19 +470,6 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(class_params)
     }
 
-    /// e.g. `C ⇒ D ⇒`
-    fn class_context(&mut self) -> Result<Vec<Class>, ParseError> {
-        let mut class_context = vec![];
-        while let Some(class) = self.optional(|this| {
-            let class = this.class()?;
-            this.expect_symbol("⇒")?;
-            Ok(class)
-        }) {
-            class_context.push(class);
-        }
-        Ok(class_context)
-    }
-
     pub fn term(&mut self) -> Result<Term, ParseError> {
         self.subterm(0)
     }
@@ -1151,7 +1138,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         for ty in &local_types {
             self.type_locals.push(*ty);
         }
-        let local_classes = self.class_context()?;
+        let local_classes = self.local_class_parameters()?;
         self.expect_symbol(":")?;
         let t = self.ty()?;
         // Parsing finished.
@@ -1478,11 +1465,13 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     fn class_instance_cmd(&mut self, _token: Token<'a>) -> Result<CmdClassInstance, ParseError> {
+        let name = self.name()?;
         let local_types = self.local_type_parameters()?;
         for &ty in &local_types {
             self.type_locals.push(ty);
         }
-        let local_classes = self.class_context()?;
+        let local_classes = self.local_class_parameters()?;
+        self.expect_symbol(":")?;
         let target = self.class()?;
         self.expect_symbol(":=")?;
         let mut fields = vec![];
@@ -1543,6 +1532,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
         Ok(CmdClassInstance {
+            name,
             local_types,
             local_classes,
             target,
