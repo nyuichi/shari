@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>shari + Monaco Editor</title>
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.38.0/min/vs/loader.js"></script>
+    <style>
+        /* 全体のリセット */
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            box-sizing: border-box;
+        }
+
+        /* 画面を左右に2分割するためのコンテナ */
+        #container {
+            display: flex;
+            width: 100%;
+            height: 100vh;
+            /* 画面の高さいっぱい */
+            overflow: hidden;
+            /* はみ出し防止 */
+        }
+
+        /* 左カラム: Editor を縦いっぱいに広げる */
+        #editor-container {
+            flex: 1;
+            /* 画面の半分を使う */
+            border-right: 1px solid #ccc;
+            display: flex;
+            /* 内部要素をflexで配置 */
+            flex-direction: column;
+            /* 縦方向に要素を並べる */
+        }
+
+        /* Monaco Editor本体を高さいっぱいにする */
+        #editor {
+            flex: 1;
+            /* 親の縦方向サイズをフルに使う */
+        }
+
+        /* 右カラム: Runボタン + 出力エリア */
+        #output-container {
+            flex: 1;
+            /* 残り半分を使う */
+            display: flex;
+            flex-direction: column;
+            padding: 1em;
+        }
+
+        #run-btn {
+            margin-bottom: 1em;
+        }
+
+        /* 出力エリア */
+        #output {
+            flex: 1;
+            /* 縦方向に残りの空間を埋める */
+            border: 1px solid #ccc;
+            padding: 0.5em;
+            overflow: auto;
+            white-space: pre-wrap;
+            /* 改行を保持して表示 */
+            background-color: #f9f9f9;
+            font-family: "Courier New", Courier, monospace;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container">
+        <!-- 左カラム: Editor -->
+        <div id="editor-container">
+            <div id="editor"></div>
+        </div>
+
+        <!-- 右カラム: Runボタン + 出力 -->
+        <div id="output-container">
+            <button id="run-btn">Run</button>
+            <div id="output"></div>
+        </div>
+    </div>
+
+    <script>
+        require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.38.0/min/vs' } });
+        require(['vs/editor/editor.main'], function () {
+            fetch('./main.shari')
+                .then(res => res.text())
+                .then(text => {
+                    window.editor = monaco.editor.create(document.getElementById('editor'), {
+                        value: text,
+                        language: 'plaintext',
+                        theme: 'vs-light'
+                    });
+                })
+                .catch(err => {
+                    console.error('Default file load error:', err);
+                    window.editor = monaco.editor.create(document.getElementById('editor'), {
+                        value: '-- Fallback content',
+                        language: 'plaintext',
+                        theme: 'vs-light'
+                    });
+                });
+        });
+    </script>
+
+    <script type="module">
+        import init, { run_process } from "./shari_playground.js";
+
+        async function main() {
+            await init();
+
+            const runBtn = document.getElementById("run-btn");
+            const output = document.getElementById("output");
+
+            runBtn.addEventListener("click", () => {
+                const inputCode = window.editor.getValue();
+                const result = run_process(inputCode);
+                output.textContent = result;
+            });
+        }
+
+        main();
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,24 @@
+{
+    "editor.unicodeHighlight.allowedCharacters": {
+        "∨": true,
+        "⊤": true,
+        "ℕ": true,
+        "∪": true,
+        "∖": true
+    },
+    "latex-input.mappings": [
+        {
+            "iff": "↔",
+            "neq": "≠",
+            "imp": "→",
+            "not": "¬",
+            "gets": "←",
+            "nequiv": "≢",
+            "zl": "→",
+            "Vdash": "⊩",
+            "bigcap": "⋂",
+            "bigcup": "⋃"
+        },
+        "default-mappings.json",
+    ],
+}
