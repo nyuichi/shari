@@ -4,3 +4,4 @@ public/shari_playground_bg.wasm.d.ts
 public/shari_playground.d.ts
 public/shari_playground.js
 wasm/
+node_modules/
