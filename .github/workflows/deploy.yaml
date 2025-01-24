@@ -19,7 +19,7 @@ jobs:
           rustflags:
 
       - name: Install wasm-bindgen
-        run: cargo install wasm-bindgen-cli
+        uses: jetli/wasm-bindgen-action@v0.2.0
 
       - name: Build & Deploy
         run: |
