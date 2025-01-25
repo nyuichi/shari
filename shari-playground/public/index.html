@@ -43,26 +43,39 @@
             /* 親の縦方向サイズをフルに使う */
         }
 
-        /* 右カラム: Runボタン + 出力エリア */
+        /* 右ペイン: 縦に上下分割 */
         #output-container {
             flex: 1;
-            /* 残り半分を使う */
+            /* 残りを全て使う */
             display: flex;
             flex-direction: column;
-            padding: 1em;
+            /* 上下に並べる */
+            gap: 5px;
+            /* 上下の隙間 */
+            padding: 5px;
         }
 
-        /* 出力エリア */
+        /* 上部: 処理結果の表示領域 */
         #output {
             flex: 1;
-            /* 縦方向に残りの空間を埋める */
+            /* 上下で均等に分割したければ共にflex:1 */
             border: 1px solid #ccc;
+            overflow: auto;
+            padding: 0.5em;
+            white-space: pre-wrap;
+            font-family: "Courier New", Courier, monospace;
+            /* 等幅フォント例 */
+        }
+
+        /* 下部: ログ用 textarea */
+        #log-area {
+            flex: 1;
+            resize: none;
+            /* ユーザーの手動リサイズを禁止 (任意) */
+            border: 1px solid #ccc;
+            font-family: "Courier New", Courier, monospace;
             padding: 0.5em;
             overflow: auto;
-            white-space: pre-wrap;
-            /* 改行を保持して表示 */
-            background-color: #f9f9f9;
-            font-family: "Courier New", Courier, monospace;
         }
     </style>
 </head>
@@ -77,6 +90,7 @@
         <!-- 右カラム: Runボタン + 出力 -->
         <div id="output-container">
             <div id="output"></div>
+            <textarea id="log-area" readonly></textarea>
         </div>
     </div>
 
@@ -89,7 +103,10 @@
                     window.editor = monaco.editor.create(document.getElementById('editor'), {
                         value: text,
                         language: 'plaintext',
-                        theme: 'vs-light'
+                        theme: 'vs-light',
+                        minimap: {
+                            enabled: false
+                        }
                     });
                 })
                 .catch(err => {
@@ -104,15 +121,25 @@
     </script>
 
     <script type="module">
-        import init, { run_process } from "./shari_playground.js";
+        import init, { init_logger, run_process } from "./shari_playground.js";
+
+        const logArea = document.getElementById("log-area");
+
+        window.appendLog = function (msg) {
+            logArea.value += msg + "\n";
+        };
+
         let autoRunTimer = null;
 
         async function main() {
             await init();
+            init_logger();
 
             const output = document.getElementById("output");
 
             function runCode() {
+                // TODO: ログはクリアしないほうがいいかも？
+                logArea.value = "";
                 const inputCode = window.editor.getValue();
                 const result = run_process(inputCode);
                 output.textContent = result;

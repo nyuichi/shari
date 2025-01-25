@@ -1,6 +1,7 @@
 use crate::{
     cmd::{Fixity, Operator},
-    tt::{Class, Ctor, Name, Term, Type},
+    proof::Axiom,
+    tt::{Class, Const, Ctor, Name, Term, Type},
 };
 
 use anyhow::bail;
@@ -424,5 +425,67 @@ impl Display for Pretty<'_, &Class> {
 impl Display for Pretty<'_, Class> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         Printer::new(self.op_table).fmt_class(f, &self.data)
+    }
+}
+
+impl Display for Pretty<'_, (&Name, &Const)> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (
+            name,
+            Const {
+                local_types,
+                local_classes,
+                ty,
+            },
+        ) = self.data;
+        write!(f, "const {}", name)?;
+        if !local_types.is_empty() {
+            write!(f, ".{{")?;
+            let mut first = true;
+            for local_type in local_types {
+                if !first {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{}", local_type)?;
+                first = false;
+            }
+            write!(f, "}}")?;
+        }
+        for local_class in local_classes {
+            write!(f, " [{}]", Pretty::new(self.op_table, local_class))?;
+        }
+        write!(f, " : {}", Pretty::new(self.op_table, ty))?;
+        Ok(())
+    }
+}
+
+impl Display for Pretty<'_, (&Name, &Axiom)> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (
+            name,
+            Axiom {
+                local_types,
+                local_classes,
+                target,
+            },
+        ) = self.data;
+        write!(f, "axiom {}", name)?;
+        if !local_types.is_empty() {
+            write!(f, ".{{")?;
+            let mut first = true;
+            for local_type in local_types {
+                if !first {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{}", local_type)?;
+                first = false;
+            }
+            write!(f, "}}")?;
+        }
+        for local_class in local_classes {
+            write!(f, " [{}]", Pretty::new(self.op_table, local_class))?;
+        }
+        write!(f, " : {}", Pretty::new(self.op_table, target))?;
+        Ok(())
     }
 }

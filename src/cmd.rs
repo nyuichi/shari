@@ -6,7 +6,7 @@ use crate::{
     elab,
     expr::{self, Expr},
     parse::{AxiomInfo, ConstInfo, Nasmespace, TokenTable},
-    print::OpTable,
+    print::{OpTable, Pretty},
     proof::{self, Axiom},
     tt::{
         self, mk_const, mk_fresh_type_hole, mk_instance_local, mk_local, mk_type_arrow,
@@ -314,6 +314,11 @@ impl Eval {
                 ty,
             },
         );
+
+        log::info!(
+            "added {}",
+            Pretty::new(&self.pp, self.const_table.get_key_value(&name).unwrap())
+        );
     }
 
     fn add_axiom(
@@ -349,6 +354,11 @@ impl Eval {
                 local_classes,
                 target,
             },
+        );
+
+        log::info!(
+            "added {}",
+            Pretty::new(&self.pp, self.axiom_table.get_key_value(&name).unwrap())
         );
     }
 
