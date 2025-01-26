@@ -1,7 +1,7 @@
 use crate::{
     cmd::{Fixity, Operator},
     proof::Axiom,
-    tt::{Class, Const, Ctor, Name, Term, Type},
+    tt::{Class, ClassType, Const, Ctor, Kind, Name, Term, Type},
 };
 
 use anyhow::bail;
@@ -486,6 +486,24 @@ impl Display for Pretty<'_, (&Name, &Axiom)> {
             write!(f, " [{}]", Pretty::new(self.op_table, local_class))?;
         }
         write!(f, " : {}", Pretty::new(self.op_table, target))?;
+        Ok(())
+    }
+}
+
+impl Display for Pretty<'_, (&Name, &Kind)> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (name, kind) = self.data;
+        write!(f, "type const {} : {}", name, kind)
+    }
+}
+
+impl Display for Pretty<'_, (&Name, &ClassType)> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (name, &ClassType { arity }) = self.data;
+        write!(f, "class {}", name)?;
+        for _ in 0..arity {
+            write!(f, " _")?;
+        }
         Ok(())
     }
 }

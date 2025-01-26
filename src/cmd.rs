@@ -316,7 +316,7 @@ impl Eval {
         );
 
         log::info!(
-            "added {}",
+            "+ {}",
             Pretty::new(&self.pp, self.const_table.get_key_value(&name).unwrap())
         );
     }
@@ -357,7 +357,7 @@ impl Eval {
         );
 
         log::info!(
-            "added {}",
+            "+ {}",
             Pretty::new(&self.pp, self.axiom_table.get_key_value(&name).unwrap())
         );
     }
@@ -367,6 +367,14 @@ impl Eval {
         self.ns.type_consts.insert(name);
 
         self.type_const_table.insert(name, kind.clone());
+
+        log::info!(
+            "+ {}",
+            Pretty::new(
+                &self.pp,
+                self.type_const_table.get_key_value(&name).unwrap()
+            )
+        );
     }
 
     fn add_class_predicate(&mut self, name: Name, ty: ClassType) {
@@ -374,6 +382,14 @@ impl Eval {
         self.ns.class_predicates.insert(name);
 
         self.class_predicate_table.insert(name, ty);
+
+        log::info!(
+            "+ {}",
+            Pretty::new(
+                &self.pp,
+                self.class_predicate_table.get_key_value(&name).unwrap()
+            )
+        );
     }
 
     fn add_class_instance(
