@@ -1,5 +1,3 @@
-//! [Type] and [Term] may be ill-formed.
-
 use regex::Regex;
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -12,7 +10,7 @@ use std::{mem, slice, vec};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
-pub struct Name(pub usize);
+pub struct Name(usize);
 
 static NAME_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static NAME_TABLE: LazyLock<Mutex<HashMap<String, Name>>> = LazyLock::new(Default::default);

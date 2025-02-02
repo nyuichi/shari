@@ -8,9 +8,8 @@
  - [x] type class
  - [ ] namespace
  - [ ] calc environment
- - [ ] extension by new symbol
- - [ ] field access notation
  - [ ] coersion
+ - [ ] improved error reporting
  -/
 
 -- the very basic building blocks of our logic

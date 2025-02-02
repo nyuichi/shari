@@ -1116,8 +1116,7 @@ impl<'a> Elaborator<'a> {
                 self.add_type_constraint(inner1.cod, inner2.cod);
             }
             (Type::App(inner1), Type::App(inner2)) => {
-                // Since we have no higher-kinded polymorphism, holes will only be typed as `Type`,
-                // it is illegal to match the following two types:
+                // Since we have no higher-kinded polymorphism, it is impossible to match the following two types:
                 //  ?M₁ t =?= ?M₂ t₁ t₂
                 // But such a case is checked and ruled out in the kind checking phase that runs before
                 // this unificaiton phase.
