@@ -12,6 +12,19 @@
  - [ ] improved error reporting
  -/
 
+/-
+
+Our core logic is described by the following pure type system (PTS):
+
+| S | Prop, Type, Kind |
+| A | Prop : Type, Type : Kind |
+| R | (Prop, Prop), (Type, Type), (Type, Prop) |
+
+`φ ψ ⋯ : Prop` are called _propositions_.
+`e₁ e₂ ⋯ : φ` are called _(proof) expressions_.
+
+-/
+
 -- the very basic building blocks of our logic
 type const Prop : Type
 const imp : Prop → Prop → Prop
