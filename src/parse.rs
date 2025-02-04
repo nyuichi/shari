@@ -705,6 +705,31 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(expr)
     }
 
+    fn mk_have(m: Term, e: Expr, body: Expr) -> Expr {
+        mk_expr_app(mk_expr_assume(m, body), e)
+    }
+
+    fn mk_eq(lhs: Term, rhs: Term) -> Term {
+        let mut eq = mk_const(
+            Name::intern("eq").unwrap(),
+            vec![mk_fresh_type_hole()],
+            vec![],
+        );
+        eq.apply([lhs, rhs]);
+        eq
+    }
+
+    fn mk_eq_trans(&mut self, e1: Expr, e2: Expr) -> Expr {
+        let name = Name::intern("eq.trans").unwrap();
+        let ty_args = vec![mk_fresh_type_hole()];
+        let instances = vec![];
+        let mut eq_trans = mk_expr_const(name, ty_args, instances);
+        for _ in 0..3 {
+            eq_trans = mk_expr_inst(eq_trans, self.mk_term_hole());
+        }
+        mk_expr_app(mk_expr_app(eq_trans, e1), e2)
+    }
+
     fn subexpr(&mut self, rbp: usize) -> Result<Expr, ParseError> {
         // nud
         let mut left = 'left: {
@@ -755,7 +780,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let e1 = self.expr()?;
                     self.expect_symbol(",")?;
                     let e2 = self.expr()?;
-                    mk_expr_app(mk_expr_assume(m.clone(), e2), e1)
+                    Self::mk_have(m, e1, e2)
                 }
                 "obtain" => {
                     self.expect_symbol("(")?;
@@ -786,6 +811,61 @@ impl<'a, 'b> Parser<'a, 'b> {
                     let e_body = mk_expr_assume(p, e2);
                     let e_body = mk_expr_take(name, ty, e_body);
                     mk_expr_app(e, e_body)
+                }
+                "calc" => {
+                    // calc m₁ = m₂ := e₁
+                    //     ... = m₃ := e₂
+                    //     ... = m₄ := e₃,
+                    // e
+                    //
+                    // is equivalent to
+                    //
+                    // have m₁ = m₂ := e₁,
+                    // have m₁ = m₃ :=
+                    //   have m₂ = m₃ := e₂,
+                    //   eq.trans ⟪m₁ = m₂⟫ ⟪m₂ = m₃⟫,
+                    // have m₁ = m₄ :=
+                    //   have m₃ = m₄ := e₃,
+                    //   eq.trans ⟪m₁ = m₃⟫ ⟪m₃ = m₄⟫,
+                    // e
+                    let lhs = self.subterm(50)?; // TODO: get the precedence from main.shari.
+                    let mut rhs_list = vec![];
+                    loop {
+                        self.expect_symbol("=")?;
+                        let rhs = self.subterm(50)?;
+                        self.expect_symbol(":=")?;
+                        let e = self.expr()?;
+                        rhs_list.push((rhs, e));
+                        if self.expect_symbol_opt("...").is_none() {
+                            break;
+                        }
+                    }
+                    self.expect_symbol(",")?;
+                    let body = self.expr()?;
+
+                    let mut lemma_list = vec![];
+                    let mut last_rhs: Option<Term> = None;
+                    for (rhs, e) in rhs_list {
+                        let e = match last_rhs {
+                            Some(last) => Self::mk_have(
+                                Self::mk_eq(last.clone(), rhs.clone()),
+                                e,
+                                self.mk_eq_trans(
+                                    mk_expr_assump(Self::mk_eq(lhs.clone(), last.clone())),
+                                    mk_expr_assump(Self::mk_eq(last, rhs.clone())),
+                                ),
+                            ),
+                            None => e,
+                        };
+                        lemma_list.push((Self::mk_eq(lhs.clone(), rhs.clone()), e));
+                        last_rhs = Some(rhs);
+                    }
+
+                    let mut body = body;
+                    for (lhs, e) in lemma_list.into_iter().rev() {
+                        body = Self::mk_have(lhs, e, body);
+                    }
+                    body
                 }
                 _ => self.expr_const(token, true)?,
             }

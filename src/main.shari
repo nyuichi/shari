@@ -6,10 +6,10 @@
  - [x] inductive predicates
  - [x] structures and instances
  - [x] type class
- - [ ] namespace
- - [ ] calc environment
- - [ ] coersion
+ - [x] calc environment
  - [ ] improved error reporting
+ - [ ] coersion
+ - [ ] namespace
  -/
 
 /-
@@ -715,11 +715,6 @@ def bit1 (n : ℕ) : ℕ := succ (bit0 n)
  - (some) algebras
  -/
 
-class structure semigroup u := {
-  const mult : u → u → u
-  axiom assoc (x₁ x₂ x₃ : u) : mult (mult x₁ x₂) x₃ = mult x₁ (mult x₂ x₃)
-}
-
 structure monoid u := {
   const mult : u → u → u
   const unit : u
@@ -728,38 +723,47 @@ structure monoid u := {
   axiom right_unit (x : u) : mult x unit = x
 }
 
+def mult.{u} : monoid u → u → u → u := monoid.mult
+def unit.{u} : monoid u → u := monoid.unit
+
+def interchange.{u} (m₁ m₂ : monoid u) : Prop := ∀ a b c d, mult m₁ (mult m₂ a b) (mult m₂ c d) = mult m₂ (mult m₁ a c) (mult m₁ b d)
+
+lemma interchange.equates_unit.{u} (m₁ m₂ : monoid u) : interchange m₁ m₂ → unit m₁ = unit m₂ :=
+assume interchange m₁ m₂,
+calc unit m₁ = mult m₁ (unit m₁) (unit m₁)                                         := eq.symm monoid.left_unit
+         ... = mult m₁ (mult m₂ (unit m₂) (unit m₁)) (unit m₁)                     := eq.ap (eq.symm monoid.left_unit)
+         ... = mult m₁ (mult m₂ (unit m₂) (unit m₁)) (mult m₂ (unit m₁) (unit m₂)) := eq.ap (eq.symm monoid.right_unit)
+         ... = mult m₂ (mult m₁ (unit m₂) (unit m₁)) (mult m₁ (unit m₁) (unit m₂)) := ⟪interchange m₁ m₂⟫[_, _, _, _]
+         ... = mult m₂ (unit m₂) (mult m₁ (unit m₁) (unit m₂))                     := eq.ap monoid.right_unit
+         ... = mult m₂ (unit m₂) (unit m₂)                                         := eq.ap monoid.left_unit
+         ... = unit m₂                                                             := eq.ap monoid.right_unit,
+⟪unit m₁ = unit m₂⟫
+
+lemma interchange.equates_mult.{u} (m₁ m₂ : monoid u) : interchange m₁ m₂ → mult m₁ = mult m₂ :=
+assume interchange m₁ m₂,
+have ∀ a b, mult m₁ a b = mult m₂ a b :=
+  take (a : u),
+  take (b : u),
+  calc mult m₁ a b = mult m₁ (mult m₂ a (unit m₂)) b                     := eq.ap (eq.symm monoid.right_unit)
+               ... = mult m₁ (mult m₂ a (unit m₂)) (mult m₂ (unit m₂) b) := eq.ap (eq.symm monoid.left_unit)
+               ... = mult m₂ (mult m₁ a (unit m₂)) (mult m₁ (unit m₂) b) := ⟪interchange m₁ m₂⟫[_, _, _, _]
+               ... = mult m₂ (mult m₁ a (unit m₁)) (mult m₁ (unit m₂) b) := eq.ap (eq.symm (interchange.equates_unit ⟪interchange m₁ m₂⟫))
+               ... = mult m₂ (mult m₁ a (unit m₁)) (mult m₁ (unit m₁) b) := eq.ap (eq.symm (interchange.equates_unit ⟪interchange m₁ m₂⟫))
+               ... = mult m₂ a (mult m₁ (unit m₁) b)                     := eq.ap monoid.right_unit
+               ... = mult m₂ a b                                         := eq.ap monoid.left_unit,
+  ⟪mult m₁ a b = mult m₂ a b⟫,
+@fun_ext[mult m₁, mult m₂] (take (a : u), @fun_ext[mult m₁ a, mult m₂ a] ⟪∀ a b, mult m₁ a b = mult m₂ a b⟫[a])
+
+lemma interchange.equates_monoid.{u} (m₁ m₂ : monoid u) : interchange m₁ m₂ → m₁ = m₂ :=
+assume interchange m₁ m₂,
+monoid.ext (interchange.equates_mult ⟪interchange m₁ m₂⟫) (interchange.equates_unit ⟪interchange m₁ m₂⟫)
+
 /-
 class structure monoid.hom u v := {
   class instance dom.monoid : monoid u
   class instance cod.monoid : monoid v
   const f : u → v
   axiom homomorphic (x₁ x₂ : u) : mult (f x₁) (f x₂) = f (mult x₁ x₂)
-}
--/
-
-/-
-instance Prop_conj_monoid : monoid Prop := {
-  def mult := and
-  def unit := ⊤
-  lemma assoc := and.assoc
-  lemma left_unit := true_and
-  lemma right_unit := and_true
-}
-
-instance Prop_disj_monoid : monoid Prop := {
-  def mult := or
-  def unit := ⊥
-  lemma assoc := or.assoc
-  lemma left_unit := false_or
-  lemma right_unit := or_false
-}
-
-instance power_monoid.{u, v} (m : monoid u) : monoid (v → u) := {
-  def mult (f g : v → u) := λ x, mult m (f x) (g x)
-  def unit := λ x, unit m
-  lemma assoc := sorry
-  lemma left_unit := sorry
-  lemma right_unit := sorry
 }
 -/
 
@@ -771,35 +775,12 @@ structure is_prop u := {
   axiom spec (x₁ x₂ : u) : x₁ = x₂
 }
 
--- def interchange (m₁ m₂ : monoid u) : Prop := ∀ a b c d, mult m₁ (mult m₂ a b) (mult m₂ c d) = mult m₂ (mult m₁ a c) (mult m₁ b d)
-
-/-
-lemma interchange.units_are_equal (m₁ m₂ : monoid u) : interchange m₁ m₂ → unit m₁ = mult m₂ (mult m₁ (unit m₁) (unit m₂)) (mult m₁ (unit m₂) (unit m₁)) :=
-assume interchange m₁ m₂,
-have unit m₁ = mult m₁ (unit m₁) (unit m₁) := eq.symm left_unit,
-have mult m₁ (unit m₁) (unit m₁) = mult m₁ (mult m₂ (unit m₁) (unit m₂)) (unit m₁) := @eq.ap[_, _, λ x, mult m₁ x (unit m₁)] (eq.symm @right_unit[m₂, unit m₁]),
-have mult m₁ (mult m₂ (unit m₁) (unit m₂)) (unit m₁) = mult m₁ (mult m₂ (unit m₁) (unit m₂)) (mult m₂ (unit m₂) (unit m₁)) := @eq.ap[_, _, λ x, mult m₁ (mult m₂ (unit m₁) (unit m₂)) x] (eq.symm left_unit),
-have mult m₁ (mult m₂ (unit m₁) (unit m₂)) (mult m₂ (unit m₂) (unit m₁)) = mult m₂ (mult m₁ (unit m₁) (unit m₂)) (mult m₁ (unit m₂) (unit m₁)) := ⟪interchange m₁ m₂⟫[unit m₁, unit m₂, unit m₂, unit m₁],
-eq.trans
-  ⟪unit m₁ = mult m₁ (unit m₁) (unit m₁)⟫
-  (eq.trans
-    ⟪mult m₁ (unit m₁) (unit m₁) = mult m₁ (mult m₂ (unit m₁) (unit m₂)) (unit m₁)⟫
-    (eq.trans
-      ⟪mult m₁ (mult m₂ (unit m₁) (unit m₂)) (unit m₁) = mult m₁ (mult m₂ (unit m₁) (unit m₂)) (mult m₂ (unit m₂) (unit m₁))⟫)
-      ⟪mult m₁ (mult m₂ (unit m₁) (unit m₂)) (mult m₂ (unit m₂) (unit m₁)) = mult m₂ (mult m₁ (unit m₁) (unit m₂)) (mult m₁ (unit m₂) (unit m₁))⟫)
--- have unit m₁ = mult m₂ (unit m₂) (mult m₁ (unit m₂) (unit m₁)) := eq.trans ⟪unit m₁ = mult m₂ (mult m₁ (unit m₁) (unit m₂)) (mult m₁ (unit m₂) (unit m₁))⟫ (eq.ap left_unit),
--- have unit m₁ = mult m₂ (unit m₂) (unit m₂) := eq.trans ⟪unit m₁ = mult m₂ (unit m₂) (mult m₁ (unit m₂) (unit m₁))⟫ (eq.ap right_unit),
--- have unit m₁ = unit m₂ := eq.trans ⟪unit m₁ = mult m₂ (unit m₂) (unit m₂)⟫ left_unit,
--- ⟪unit m₁ = unit m₂⟫
--/
-
 inductive topology.{u} (subbase : set (set u)) : set (set u)
 | subbase (x : set u) : x ∈ subbase → topology x
 | univ : topology univ
 | inter (x y : set u) : topology (x ∩ y)
 | union (A : set (set u)) : (∀ a, a ∈ A → topology a) → topology (bigcup A)
 
--- TODO: want the newtype syntax?
 structure space u := {
   const subbase : set (set u)
 }

@@ -67,7 +67,7 @@ impl<'a> std::fmt::Display for SourceInfo<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
     Ident,   // e.g. "foo", "α", "Prop", "foo.bar.baz"
-    Symbol,  // e.g. "+", ":", "λ", ",", "_"
+    Symbol,  // e.g. "+", ":", "λ", ",", "_", "..."
     NumLit,  // e.g. "0", "42"
     Keyword, // e.g. "infixr", "def", "lemma"
 }
@@ -206,7 +206,7 @@ impl<'a> Iterator for Lex<'a> {
                 ),
                 (
                     Kind::Symbol,
-                    r"[(){}\[\]⟨⟩⟪⟫,]|\.\{|\$\{|[\p{Symbol}\p{Punctuation}&&[^(){}\[\]⟨⟩⟪⟫,.]]+",
+                    r"[(){}\[\]⟨⟩⟪⟫,]|\.\{|\$\{|[\p{Symbol}\p{Punctuation}&&[^(){}\[\]⟨⟩⟪⟫,.]]+|\.\.\.",
                 ),
                 (Kind::NumLit, r"0|[1-9][0-9]*"),
             ]
