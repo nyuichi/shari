@@ -8,7 +8,7 @@
  - [x] type class
  - [x] calc environment
  - [ ] improved error reporting
- - [ ] coersion
+ - [ ] coercion
  - [ ] namespace
  -/
 
