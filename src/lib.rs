@@ -1,6 +1,6 @@
 use anyhow::Context;
 use lex::Lex;
-use parse::{ParseError, Parser};
+use parse::Parser;
 
 mod cmd;
 mod elab;
