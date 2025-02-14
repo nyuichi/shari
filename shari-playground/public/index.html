@@ -124,7 +124,11 @@
                         keywords: [
                             'infixr', 'nofix', 'infixl', 'infix', 'prefix',
                             'axiom', 'def', 'lemma', 'const', 'type',
-                            'local', 'inductive', 'structure', 'instance', 'class'
+                            'local', 'inductive', 'structure', 'instance', 'class',
+                        ],
+
+                        contextualKeywords: [
+                            'have', 'obtain', 'assume', 'change', 'calc', 'take'
                         ],
 
                         brackets: [
@@ -137,24 +141,14 @@
 
                         tokenizer: {
                             root: [
+                                // 識別子
+                                [/[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*/u, { cases: { '@keywords': 'keyword', '@contextualKeywords': 'keyword', '@default': 'identifier' } }],
+
                                 // 1行コメント: -- から行末まで
                                 [/--.*$/, 'comment'],
 
                                 // 複数行コメントの開始: /-  (ネスト可) → @comment へ移行
                                 [/(\/-)/, { token: 'comment', next: '@comment' }],
-
-                                // キーワード
-                                [
-                                    /\b(infixr|nofix|infixl|infix|prefix|axiom|def|lemma|const|type|local|inductive|structure|instance|class)\b/,
-                                    'keyword'
-                                ],
-
-                                // 数字
-                                [/\d+/, 'number'],
-
-                                // その他の識別子
-                                [/[\p{LC}_][\p{LC}\p{Nd}_]*/u, 'identifier'],
-
 
                                 // 括弧や区切り記号など
                                 [/[{}()\[\]⟪⟫⟨⟩]/, '@brackets'],
@@ -172,7 +166,9 @@
                                 // その他の文字はすべてコメントとして処理
                                 [/./, 'comment'],
                             ],
-                        }
+                        },
+
+                        unicode: true,
                     });
 
                     // 作成済みエディタのモデルを差し替える
