@@ -4,7 +4,6 @@ use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub fn run_process(input: &str) -> String {
-    std::panic::set_hook(Box::new(console_error_panic_hook::hook));
     match process(input) {
         Ok(()) => "Success".to_string(),
         Err(e) => format!("Error: {:#}", e),
@@ -37,7 +36,8 @@ impl Log for TextAreaLogger {
 static LOGGER: TextAreaLogger = TextAreaLogger;
 
 #[wasm_bindgen]
-pub fn init_logger() {
+pub fn init_all() {
     log::set_logger(&LOGGER).unwrap();
     log::set_max_level(LevelFilter::Info);
+    std::panic::set_hook(Box::new(console_error_panic_hook::hook));
 }

@@ -823,6 +823,14 @@
                         "_8": "₈",
                         "_9": "₉",
 
+                        // babel
+                        "flqq": "«", // U+00AB « LEFT-POINTING DOUBLE ANGLE QUOTATION MARK
+                        "frqq": "»", // U+00BB » RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK
+                        "\"<": "«", // U+00AB « LEFT-POINTING DOUBLE ANGLE QUOTATION MARK
+                        "\">": "»", // U+00BB » RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK
+                        "flq": "‹", // U+2039 ‹ SINGLE LEFT-POINTING ANGLE QUOTATION MARK
+                        "frq": "›", // U+203A › SINGLE RIGHT-POINTING ANGLE QUOTATION MARK
+
                         // FIXME: 以下は動かない。(^がword separatorなので。)
                         "^0": "⁰",
                         "^1": "¹",
@@ -947,7 +955,7 @@
     </script>
 
     <script type="module">
-        import init, { init_logger, run_process } from "./shari_playground.js";
+        import init, { init_all, run_process } from "./shari_playground.js";
 
         const logArea = document.getElementById("log-area");
 
@@ -959,7 +967,7 @@
 
         async function main() {
             await init();
-            init_logger();
+            init_all();
 
             const output = document.getElementById("output");
 
