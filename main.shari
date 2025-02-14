@@ -14,6 +14,28 @@
 
 /-
 
+** FOR PLAYGROUND USERS **
+
+You can type unicode characters with typing `\` + command names. Commands mostly follow the naming conventions of LaTeX.
+See the comprehensive list of input commands [here](./unicode-map.js).
+
+
+# Syntax
+
+Proof expressions include the following:
+
+take (x : τ), e               forall introduction
+e[m₁, ⋯, mₙ]                  forall elimination (Note that invocation of a proved or postulated fact implicitly inserts forall eliminations.)
+assume φ, e                   imp introduction
+e₁ e₁                         imp elimination
+change φ, e                   change the goal to a definitional equivalent
+have φ := e₁, e₂
+obtain (x : τ), φ := e₁, e₂
+calc m₁ = m₂ := e₁ ... = m₃ := e₂ ... = m₄ := e₃, e₄
+
+
+# Theoretical backgrounds
+
 Our core logic is described by the following pure type system (PTS):
 
 | S | Prop, Type, Kind |
