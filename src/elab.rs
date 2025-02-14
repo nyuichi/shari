@@ -31,11 +31,31 @@ enum ConstraintKind {
 }
 
 #[derive(Debug, Clone)]
+enum Error {
+    Visit(String),
+    Join(Arc<(Error, Error)>),
+}
+
+fn mk_error_join(e1: Error, e2: Error) -> Error {
+    Error::Join(Arc::new((e1, e2)))
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Visit(s) => write!(f, "{}", s),
+            Error::Join(inner) => write!(f, "{}", inner.0),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct EqConstraint {
     // TODO: only the locals field is used. Use a more efficient data structure.
     local_env: LocalEnv,
     left: Term,
     right: Term,
+    error: Error,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +64,7 @@ struct ClassConstraint {
     local_env: LocalEnv,
     hole: Name,
     class: Class,
+    error: Error,
 }
 
 #[derive(Debug, Clone)]
@@ -56,9 +77,9 @@ struct Snapshot {
 
 #[derive(Debug, Default)]
 struct Node {
-    subst: Vec<(Name, Term)>,
-    type_constraints: Vec<(Type, Type)>,
-    term_constraints: Vec<(LocalEnv, Term, Term)>,
+    subst: Vec<(Name, Term, Error)>,
+    type_constraints: Vec<(Type, Type, Error)>,
+    term_constraints: Vec<(LocalEnv, Term, Term, Error)>,
 }
 
 struct Branch<'a> {
@@ -104,11 +125,11 @@ struct Elaborator<'a> {
     // It extends when a new constraint is queued or a decision is made.
     trail: Vec<TrailElement>,
     // only used in find_conflict
-    term_constraints: Vec<(LocalEnv, Term, Term)>,
+    term_constraints: Vec<(LocalEnv, Term, Term, Error)>,
     // only used in find_conflict
-    type_constraints: Vec<(Type, Type)>,
+    type_constraints: Vec<(Type, Type, Error)>,
     // only used in find_conflict
-    class_constraints: Vec<(LocalEnv, Name, Class)>,
+    class_constraints: Vec<(LocalEnv, Name, Class, Error)>,
 }
 
 impl<'a> Elaborator<'a> {
@@ -264,8 +285,9 @@ impl<'a> Elaborator<'a> {
                 let arg_ty = self.visit_term(arg)?;
                 let ret_ty = mk_fresh_type_hole();
 
+                let error = Error::Visit(format!("not an arrow: {}", fun_ty));
                 self.type_constraints
-                    .push((fun_ty, mk_type_arrow(arg_ty, ret_ty.clone())));
+                    .push((fun_ty, mk_type_arrow(arg_ty, ret_ty.clone()), error));
 
                 Ok(ret_ty)
             }
@@ -373,8 +395,13 @@ impl<'a> Elaborator<'a> {
                     return Ok(());
                 }
                 self.instance_holes.push((instance, class.clone()));
-                self.class_constraints
-                    .push((self.tt_local_env.clone(), instance, class.clone()));
+                let error = Error::Visit(format!("could not synthesize instance: {}", instance));
+                self.class_constraints.push((
+                    self.tt_local_env.clone(),
+                    instance,
+                    class.clone(),
+                    error,
+                ));
                 Ok(())
             }
         }
@@ -386,7 +413,9 @@ impl<'a> Elaborator<'a> {
                 let ExprAssump { target } = Arc::make_mut(expr);
 
                 let target_ty = self.visit_term(target)?;
-                self.type_constraints.push((target_ty, mk_type_prop()));
+                let error = Error::Visit(format!("not a proposition: {}", target_ty));
+                self.type_constraints
+                    .push((target_ty, mk_type_prop(), error));
 
                 let mut found = false;
                 for local in &self.local_axioms {
@@ -406,7 +435,9 @@ impl<'a> Elaborator<'a> {
                 let ExprAssume { local_axiom, expr } = Arc::make_mut(expr);
 
                 let local_axiom_ty = self.visit_term(local_axiom)?;
-                self.type_constraints.push((local_axiom_ty, mk_type_prop()));
+                let error = Error::Visit(format!("not a proposition: {}", local_axiom_ty));
+                self.type_constraints
+                    .push((local_axiom_ty, mk_type_prop(), error));
 
                 self.local_axioms.push(local_axiom.clone());
                 let mut target = self.visit_expr(expr)?;
@@ -425,8 +456,12 @@ impl<'a> Elaborator<'a> {
 
                 let mut target = ret.clone();
                 target.guard([arg]);
-                self.term_constraints
-                    .push((self.tt_local_env.clone(), fun, target.clone()));
+                self.term_constraints.push((
+                    self.tt_local_env.clone(),
+                    fun,
+                    target.clone(),
+                    Error::Visit(format!("not an implication: {}", expr1)),
+                ));
 
                 *expr1 = mk_expr_change(target, mem::take(expr1));
 
@@ -470,8 +505,12 @@ impl<'a> Elaborator<'a> {
                     vec![],
                 );
                 target.apply([pred.clone()]);
-                self.term_constraints
-                    .push((self.tt_local_env.clone(), forall, target.clone()));
+                self.term_constraints.push((
+                    self.tt_local_env.clone(),
+                    forall,
+                    target.clone(),
+                    Error::Visit(format!("not a forall: {}", expr)),
+                ));
 
                 *expr = mk_expr_change(target, mem::take(expr));
 
@@ -517,12 +556,15 @@ impl<'a> Elaborator<'a> {
                 let ExprChange { target, expr } = Arc::make_mut(expr);
 
                 let target_ty = self.visit_term(target)?;
-                self.type_constraints.push((target_ty, mk_type_prop()));
+                let error = Error::Visit(format!("not a proposition: {}", target_ty));
+                self.type_constraints
+                    .push((target_ty, mk_type_prop(), error));
                 let expr_prop = self.visit_expr(expr)?;
                 self.term_constraints.push((
                     self.tt_local_env.clone(),
                     expr_prop.clone(),
                     target.clone(),
+                    Error::Visit(format!("propositions mismatch in change: {}", expr)),
                 ));
 
                 Ok(target.clone())
@@ -536,7 +578,7 @@ impl<'a> Elaborator<'a> {
         println!("{sp}+current state");
         if !self.term_constraints.is_empty() {
             println!("{sp}| term_constraints:");
-            for (_, left, right) in &self.term_constraints {
+            for (_, left, right, _) in &self.term_constraints {
                 println!("{sp}| - {}\n{sp}|   {}", left, right);
             }
             println!();
@@ -903,11 +945,11 @@ impl<'a> Elaborator<'a> {
         }
     }
 
-    fn add_type_constraint(&mut self, t1: Type, t2: Type) {
-        self.type_constraints.push((t1, t2));
+    fn add_type_constraint(&mut self, t1: Type, t2: Type, error: Error) {
+        self.type_constraints.push((t1, t2, error));
     }
 
-    fn add_delta_constraint(&mut self, local_env: LocalEnv, left: Term, right: Term) {
+    fn add_delta_constraint(&mut self, local_env: LocalEnv, left: Term, right: Term, error: Error) {
         #[cfg(debug_assertions)]
         {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
@@ -921,13 +963,20 @@ impl<'a> Elaborator<'a> {
             local_env,
             left,
             right,
+            error,
         });
         self.trail
             .push(TrailElement::EqConstraint(c.clone(), ConstraintKind::Delta));
         self.queue_delta.push_back(c.clone());
     }
 
-    fn add_flex_constraint(&mut self, local_env: LocalEnv, mut left: Term, mut right: Term) {
+    fn add_flex_constraint(
+        &mut self,
+        local_env: LocalEnv,
+        mut left: Term,
+        mut right: Term,
+        error: Error,
+    ) {
         self.inst_arg_head(&mut left);
         self.inst_arg_head(&mut right);
         let kind;
@@ -958,6 +1007,7 @@ impl<'a> Elaborator<'a> {
             local_env,
             left,
             right,
+            error,
         });
 
         self.trail.push(TrailElement::EqConstraint(c.clone(), kind));
@@ -980,7 +1030,13 @@ impl<'a> Elaborator<'a> {
         self.watch(c);
     }
 
-    fn add_postponed_constraint(&mut self, local_env: LocalEnv, left: Term, right: Term) {
+    fn add_postponed_constraint(
+        &mut self,
+        local_env: LocalEnv,
+        left: Term,
+        right: Term,
+        error: Error,
+    ) {
         #[cfg(debug_assertions)]
         {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
@@ -994,6 +1050,7 @@ impl<'a> Elaborator<'a> {
             local_env,
             left,
             right,
+            error,
         });
         self.trail.push(TrailElement::EqConstraint(
             c.clone(),
@@ -1003,7 +1060,13 @@ impl<'a> Elaborator<'a> {
         self.watch_instance(c);
     }
 
-    fn add_class_constraint(&mut self, local_env: LocalEnv, hole: Name, class: Class) {
+    fn add_class_constraint(
+        &mut self,
+        local_env: LocalEnv,
+        hole: Name,
+        class: Class,
+        error: Error,
+    ) {
         #[cfg(debug_assertions)]
         {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
@@ -1017,13 +1080,14 @@ impl<'a> Elaborator<'a> {
             local_env,
             hole,
             class,
+            error,
         });
         self.trail.push(TrailElement::ClassConstraint(c.clone()));
         self.queue_class.push_back(c.clone());
         self.watch_type(&c);
     }
 
-    fn add_subst(&mut self, name: Name, m: Term) {
+    fn add_subst(&mut self, name: Name, m: Term, error: Error) {
         #[cfg(debug_assertions)]
         {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
@@ -1048,12 +1112,17 @@ impl<'a> Elaborator<'a> {
                     }
                 }
                 let c = (**c).clone();
-                self.term_constraints.push((c.local_env, c.left, c.right));
+                self.term_constraints.push((
+                    c.local_env,
+                    c.left,
+                    c.right,
+                    mk_error_join(c.error, error.clone()),
+                ));
             }
         }
     }
 
-    fn add_type_subst(&mut self, name: Name, ty: Type) {
+    fn add_type_subst(&mut self, name: Name, ty: Type, error: Error) {
         #[cfg(debug_assertions)]
         {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
@@ -1066,12 +1135,17 @@ impl<'a> Elaborator<'a> {
         if let Some(constraints) = self.type_watch_list.get(&name) {
             for c in constraints {
                 let c = (**c).clone();
-                self.class_constraints.push((c.local_env, c.hole, c.class));
+                self.class_constraints.push((
+                    c.local_env,
+                    c.hole,
+                    c.class,
+                    mk_error_join(c.error, error.clone()),
+                ));
             }
         }
     }
 
-    fn add_instance_subst(&mut self, name: Name, instance: Instance) {
+    fn add_instance_subst(&mut self, name: Name, instance: Instance, error: Error) {
         #[cfg(debug_assertions)]
         {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
@@ -1084,7 +1158,12 @@ impl<'a> Elaborator<'a> {
         if let Some(constraints) = self.instance_watch_list.get(&name) {
             for c in constraints {
                 let c = (**c).clone();
-                self.term_constraints.push((c.local_env, c.left, c.right));
+                self.term_constraints.push((
+                    c.local_env,
+                    c.left,
+                    c.right,
+                    mk_error_join(c.error, error.clone()),
+                ));
             }
         }
     }
@@ -1100,20 +1179,25 @@ impl<'a> Elaborator<'a> {
         self.term_holes.push((name, ty));
     }
 
-    fn find_conflict_in_types(&mut self, mut t1: Type, mut t2: Type) -> Option<()> {
+    fn find_conflict_in_types(
+        &mut self,
+        mut t1: Type,
+        mut t2: Type,
+        error: Error,
+    ) -> Option<Error> {
         if t1 == t2 {
             return None;
         }
         if self.inst_type_head(&mut t1) || self.inst_type_head(&mut t2) {
-            self.add_type_constraint(t1, t2);
+            self.add_type_constraint(t1, t2, error);
             return None;
         }
         match (t1, t2) {
             (Type::Arrow(inner1), Type::Arrow(inner2)) => {
                 let inner1 = Arc::try_unwrap(inner1).unwrap_or_else(|arc| (*arc).clone());
                 let inner2 = Arc::try_unwrap(inner2).unwrap_or_else(|arc| (*arc).clone());
-                self.add_type_constraint(inner1.dom, inner2.dom);
-                self.add_type_constraint(inner1.cod, inner2.cod);
+                self.add_type_constraint(inner1.dom, inner2.dom, error.clone());
+                self.add_type_constraint(inner1.cod, inner2.cod, error);
             }
             (Type::App(inner1), Type::App(inner2)) => {
                 // Since we have no higher-kinded polymorphism, it is impossible to match the following two types:
@@ -1122,19 +1206,19 @@ impl<'a> Elaborator<'a> {
                 // this unificaiton phase.
                 let inner1 = Arc::try_unwrap(inner1).unwrap_or_else(|arc| (*arc).clone());
                 let inner2 = Arc::try_unwrap(inner2).unwrap_or_else(|arc| (*arc).clone());
-                self.add_type_constraint(inner1.fun, inner2.fun);
-                self.add_type_constraint(inner1.arg, inner2.arg);
+                self.add_type_constraint(inner1.fun, inner2.fun, error.clone());
+                self.add_type_constraint(inner1.arg, inner2.arg, error);
             }
             (Type::Hole(name), t) | (t, Type::Hole(name)) => {
                 let mut t = t.clone();
                 self.fully_inst_type(&mut t); // TODO: avoid instantiation
                 if t.contains_hole(name) {
-                    return Some(());
+                    return Some(error);
                 }
-                self.add_type_subst(name, t);
+                self.add_type_subst(name, t, error);
             }
             (_, _) => {
-                return Some(());
+                return Some(error);
             }
         }
         None
@@ -1145,12 +1229,13 @@ impl<'a> Elaborator<'a> {
         mut local_env: LocalEnv,
         mut left: Term,
         mut right: Term,
-    ) -> Option<()> {
+        error: Error,
+    ) -> Option<Error> {
         if left.alpha_eq(&right) {
             return None;
         }
         if let (Term::Abs(l), Term::Abs(r)) = (&mut left, &mut right) {
-            self.add_type_constraint(l.binder_type.clone(), r.binder_type.clone());
+            self.add_type_constraint(l.binder_type.clone(), r.binder_type.clone(), error.clone());
             let x = Parameter {
                 name: Name::fresh(),
                 ty: mem::take(&mut Arc::make_mut(l).binder_type),
@@ -1160,15 +1245,15 @@ impl<'a> Elaborator<'a> {
             local_env.locals.push(x);
             let left = mem::take(&mut Arc::make_mut(l).body);
             let right = mem::take(&mut Arc::make_mut(r).body);
-            self.term_constraints.push((local_env, left, right));
+            self.term_constraints.push((local_env, left, right, error));
             return None;
         }
         if left.whnf().is_some() || right.whnf().is_some() {
-            self.term_constraints.push((local_env, left, right));
+            self.term_constraints.push((local_env, left, right, error));
             return None;
         }
         if self.inst_head(&mut left) || self.inst_head(&mut right) {
-            self.term_constraints.push((local_env, left, right));
+            self.term_constraints.push((local_env, left, right, error));
             return None;
         }
         if left.is_abs() {
@@ -1182,16 +1267,16 @@ impl<'a> Elaborator<'a> {
                 if self.proof_env.tt_env.has_kappa(left_head.name) {
                     self.inst_recv(Arc::make_mut(left_head));
                     if left_head.instances[0].is_hole() {
-                        self.add_postponed_constraint(local_env, left, Term::Abs(right));
+                        self.add_postponed_constraint(local_env, left, Term::Abs(right), error);
                         return None;
                     }
                 }
                 if self.proof_env.tt_env.unfold_head(&mut left).is_some() {
                     self.term_constraints
-                        .push((local_env, left, Term::Abs(right)));
+                        .push((local_env, left, Term::Abs(right), error));
                     return None;
                 } else {
-                    return Some(());
+                    return Some(error);
                 }
             } else if left.head().is_hole() {
                 // ?M t₁ ⋯ tₙ =?= λ x, N
@@ -1217,10 +1302,10 @@ impl<'a> Elaborator<'a> {
                 right.open(&mk_local(x.name));
                 left.apply([mk_local(x.name)]);
                 local_env.locals.push(x);
-                self.term_constraints.push((local_env, left, right));
+                self.term_constraints.push((local_env, left, right, error));
                 return None;
             } else {
-                return Some(());
+                return Some(error);
             }
         }
         // then each of the heads can be a local, a const, or a hole
@@ -1237,7 +1322,7 @@ impl<'a> Elaborator<'a> {
                         })
                         .collect::<Vec<_>>();
                     left.abs(&binders);
-                    self.add_subst(right_head, left);
+                    self.add_subst(right_head, left, error);
                     return None;
                 }
             }
@@ -1255,28 +1340,28 @@ impl<'a> Elaborator<'a> {
                         })
                         .collect::<Vec<_>>();
                     right.abs(&binders);
-                    self.add_subst(left_head, right);
+                    self.add_subst(left_head, right, error);
                     return None;
                 }
             }
         }
         if right.head().is_hole() || left.head().is_hole() {
-            self.add_flex_constraint(local_env, left, right);
+            self.add_flex_constraint(local_env, left, right, error);
             return None;
         }
         // then each of the heads can be a local or a const.
         if let (Term::Local(left_head), Term::Local(right_head)) = (left.head(), right.head()) {
             if left_head != right_head {
-                return Some(());
+                return Some(error);
             }
             let left_args = left.unapply();
             let right_args = right.unapply();
             if left_args.len() != right_args.len() {
-                return Some(());
+                return Some(error);
             }
             for (left_arg, right_arg) in left_args.into_iter().zip(right_args.into_iter()).rev() {
                 self.term_constraints
-                    .push((local_env.clone(), left_arg, right_arg));
+                    .push((local_env.clone(), left_arg, right_arg, error.clone()));
             }
             return None;
         }
@@ -1288,18 +1373,18 @@ impl<'a> Elaborator<'a> {
             if self.proof_env.tt_env.has_kappa(right_head.name) {
                 self.inst_recv(Arc::make_mut(right_head));
                 if right_head.instances[0].is_hole() {
-                    self.add_postponed_constraint(local_env, left, right);
+                    self.add_postponed_constraint(local_env, left, right, error);
                     return None;
                 }
             }
             if !right.contains_local(left_head) {
-                return Some(());
+                return Some(error);
             }
             if self.proof_env.tt_env.unfold_head(&mut right).is_some() {
-                self.term_constraints.push((local_env, left, right));
+                self.term_constraints.push((local_env, left, right, error));
                 return None;
             }
-            return Some(());
+            return Some(error);
         }
         let (Term::Const(left_head), Term::Const(right_head)) = (left.head_mut(), right.head_mut())
         else {
@@ -1308,22 +1393,24 @@ impl<'a> Elaborator<'a> {
         if self.proof_env.tt_env.has_kappa(left_head.name) {
             self.inst_recv(Arc::make_mut(left_head));
             if left_head.instances[0].is_hole() {
-                self.add_postponed_constraint(local_env, left, right);
+                self.add_postponed_constraint(local_env, left, right, error);
                 return None;
             }
             if self.proof_env.tt_env.unfold_head(&mut left).is_some() {
-                self.term_constraints.push((local_env.clone(), left, right));
+                self.term_constraints
+                    .push((local_env.clone(), left, right, error));
                 return None;
             }
         }
         if self.proof_env.tt_env.has_kappa(right_head.name) {
             self.inst_recv(Arc::make_mut(right_head));
             if right_head.instances[0].is_hole() {
-                self.add_postponed_constraint(local_env, left, right);
+                self.add_postponed_constraint(local_env, left, right, error);
                 return None;
             }
             if self.proof_env.tt_env.unfold_head(&mut right).is_some() {
-                self.term_constraints.push((local_env.clone(), left, right));
+                self.term_constraints
+                    .push((local_env.clone(), left, right, error));
                 return None;
             }
         }
@@ -1333,21 +1420,21 @@ impl<'a> Elaborator<'a> {
         if left_head.name == right_head.name {
             if self.proof_env.tt_env.has_delta(left_head.name) {
                 // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where f is unfoldable
-                self.add_delta_constraint(local_env, left, right);
+                self.add_delta_constraint(local_env, left, right, error);
                 return None;
             }
             // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where f is not unfoldable.
             for (t1, t2) in left_head.ty_args.iter().zip(right_head.ty_args.iter()) {
-                self.add_type_constraint(t1.clone(), t2.clone());
+                self.add_type_constraint(t1.clone(), t2.clone(), error.clone());
             }
             let left_args = left.unapply();
             let right_args = right.unapply();
             if left_args.len() != right_args.len() {
-                return Some(());
+                return Some(error);
             }
             for (left_arg, right_arg) in left_args.into_iter().zip(right_args.into_iter()).rev() {
                 self.term_constraints
-                    .push((local_env.clone(), left_arg, right_arg));
+                    .push((local_env.clone(), left_arg, right_arg, error.clone()));
             }
             return None;
         }
@@ -1355,7 +1442,7 @@ impl<'a> Elaborator<'a> {
         let right_height = self.proof_env.tt_env.delta_height(right_head.name);
         if left_height == 0 && right_height == 0 {
             // (f t₁ ⋯ tₙ) ≈ (g s₁ ⋯ sₘ) where f and g are both irreducible.
-            return Some(());
+            return Some(error);
         }
         match left_height.cmp(&right_height) {
             std::cmp::Ordering::Greater => {
@@ -1369,7 +1456,7 @@ impl<'a> Elaborator<'a> {
                 self.proof_env.tt_env.unfold_head(&mut right).unwrap();
             }
         }
-        self.term_constraints.push((local_env, left, right));
+        self.term_constraints.push((local_env, left, right, error));
         None
     }
 
@@ -1426,21 +1513,22 @@ impl<'a> Elaborator<'a> {
         local_env: LocalEnv,
         hole: Name,
         mut class: Class,
-    ) -> Option<()> {
+        error: Error,
+    ) -> Option<Error> {
         self.fully_inst_class(&mut class);
         // TODO: infer a type class instance for a class like (C a ?b).
         if !class.is_ground() {
-            self.add_class_constraint(local_env, hole, class);
+            self.add_class_constraint(local_env, hole, class, error);
             return None;
         }
         let Some(instance) = self.resolve_class(&local_env, &class) else {
-            return Some(());
+            return Some(error);
         };
-        self.add_instance_subst(hole, instance);
+        self.add_instance_subst(hole, instance, error);
         None
     }
 
-    fn find_conflict(&mut self) -> Option<()> {
+    fn find_conflict(&mut self) -> Option<Error> {
         #[cfg(debug_assertions)]
         {
             self.print_state();
@@ -1449,41 +1537,41 @@ impl<'a> Elaborator<'a> {
             || !self.class_constraints.is_empty()
             || !self.term_constraints.is_empty()
         {
-            if let Some((t1, t2)) = self.type_constraints.pop() {
+            if let Some((t1, t2, error)) = self.type_constraints.pop() {
                 #[cfg(debug_assertions)]
                 {
                     let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
                     println!("{sp}find conflict in {t1} =?= {t2}");
                 }
-                if self.find_conflict_in_types(t1, t2).is_some() {
+                if let Some(error) = self.find_conflict_in_types(t1, t2, error) {
                     #[cfg(debug_assertions)]
                     {
                         let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
                         println!("{sp}conflict in types");
                     }
-                    return Some(());
+                    return Some(error);
                 }
                 continue;
             }
-            if let Some((local_env, hole, ty)) = self.class_constraints.pop() {
-                if self.find_conflict_in_class(local_env, hole, ty).is_some() {
-                    return Some(());
+            if let Some((local_env, hole, ty, error)) = self.class_constraints.pop() {
+                if let Some(error) = self.find_conflict_in_class(local_env, hole, ty, error) {
+                    return Some(error);
                 }
                 continue;
             }
-            if let Some((local_env, m1, m2)) = self.term_constraints.pop() {
+            if let Some((local_env, m1, m2, error)) = self.term_constraints.pop() {
                 #[cfg(debug_assertions)]
                 {
                     let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
                     println!("{sp}find conflict in {m1} =?= {m2}");
                 }
-                if self.find_conflict_in_terms(local_env, m1, m2).is_some() {
+                if let Some(error) = self.find_conflict_in_terms(local_env, m1, m2, error) {
                     #[cfg(debug_assertions)]
                     {
                         let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
                         println!("{sp}conflict in terms");
                     }
-                    return Some(());
+                    return Some(error);
                 }
             }
         }
@@ -1593,14 +1681,14 @@ impl<'a> Elaborator<'a> {
         };
         let snapshot = br.snapshot.clone();
         self.restore(&snapshot);
-        for (x, m) in node.subst.into_iter().rev() {
-            self.add_subst(x, m);
+        for (x, m, error) in node.subst.into_iter().rev() {
+            self.add_subst(x, m, error);
         }
-        for (left, right) in node.type_constraints.into_iter().rev() {
-            self.type_constraints.push((left, right));
+        for (left, right, error) in node.type_constraints.into_iter().rev() {
+            self.type_constraints.push((left, right, error));
         }
-        for (local_env, left, right) in node.term_constraints.into_iter().rev() {
-            self.term_constraints.push((local_env, left, right));
+        for (local_env, left, right, error) in node.term_constraints.into_iter().rev() {
+            self.term_constraints.push((local_env, left, right, error));
         }
         true
     }
@@ -1619,13 +1707,15 @@ impl<'a> Elaborator<'a> {
         let node1 = {
             let mut node = Node::default();
             for (t1, t2) in zip(&left_head.ty_args, &right_head.ty_args) {
-                node.type_constraints.push((t1.clone(), t2.clone()));
+                node.type_constraints
+                    .push((t1.clone(), t2.clone(), c.error.clone()));
             }
             for (&left_arg, &right_arg) in left_args.iter().zip(right_args.iter()) {
                 node.term_constraints.push((
                     c.local_env.clone(),
                     left_arg.clone(),
                     right_arg.clone(),
+                    c.error.clone(),
                 ));
             }
             node
@@ -1638,7 +1728,7 @@ impl<'a> Elaborator<'a> {
             self.proof_env.tt_env.unfold_head(&mut left).unwrap();
             self.proof_env.tt_env.unfold_head(&mut right).unwrap();
             node.term_constraints
-                .push((c.local_env.clone(), left, right));
+                .push((c.local_env.clone(), left, right, c.error.clone()));
             node
         };
         vec![node1, node2]
@@ -1766,9 +1856,14 @@ impl<'a> Elaborator<'a> {
             target.apply(new_args);
             target.abs(&new_binders);
             nodes.push(Node {
-                subst: vec![(left_head, target)],
-                type_constraints: vec![(t, left_ty.clone())],
-                term_constraints: vec![(c.local_env.clone(), c.left.clone(), c.right.clone())], // TODO: optimize
+                subst: vec![(left_head, target, c.error.clone())],
+                type_constraints: vec![(t, left_ty.clone(), c.error.clone())],
+                term_constraints: vec![(
+                    c.local_env.clone(),
+                    c.left.clone(),
+                    c.right.clone(),
+                    c.error.clone(),
+                )], // TODO: optimize
             });
         }
 
@@ -1838,9 +1933,14 @@ impl<'a> Elaborator<'a> {
             target.apply(new_args);
             target.abs(&new_binders);
             nodes.push(Node {
-                subst: vec![(left_head, target)],
+                subst: vec![(left_head, target, c.error.clone())],
                 type_constraints: vec![],
-                term_constraints: vec![(c.local_env.clone(), c.left.clone(), c.right.clone())], // TODO: optimize
+                term_constraints: vec![(
+                    c.local_env.clone(),
+                    c.left.clone(),
+                    c.right.clone(),
+                    c.error.clone(),
+                )], // TODO: optimize
             });
         }
 
@@ -1932,16 +2032,16 @@ impl<'a> Elaborator<'a> {
         true
     }
 
-    fn solve(&mut self) -> bool {
+    fn solve(&mut self) -> Result<(), Error> {
         loop {
-            while let Some(()) = self.find_conflict() {
+            while let Some(error) = self.find_conflict() {
                 #[cfg(debug_assertions)]
                 {
                     let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
                     println!("{sp}conflict found!");
                 }
                 if !self.backjump() {
-                    return false;
+                    return Err(error);
                 }
             }
             #[cfg(debug_assertions)]
@@ -1951,7 +2051,7 @@ impl<'a> Elaborator<'a> {
                 self.print_state();
             }
             if !self.decide() {
-                return true;
+                return Ok(());
             }
         }
     }
@@ -1985,10 +2085,11 @@ pub fn elaborate_term(
     let mut elab = Elaborator::new(proof_env, local_env, vec![]);
 
     let t = elab.visit_term(target)?;
-    elab.type_constraints.push((t, ty.clone()));
+    let error = Error::Visit(format!("type mismatch"));
+    elab.type_constraints.push((t, ty.clone(), error));
 
-    if !elab.solve() {
-        bail!("unification failed");
+    if let Err(error) = elab.solve() {
+        bail!("unification failed: {error}");
     }
 
     elab.fully_inst(target);
@@ -2022,8 +2123,8 @@ pub fn elaborate_expr(
     *e = mk_expr_change(prop.clone(), mem::take(e));
     elab.visit_expr(e)?;
 
-    if !elab.solve() {
-        bail!("unification failed");
+    if let Err(error) = elab.solve() {
+        bail!("unification failed: {error}");
     }
 
     elab.fully_inst_expr(e);
