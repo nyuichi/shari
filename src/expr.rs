@@ -9,7 +9,7 @@ use crate::proof::{
 use crate::tt::Instance;
 use crate::tt::{self, Name, Parameter, Term, Type};
 
-/// p ::= ⟪φ⟫
+/// p ::= «φ»
 ///     | assume φ, p
 ///     | p p
 ///     | take (x : τ), p
@@ -19,7 +19,7 @@ use crate::tt::{self, Name, Parameter, Term, Type};
 ///
 ///
 /// --------------- (φ ∈ Φ)
-/// Γ | Φ ⊢ ⟪φ⟫ : φ
+/// Γ | Φ ⊢ «φ» : φ
 ///
 /// Γ | Φ, φ ⊢ h : ψ
 /// ----------------------------
@@ -147,7 +147,7 @@ impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Expr::Assump(e) => {
-                write!(f, "⟪{}⟫", e.target)
+                write!(f, "«{}»", e.target)
             }
             Expr::Assume(e) => {
                 write!(f, "assume {}, {}", e.local_axiom, e.expr)

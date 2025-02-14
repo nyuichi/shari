@@ -738,9 +738,9 @@ impl<'a, 'b> Parser<'a, 'b> {
                 self.expect_symbol(")")?;
                 break 'left e;
             }
-            if let Some(_token) = self.expect_symbol_opt("⟪") {
+            if let Some(_token) = self.expect_symbol_opt("«") {
                 let prop = self.term()?;
-                self.expect_symbol("⟫")?;
+                self.expect_symbol("»")?;
                 break 'left mk_expr_assump(prop);
             }
             if let Some(_token) = self.expect_symbol_opt("@") {
@@ -823,10 +823,10 @@ impl<'a, 'b> Parser<'a, 'b> {
                     // have m₁ = m₂ := e₁,
                     // have m₁ = m₃ :=
                     //   have m₂ = m₃ := e₂,
-                    //   eq.trans ⟪m₁ = m₂⟫ ⟪m₂ = m₃⟫,
+                    //   eq.trans «m₁ = m₂» «m₂ = m₃»,
                     // have m₁ = m₄ :=
                     //   have m₃ = m₄ := e₃,
-                    //   eq.trans ⟪m₁ = m₃⟫ ⟪m₃ = m₄⟫,
+                    //   eq.trans «m₁ = m₃» «m₃ = m₄»,
                     // e
                     let lhs = self.subterm(50)?; // TODO: get the precedence from main.shari.
                     let mut rhs_list = vec![];
@@ -879,7 +879,7 @@ impl<'a, 'b> Parser<'a, 'b> {
                 if token.as_str() == "[" {
                     (ExprLed::Inst, 1025)
                 } else if token.as_str() == "("
-                    || token.as_str() == "⟪"
+                    || token.as_str() == "«"
                     || token.as_str() == "@"
                     || token.is_ident()
                 {

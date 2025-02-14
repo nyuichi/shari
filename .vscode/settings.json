@@ -17,7 +17,9 @@
             "zl": "→",
             "Vdash": "⊩",
             "bigcap": "⋂",
-            "bigcup": "⋃"
+            "bigcup": "⋃",
+            "<<": "«",
+            ">>": "»",
         },
         "default-mappings.json",
     ],
