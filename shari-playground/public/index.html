@@ -105,6 +105,7 @@
                     // 2) Monaco Editor のインスタンス作成
                     const editor = monaco.editor.create(document.getElementById('editor'), {
                         value: text,
+                        // このあとshariに切り替える。
                         language: 'plaintext',
                         theme: 'vs-light',
                         minimap: {
@@ -112,6 +113,68 @@
                         }
                     });
 
+                    monaco.languages.register({ id: 'shari' });
+
+                    monaco.languages.setMonarchTokensProvider('shari', {
+                        tokenPostfix: '.shari',
+
+                        // キーワード一覧
+                        keywords: [
+                            'infixr', 'nofix', 'infixl', 'infix', 'prefix',
+                            'axiom', 'def', 'lemma', 'const', 'type',
+                            'local', 'inductive', 'structure', 'instance', 'class'
+                        ],
+
+                        brackets: [
+                            ['(', ')', 'delimiter.parenthesis'],
+                            ['{', '}', 'delimiter.curly'],
+                            ['[', ']', 'delimiter.square'],
+                            ['⟪', '⟫', 'delimiter.angle'],
+                            ['⟨', '⟩', 'delimiter.angle'],
+                        ],
+
+                        tokenizer: {
+                            root: [
+                                // 1行コメント: -- から行末まで
+                                [/--.*$/, 'comment'],
+
+                                // 複数行コメントの開始: /-  (ネスト可) → @comment へ移行
+                                [/(\/-)/, { token: 'comment', next: '@comment' }],
+
+                                // キーワード
+                                [
+                                    /\b(infixr|nofix|infixl|infix|prefix|axiom|def|lemma|const|type|local|inductive|structure|instance|class)\b/,
+                                    'keyword'
+                                ],
+
+                                // 数字
+                                [/\d+/, 'number'],
+
+                                // その他の識別子
+                                [/[\p{LC}_][\p{LC}\p{Nd}_]*/u, 'identifier'],
+
+
+                                // 括弧や区切り記号など
+                                [/[{}()\[\]⟪⟫⟨⟩]/, '@brackets'],
+                                [/[;,.]/, 'delimiter']
+                            ],
+
+                            // ネスト可能な複数行コメント
+                            comment: [
+                                // 新たな /- を見つけたら更にネスト (push)
+                                [/(\/-)/, 'comment', '@push'],
+
+                                // -/ を見つけたら1階層終了 (pop)
+                                [/(-\/)/, { token: 'comment', next: '@pop' }],
+
+                                // その他の文字はすべてコメントとして処理
+                                [/./, 'comment'],
+                            ],
+                        }
+                    });
+
+                    // 作成済みエディタのモデルを差し替える
+                    monaco.editor.setModelLanguage(editor.getModel(), 'shari');
 
                     // 3) 変換マップ定義: "\times" => "×", "\alpha" => "α" etc
                     const unicodeMap = {
@@ -423,10 +486,6 @@
                         "dasharrow": "⇢", // U+21E2 ⇢ RIGHTWARDS DASHED ARROW
                         "dashleftarrow": "⇠", // U+21E0 ⇠ LEFTWARDS DASHED ARROW
                         "dashrightarrow": "⇢", // U+21E2 ⇢ RIGHTWARDS DASHED ARROW
-                        "diameter": "⌁", // ← Wait, original was #\u2300 ; ⌀ DIAMETER SIGN 
-                        //   Actually U+2300 is "⌀" not "⌁". Carefully:
-                        //   U+2300 (CIRCLE SLASH) is "⌀" "DIAMETER SIGN".
-                        //   We'll use "⌀".
                         "diameter": "⌀", // U+2300 ⌀ DIAMETER SIGN
                         "diamondsuit": "♢", // U+2662 ♢ WHITE DIAMOND SUIT
                         "earth": "♁", // U+2641 ♁ EARTH
@@ -812,7 +871,7 @@
                     }
 
                     // 4) Completion Item Provider を登録
-                    monaco.languages.registerCompletionItemProvider('plaintext', {
+                    monaco.languages.registerCompletionItemProvider('shari', {
                         // 4-1) トリガー文字: '\' のあとに補完を候補表示したい場合
                         triggerCharacters: ['\\'],
 
