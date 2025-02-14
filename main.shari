@@ -812,3 +812,15 @@ structure space u := {
 instance space.mk.{u} (subbase : set (set u)) : space u := {
   def subbase : set (set u) := subbase
 }
+
+-- うごいた
+lemma not_not_em_1 (φ : Prop) : ¬(φ ∨ ¬φ) → ¬φ :=
+assume ¬(φ ∨ ¬φ),
+assume φ,
+contradiction (or.left «φ») «¬(φ ∨ ¬φ)»
+
+-- うごいた
+lemma not_not_em (φ : Prop) : ¬¬(φ ∨ ¬φ) :=
+assume ¬(φ ∨ ¬φ),
+have ¬φ := not_not_em_1 «¬(φ ∨ ¬φ)»,
+contradiction (or.right «¬φ») «¬(φ ∨ ¬φ)»
