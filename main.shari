@@ -308,8 +308,8 @@ lemma eq.congr_abs.{u, v} (m₁ m₂ : u) : (∀ (x : v), m₁ = m₂) → (λ (
 assume ∀ (x : v), m₁ = m₂,
 fun_ext ⟪∀ (x : v), m₁ = m₂⟫
 
--- FIXME
 lemma eta_expand.{u, v} (f : u → v) : f = λ x, f x :=
+-- FIXME: the unifier is unable to synthesize `f` (for some reasons).
 @fun_ext[f, _] (take (x : u), eq.refl)
 
 /-
@@ -596,6 +596,7 @@ lemma ac.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x,
 assume ∀ x, ∃ y, R x y,
 have ∀ x, ∃! (h : inhab v), R x = inhab.rep h :=
   take (x : u),
+  -- FIXME: the unifier could not synthesize `R x`. Perhaps because it's a partially applied term?
   @inhab.uabs[R x] ⟪∀ x, ∃ y, R x y⟫[x],
 have ∃! (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
   auc ⟪∀ x, ∃! (h : inhab v), R x = inhab.rep h⟫,
@@ -752,6 +753,7 @@ have ∀ a b, mult m₁ a b = mult m₂ a b :=
                ... = mult m₂ a (mult m₁ (unit m₁) b)                     := eq.ap monoid.right_unit
                ... = mult m₂ a b                                         := eq.ap monoid.left_unit,
   ⟪mult m₁ a b = mult m₂ a b⟫,
+-- FIXME: remove @ from fun_ext after the bug in the unifier is fixed.
 @fun_ext[mult m₁, mult m₂] (take (a : u), @fun_ext[mult m₁ a, mult m₂ a] ⟪∀ a b, mult m₁ a b = mult m₂ a b⟫[a])
 
 lemma interchange.equates_monoid.{u} (m₁ m₂ : monoid u) : interchange m₁ m₂ → m₁ = m₂ :=
