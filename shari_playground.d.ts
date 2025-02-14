@@ -1,14 +1,14 @@
 /* tslint:disable */
 /* eslint-disable */
 export function run_process(input: string): string;
-export function init_logger(): void;
+export function init_all(): void;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
   readonly memory: WebAssembly.Memory;
   readonly run_process: (a: number, b: number) => [number, number];
-  readonly init_logger: () => void;
+  readonly init_all: () => void;
   readonly __wbindgen_free: (a: number, b: number, c: number) => void;
   readonly __wbindgen_malloc: (a: number, b: number) => number;
   readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

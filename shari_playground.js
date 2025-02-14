@@ -101,8 +101,8 @@ export function run_process(input) {
     }
 }
 
-export function init_logger() {
-    wasm.init_logger();
+export function init_all() {
+    wasm.init_all();
 }
 
 async function __wbg_load(module, imports) {
