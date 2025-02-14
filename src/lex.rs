@@ -1,3 +1,4 @@
+use std::iter::FusedIterator;
 use std::ops::Range;
 use std::sync::LazyLock;
 
@@ -16,12 +17,13 @@ impl<'a> SourceInfo<'a> {
     pub fn eof(input: &'a str) -> Self {
         let range = {
             let last = input.chars().count();
-            last..last
+            last - 1..last
         };
         let (line, column) = {
-            let mut lines = input.lines();
-            let last_line = lines.by_ref().last().unwrap();
-            (lines.count() + 1, last_line.chars().count() + 1)
+            let line = input.lines().count();
+            let last_line = input.lines().last().unwrap();
+            let column = last_line.chars().count() + 1;
+            (line, column)
         };
         Self {
             range,
@@ -184,6 +186,10 @@ impl<'a> Lex<'a> {
         }
         source_info
     }
+
+    pub fn is_eof(&self) -> bool {
+        self.clone().next().is_none()
+    }
 }
 
 impl<'a> Iterator for Lex<'a> {
@@ -284,3 +290,5 @@ impl<'a> Iterator for Lex<'a> {
         }
     }
 }
+
+impl FusedIterator for Lex<'_> {}

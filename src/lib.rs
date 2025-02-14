@@ -16,13 +16,10 @@ pub fn process(input: &str) -> anyhow::Result<()> {
 
     let mut lex = Lex::new(input);
 
-    loop {
+    while !lex.is_eof() {
         let cmd =
             match Parser::new(&mut lex, &eval.tt, &eval.ns, eval.local_type_consts.clone()).cmd() {
                 Ok(cmd) => cmd,
-                Err(ParseError::Eof { .. }) => {
-                    break;
-                }
                 Err(e) => {
                     return Err(e).context("parse error");
                 }

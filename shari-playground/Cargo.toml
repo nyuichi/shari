@@ -7,6 +7,7 @@ edition = "2021"
 log = "0.4"
 wasm-bindgen = "0.2"
 shari = { path = ".." }
+console_error_panic_hook = "0.1.6"
 
 [lib]
 crate-type = ["cdylib"]
