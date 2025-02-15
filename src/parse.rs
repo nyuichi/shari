@@ -342,7 +342,7 @@ impl<'a> Parser<'a> {
                 Ok(mk_type_local(name))
             } else if self.ns.type_consts.contains(&name) {
                 Ok(mk_type_const(name))
-            } else if token.as_str() == "set" {
+            } else if token.as_str() == "sub" {
                 let t = self.subty(1024)?;
                 Ok(mk_type_arrow(t, mk_type_prop()))
             } else if token.as_str() == "ℕ" {

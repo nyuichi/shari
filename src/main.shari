@@ -63,6 +63,17 @@ prefix ¬ : 40 := has_neg.neg
 infix ↔ : 20 := iff
 infix ≠ : 50 := ne
 
+infixl + : 65 := has_plus.plus
+infixl - : 65 := sub
+infixl * : 70 := has_ast.ast
+infixl / : 70 := div
+prefix - : 100 := neg
+infixr ^ : 80 := pow
+infix ≤ : 50 := le
+infix < : 50 := lt
+infix ≥ : 50 := ge
+infix > : 50 := gt
+
 -- The kernel and higher-order unifier recognize three reduction rules as the definitional equivalence:
 --
 -- 1. β-reduction: (λ x, M) N ↦ [N/x]M
@@ -120,6 +131,14 @@ class structure has_vee u := {
 
 class structure has_neg u := {
   const neg : u → u
+}
+
+class structure has_plus u := {
+  const plus : u → u → u
+}
+
+class structure has_ast u := {
+  const ast : u → u → u
 }
 
 -- A predicative version of Leibniz equality (attributed to Paulin).
@@ -370,47 +389,47 @@ infixl ∪ : 65 := cup
 infix ∖ : 70 := setminus
 nofix ∅ := empty
 
--- TODO: type set u := u → Prop
+-- TODO: type sub u := u → Prop
 
-def in.{u} (x : u) (s : set u) : Prop := s x
-def notin.{u} (x : u) (s : set u) : Prop := ¬(x ∈ s)
-def univ.{u} : set u := λ x, ⊤
-def empty.{u} : set u := λ x, ⊥
-def subset.{u} (s : set u) (t : set u) : Prop := ∀ x, x ∈ s → x ∈ t
-def sep.{u} (s : set u) (φ : set u) : set u := λ x, x ∈ s ∧ φ x
-def cap.{u} (s : set u) (t : set u) : set u := { x | x ∈ s ∧ x ∈ t }
-def cup.{u} (s : set u) (t : set u) : set u := { x | x ∈ s ∨ x ∈ t }
-def bigcap.{u} (a : set (set u)) : set u := { x | ∀ s, s ∈ a → x ∈ s }
-def bigcup.{u} (a : set (set u)) : set u := { x | ∃ s, s ∈ a ∧ x ∈ s }
-def power.{u} (s : set u) : set (set u) := { t | t ⊆ s }
-def setminus.{u} (s : set u) (t : set u) : set u := { x | x ∈ s ∧ x ∉ t }
-def im.{u, v} (f : u → v) (s : set u) : set v := { y | ∃ x, x ∈ s ∧ y = f x }
-def insert.{u} (a : u) (s : set u) : set u := { x | x = a ∨ x ∈ s }
+def in.{u} (x : u) (s : sub u) : Prop := s x
+def notin.{u} (x : u) (s : sub u) : Prop := ¬(x ∈ s)
+def univ.{u} : sub u := λ x, ⊤
+def empty.{u} : sub u := λ x, ⊥
+def subset.{u} (s : sub u) (t : sub u) : Prop := ∀ x, x ∈ s → x ∈ t
+def sep.{u} (s : sub u) (φ : u → Prop) : sub u := λ x, x ∈ s ∧ φ x
+def cap.{u} (s : sub u) (t : sub u) : sub u := { x | x ∈ s ∧ x ∈ t }
+def cup.{u} (s : sub u) (t : sub u) : sub u := { x | x ∈ s ∨ x ∈ t }
+def bigcap.{u} (a : sub (sub u)) : sub u := { x | ∀ s, s ∈ a → x ∈ s }
+def bigcup.{u} (a : sub (sub u)) : sub u := { x | ∃ s, s ∈ a ∧ x ∈ s }
+def power.{u} (s : sub u) : sub (sub u) := { t | t ⊆ s }
+def setminus.{u} (s : sub u) (t : sub u) : sub u := { x | x ∈ s ∧ x ∉ t }
+def im.{u, v} (f : u → v) (s : sub u) : sub v := { y | ∃ x, x ∈ s ∧ y = f x }
+def insert.{u} (a : u) (s : sub u) : sub u := { x | x = a ∨ x ∈ s }
 
 -- I don't know why these are adopted as the standard notation in Lean.
 -- https://github.com/leanprover/lean3/pull/936/commits/549feb5d7f95c0d28450b3778d471becafe58046
 -- prefix ⋂₀ : 110 := bigcap
 -- prefix ⋃₀ : 110 := bigcup
 
-lemma cantor.{u} : ¬(∃ (e : u → set u), surjective e) :=
+lemma cantor.{u} : ¬(∃ (e : u → sub u), surjective e) :=
 mt lawvere_fixpoint (
   assume ∃ φ, φ = ¬φ,
   obtain (φ : Prop), φ = ¬φ := «∃ φ, φ = ¬φ»,
   contradiction «φ = ¬φ» not.fixed_point_free)
 
-def preimage.{u, v} (f : u → v) (t : set v) : set u := { x | t (f x) }
+def preimage.{u, v} (f : u → v) (t : sub v) : sub u := { x | t (f x) }
 
-inductive fin.{u} : set u → Prop
+inductive fin.{u} : sub u → Prop
 | empty : fin empty
-| insert (a : u) (s : set u) : fin s → fin (insert a s)
+| insert (a : u) (s : sub u) : fin s → fin (insert a s)
 
-lemma empty_subseteq.{u} (s : set u) : ∅ ⊆ s :=
+lemma empty_subseteq.{u} (s : sub u) : ∅ ⊆ s :=
 take (a : u),
 assume a ∈ ∅,
 have ⊥ := «a ∈ ∅»,
 absurd «⊥»
 
-lemma empty_in_power.{u} (s : set u) : ∅ ∈ power s :=
+lemma empty_in_power.{u} (s : sub u) : ∅ ∈ power s :=
 empty_subseteq
 
 /-
@@ -566,18 +585,18 @@ contradiction «true = false» true_ne_false
 -- The command is desugared into the following set of declarations.
 --
 --   type const inhab : Type → Type
---   const inhab.rec.{u, α} : inhab u → (set u → α) → α
---   def inhab.rep.{u} : inhab u → set u := λ (this : inhab u), inhab.rec.{u, set u} this (λ (rep : set u), rep)
+--   const inhab.rec.{u, α} : inhab u → (sub u → α) → α
+--   def inhab.rep.{u} : inhab u → sub u := λ (this : inhab u), inhab.rec.{u, sub u} this (λ (rep : sub u), rep)
 --   axiom inhab.inhabited.{u} (this : inhab u) : ∃ x, x ∈ inhab.rep this
---   axiom inhab.abs.{u} (s : set u) : (∃ x, x ∈ s) → ∃ d, s = inhab.rep d
+--   axiom inhab.abs.{u} (s : sub u) : (∃ x, x ∈ s) → ∃ d, s = inhab.rep d
 --   axiom inhab.ext.{u} (d₁ d₂ : inhab u) : inhab.rep d₁ = inhab.rep d₂ → d₁ = d₂
 --
 structure inhab u := {
-  const rep : set u
+  const rep : sub u
   axiom inhabited : ∃ x, x ∈ rep
 }
 
-lemma inhab.uabs.{u} (s : set u) : (∃ x, x ∈ s) → ∃! c, s = inhab.rep c :=
+lemma inhab.uabs.{u} (s : sub u) : (∃ x, x ∈ s) → ∃! c, s = inhab.rep c :=
 assume ∃ x, x ∈ s,
 obtain (c : inhab u), s = inhab.rep c := inhab.abs «∃ x, x ∈ s»,
 uexists.intro
@@ -591,18 +610,18 @@ uexists.intro
 
 -- This command introduces:
 --
---   const power.inhab.{u} : set u → inhab (set u)
---   def power.inhab.rep.{u} (A : set u) : set (set u) := power A
---   lemma power.inhab.inhabited.{u} (A : set u) : ∃ a, a ∈ power x := (..)
---   axiom power.inhab.spec.{u} (A : set u) : inhab.rec (power.inhab A) = λ f, f (power.inhab.rep A)
+--   const power.inhab.{u} : sub u → inhab (sub u)
+--   def power.inhab.rep.{u} (A : sub u) : sub (sub u) := power A
+--   lemma power.inhab.inhabited.{u} (A : sub u) : ∃ a, a ∈ power x := (..)
+--   axiom power.inhab.spec.{u} (A : sub u) : inhab.rec (power.inhab A) = λ f, f (power.inhab.rep A)
 --
-instance power.inhab.{u} (A : set u) : inhab (set u) := {
-  def rep : set (set u) := power A
+instance power.inhab.{u} (A : sub u) : inhab (sub u) := {
+  def rep : sub (sub u) := power A
   lemma inhabited : ∃ a, a ∈ power A := exists.intro empty_in_power
 }
 
 instance cup.inhab.{u} (A B : inhab u) : inhab u := {
-  def rep : set u := inhab.rep A ∪ inhab.rep B
+  def rep : sub u := inhab.rep A ∪ inhab.rep B
 
   lemma inhabited : ∃ a, a ∈ inhab.rep A ∪ inhab.rep B :=
   obtain (x : u), x ∈ inhab.rep A := inhab.inhabited,
@@ -715,21 +734,18 @@ const epsilon.{u} : is_inhabited u → u
  - natural numbers
  -/
 
-infixl + : 65 := add
-infixl - : 65 := sub
-infixl * : 70 := mul
-infixl / : 70 := div
-prefix - : 100 := neg
-infixr ^ : 80 := pow
-infix ≤ : 50 := le
-infix < : 50 := lt
-infix ≥ : 50 := ge
-infix > : 50 := gt
-
 -- TODO: type ℕ := nat
 
-def add (n m : ℕ) : ℕ := nat.rec n m (λ p, succ)
-def mul (n m : ℕ) : ℕ := nat.rec n zero (λ p, add m)
+def nat.add (n m : ℕ) : ℕ := nat.rec n m (λ p, succ)
+def nat.mul (n m : ℕ) : ℕ := nat.rec n zero (λ p, nat.add m)
+
+class instance nat.has_plus : has_plus ℕ := {
+  def plus : ℕ → ℕ → ℕ := nat.add
+}
+
+class instance nat.has_ast : has_ast ℕ := {
+  def ast : ℕ → ℕ → ℕ := nat.mul
+}
 
 def bit0 (n : ℕ) : ℕ := n + n
 def bit1 (n : ℕ) : ℕ := succ (bit0 n)
@@ -778,7 +794,7 @@ have ∀ a b, mult m₁ a b = mult m₂ a b :=
 -- FIXME: remove @ from fun_ext after the bug in the unifier is fixed.
 @fun_ext[mult m₁, mult m₂] (take (a : u), @fun_ext[mult m₁ a, mult m₂ a] «∀ a b, mult m₁ a b = mult m₂ a b»[a])
 
-lemma interchange.equates_monoid.{u} (m₁ m₂ : monoid u) : interchange m₁ m₂ → m₁ = m₂ :=
+lemma eckmann_hilton.{u} (m₁ m₂ : monoid u) : interchange m₁ m₂ → m₁ = m₂ :=
 assume interchange m₁ m₂,
 monoid.ext (interchange.equates_mult «interchange m₁ m₂») (interchange.equates_unit «interchange m₁ m₂»)
 
@@ -799,18 +815,18 @@ structure is_prop u := {
   axiom spec (x₁ x₂ : u) : x₁ = x₂
 }
 
-inductive topology.{u} (subbase : set (set u)) : set (set u)
-| subbase (x : set u) : x ∈ subbase → topology x
+inductive topology.{u} (subbase : sub (sub u)) : sub (sub u)
+| subbase (x : sub u) : x ∈ subbase → topology x
 | univ : topology univ
-| inter (x y : set u) : topology (x ∩ y)
-| union (A : set (set u)) : (∀ a, a ∈ A → topology a) → topology (bigcup A)
+| inter (x y : sub u) : topology (x ∩ y)
+| union (A : sub (sub u)) : (∀ a, a ∈ A → topology a) → topology (bigcup A)
 
 structure space u := {
-  const subbase : set (set u)
+  const subbase : sub (sub u)
 }
 
-instance space.mk.{u} (subbase : set (set u)) : space u := {
-  def subbase : set (set u) := subbase
+instance space.mk.{u} (subbase : sub (sub u)) : space u := {
+  def subbase : sub (sub u) := subbase
 }
 
 -- うごいた
