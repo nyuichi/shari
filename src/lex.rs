@@ -1,20 +1,20 @@
 use std::iter::FusedIterator;
 use std::ops::Range;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use regex::Regex;
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
-pub struct SourceInfo<'a> {
+pub struct SourceInfo {
     line: usize,   // 1-origin
     column: usize, // 1-origin
     range: Range<usize>,
-    input: &'a str,
+    input: Arc<String>,
 }
 
-impl<'a> SourceInfo<'a> {
-    pub fn eof(input: &'a str) -> Self {
+impl SourceInfo {
+    pub fn eof(input: Arc<String>) -> Self {
         let range = {
             let last = input.chars().count();
             last - 1..last
@@ -40,7 +40,7 @@ impl<'a> SourceInfo<'a> {
     }
 }
 
-impl<'a> std::fmt::Display for SourceInfo<'a> {
+impl std::fmt::Display for SourceInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}:{}\n\n", self.line, self.column)?;
         writeln!(
@@ -75,12 +75,12 @@ pub enum TokenKind {
 }
 
 #[derive(Debug, Clone)]
-pub struct Token<'a> {
+pub struct Token {
     pub kind: TokenKind,
-    pub source_info: SourceInfo<'a>,
+    pub source_info: SourceInfo,
 }
 
-impl<'a> Token<'a> {
+impl Token {
     pub fn is_ident(&self) -> bool {
         self.kind == TokenKind::Ident
     }
@@ -102,15 +102,15 @@ impl<'a> Token<'a> {
     }
 }
 
-impl<'a> std::fmt::Display for Token<'a> {
+impl std::fmt::Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{:?} {}\n{}", self.kind, self.as_str(), self.source_info)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct Lex<'a> {
-    input: &'a str,
+pub struct Lex {
+    input: Arc<String>,
     position: usize,
     line: usize,
     column: usize,
@@ -130,8 +130,8 @@ pub struct LexError {
     column: usize,
 }
 
-impl<'a> From<Lex<'a>> for LexError {
-    fn from(lex: Lex<'a>) -> Self {
+impl From<Lex> for LexError {
+    fn from(lex: Lex) -> Self {
         Self {
             line: lex.line,
             column: lex.column,
@@ -139,8 +139,8 @@ impl<'a> From<Lex<'a>> for LexError {
     }
 }
 
-impl<'a> Lex<'a> {
-    pub fn new(input: &'a str) -> Self {
+impl Lex {
+    pub fn new(input: Arc<String>) -> Self {
         Self {
             input,
             position: 0,
@@ -149,8 +149,8 @@ impl<'a> Lex<'a> {
         }
     }
 
-    pub fn input(&self) -> &'a str {
-        self.input
+    pub fn input(&self) -> &Arc<String> {
+        &self.input
     }
 
     pub fn save(&self) -> LexState {
@@ -167,12 +167,12 @@ impl<'a> Lex<'a> {
         self.column = state.column;
     }
 
-    fn advance(&mut self, bytes: usize) -> SourceInfo<'a> {
+    fn advance(&mut self, bytes: usize) -> SourceInfo {
         let source_info = SourceInfo {
             range: self.position..self.position + bytes,
             line: self.line,
             column: self.column,
-            input: self.input,
+            input: Arc::clone(&self.input),
         };
         let text = &self.input[self.position..self.position + bytes];
         self.position += bytes;
@@ -192,8 +192,9 @@ impl<'a> Lex<'a> {
     }
 }
 
-impl<'a> Iterator for Lex<'a> {
-    type Item = std::result::Result<Token<'a>, LexError>;
+impl Iterator for Lex {
+    type Item = std::result::Result<Token, LexError>;
+
     fn next(&mut self) -> Option<Self::Item> {
         #[derive(PartialEq, Eq, Debug)]
         enum Kind {
@@ -230,7 +231,8 @@ impl<'a> Iterator for Lex<'a> {
             if self.input.len() == self.position {
                 return None;
             }
-            let cap = match RE.captures(&self.input[self.position..]) {
+            let input = Arc::clone(&self.input);
+            let cap = match RE.captures(&input[self.position..]) {
                 None => return Some(Err(LexError::from(self.clone()))),
                 Some(cap) => cap,
             };
@@ -291,4 +293,4 @@ impl<'a> Iterator for Lex<'a> {
     }
 }
 
-impl FusedIterator for Lex<'_> {}
+impl FusedIterator for Lex {}

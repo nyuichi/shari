@@ -18,6 +18,7 @@ use crate::tt::{
 use crate::lex::{Lex, LexError, SourceInfo, Token, TokenKind};
 use anyhow::bail;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::{mem, slice};
 use thiserror::Error;
 
@@ -128,10 +129,10 @@ pub enum ParseError {
     #[error("parse error: {message} at {source_info}")]
     Parse {
         message: String,
-        source_info: String,
+        source_info: SourceInfo,
     },
     #[error("unexpected end of input at {source_info}")]
-    Eof { source_info: String },
+    Eof { source_info: SourceInfo },
 }
 
 #[derive(Debug, Default, Clone)]
@@ -158,20 +159,20 @@ pub struct Nasmespace {
     pub locals: Vec<Name>,
 }
 
-pub struct Parser<'a, 'b> {
-    lex: &'b mut Lex<'a>,
-    tt: &'b TokenTable,
-    ns: &'b Nasmespace,
+pub struct Parser<'a> {
+    lex: &'a mut Lex,
+    tt: &'a TokenTable,
+    ns: &'a Nasmespace,
     type_locals: Vec<Name>,
     locals: Vec<Name>,
     holes: Vec<(Name, Type)>,
 }
 
-impl<'a, 'b> Parser<'a, 'b> {
+impl<'a> Parser<'a> {
     pub fn new(
-        lex: &'b mut Lex<'a>,
-        tt: &'b TokenTable,
-        ns: &'b Nasmespace,
+        lex: &'a mut Lex,
+        tt: &'a TokenTable,
+        ns: &'a Nasmespace,
         type_variables: Vec<Name>,
     ) -> Self {
         Self {
@@ -184,16 +185,16 @@ impl<'a, 'b> Parser<'a, 'b> {
         }
     }
 
-    fn fail<R>(token: Token<'a>, message: impl Into<String>) -> Result<R, ParseError> {
+    fn fail<R>(token: Token, message: impl Into<String>) -> Result<R, ParseError> {
         Err(ParseError::Parse {
             message: message.into(),
-            source_info: token.source_info.to_string(),
+            source_info: token.source_info,
         })
     }
 
     fn eof_error(&self) -> ParseError {
         ParseError::Eof {
-            source_info: SourceInfo::eof(self.lex.input()).to_string(),
+            source_info: SourceInfo::eof(Arc::clone(self.lex.input())),
         }
     }
 
@@ -211,11 +212,11 @@ impl<'a, 'b> Parser<'a, 'b> {
         }
     }
 
-    fn peek_opt(&mut self) -> Option<Token<'a>> {
+    fn peek_opt(&mut self) -> Option<Token> {
         self.optional(|this| this.peek())
     }
 
-    fn peek(&mut self) -> Result<Token<'a>, ParseError> {
+    fn peek(&mut self) -> Result<Token, ParseError> {
         self.lex
             .clone()
             .next()
@@ -230,7 +231,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             .expect("impossible lex error! probably due to unchecked advance");
     }
 
-    fn any_token(&mut self) -> Result<Token<'a>, ParseError> {
+    fn any_token(&mut self) -> Result<Token, ParseError> {
         self.lex
             .next()
             .transpose()
@@ -238,7 +239,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             .ok_or_else(|| self.eof_error())
     }
 
-    fn ident(&mut self) -> Result<Token<'a>, ParseError> {
+    fn ident(&mut self) -> Result<Token, ParseError> {
         let token = self.any_token()?;
         if !token.is_ident() {
             return Self::fail(token, "expected identifier");
@@ -246,7 +247,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(token)
     }
 
-    fn ident_opt(&mut self) -> Option<Token<'a>> {
+    fn ident_opt(&mut self) -> Option<Token> {
         if let Some(token) = self.peek_opt() {
             if token.is_ident() {
                 self.advance();
@@ -264,7 +265,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         Self::fail(token, format!("expected identifier '{}'", name))
     }
 
-    fn symbol(&mut self) -> Result<Token<'a>, ParseError> {
+    fn symbol(&mut self) -> Result<Token, ParseError> {
         let token = self.any_token()?;
         if !token.is_symbol() {
             return Self::fail(token, "expected symbol");
@@ -280,7 +281,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         Self::fail(token, format!("expected symbol '{}'", sym))
     }
 
-    fn expect_symbol_opt(&mut self, sym: &str) -> Option<Token<'a>> {
+    fn expect_symbol_opt(&mut self, sym: &str) -> Option<Token> {
         if let Some(token) = self.peek_opt() {
             if token.kind == TokenKind::Symbol && token.as_str() == sym {
                 self.advance();
@@ -290,7 +291,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         None
     }
 
-    fn num_lit(&mut self) -> Result<Token<'a>, ParseError> {
+    fn num_lit(&mut self) -> Result<Token, ParseError> {
         let token = self.any_token()?;
         if !token.is_num_lit() {
             return Self::fail(token, "expected numeral literal");
@@ -298,7 +299,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(token)
     }
 
-    fn keyword(&mut self) -> Result<Token<'a>, ParseError> {
+    fn keyword(&mut self) -> Result<Token, ParseError> {
         let token = self.any_token()?;
         if !token.is_keyword() {
             return Self::fail(token, "expected keyword");
@@ -478,7 +479,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.optional(|this| this.term())
     }
 
-    fn term_abs(&mut self, token: Token<'a>) -> Result<Term, ParseError> {
+    fn term_abs(&mut self, token: Token) -> Result<Term, ParseError> {
         let params = self.parameters()?;
         self.expect_symbol(",")?;
         if params.is_empty() {
@@ -501,7 +502,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(m)
     }
 
-    fn term_binder(&mut self, token: Token<'a>, binder: &str) -> Result<Term, ParseError> {
+    fn term_binder(&mut self, token: Token, binder: &str) -> Result<Term, ParseError> {
         let params = self.parameters()?;
         self.expect_symbol(",")?;
         if params.is_empty() {
@@ -529,7 +530,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(m)
     }
 
-    fn term_sep(&mut self, _token: Token<'a>) -> Result<Term, ParseError> {
+    fn term_sep(&mut self, _token: Token) -> Result<Term, ParseError> {
         let name = self.name()?;
         let ty;
         if let Some(_token) = self.expect_symbol_opt(":") {
@@ -547,7 +548,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(m)
     }
 
-    fn term_var(&mut self, token: Token<'a>, entity: Option<Name>) -> Result<Term, ParseError> {
+    fn term_var(&mut self, token: Token, entity: Option<Name>) -> Result<Term, ParseError> {
         let name = match entity {
             None => Name::try_from(token.as_str()).expect("logic flaw"),
             Some(s) => s,
@@ -671,7 +672,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.subexpr(0)
     }
 
-    fn expr_const(&mut self, token: Token<'a>, auto_inst: bool) -> Result<Expr, ParseError> {
+    fn expr_const(&mut self, token: Token, auto_inst: bool) -> Result<Expr, ParseError> {
         let name = Name::try_from(token.as_str()).unwrap();
         let Some(axiom_info) = self.ns.axioms.get(&name).cloned() else {
             return Self::fail(token, "unknown variable");
@@ -1247,7 +1248,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         Ok(CmdLocalTypeConst { variables })
     }
 
-    fn type_inductive_cmd(&mut self, _token: Token<'a>) -> Result<CmdTypeInductive, ParseError> {
+    fn type_inductive_cmd(&mut self, _token: Token) -> Result<CmdTypeInductive, ParseError> {
         let name = self.name()?;
         self.type_locals.push(name);
 
@@ -1289,7 +1290,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         })
     }
 
-    fn inductive_cmd(&mut self, _token: Token<'a>) -> Result<CmdInductive, ParseError> {
+    fn inductive_cmd(&mut self, _token: Token) -> Result<CmdInductive, ParseError> {
         let name = self.name()?;
         self.locals.push(name);
         let local_types = self.local_type_parameters()?;
@@ -1338,7 +1339,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         })
     }
 
-    fn structure_cmd(&mut self, _token: Token<'a>) -> Result<CmdStructure, ParseError> {
+    fn structure_cmd(&mut self, _token: Token) -> Result<CmdStructure, ParseError> {
         let name = self.name()?;
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
@@ -1400,7 +1401,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         })
     }
 
-    fn instance_cmd(&mut self, _token: Token<'a>) -> Result<CmdInstance, ParseError> {
+    fn instance_cmd(&mut self, _token: Token) -> Result<CmdInstance, ParseError> {
         let name = self.name()?;
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
@@ -1482,7 +1483,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         })
     }
 
-    fn class_structure_cmd(&mut self, _token: Token<'a>) -> Result<CmdClassStructure, ParseError> {
+    fn class_structure_cmd(&mut self, _token: Token) -> Result<CmdClassStructure, ParseError> {
         let name = self.name()?;
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
@@ -1544,7 +1545,7 @@ impl<'a, 'b> Parser<'a, 'b> {
         })
     }
 
-    fn class_instance_cmd(&mut self, _token: Token<'a>) -> Result<CmdClassInstance, ParseError> {
+    fn class_instance_cmd(&mut self, _token: Token) -> Result<CmdClassInstance, ParseError> {
         let name = self.name()?;
         let local_types = self.local_type_parameters()?;
         for &ty in &local_types {

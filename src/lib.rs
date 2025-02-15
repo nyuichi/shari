@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Context;
 use lex::Lex;
 use parse::Parser;
@@ -14,7 +16,7 @@ mod tt;
 pub fn process(input: &str) -> anyhow::Result<()> {
     let mut eval = cmd::Eval::default();
 
-    let mut lex = Lex::new(input);
+    let mut lex = Lex::new(Arc::new(input.to_owned()));
 
     while !lex.is_eof() {
         let cmd =
