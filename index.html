@@ -100,177 +100,204 @@
         // 1) Monaco Editor のロード設定
         require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.38.0/min/vs' } });
         require(['vs/editor/editor.main'], function () {
+            monaco.languages.register({ id: 'shari' });
+
+            monaco.languages.setLanguageConfiguration('shari', {
+                wordPattern: /[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*/gu,
+                comments: {
+                    lineComment: '--',
+                    blockComment: ['/-', '-/']
+                },
+                brackets: [
+                    ['(', ')'],
+                    ['{', '}'],
+                    ['[', ']'],
+                    ['«', '»']
+                ],
+                autoClosingPairs: [
+                    { open: '(', close: ')' },
+                    { open: '[', close: ']' },
+                    { open: '{', close: '}' },
+                    { open: '"', close: '"' },
+                    { open: '«', close: '»' }
+                ],
+                surroundingPairs: [
+                    { open: '(', close: ')' },
+                    { open: '[', close: ']' },
+                    { open: '{', close: '}' },
+                    { open: '"', close: '"' },
+                    { open: '«', close: '»' }
+                ],
+                // autoCloseBefore?: string;
+                // folding?: FoldingRules;
+                // indentationRules?: IndentationRule;
+                // onEnterRules?: OnEnterRule[];
+            });
+
+            monaco.languages.setMonarchTokensProvider('shari', {
+                tokenPostfix: '.shari',
+
+                // キーワード一覧
+                keywords: [
+                    'infixr', 'nofix', 'infixl', 'infix', 'prefix',
+                    'axiom', 'def', 'lemma', 'const', 'type',
+                    'local', 'inductive', 'structure', 'instance', 'class',
+                ],
+
+                contextualKeywords: [
+                    'have', 'obtain', 'assume', 'change', 'calc', 'take'
+                ],
+
+                brackets: [
+                    ['(', ')', 'delimiter.parenthesis'],
+                    ['{', '}', 'delimiter.curly'],
+                    ['[', ']', 'delimiter.square'],
+                    ['«', '»', 'delimiter.angle'],
+                ],
+
+                tokenizer: {
+                    root: [
+                        // 識別子
+                        [/[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*/u, { cases: { '@keywords': 'keyword', '@contextualKeywords': 'keyword', '@default': 'identifier' } }],
+
+                        // 1行コメント: -- から行末まで
+                        [/--.*$/, 'comment'],
+
+                        // 複数行コメントの開始: /-  (ネスト可) → @comment へ移行
+                        [/(\/-)/, { token: 'comment', next: '@comment' }],
+
+                        // 括弧や区切り記号など
+                        [/[{}()\[\]«»]/, '@brackets'],
+                        [/[;,.]/, 'delimiter']
+                    ],
+
+                    // ネスト可能な複数行コメント
+                    comment: [
+                        // 新たな /- を見つけたら更にネスト (push)
+                        [/(\/-)/, 'comment', '@push'],
+
+                        // -/ を見つけたら1階層終了 (pop)
+                        [/(-\/)/, { token: 'comment', next: '@pop' }],
+
+                        // その他の文字はすべてコメントとして処理
+                        [/./, 'comment'],
+                    ],
+                },
+
+                unicode: true,
+            });
+
+            // 変換マップを前処理
+            const sortedKeys = Object.keys(unicodeMap).sort();
+
+            function binarySearchPrefix(array, prefix) {
+                // prefix以上の最初のインデックスを探す (lower bound)
+                let left = 0, right = array.length;
+                while (left < right) {
+                    const mid = (left + right) >> 1;
+                    if (array[mid] < prefix) {
+                        left = mid + 1;
+                    } else {
+                        right = mid;
+                    }
+                }
+                return left;
+            }
+
+            function findCandidatesPrefix(prefix) {
+                const start = binarySearchPrefix(sortedKeys, prefix);
+                // prefixの最終形を "prefix + a文字として絶対に超えない終端" を作る
+                // 例: prefixEnd = prefix + '\uffff' など
+                const prefixEnd = prefix + "\uffff";
+                let candidates = [];
+                for (let i = start; i < sortedKeys.length; i++) {
+                    const key = sortedKeys[i];
+                    if (key > prefixEnd) break;
+                    if (key.startsWith(prefix)) {
+                        candidates.push({ key, value: unicodeMap[key] });
+                    } else {
+                        break;
+                    }
+                }
+                return candidates;
+            }
+
+            // Completion Item Provider を登録
+            monaco.languages.registerCompletionItemProvider('shari', {
+                // 1) トリガー文字: '\' のあとに補完を候補表示したい場合
+                triggerCharacters: ['\\'],
+
+                // 2) 補完候補を返す関数
+                provideCompletionItems: function (model, position) {
+                    // 現在のカーソル行のテキストを取得
+                    const textUntilPosition = model.getValueInRange({
+                        startLineNumber: position.lineNumber,
+                        startColumn: 1,
+                        endLineNumber: position.lineNumber,
+                        endColumn: position.column
+                    });
+
+                    // FIXME:
+                    // いまのままだと \^0 への補完ができない。なぜなら ^ は word separator だから。
+                    // https://github.com/microsoft/vscode/blob/44028decf1ca81a0cbf99a65ab72cca6735449f2/src/vs/editor/common/core/wordHelper.ts#L37
+
+                    // 例: "\tim" のうち、正規表現で `\` を含む部分をマッチしつつ、
+                    //     グループとして "tim" のみを抜き出したい。
+                    //     → /\\([A-Za-z0-9_^]+)$/ で [1] 番目のグループに "tim" が入る。
+                    const match = textUntilPosition.match(/\\([A-Za-z0-9_]+|(\^[A-Za-z0-9_]+))$/);
+                    if (!match) {
+                        // バックスラッシュ+アルファベットor数字or^_の連続で終わっていないなら補完なし
+                        return { suggestions: [] };
+                    }
+
+                    // グループ1に "tim" 等が入っている
+                    const wordPart = match[1]; // 例: "times"
+
+                    // 今の入力位置から、"\tim" 全体を置き換えたい
+                    // → 置き換え開始カラム = 現在カラム - (wordPart.length + 1)
+                    //   ( +1 は '\' の分 )
+                    const startColumn = position.column - (wordPart.length + 1);
+
+                    const candidates = findCandidatesPrefix(wordPart);
+
+                    const suggestions = [];
+                    // 例: { key: "times", replacement: "×" }
+                    for (const { key: word, value: replacement } of candidates) {
+                        const suggestion = {
+                            label: `\\${word}`,  // ユーザに見せる候補ラベル（例: "\times"）
+                            kind: monaco.languages.CompletionItemKind.Text,
+                            insertText: replacement, // 実際に挿入する文字（例: "×"）
+                            range: {
+                                startLineNumber: position.lineNumber,
+                                startColumn: startColumn,
+                                endLineNumber: position.lineNumber,
+                                endColumn: position.column
+                            },
+                        };
+
+                        suggestions.push(suggestion);
+                    }
+                    return {
+                        suggestions
+                    };
+                }
+            });
+
+
             fetch('./main.shari')
                 .then(res => res.text())
                 .then(text => {
 
-                    // 2) Monaco Editor のインスタンス作成
+                    // Monaco Editor のインスタンス作成
                     const editor = monaco.editor.create(document.getElementById('editor'), {
                         value: text,
-                        // このあとshariに切り替える。
-                        language: 'plaintext',
+                        language: 'shari',
                         theme: 'vs-light',
                         minimap: {
                             enabled: false
                         },
                         unicodeHighlight: {
                             ambiguousCharacters: false,
-                        }
-                    });
-
-                    monaco.languages.register({ id: 'shari' });
-
-                    monaco.languages.setMonarchTokensProvider('shari', {
-                        tokenPostfix: '.shari',
-
-                        // キーワード一覧
-                        keywords: [
-                            'infixr', 'nofix', 'infixl', 'infix', 'prefix',
-                            'axiom', 'def', 'lemma', 'const', 'type',
-                            'local', 'inductive', 'structure', 'instance', 'class',
-                        ],
-
-                        contextualKeywords: [
-                            'have', 'obtain', 'assume', 'change', 'calc', 'take'
-                        ],
-
-                        brackets: [
-                            ['(', ')', 'delimiter.parenthesis'],
-                            ['{', '}', 'delimiter.curly'],
-                            ['[', ']', 'delimiter.square'],
-                            ['«', '»', 'delimiter.angle'],
-                        ],
-
-                        tokenizer: {
-                            root: [
-                                // 識別子
-                                [/[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*/u, { cases: { '@keywords': 'keyword', '@contextualKeywords': 'keyword', '@default': 'identifier' } }],
-
-                                // 1行コメント: -- から行末まで
-                                [/--.*$/, 'comment'],
-
-                                // 複数行コメントの開始: /-  (ネスト可) → @comment へ移行
-                                [/(\/-)/, { token: 'comment', next: '@comment' }],
-
-                                // 括弧や区切り記号など
-                                [/[{}()\[\]«»]/, '@brackets'],
-                                [/[;,.]/, 'delimiter']
-                            ],
-
-                            // ネスト可能な複数行コメント
-                            comment: [
-                                // 新たな /- を見つけたら更にネスト (push)
-                                [/(\/-)/, 'comment', '@push'],
-
-                                // -/ を見つけたら1階層終了 (pop)
-                                [/(-\/)/, { token: 'comment', next: '@pop' }],
-
-                                // その他の文字はすべてコメントとして処理
-                                [/./, 'comment'],
-                            ],
-                        },
-
-                        unicode: true,
-                    });
-
-                    // 作成済みエディタのモデルを差し替える
-                    monaco.editor.setModelLanguage(editor.getModel(), 'shari');
-
-                    // 3) 変換マップを前処理
-                    const sortedKeys = Object.keys(unicodeMap).sort();
-
-                    function binarySearchPrefix(array, prefix) {
-                        // prefix以上の最初のインデックスを探す (lower bound)
-                        let left = 0, right = array.length;
-                        while (left < right) {
-                            const mid = (left + right) >> 1;
-                            if (array[mid] < prefix) {
-                                left = mid + 1;
-                            } else {
-                                right = mid;
-                            }
-                        }
-                        return left;
-                    }
-
-                    function findCandidatesPrefix(prefix) {
-                        const start = binarySearchPrefix(sortedKeys, prefix);
-                        // prefixの最終形を "prefix + a文字として絶対に超えない終端" を作る
-                        // 例: prefixEnd = prefix + '\uffff' など
-                        const prefixEnd = prefix + "\uffff";
-                        let candidates = [];
-                        for (let i = start; i < sortedKeys.length; i++) {
-                            const key = sortedKeys[i];
-                            if (key > prefixEnd) break;
-                            if (key.startsWith(prefix)) {
-                                candidates.push({ key, value: unicodeMap[key] });
-                            } else {
-                                break;
-                            }
-                        }
-                        return candidates;
-                    }
-
-                    // 4) Completion Item Provider を登録
-                    monaco.languages.registerCompletionItemProvider('shari', {
-                        // 4-1) トリガー文字: '\' のあとに補完を候補表示したい場合
-                        triggerCharacters: ['\\'],
-
-                        // 4-2) 補完候補を返す関数
-                        provideCompletionItems: function (model, position) {
-                            // 現在のカーソル行のテキストを取得
-                            const textUntilPosition = model.getValueInRange({
-                                startLineNumber: position.lineNumber,
-                                startColumn: 1,
-                                endLineNumber: position.lineNumber,
-                                endColumn: position.column
-                            });
-
-                            // FIXME:
-                            // いまのままだと \^0 への補完ができない。なぜなら ^ は word separator だから。
-                            // https://github.com/microsoft/vscode/blob/44028decf1ca81a0cbf99a65ab72cca6735449f2/src/vs/editor/common/core/wordHelper.ts#L37
-
-                            // 例: "\tim" のうち、正規表現で `\` を含む部分をマッチしつつ、
-                            //     グループとして "tim" のみを抜き出したい。
-                            //     → /\\([A-Za-z0-9_^]+)$/ で [1] 番目のグループに "tim" が入る。
-                            const match = textUntilPosition.match(/\\([A-Za-z0-9_]+|(\^[A-Za-z0-9_]+))$/);
-                            if (!match) {
-                                // バックスラッシュ+アルファベットor数字or^_の連続で終わっていないなら補完なし
-                                return { suggestions: [] };
-                            }
-
-                            // グループ1に "tim" 等が入っている
-                            const wordPart = match[1]; // 例: "times"
-
-                            // 今の入力位置から、"\tim" 全体を置き換えたい
-                            // → 置き換え開始カラム = 現在カラム - (wordPart.length + 1)
-                            //   ( +1 は '\' の分 )
-                            const startColumn = position.column - (wordPart.length + 1);
-
-                            const candidates = findCandidatesPrefix(wordPart);
-
-                            const suggestions = [];
-                            // 例: { key: "times", replacement: "×" }
-                            for (const { key: word, value: replacement } of candidates) {
-                                const suggestion = {
-                                    label: `\\${word}`,  // ユーザに見せる候補ラベル（例: "\times"）
-                                    kind: monaco.languages.CompletionItemKind.Text,
-                                    insertText: replacement, // 実際に挿入する文字（例: "×"）
-                                    range: {
-                                        startLineNumber: position.lineNumber,
-                                        startColumn: startColumn,
-                                        endLineNumber: position.lineNumber,
-                                        endColumn: position.column
-                                    },
-                                    // 他の候補より優先したい場合などは sortText を小さくすると良い
-                                    sortText: '0'
-                                };
-
-                                suggestions.push(suggestion);
-                            }
-                            return {
-                                suggestions
-                            };
                         }
                     });
 
