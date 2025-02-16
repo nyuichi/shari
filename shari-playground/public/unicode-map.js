@@ -663,4 +663,7 @@ export const unicodeMap = {
     "^7": "⁷",
     "^8": "⁸",
     "^9": "⁹",
+
+    // Others
+    "emptyset": "∅", // U+2205 ∅ EMPTY SET
 };

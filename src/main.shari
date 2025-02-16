@@ -69,10 +69,10 @@ infixl * : 70 := has_ast.ast
 infixl / : 70 := div
 prefix - : 100 := neg
 infixr ^ : 80 := pow
-infix ≤ : 50 := le
-infix < : 50 := lt
-infix ≥ : 50 := ge
-infix > : 50 := gt
+infix ≤ : 50 := has_le.le
+infix < : 50 := has_le.lt
+infix ≥ : 50 := has_le.ge
+infix > : 50 := has_le.gt
 
 -- The kernel and higher-order unifier recognize three reduction rules as the definitional equivalence:
 --
@@ -141,6 +141,10 @@ class structure has_ast u := {
   const ast : u → u → u
 }
 
+class structure has_le u := {
+  const le : u → u → Prop
+}
+
 -- A predicative version of Leibniz equality (attributed to Paulin).
 -- The following set of declarations are generated.
 -- (Notice that the order of arguments in eq.ind is slightly modified from [Dybjer, '97].)
@@ -197,6 +201,10 @@ class instance Prop.has_neg : has_neg Prop := {
 def iff (φ : Prop) (ψ : Prop) : Prop := (φ → ψ) ∧ (ψ → φ)
 def uexists.{u} (P : u → Prop) : Prop := ∃ x, P x ∧ (∀ y, P y → x = y)
 def ne.{u} (x : u) (y : u) : Prop := ¬x = y
+
+def has_le.lt.{u} [has_le u] (x y : u) : Prop := x ≤ y ∧ x ≠ y
+def has_le.ge.{u} [has_le u] (x y : u) : Prop := y ≤ x
+def has_le.gt.{u} [has_le u] (x y : u) : Prop := y < x
 
 -- Three axioms of topos (cf. [Introduction to CATEGORY THEORY and CATEGORICAL LOGIC, T. Streicher, '03])
 axiom prop_ext (φ ψ : Prop) : (φ ↔ ψ) → φ = ψ
@@ -717,8 +725,12 @@ instance is_inhabited.join.{u} (h : is_inhabited (is_inhabited u)) : is_inhabite
 -- internal global choice operator
 -- 
 -- Introducing this constant restricts the class of models to toposes whose supports split.
+-- Postulating split supports together with the internal axiom of choice, our logic becomes
+-- precisely an internal logic of toposes satisfying the _external_ axiom of choice.
+--
 -- Note we do not have an object-level function assigning for each type u the choice function,
--- which would imply axiom of choice.
+-- which would imply axiom of choice. For the details of this direction see Lean's standard library.
+--
 -- In the presence of dependent products, this operator corresponds to the law of double negation:
 --
 --   is_inhabited u ≅ Π (p : Prop), (u → El(p)) → El(p)
@@ -730,7 +742,46 @@ instance is_inhabited.join.{u} (h : is_inhabited (is_inhabited u)) : is_inhabite
 -- means there exist an object V, V → 1 epi and V → u, one can safely assume V was 1.
 const epsilon.{u} : is_inhabited u → u
 
-/-
+-- Construct external global epsilon operator from internal epsilon and internal axiom of choice.
+-- A similar construction is found in arXiv:1603.00822.
+
+lemma external_epsilon_spec.{u} (h : is_inhabited u) (P : u → Prop) : ∃ x, (∃ y, P y) → P x :=
+or.ind @em[∃ y, P y]
+  (assume ∃ y, P y,
+   obtain (y : u), P y := «∃ y, P y»,
+   @exists.intro[_, y]
+     (assume ∃ y, P y,
+      «P y»))
+  (assume ¬∃ y, P y,
+   obtain (x : u), ⊤ := @is_inhabited.inhabited[h],
+   @exists.intro[_, x]
+    (assume ∃ y, P y,
+     @absurd[P x] (contradiction «∃ y, P y» «¬∃ y, P y»)))
+
+lemma external_epsilon_exists.{u} (h : is_inhabited u) : ∃ (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) :=
+ac (take (P : u → Prop), @external_epsilon_spec[h, P])
+
+-- The followings are boilerplate. To obtain an object `x` from a proposition `∃ x, ...`, we first define a structure and then
+-- prove its inhabitedness and finally get the term applying the internal epsilon.
+structure extract_hilbert_epsilon u := {
+  const run : (u → Prop) → u
+  axiom spec (P : u → Prop) : (∃ y, P y) → P (run P)
+}
+
+lemma extract_hilbert_epsilon.is_inhabited.{u} (h : is_inhabited u) : ∃ (x : extract_hilbert_epsilon u), ⊤ :=
+obtain (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) := @external_epsilon_exists[h],
+obtain (this : extract_hilbert_epsilon u), ε = extract_hilbert_epsilon.run this := @extract_hilbert_epsilon.abs[ε] «∀ P, (∃ y, P y) → P (ε P)»,
+@exists.intro[_, this] true.intro
+
+instance extract_hilbert_epsilon.is_inhabited.{u} (h : is_inhabited u) : is_inhabited (extract_hilbert_epsilon u) := {
+  lemma inhabited : ∃ (x : extract_hilbert_epsilon u), ⊤ := @extract_hilbert_epsilon.is_inhabited[h]
+}
+
+-- This is what we wanted, the Hilbert epsilon.
+def hilbert_epsilon.{u} : is_inhabited u → (u → Prop) → u :=
+λ h, extract_hilbert_epsilon.run epsilon (extract_hilbert_epsilon.is_inhabited h)
+
+/-  
  - natural numbers
  -/
 
@@ -840,3 +891,56 @@ lemma not_not_em (φ : Prop) : ¬¬(φ ∨ ¬φ) :=
 assume ¬(φ ∨ ¬φ),
 have ¬φ := not_not_em_1 «¬(φ ∨ ¬φ)»,
 contradiction (or.right «¬φ») «¬(φ ∨ ¬φ)»
+
+structure complete_lattice u := {
+  const Meet : sub u → u
+  const Join : sub u → u
+}
+
+def complete_lattice.meet.{u} (L : complete_lattice u) (x y : u) : u :=
+complete_lattice.Meet L (λ z, z = x ∨ z = y)
+
+def complete_lattice.join.{u} (L : complete_lattice u) (x y : u) : u :=
+complete_lattice.Join L (λ z, z = x ∨ z = y)
+
+def complete_lattice.top.{u} (L : complete_lattice u) : u :=
+complete_lattice.Meet L ∅
+
+def complete_lattice.bot.{u} (L : complete_lattice u) : u :=
+complete_lattice.Join L ∅
+
+def complete_lattice.le.{u} (L : complete_lattice u) (x y : u) : Prop :=
+x = complete_lattice.meet L x y
+
+class structure complete_lattice u := {
+  const summon : complete_lattice u
+}
+
+class instance complete_lattice.has_vee.{u} [complete_lattice u] : has_vee u := {
+  def vee : u → u → u := complete_lattice.meet complete_lattice.summon
+}
+
+class instance complete_lattice.has_wedge.{u} [complete_lattice u] : has_wedge u := {
+  def wedge : u → u → u := complete_lattice.meet complete_lattice.summon
+}
+
+class instance complete_lattice.has_top.{u} [complete_lattice u] : has_top u := {
+  def top : u := complete_lattice.top complete_lattice.summon
+}
+
+class instance complete_lattice.has_bot.{u} [complete_lattice u] : has_bot u := {
+  def bot : u := complete_lattice.bot complete_lattice.summon
+}
+
+class instance complete_lattice.has_le.{u} [complete_lattice u] : has_le u := {
+  def le : u → u → Prop := complete_lattice.le complete_lattice.summon
+}
+
+-- TODO: add notations
+def Meet.{u} [complete_lattice u] : sub u → u := complete_lattice.Meet complete_lattice.summon
+def Join.{u} [complete_lattice u] : sub u → u := complete_lattice.Join complete_lattice.summon
+
+def monotone.{u, v} [has_le u] [has_le v] (f : u → v) : Prop := ∀ x y, x ≤ y → f x ≤ f y
+
+def lfp.{u} (L : complete_lattice u) (f : u → u) : u :=
+complete_lattice.Meet L { x | complete_lattice.le L (f x) x }
