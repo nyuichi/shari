@@ -34,6 +34,19 @@ obtain (x : τ), φ := e₁, e₂
 calc m₁ = m₂ := e₁ ... = m₃ := e₂ ... = m₄ := e₃, e₄
 
 
+# The logical foundation
+
+Some axioms / constants are postulated upon the base logic.
+Their consistency is established from semantic arguments.
+
+| logic                                              | models                                                           |
+|----------------------------------------------------|------------------------------------------------------------------|
+| intuitionistic higher-order logic (our base logic) | any model of PTS λHOL                                            |
+| + fun_ext + prop_ext + auc                         | any topos                                                        |
+| + inductive types                                  | any topos with NNO                                               |
+| + choice                                           | any (boolean) topos with NNO validating internal axiom of choice |
+| + epsilon                                          | any (boolean) topos with NNO validating external axiom of choice |
+
 # Theoretical backgrounds
 
 Our core logic is described by the following pure type system (PTS):
@@ -108,8 +121,7 @@ infix > : 50 := has_le.gt
 
 -- This introduces:
 -- 
--- 1. A class predicate `has_top` with one variable. Class predicates have a separate namespace, but
---    one should try not to overlap with type names.
+-- 1. A class predicate `has_top` with one variable. Class predicates have a separate namespace.
 -- 2. A constant with a class constraint: `const top.{u} [has_top u] : u`.
 --    If there is an instance `I` of class `has_top τ`, top.{τ} is κ-reducible to I.top.
 --
@@ -144,6 +156,14 @@ class structure has_ast u := {
 class structure has_le u := {
   const le : u → u → Prop
 }
+
+-- The most generic class.
+-- One can use only this class to emulate every class structure.
+class structure has u := {
+  const summon : u
+}
+
+def summon.{u} [has u] : u := has.summon
 
 -- A predicative version of Leibniz equality (attributed to Paulin).
 -- The following set of declarations are generated.
@@ -532,7 +552,7 @@ def succ : nat → nat := nat.succ
 def nil : list u := list.nil
 def cons : u → list u → list u := list.cons
 def none : option u := option.none
-def some : u → option u := option.some
+-- def some : u → option u := option.some
 
 lemma unit.eta_expand (x : unit) : x = star :=
 unit.ind eq.refl
@@ -703,7 +723,7 @@ or.ind «φ ∨ choice h₁ ≠ choice h₂»
     or.right (mt «φ → choice h₁ = choice h₂» «choice h₁ ≠ choice h₂»))
 
 /-
- - support
+ - Hilbert's ε-operator
  -/
 
 -- A type operator sending an inhabited type to its propositional truncation.
@@ -711,16 +731,6 @@ or.ind «φ ∨ choice h₁ ≠ choice h₂»
 structure is_inhabited u := {
   axiom inhabited : ∃ (a : u), ⊤
 }
-
-/-FIXME
-instance is_inhabited.mk.{u} (x : u) : is_inhabited u := {
-  lemma inhabited := exists.intro true.intro
-}
-
-instance is_inhabited.join.{u} (h : is_inhabited (is_inhabited u)) : is_inhabited u := {
-  lemma inhabited : ∃ (a : is_inhabited u), ⊤ := @is_inhabited.inhabited[h]
-}
--/
 
 -- internal global choice operator
 -- 
@@ -740,12 +750,33 @@ instance is_inhabited.join.{u} (h : is_inhabited (is_inhabited u)) : is_inhabite
 -- One can interpret this function in Kripke-Joyal semantics as follows:
 -- whenever one proves ⊢ ∃ (x : u), ⊤, hence ⊩ ∃ (x : u), ⊤, which in general
 -- means there exist an object V, V → 1 epi and V → u, one can safely assume V was 1.
+--
+-- Assuming IAC, the following are equivalent. E is a topos.
+-- (a) Supports split in E.
+-- (b) Supports split in E/X for each X ∈ E.
+-- Proof:
+--   For (a) => (b), take any object f ∈ E/X, where f : A → X in E.
+--   f has a split support iff there exists a morphism from supp f to f.
+--   We want to construct such a morphism.
+--   supp f in E/X is given by the inclusion i : im f → X in E.
+--   By external AC (which follows from IAC + SS) of C, we have a section
+--   s : im f → A of an epi q : A → im f.
+--   Since f s = i q s = i = supp f, s is a morphism in E/X from supp f to f.
+-- QED.
+--
+-- This lemma is very important because the fact the properties of the ambient category are
+-- inherited to its slices corresponds to that introducing a variable does not change the logic.
+-- If we add locally defined types in the future, this lemma validates the use of epsilon applying to
+-- such types that may contain free (term) variables.
+--
+-- To make it easier to check the consistency, epsilon takes a object level witness [is_inhabited u] instead of
+-- class [is_inhabited u].
 const epsilon.{u} : is_inhabited u → u
 
--- Construct external global epsilon operator from internal epsilon and internal axiom of choice.
+-- Construct external epsilon operator from internal epsilon and internal axiom of choice.
 -- A similar construction is found in arXiv:1603.00822.
 
-lemma external_epsilon_spec.{u} (h : is_inhabited u) (P : u → Prop) : ∃ x, (∃ y, P y) → P x :=
+lemma strong_indefinite_description.{u} (h : is_inhabited u) (P : u → Prop) : ∃ x, (∃ y, P y) → P x :=
 or.ind @em[∃ y, P y]
   (assume ∃ y, P y,
    obtain (y : u), P y := «∃ y, P y»,
@@ -758,28 +789,32 @@ or.ind @em[∃ y, P y]
     (assume ∃ y, P y,
      @absurd[P x] (contradiction «∃ y, P y» «¬∃ y, P y»)))
 
-lemma external_epsilon_exists.{u} (h : is_inhabited u) : ∃ (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) :=
-ac (take (P : u → Prop), @external_epsilon_spec[h, P])
+lemma some_exists.{u} (h : is_inhabited u) : ∃ (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) :=
+ac (take (P : u → Prop), @strong_indefinite_description[h, P])
 
 -- The followings are boilerplate. To obtain an object `x` from a proposition `∃ x, ...`, we first define a structure and then
 -- prove its inhabitedness and finally get the term applying the internal epsilon.
-structure extract_hilbert_epsilon u := {
+structure Some u := {
   const run : (u → Prop) → u
   axiom spec (P : u → Prop) : (∃ y, P y) → P (run P)
 }
 
-lemma extract_hilbert_epsilon.is_inhabited.{u} (h : is_inhabited u) : ∃ (x : extract_hilbert_epsilon u), ⊤ :=
-obtain (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) := @external_epsilon_exists[h],
-obtain (this : extract_hilbert_epsilon u), ε = extract_hilbert_epsilon.run this := @extract_hilbert_epsilon.abs[ε] «∀ P, (∃ y, P y) → P (ε P)»,
+lemma Some.is_inhabited.{u} (h : is_inhabited u) : ∃ (x : Some u), ⊤ :=
+obtain (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) := @some_exists[h],
+obtain (this : Some u), ε = Some.run this := @Some.abs[ε] «∀ P, (∃ y, P y) → P (ε P)»,
 @exists.intro[_, this] true.intro
 
-instance extract_hilbert_epsilon.is_inhabited.{u} (h : is_inhabited u) : is_inhabited (extract_hilbert_epsilon u) := {
-  lemma inhabited : ∃ (x : extract_hilbert_epsilon u), ⊤ := @extract_hilbert_epsilon.is_inhabited[h]
+instance Some.is_inhabited.{u} (h : is_inhabited u) : is_inhabited (Some u) := {
+  lemma inhabited : ∃ (x : Some u), ⊤ := @Some.is_inhabited[h]
+}
+
+class instance Some.has.is_inhabited.{u} [has (is_inhabited u)] : has (is_inhabited (Some u)) := {
+  def summon : is_inhabited (Some u) := Some.is_inhabited summon
 }
 
 -- This is what we wanted, the Hilbert epsilon.
-def hilbert_epsilon.{u} : is_inhabited u → (u → Prop) → u :=
-λ h, extract_hilbert_epsilon.run epsilon (extract_hilbert_epsilon.is_inhabited h)
+def some.{u} [has (is_inhabited u)] : (u → Prop) → u := Some.run (epsilon summon)
+lemma some.spec.{u} [has (is_inhabited u)] (P : u → Prop) : (∃ y, P y) → P (some P) := @Some.spec[epsilon summon, P]
 
 /-  
  - natural numbers
@@ -912,33 +947,29 @@ complete_lattice.Join L ∅
 def complete_lattice.le.{u} (L : complete_lattice u) (x y : u) : Prop :=
 x = complete_lattice.meet L x y
 
-class structure complete_lattice u := {
-  const summon : complete_lattice u
+class instance complete_lattice.has_vee.{u} [has (complete_lattice u)] : has_vee u := {
+  def vee : u → u → u := complete_lattice.meet summon
 }
 
-class instance complete_lattice.has_vee.{u} [complete_lattice u] : has_vee u := {
-  def vee : u → u → u := complete_lattice.meet complete_lattice.summon
+class instance complete_lattice.has_wedge.{u} [has (complete_lattice u)] : has_wedge u := {
+  def wedge : u → u → u := complete_lattice.meet summon
 }
 
-class instance complete_lattice.has_wedge.{u} [complete_lattice u] : has_wedge u := {
-  def wedge : u → u → u := complete_lattice.meet complete_lattice.summon
+class instance complete_lattice.has_top.{u} [has (complete_lattice u)] : has_top u := {
+  def top : u := complete_lattice.top summon
 }
 
-class instance complete_lattice.has_top.{u} [complete_lattice u] : has_top u := {
-  def top : u := complete_lattice.top complete_lattice.summon
+class instance complete_lattice.has_bot.{u} [has (complete_lattice u)] : has_bot u := {
+  def bot : u := complete_lattice.bot summon
 }
 
-class instance complete_lattice.has_bot.{u} [complete_lattice u] : has_bot u := {
-  def bot : u := complete_lattice.bot complete_lattice.summon
-}
-
-class instance complete_lattice.has_le.{u} [complete_lattice u] : has_le u := {
-  def le : u → u → Prop := complete_lattice.le complete_lattice.summon
+class instance complete_lattice.has_le.{u} [has (complete_lattice u)] : has_le u := {
+  def le : u → u → Prop := complete_lattice.le summon
 }
 
 -- TODO: add notations
-def Meet.{u} [complete_lattice u] : sub u → u := complete_lattice.Meet complete_lattice.summon
-def Join.{u} [complete_lattice u] : sub u → u := complete_lattice.Join complete_lattice.summon
+def Meet.{u} [has (complete_lattice u)] : sub u → u := complete_lattice.Meet summon
+def Join.{u} [has (complete_lattice u)] : sub u → u := complete_lattice.Join summon
 
 def monotone.{u, v} [has_le u] [has_le v] (f : u → v) : Prop := ∀ x y, x ≤ y → f x ≤ f y
 
