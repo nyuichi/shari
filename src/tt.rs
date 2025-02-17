@@ -373,6 +373,28 @@ impl Type {
             }
         }
     }
+
+    pub fn inst(&mut self, subst: &[(Name, Type)]) {
+        match self {
+            Self::Const(_) => {}
+            Self::Local(_) => {}
+            Self::Hole(x) => {
+                if let Some((_, t)) = subst.iter().find(|(y, _)| y == x) {
+                    *self = t.clone();
+                }
+            }
+            Self::Arrow(inner) => {
+                let inner = Arc::make_mut(inner);
+                inner.dom.inst(subst);
+                inner.cod.inst(subst);
+            }
+            Self::App(inner) => {
+                let inner = Arc::make_mut(inner);
+                inner.fun.inst(subst);
+                inner.arg.inst(subst);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

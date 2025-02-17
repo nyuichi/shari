@@ -1487,7 +1487,7 @@ impl<'a> Elaborator<'a> {
                 .into_iter()
                 .map(|(_, ty)| {
                     let mut ty = ty.clone();
-                    ty.subst(&subst);
+                    ty.inst(&subst);
                     ty
                 })
                 .collect::<Vec<_>>();

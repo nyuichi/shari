@@ -328,14 +328,20 @@ impl Eval {
         local_classes: Vec<Class>,
         target: Term,
     ) {
-        assert!(self.tt_env().is_wff(
-            &mut LocalEnv {
-                local_types: local_types.clone(),
-                local_classes: local_classes.clone(),
-                locals: vec![],
-            },
-            &target,
-        ));
+        assert!(
+            self.tt_env().is_wff(
+                &mut LocalEnv {
+                    local_types: local_types.clone(),
+                    local_classes: local_classes.clone(),
+                    locals: vec![],
+                },
+                &target,
+            ),
+            "{:?}, {:?}, {}",
+            local_types,
+            local_classes,
+            target
+        );
 
         // TODO: remove and integrate into axiom_table
         self.ns.axioms.insert(
@@ -1861,7 +1867,10 @@ impl Eval {
             let mut target = mk_const(
                 name,
                 local_types.iter().map(|&x| mk_type_local(x)).collect(),
-                vec![],
+                local_classes
+                    .iter()
+                    .map(|c| mk_instance_local(c.clone()))
+                    .collect(),
             );
             target.apply(params.iter().map(|param| mk_local(param.name)));
             target
