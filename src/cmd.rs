@@ -1643,9 +1643,9 @@ impl Eval {
         //
         // generates:
         //
-        //   const power.inhab.{u} : set u → inhab (set u)
         //   def power.inhab.rep.{u} (A : set u) : set (set u) := power A
-        //   lemma power.inhab.inhabited.{u} : ∃ a, a ∈ power x := (..)
+        //   lemma power.inhab.inhabited.{u} : ∃ a, a ∈ power.inhab.rep A := (..)
+        //   const power.inhab.{u} : set u → inhab (set u)
         //   axiom power.inhab.spec.{u} (A : set u) : inhab.rec (power.inhab A) = λ f, f (power.inhab.rep A)
         //
         let CmdInstance {
@@ -1719,14 +1719,14 @@ impl Eval {
         if cmd_structure.fields.len() != fields.len() {
             bail!("number of fields mismatch");
         }
-        let mut subst = vec![];
+        let mut num_consts = 0;
         for (structure_field, field) in zip(&cmd_structure.fields, &mut fields) {
             match structure_field {
                 StructureField::Const(structure_field) => {
                     let InstanceField::Def(InstanceDef {
                         name: ref field_name,
                         ref ty,
-                        target,
+                        target: _,
                     }) = field
                     else {
                         bail!("definition expected");
@@ -1735,30 +1735,27 @@ impl Eval {
                     if self.has_const(field_fullname) {
                         bail!("already defined");
                     }
-                    let axiom_fullname =
-                        Name::intern(&format!("{}.{}.{}", structure_name, field_name, name))
-                            .unwrap();
-                    if self.has_axiom(axiom_fullname) {
-                        bail!("already defined");
-                    }
                     if structure_field.name != *field_name {
                         bail!("field name mismatch");
                     }
                     self.elaborate_type(&mut local_env, ty, Kind::base())?;
-                    self.elaborate_term(&mut local_env, target, ty)?;
                     let mut structure_field_ty = structure_field.ty.clone();
                     structure_field_ty.subst(&type_subst);
                     if structure_field_ty != *ty {
                         bail!("type mismatch");
                     }
-                    subst.push((*field_name, target.clone()));
+                    local_env.locals.push(Parameter {
+                        name: *field_name,
+                        ty: ty.clone(),
+                    });
+                    num_consts += 1;
                 }
                 StructureField::Axiom(structure_field) => {
                     let InstanceField::Lemma(InstanceLemma {
                         name: ref field_name,
                         target,
-                        ref holes,
-                        ref mut expr,
+                        holes: _,
+                        expr: _,
                     }) = field
                     else {
                         bail!("lemma expected");
@@ -1771,6 +1768,78 @@ impl Eval {
                         bail!("field name mismatch");
                     }
                     self.elaborate_term(&mut local_env, target, &mk_type_prop())?;
+                    let mut structure_field_target = structure_field.target.clone();
+                    structure_field_target.subst_type(&type_subst);
+                    if !structure_field_target.alpha_eq(target) {
+                        bail!("target mismatch");
+                    }
+                }
+            }
+        }
+        local_env
+            .locals
+            .truncate(local_env.locals.len() - num_consts);
+        let spec_name = Name::intern(&format!("{}.spec", name)).unwrap();
+        if self.has_axiom(spec_name) {
+            bail!("already defined");
+        }
+        // well-formedness check (all but entity elaboration) is completed.
+
+        // generate a delcaration per field first
+        let mut subst = vec![];
+        for field in &mut fields {
+            match field {
+                InstanceField::Def(field) => {
+                    let InstanceDef {
+                        name: field_name,
+                        ref ty,
+                        ref mut target,
+                    } = *field;
+                    // e.g. def power.inhab.rep.{u} (A : set u) : set (set u) := power A
+                    target.subst(&subst);
+                    self.elaborate_term(&mut local_env, target, ty)?;
+
+                    let fullname = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
+                    let target_ty = {
+                        let mut t = ty.clone();
+                        t.arrow(params.iter().map(|param| param.ty.clone()));
+                        t
+                    };
+                    self.add_const(
+                        fullname,
+                        local_types.clone(),
+                        local_classes.clone(),
+                        target_ty,
+                    );
+                    let target = {
+                        let mut m = target.clone();
+                        m.abs(&params);
+                        m
+                    };
+                    self.add_delta(fullname, target);
+
+                    // rep ↦ inhab.rep.{u} A
+                    let mut target = mk_const(
+                        fullname,
+                        local_types.iter().map(|&x| mk_type_local(x)).collect(),
+                        local_classes
+                            .iter()
+                            .map(|c| mk_instance_local(c.clone()))
+                            .collect(),
+                    );
+                    target.apply(params.iter().map(|param| mk_local(param.name)));
+                    subst.push((field_name, target));
+                }
+                InstanceField::Lemma(field) => {
+                    let InstanceLemma {
+                        name: field_name,
+                        ref mut target,
+                        ref holes,
+                        ref mut expr,
+                    } = *field;
+                    // e.g. lemma power.inhab.inhabited.{u} : ∃ a, a ∈ rep := (..)
+                    target.subst(&subst);
+                    expr.subst(&subst);
                     self.elaborate_expr(&mut local_env, holes.clone(), expr, target)?;
                     let h = expr::Env {
                         proof_env: self.proof_env(),
@@ -1785,20 +1854,14 @@ impl Eval {
                     ) {
                         bail!("proof failed");
                     }
-                    let mut structure_field_target = structure_field.target.clone();
-                    structure_field_target.subst_type(&type_subst);
-                    structure_field_target.subst(&subst);
-                    if !structure_field_target.alpha_eq(target) {
-                        bail!("target mismatch");
-                    }
+
+                    let fullname = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
+                    let mut target = target.clone();
+                    target.generalize(&params);
+                    self.add_axiom(fullname, local_types.clone(), local_classes.clone(), target);
                 }
             }
         }
-        let spec_name = Name::intern(&format!("{}.spec", name)).unwrap();
-        if self.has_axiom(spec_name) {
-            bail!("already defined");
-        }
-        // well-formedness check is completed.
 
         // e.g. const power.inhab.{u} : set u → inhab (set u)
         let mut target = target_ty.clone();
@@ -1807,49 +1870,6 @@ impl Eval {
         }
         self.add_const(name, local_types.clone(), local_classes.clone(), target);
 
-        for field in &fields {
-            match field {
-                InstanceField::Def(field) => {
-                    let InstanceDef {
-                        name: field_name,
-                        ty,
-                        target,
-                    } = field;
-                    // e.g. def power.inhab.rep.{u} (A : set u) : set (set u) := power A
-                    let fullname = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
-                    let def_target_ty = {
-                        let mut t = ty.clone();
-                        t.arrow(params.iter().map(|param| param.ty.clone()));
-                        t
-                    };
-                    let def_target = {
-                        let mut m = target.clone();
-                        m.abs(&params);
-                        m
-                    };
-                    self.add_const(
-                        fullname,
-                        local_types.clone(),
-                        local_classes.clone(),
-                        def_target_ty,
-                    );
-                    self.add_delta(fullname, def_target);
-                }
-                InstanceField::Lemma(field) => {
-                    let InstanceLemma {
-                        name: field_name,
-                        target,
-                        holes: _,
-                        expr: _,
-                    } = field;
-                    // e.g. lemma power.inhab.inhabited.{u} : ∃ a, a ∈ power x := (..)
-                    let fullname = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
-                    let mut target = target.clone();
-                    target.generalize(&params);
-                    self.add_axiom(fullname, local_types.clone(), local_classes.clone(), target);
-                }
-            }
-        }
         // generate spec
         //   axiom power.inhab.spec.{u, α} (A : set u) : inhab.rec.{set u, α} (power.inhab A) = λ (f : set (set u) → α), f (power.inhab.rep A)
         let ret_ty = Name::fresh();

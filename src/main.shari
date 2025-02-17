@@ -369,6 +369,90 @@ iff.intro
       (exists.map «∀ x, Q x → P x» (uexists.exists «∃! x, Q x»))
       (unique.map «∀ x, P x → Q x» (uexists.unique «∃! x, Q x»)))
 
+-- The type of decidable propositions.
+--
+-- The structure command below is desugared into the following set of declarations.
+--
+--   type const bool : Type
+--   const bool.rec.{α} : bool → (Prop → α) → α
+--   def bool.rep : bool → Prop := λ (this : bool), bool.rec.{Prop} this (λ (rep : Prop), rep)
+--   axiom bool.spec.{u} (this : bool) : bool.rep this = ⊤ ∨ bool.rep this = ⊥
+--   axiom bool.abs.{u} (rep : Prop) : rep = ⊤ ∨ rep = ⊥ → ∃ this, rep = bool.rep this
+--   axiom bool.ext.{u} (this₁ this₂ : bool) : bool.rep this₁ = bool.rep this₂ → this₁ = this₂
+--
+-- Of course, bool can be also defined in terms of an inductive type.
+--
+--   type inductive bool
+--   | tt : bool
+--   | ff : bool
+--
+-- We avoid this because we are in the bootstrapping process; existence of (all) inductive types
+-- relies on the existence of an infinite type. By defining bool using structure it should be clear
+-- that we don't need such an assumption.
+--
+structure bool := {
+  const rep : Prop
+  axiom spec : rep = ⊤ ∨ rep = ⊥
+}
+
+-- This command introduces:
+--
+--   def bool.tt.rep : Prop := ⊤
+--   lemma bool.tt.spec : bool.tt.rep = ⊤ ∨ bool.tt.rep = ⊥ := tt_spec
+--   const bool.tt : bool
+--   axiom bool.tt.spec.{α} : bool.rec bool.tt = λ (f : Prop → α), f bool.tt.rep
+--
+instance bool.tt : bool := {
+  def rep : Prop := ⊤
+  lemma spec : rep = ⊤ ∨ rep = ⊥ := or.left eq.refl
+}
+
+instance bool.ff : bool := {
+  def rep : Prop := ⊥
+  lemma spec : rep = ⊤ ∨ rep = ⊥ := or.right eq.refl
+}
+
+def tt : bool := bool.tt
+def ff : bool := bool.ff
+
+lemma bool.rep_tt_eq_true : bool.rep tt = ⊤ :=
+calc bool.rep tt = bool.rec tt (λ rep, rep)          := eq.refl
+             ... = (λ f, f bool.tt.rep) (λ rep, rep) := eq.ap bool.tt.spec
+             ... = ⊤                                 := eq.refl,
+«bool.rep tt = ⊤»
+
+lemma bool.rep_ff_eq_false : bool.rep ff = ⊥ :=
+calc bool.rep ff = bool.rec ff (λ rep, rep)          := eq.refl
+             ... = (λ f, f bool.ff.rep) (λ rep, rep) := eq.ap bool.ff.spec
+             ... = ⊥                                 := eq.refl,
+«bool.rep ff = ⊥»
+
+lemma bool.eq_tt (b : bool) : bool.rep b = ⊤ → b = tt :=
+assume bool.rep b = ⊤,
+calc bool.rep b = ⊤           := «bool.rep b = ⊤»
+            ... = bool.rep tt := eq.symm bool.rep_tt_eq_true,
+bool.ext «bool.rep b = bool.rep tt»
+
+lemma bool.eq_ff (b : bool) : bool.rep b = ⊥ → b = ff :=
+assume bool.rep b = ⊥,
+calc bool.rep b = ⊥           := «bool.rep b = ⊥»
+            ... = bool.rep ff := eq.symm bool.rep_ff_eq_false,
+bool.ext «bool.rep b = bool.rep ff»
+
+lemma bool.case (b : bool) : b = tt ∨ b = ff :=
+or.ind bool.spec
+  (assume bool.rep b = ⊤,
+   or.left (bool.eq_tt «bool.rep b = ⊤»))
+  (assume bool.rep b = ⊥,
+   or.right (bool.eq_ff «bool.rep b = ⊥»))
+
+lemma bool.tt_ne_ff : tt ≠ ff :=
+assume tt = ff,
+calc ⊤ = bool.rep tt := eq.symm bool.rep_tt_eq_true
+   ... = bool.rep ff := eq.ap «tt = ff»
+   ... = ⊥           := bool.rep_ff_eq_false,
+contradiction «⊤ = ⊥» true_ne_false
+
 /-
  - Extensionality
  -/
@@ -491,10 +575,6 @@ type inductive nat
 | zero : nat
 | succ : nat → nat
 
-type inductive bool
-| tt : bool
-| ff : bool
-
 -- TODO
 -- one may write like
 --
@@ -539,8 +619,6 @@ def prod.snd.{u, v} (p : u × v) : v := prod.rec p (λ a b, b)
 local type const u v
 
 -- TODO: use namespace
-def tt : bool := bool.tt
-def ff : bool := bool.ff
 def fst : u × v → u := prod.fst
 def snd : u × v → v := prod.snd
 def pair.{u, v} : u → v → u × v := prod.pair
@@ -593,18 +671,6 @@ lemma prod.eta.{u, v} (p : prod u v) : p = pair (fst p) (snd p) :=
 prod_ext eq.refl eq.refl
 -/
 
-lemma bool.case (b : bool) : b = tt ∨ b = ff :=
-bool.ind (or.left eq.refl) (or.right eq.refl)
-
-lemma bool.tt_ne_ff : tt ≠ ff :=
-assume tt = ff,
-have true = false :=
-  have true = bool.rec tt true false := eq.ap (eq.symm bool.tt.spec),
-  have bool.rec tt true false = bool.rec ff true false := eq.ap «tt = ff»,
-  have bool.rec ff true false = false := eq.ap bool.ff.spec,
-  eq.trans «true = bool.rec tt true false» (eq.trans «bool.rec tt true false = bool.rec ff true false» «bool.rec ff true false = false»),
-contradiction «true = false» true_ne_false
-
 /-
  - choice
  -/
@@ -645,13 +711,13 @@ uexists.intro
 --
 instance power.inhab.{u} (A : sub u) : inhab (sub u) := {
   def rep : sub (sub u) := power A
-  lemma inhabited : ∃ a, a ∈ power A := exists.intro empty_in_power
+  lemma inhabited : ∃ a, a ∈ rep := exists.intro empty_in_power
 }
 
 instance cup.inhab.{u} (A B : inhab u) : inhab u := {
   def rep : sub u := inhab.rep A ∪ inhab.rep B
 
-  lemma inhabited : ∃ a, a ∈ inhab.rep A ∪ inhab.rep B :=
+  lemma inhabited : ∃ a, a ∈ rep :=
   obtain (x : u), x ∈ inhab.rep A := inhab.inhabited,
   have x ∈ inhab.rep A ∨ x ∈ inhab.rep B := or.left «x ∈ inhab.rep A»,
   exists.intro «x ∈ inhab.rep A ∨ x ∈ inhab.rep B»
@@ -973,5 +1039,5 @@ def Join.{u} [has (complete_lattice u)] : sub u → u := complete_lattice.Join s
 
 def monotone.{u, v} [has_le u] [has_le v] (f : u → v) : Prop := ∀ x y, x ≤ y → f x ≤ f y
 
-def lfp.{u} (L : complete_lattice u) (f : u → u) : u :=
-complete_lattice.Meet L { x | complete_lattice.le L (f x) x }
+def lfp.{u} [has (complete_lattice u)] (f : u → u) : u := Meet { x | f x ≤ x }
+def gfp.{u} [has (complete_lattice u)] (f : u → u) : u := Join { x | x ≤ f x }

@@ -252,6 +252,44 @@ impl Expr {
             }
         }
     }
+
+    pub fn subst(&mut self, subst: &[(Name, Term)]) {
+        match self {
+            Expr::Assump(e) => {
+                let ExprAssump { target } = Arc::make_mut(e);
+                target.subst(subst);
+            }
+            Expr::Assume(e) => {
+                let ExprAssume { local_axiom, expr } = Arc::make_mut(e);
+                local_axiom.subst(subst);
+                expr.subst(subst);
+            }
+            Expr::App(e) => {
+                let ExprApp { expr1, expr2 } = Arc::make_mut(e);
+                expr1.subst(subst);
+                expr2.subst(subst);
+            }
+            Expr::Take(e) => {
+                let ExprTake {
+                    name: _,
+                    ty: _,
+                    expr,
+                } = Arc::make_mut(e);
+                expr.subst(subst);
+            }
+            Expr::Inst(e) => {
+                let ExprInst { expr, arg } = Arc::make_mut(e);
+                expr.subst(subst);
+                arg.subst(subst);
+            }
+            Expr::Const(_) => {}
+            Expr::Change(e) => {
+                let ExprChange { target, expr } = Arc::make_mut(e);
+                target.subst(subst);
+                expr.subst(subst);
+            }
+        }
+    }
 }
 
 #[derive(Debug)]

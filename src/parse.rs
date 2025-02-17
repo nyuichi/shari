@@ -1415,6 +1415,7 @@ impl<'a> Parser<'a> {
         self.expect_symbol(":")?;
         let target_ty = self.ty()?;
         let mut fields = vec![];
+        let mut num_defs = 0;
         self.expect_symbol(":=")?;
         self.expect_symbol("{")?;
         while self.expect_symbol_opt("}").is_none() {
@@ -1441,6 +1442,9 @@ impl<'a> Parser<'a> {
                         ty: field_ty,
                         target: field_target,
                     }));
+
+                    self.locals.push(field_name);
+                    num_defs += 1;
                 }
                 "lemma" => {
                     // TODO: allow to refer to preceding lemmas in the same instance.
@@ -1470,6 +1474,7 @@ impl<'a> Parser<'a> {
             }
         }
         // parsing finished.
+        self.locals.truncate(self.locals.len() - num_defs);
         self.locals.truncate(self.locals.len() - params.len());
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
