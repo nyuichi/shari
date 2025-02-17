@@ -37,7 +37,7 @@ calc m₁ = m₂ := e₁ ... = m₃ := e₂ ... = m₄ := e₃, e₄
 # The logical foundation
 
 Some axioms / constants are postulated upon the base logic.
-Their consistency is established from semantic models.
+Their consistency is established from semantic arguments.
 
 | logic                                              | models                                                           |
 |----------------------------------------------------|------------------------------------------------------------------|
@@ -156,6 +156,14 @@ class structure has_ast u := {
 class structure has_le u := {
   const le : u → u → Prop
 }
+
+-- The most generic class.
+-- One can use only this class to emulate every class structure.
+class structure has u := {
+  const summon : u
+}
+
+def summon.{u} [has u] : u := has.summon
 
 -- A predicative version of Leibniz equality (attributed to Paulin).
 -- The following set of declarations are generated.
@@ -724,10 +732,6 @@ structure is_inhabited u := {
   axiom inhabited : ∃ (a : u), ⊤
 }
 
-class structure is_inhabited u := {
-  const run : is_inhabited u
-}
-
 -- internal global choice operator
 -- 
 -- Introducing this constant restricts the class of models to toposes whose supports split.
@@ -804,13 +808,13 @@ instance Some.is_inhabited.{u} (h : is_inhabited u) : is_inhabited (Some u) := {
   lemma inhabited : ∃ (x : Some u), ⊤ := @Some.is_inhabited[h]
 }
 
-class instance Some.is_inhabited.{u} [is_inhabited u] : is_inhabited (Some u) := {
-  def run : is_inhabited (Some u) := Some.is_inhabited is_inhabited.run
+class instance Some.has.is_inhabited.{u} [has (is_inhabited u)] : has (is_inhabited (Some u)) := {
+  def summon : is_inhabited (Some u) := Some.is_inhabited summon
 }
 
 -- This is what we wanted, the Hilbert epsilon.
-def some.{u} [is_inhabited u] : (u → Prop) → u := Some.run (epsilon is_inhabited.run)
-lemma some.spec.{u} [is_inhabited u] (P : u → Prop) : (∃ y, P y) → P (some P) := @Some.spec[epsilon is_inhabited.run, P]
+def some.{u} [has (is_inhabited u)] : (u → Prop) → u := Some.run (epsilon summon)
+lemma some.spec.{u} [has (is_inhabited u)] (P : u → Prop) : (∃ y, P y) → P (some P) := @Some.spec[epsilon summon, P]
 
 /-  
  - natural numbers
@@ -943,33 +947,29 @@ complete_lattice.Join L ∅
 def complete_lattice.le.{u} (L : complete_lattice u) (x y : u) : Prop :=
 x = complete_lattice.meet L x y
 
-class structure complete_lattice u := {
-  const summon : complete_lattice u
+class instance complete_lattice.has_vee.{u} [has (complete_lattice u)] : has_vee u := {
+  def vee : u → u → u := complete_lattice.meet summon
 }
 
-class instance complete_lattice.has_vee.{u} [complete_lattice u] : has_vee u := {
-  def vee : u → u → u := complete_lattice.meet complete_lattice.summon
+class instance complete_lattice.has_wedge.{u} [has (complete_lattice u)] : has_wedge u := {
+  def wedge : u → u → u := complete_lattice.meet summon
 }
 
-class instance complete_lattice.has_wedge.{u} [complete_lattice u] : has_wedge u := {
-  def wedge : u → u → u := complete_lattice.meet complete_lattice.summon
+class instance complete_lattice.has_top.{u} [has (complete_lattice u)] : has_top u := {
+  def top : u := complete_lattice.top summon
 }
 
-class instance complete_lattice.has_top.{u} [complete_lattice u] : has_top u := {
-  def top : u := complete_lattice.top complete_lattice.summon
+class instance complete_lattice.has_bot.{u} [has (complete_lattice u)] : has_bot u := {
+  def bot : u := complete_lattice.bot summon
 }
 
-class instance complete_lattice.has_bot.{u} [complete_lattice u] : has_bot u := {
-  def bot : u := complete_lattice.bot complete_lattice.summon
-}
-
-class instance complete_lattice.has_le.{u} [complete_lattice u] : has_le u := {
-  def le : u → u → Prop := complete_lattice.le complete_lattice.summon
+class instance complete_lattice.has_le.{u} [has (complete_lattice u)] : has_le u := {
+  def le : u → u → Prop := complete_lattice.le summon
 }
 
 -- TODO: add notations
-def Meet.{u} [complete_lattice u] : sub u → u := complete_lattice.Meet complete_lattice.summon
-def Join.{u} [complete_lattice u] : sub u → u := complete_lattice.Join complete_lattice.summon
+def Meet.{u} [has (complete_lattice u)] : sub u → u := complete_lattice.Meet summon
+def Join.{u} [has (complete_lattice u)] : sub u → u := complete_lattice.Join summon
 
 def monotone.{u, v} [has_le u] [has_le v] (f : u → v) : Prop := ∀ x y, x ≤ y → f x ≤ f y
 
