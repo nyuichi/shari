@@ -41,15 +41,13 @@ Their consistency is established from semantic arguments.
 
 | logic                                              | models                                |
 |----------------------------------------------------|---------------------------------------|
-| intuitionistic higher-order logic (our base logic) | any model of PTS λHOL                 |
+| intuitionistic higher-order logic (the base logic) | any model of PTS λHOL                 |
 | + fun_ext + prop_ext + auc                         | any topos                             |
 |   + choice                                         |   satisfying internal axiom of choice |
 |   + epsilon                                        |   in which supports split             |
 |   + inductive types                                |   with NNO                            |
 
-# Theoretical backgrounds
-
-Our core logic is described by the following pure type system (PTS):
+The base logic is described by the following pure type system (PTS):
 
 | S | Prop, Type, Kind |
 | A | Prop : Type, Type : Kind |
@@ -622,9 +620,88 @@ or.ind «φ ∨ choice h₁ ≠ choice h₂»
   (assume choice h₁ ≠ choice h₂,
     or.right (mt «φ → choice h₁ = choice h₂» «choice h₁ ≠ choice h₂»))
 
-/-
- - epsilon
- -/
+-- double negation elimination
+lemma dne (φ : Prop) : ¬¬φ → φ :=
+assume ¬¬φ,
+or.ind em
+  (assume φ,
+   «φ»)
+  (assume ¬φ,
+   absurd (contradiction «¬φ» «¬¬φ»))
+
+lemma peirce (φ ψ : Prop) : ((φ → ψ) → φ) → φ :=
+or.ind em
+  (assume φ,
+   assume (φ → ψ) → φ,
+   «φ»)
+  (assume ¬φ,
+   assume (φ → ψ) → φ,
+   have φ → ψ := assume φ, absurd (contradiction «φ» «¬φ»),
+   «(φ → ψ) → φ» «φ → ψ»)
+
+lemma imp.to_or (φ ψ : Prop) : (φ → ψ) → ¬φ ∨ ψ :=
+assume φ → ψ,
+or.ind em
+  (assume φ,
+   have ψ := «φ → ψ» «φ»,
+   or.right «ψ»)
+  (assume ¬φ,
+   or.left «¬φ»)
+
+lemma or.to_imp (φ ψ : Prop) : ¬φ ∨ ψ → φ → ψ :=
+assume ¬φ ∨ ψ,
+assume φ,
+or.ind «¬φ ∨ ψ»
+  (assume ¬φ,
+   absurd (contradiction «φ» «¬φ»))
+  (assume ψ,
+   «ψ»)
+
+-- An intermediate axiom. This is strictly weaker than em.
+lemma godel_dummet (φ ψ : Prop) : (φ → ψ) ∨ (ψ → φ) :=
+or.ind em
+  (assume φ,
+   have ¬ψ ∨ φ := or.right «φ»,
+   or.right (or.to_imp «¬ψ ∨ φ»))
+  (assume ¬φ,
+   have ¬φ ∨ ψ := or.left «¬φ»,
+   or.left (or.to_imp «¬φ ∨ ψ»))
+
+-- equivalent to the Gödel-Dummet axiom
+lemma imp.right_distr_or (φ ψ ξ : Prop) : (φ → ψ ∨ ξ) → (φ → ψ) ∨ (φ → ξ) :=
+assume φ → ψ ∨ ξ,
+or.ind godel_dummet
+  (assume ψ → ξ,
+   have φ → ξ :=
+     assume φ,
+     have ψ ∨ ξ := «φ → ψ ∨ ξ» «φ»,
+     or.ind «ψ ∨ ξ»
+       (assume ψ,
+        «ψ → ξ» «ψ»)
+       (assume ξ,
+        «ξ»),
+   or.right «φ → ξ»)
+  (assume ξ → ψ,
+   have φ → ψ :=
+     assume φ,
+     have ψ ∨ ξ := «φ → ψ ∨ ξ» «φ»,
+     or.ind «ψ ∨ ξ»
+       (assume ψ,
+        «ψ»)
+       (assume ξ,
+        «ξ → ψ» «ξ»),
+   or.left «φ → ψ»)
+
+-- generalized excluded middle. This is equivalent to em in the presence of ex falso.
+lemma gem (φ ψ : Prop) : φ ∨ (φ → ψ) :=
+or.ind em
+  (assume φ,
+   or.left «φ»)
+  (assume ¬φ,
+   have φ → ψ :=
+     assume φ,
+     absurd (contradiction «φ» «¬φ»),
+   or.right «φ → ψ»)
 
 -- A type operator sending an inhabited type to its propositional truncation.
 -- This type has several names in the literature, such as support type, bracket type, or propositional truncation.
@@ -632,14 +709,42 @@ structure is_inhabited u := {
   axiom inhabited : ∃ (a : u), ⊤
 }
 
+-- (The dual of) the drinker paradox. This is equivalent to independence_of_premise.
+lemma strong_indefinite_description.{u} (h : is_inhabited u) (P : u → Prop) : ∃ x, (∃ y, P y) → P x :=
+or.ind @em[∃ y, P y]
+  (assume ∃ y, P y,
+   obtain (y : u), P y := «∃ y, P y»,
+   @exists.intro[_, y]
+     (assume ∃ y, P y,
+      «P y»))
+  (assume ¬∃ y, P y,
+   obtain (x : u), ⊤ := @is_inhabited.inhabited[h],
+   @exists.intro[_, x]
+    (assume ∃ y, P y,
+     @absurd[P x] (contradiction «∃ y, P y» «¬∃ y, P y»)))
+
+-- Independence of (general) premise. This is equivalent to the drinker paradox.
+lemma independence_of_premise.{u} (h : is_inhabited u) (P : u → Prop) (φ : Prop) : (φ → ∃ x, P x) → (∃ x, φ → P x) :=
+assume φ → ∃ x, P x,
+obtain (x : u), (∃ y, P y) → P x := @strong_indefinite_description[h, P],
+have φ → P x := imp.trans «φ → ∃ x, P x» «(∃ y, P y) → P x»,
+exists.intro «φ → P x»
+
+/-
+ - epsilon
+ -/
+
 -- internal global choice operator
 -- 
 -- Introducing this constant restricts the class of models to toposes whose supports split.
 -- Postulating split supports together with the internal axiom of choice, our logic becomes
 -- precisely an internal logic of toposes satisfying the _external_ axiom of choice.
 --
+--    internal axiom of choice + split supports = external axiom of choice
+--
 -- Note we do not have an object-level function assigning for each type u the choice function,
--- which would imply axiom of choice. For the details of this direction see Lean's standard library.
+-- which is strictly stronger than our choice and would imply the axiom of choice.
+-- For the details of this direction see Lean's standard library.
 --
 -- In the presence of dependent products, this operator corresponds to the law of double negation:
 --
@@ -654,6 +759,7 @@ structure is_inhabited u := {
 -- Assuming IAC, the following are equivalent. E is a topos.
 -- (a) Supports split in E.
 -- (b) Supports split in E/X for each X ∈ E.
+--
 -- Proof:
 --   For (a) => (b), take any object f ∈ E/X, where f : A → X in E.
 --   f has a split support iff there exists a morphism from supp f to f.
@@ -666,31 +772,26 @@ structure is_inhabited u := {
 --
 -- This lemma is very important because the fact the properties of the ambient category are
 -- inherited to its slices corresponds to that introducing a variable does not change the logic.
--- If we add locally defined types in the future, this lemma validates the use of epsilon applying to
+-- If we add locally defined types in the future, this lemma justifies the use of epsilon applying to
 -- such types that may contain free (term) variables.
---
--- To make it easier to check the consistency, epsilon takes a object level witness [is_inhabited u] instead of
--- class [is_inhabited u].
 const epsilon.{u} : is_inhabited u → u
+
+structure pointed u := {
+  const pt : u
+}
+
+instance pointed.mk.{u} (x : u) : pointed u := {
+  def pt : u := x
+}
+
+-- Essentially same as epsilon, but is more structured.
+def is_inhabited.pointed.{u} (h : is_inhabited u) : pointed u := pointed.mk (epsilon h)
 
 -- Construct external epsilon operator from internal epsilon and internal axiom of choice.
 -- A similar construction is found in arXiv:1603.00822.
 
-lemma strong_indefinite_description.{u} (h : is_inhabited u) (P : u → Prop) : ∃ x, (∃ y, P y) → P x :=
-or.ind @em[∃ y, P y]
-  (assume ∃ y, P y,
-   obtain (y : u), P y := «∃ y, P y»,
-   @exists.intro[_, y]
-     (assume ∃ y, P y,
-      «P y»))
-  (assume ¬∃ y, P y,
-   obtain (x : u), ⊤ := @is_inhabited.inhabited[h],
-   @exists.intro[_, x]
-    (assume ∃ y, P y,
-     @absurd[P x] (contradiction «∃ y, P y» «¬∃ y, P y»)))
-
 lemma some_exists.{u} (h : is_inhabited u) : ∃ (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) :=
-ac (take (P : u → Prop), @strong_indefinite_description[h, P])
+ac @strong_indefinite_description[h]
 
 -- The followings are boilerplate. To obtain an object `x` from a proposition `∃ x, ...`, we first define a structure and then
 -- prove its inhabitedness and finally get the term applying the internal epsilon.
@@ -699,22 +800,18 @@ structure Some u := {
   axiom spec (P : u → Prop) : (∃ y, P y) → P (run P)
 }
 
-lemma Some.is_inhabited.{u} (h : is_inhabited u) : ∃ (x : Some u), ⊤ :=
-obtain (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) := @some_exists[h],
-obtain (this : Some u), ε = Some.run this := @Some.abs[ε] «∀ P, (∃ y, P y) → P (ε P)»,
-@exists.intro[_, this] true.intro
-
 instance Some.is_inhabited.{u} (h : is_inhabited u) : is_inhabited (Some u) := {
-  lemma inhabited : ∃ (x : Some u), ⊤ := @Some.is_inhabited[h]
+  lemma inhabited : ∃ (x : Some u), ⊤ :=
+  obtain (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) := @some_exists[h],
+  obtain (this : Some u), ε = Some.run this := @Some.abs[ε] «∀ P, (∃ y, P y) → P (ε P)»,
+  @exists.intro[_, this] true.intro
 }
 
-class instance Some.has.is_inhabited.{u} [has (is_inhabited u)] : has (is_inhabited (Some u)) := {
-  def summon : is_inhabited (Some u) := Some.is_inhabited summon
-}
+def Some.pt.{u} (h : is_inhabited u) : Some u := pointed.pt (is_inhabited.pointed (Some.is_inhabited h))
 
 -- This is what we wanted, the Hilbert epsilon.
-def some.{u} [has (is_inhabited u)] : (u → Prop) → u := Some.run (epsilon summon)
-lemma some.spec.{u} [has (is_inhabited u)] (P : u → Prop) : (∃ y, P y) → P (some P) := @Some.spec[epsilon summon, P]
+def some.{u} [has (is_inhabited u)] : (u → Prop) → u := Some.run (Some.pt summon)
+lemma some.spec.{u} [has (is_inhabited u)] (P : u → Prop) : (∃ y, P y) → P (some P) := @Some.spec[Some.pt summon, P]
 
 /-  
  - natural numbers
@@ -920,10 +1017,6 @@ class structure monoid.hom u v := {
   axiom homomorphic (x₁ x₂ : u) : mult (f x₁) (f x₂) = f (mult x₁ x₂)
 }
 -/
-
-structure pointed u := {
-  const pt : u
-}
 
 structure is_prop u := {
   axiom spec (x₁ x₂ : u) : x₁ = x₂
