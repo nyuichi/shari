@@ -39,17 +39,15 @@ calc m₁ = m₂ := e₁ ... = m₃ := e₂ ... = m₄ := e₃, e₄
 Some axioms / constants are postulated upon the base logic.
 Their consistency is established from semantic arguments.
 
-| logic                                              | models                                                           |
-|----------------------------------------------------|------------------------------------------------------------------|
-| intuitionistic higher-order logic (our base logic) | any model of PTS λHOL                                            |
-| + fun_ext + prop_ext + auc                         | any topos                                                        |
-| + inductive types                                  | any topos with NNO                                               |
-| + choice                                           | any (boolean) topos with NNO validating internal axiom of choice |
-| + epsilon                                          | any (boolean) topos with NNO validating external axiom of choice |
+| logic                                              | models                                |
+|----------------------------------------------------|---------------------------------------|
+| intuitionistic higher-order logic (the base logic) | any model of PTS λHOL                 |
+| + fun_ext + prop_ext + auc                         | any topos                             |
+|   + choice                                         |   satisfying internal axiom of choice |
+|   + epsilon                                        |   in which supports split             |
+|   + inductive types                                |   with NNO                            |
 
-# Theoretical backgrounds
-
-Our core logic is described by the following pure type system (PTS):
+The base logic is described by the following pure type system (PTS):
 
 | S | Prop, Type, Kind |
 | A | Prop : Type, Type : Kind |
@@ -369,6 +367,90 @@ iff.intro
       (exists.map «∀ x, Q x → P x» (uexists.exists «∃! x, Q x»))
       (unique.map «∀ x, P x → Q x» (uexists.unique «∃! x, Q x»)))
 
+-- The type of decidable propositions.
+--
+-- The structure command below is desugared into the following set of declarations.
+--
+--   type const bool : Type
+--   const bool.rec.{α} : bool → (Prop → α) → α
+--   def bool.rep : bool → Prop := λ (this : bool), bool.rec.{Prop} this (λ (rep : Prop), rep)
+--   axiom bool.spec.{u} (this : bool) : bool.rep this = ⊤ ∨ bool.rep this = ⊥
+--   axiom bool.abs.{u} (rep : Prop) : rep = ⊤ ∨ rep = ⊥ → ∃ this, rep = bool.rep this
+--   axiom bool.ext.{u} (this₁ this₂ : bool) : bool.rep this₁ = bool.rep this₂ → this₁ = this₂
+--
+-- Of course, bool can be also defined in terms of an inductive type.
+--
+--   type inductive bool
+--   | tt : bool
+--   | ff : bool
+--
+-- We avoid this because we are in the bootstrapping process; existence of (all) inductive types
+-- relies on the existence of an infinite type. By defining bool using structure it should be clear
+-- that we don't need such an assumption.
+--
+structure bool := {
+  const rep : Prop
+  axiom spec : rep = ⊤ ∨ rep = ⊥
+}
+
+-- This command introduces:
+--
+--   def bool.tt.rep : Prop := ⊤
+--   lemma bool.tt.spec : bool.tt.rep = ⊤ ∨ bool.tt.rep = ⊥ := tt_spec
+--   const bool.tt : bool
+--   axiom bool.tt.spec.{α} : bool.rec bool.tt = λ (f : Prop → α), f bool.tt.rep
+--
+instance bool.tt : bool := {
+  def rep : Prop := ⊤
+  lemma spec : rep = ⊤ ∨ rep = ⊥ := or.left eq.refl
+}
+
+instance bool.ff : bool := {
+  def rep : Prop := ⊥
+  lemma spec : rep = ⊤ ∨ rep = ⊥ := or.right eq.refl
+}
+
+def tt : bool := bool.tt
+def ff : bool := bool.ff
+
+lemma bool.rep_tt_eq_true : bool.rep tt = ⊤ :=
+calc bool.rep tt = bool.rec tt (λ rep, rep)          := eq.refl
+             ... = (λ f, f bool.tt.rep) (λ rep, rep) := eq.ap bool.tt.spec
+             ... = ⊤                                 := eq.refl,
+«bool.rep tt = ⊤»
+
+lemma bool.rep_ff_eq_false : bool.rep ff = ⊥ :=
+calc bool.rep ff = bool.rec ff (λ rep, rep)          := eq.refl
+             ... = (λ f, f bool.ff.rep) (λ rep, rep) := eq.ap bool.ff.spec
+             ... = ⊥                                 := eq.refl,
+«bool.rep ff = ⊥»
+
+lemma bool.eq_tt (b : bool) : bool.rep b = ⊤ → b = tt :=
+assume bool.rep b = ⊤,
+calc bool.rep b = ⊤           := «bool.rep b = ⊤»
+            ... = bool.rep tt := eq.symm bool.rep_tt_eq_true,
+bool.ext «bool.rep b = bool.rep tt»
+
+lemma bool.eq_ff (b : bool) : bool.rep b = ⊥ → b = ff :=
+assume bool.rep b = ⊥,
+calc bool.rep b = ⊥           := «bool.rep b = ⊥»
+            ... = bool.rep ff := eq.symm bool.rep_ff_eq_false,
+bool.ext «bool.rep b = bool.rep ff»
+
+lemma bool.case (b : bool) : b = tt ∨ b = ff :=
+or.ind bool.spec
+  (assume bool.rep b = ⊤,
+   or.left (bool.eq_tt «bool.rep b = ⊤»))
+  (assume bool.rep b = ⊥,
+   or.right (bool.eq_ff «bool.rep b = ⊥»))
+
+lemma bool.tt_ne_ff : tt ≠ ff :=
+assume tt = ff,
+calc ⊤ = bool.rep tt := eq.symm bool.rep_tt_eq_true
+   ... = bool.rep ff := eq.ap «tt = ff»
+   ... = ⊥           := bool.rep_ff_eq_false,
+contradiction «⊤ = ⊥» true_ne_false
+
 /-
  - Extensionality
  -/
@@ -406,7 +488,7 @@ assume y = f x₂,
 def split.{u, v} (f : u → v) : Prop := ∃ g, ∀ y, y = f (g y)
 
 /-
- - sets
+ - subsets
  -/
 
 infix ∈ : 50 := in
@@ -427,17 +509,23 @@ def subset.{u} (s : sub u) (t : sub u) : Prop := ∀ x, x ∈ s → x ∈ t
 def sep.{u} (s : sub u) (φ : u → Prop) : sub u := λ x, x ∈ s ∧ φ x
 def cap.{u} (s : sub u) (t : sub u) : sub u := { x | x ∈ s ∧ x ∈ t }
 def cup.{u} (s : sub u) (t : sub u) : sub u := { x | x ∈ s ∨ x ∈ t }
-def bigcap.{u} (a : sub (sub u)) : sub u := { x | ∀ s, s ∈ a → x ∈ s }
-def bigcup.{u} (a : sub (sub u)) : sub u := { x | ∃ s, s ∈ a ∧ x ∈ s }
+def Cap.{u} (a : sub (sub u)) : sub u := { x | ∀ s, s ∈ a → x ∈ s }
+def Cup.{u} (a : sub (sub u)) : sub u := { x | ∃ s, s ∈ a ∧ x ∈ s }
 def power.{u} (s : sub u) : sub (sub u) := { t | t ⊆ s }
 def setminus.{u} (s : sub u) (t : sub u) : sub u := { x | x ∈ s ∧ x ∉ t }
 def im.{u, v} (f : u → v) (s : sub u) : sub v := { y | ∃ x, x ∈ s ∧ y = f x }
 def insert.{u} (a : u) (s : sub u) : sub u := { x | x = a ∨ x ∈ s }
 
--- I don't know why these are adopted as the standard notation in Lean.
+-- Consolas does not display well the cap and bigcap symbols:
+--
+--    ∩  U+2229 INTERSECTION
+--    ⋂  U+22C2 N-ARY INTERSECTION
+--
+-- that's why we use instead ⋒ U+22D2 DOUBLE INTERSECTION.
+-- In Lean, two character symbols ⋂₀ and ⋃₀ are adopted but I could not find their origin on the internet.
 -- https://github.com/leanprover/lean3/pull/936/commits/549feb5d7f95c0d28450b3778d471becafe58046
--- prefix ⋂₀ : 110 := bigcap
--- prefix ⋃₀ : 110 := bigcup
+prefix ⋒ : 110 := Cap
+prefix ⋓ : 110 := Cup
 
 lemma cantor.{u} : ¬(∃ (e : u → sub u), surjective e) :=
 mt lawvere_fixpoint (
@@ -451,174 +539,11 @@ inductive fin.{u} : sub u → Prop
 | empty : fin empty
 | insert (a : u) (s : sub u) : fin s → fin (insert a s)
 
-lemma empty_subseteq.{u} (s : sub u) : ∅ ⊆ s :=
-take (a : u),
-assume a ∈ ∅,
-have ⊥ := «a ∈ ∅»,
-absurd «⊥»
-
-lemma empty_in_power.{u} (s : sub u) : ∅ ∈ power s :=
-empty_subseteq
-
-/-
- - well-founded
- -/
-
--- acc R x :↔ x is in the well-founded part of R
-inductive acc.{u} (R : u → u → Prop) : u → Prop
-| intro (x : u) : (∀ y, R y x → acc y) → acc x
-
-def well_founded.{u} (R : u → u → Prop) : Prop := ∀ x, acc R x
-
-/-
- - basic inductive types
- -/
-
--- The following declarations are introduced.
---
--- type const nat : Type
--- const nat.zero : nat
--- const nat.succ : nat → nat
--- axiom nat.ind : ∀ x, ∀ P, P nat.zero → (∀ n, P n → P (nat.succ n)) → P x
--- const nat.rec.{u} : nat → u → (nat → u → u) → u
--- axiom nat.zero.spec.{u} : nat.rec nat.zero = (λ x f, x)
--- axiom nat.succ.spec.{u} : ∀ n, nat.rec (nat.succ n) = λ x f, f n (nat.rec n x f)
---
--- Note that iota equations (rules in the form of `rec (ctor ..) = ..`) only hold propositionally in our system.
--- This is not a theoretical limination but to reduce the search space the higher-order unifier runs on.
--- If this limitation is too restrictive, please report us.
-type inductive nat
-| zero : nat
-| succ : nat → nat
-
-type inductive bool
-| tt : bool
-| ff : bool
-
--- TODO
--- one may write like
---
---  type inductive prod (u v : Type) : Type
---  | pair (fst : u) (snd : v) : prod
---
-type inductive prod u v
-| pair : u → v → prod
-
-type inductive unit
-| star : unit
-
-type inductive sum u v
-| inl : u → sum
-| inr : v → sum
-
-type inductive empty
-
-type inductive list u
-| nil : list
-| cons : u → list → list
-
-type inductive option u
-| none : option
-| some : u → option
-
-type inductive ord
-| zero : ord
-| succ : ord → ord
-| limit : (nat → ord) → ord
-
-type inductive bin_tree u
-| empty : bin_tree
-| leaf : u → bin_tree
-| node : bin_tree → bin_tree → bin_tree
-
--- type infixr × : 35
-
-def prod.fst.{u, v} (p : u × v) : u := prod.rec p (λ a b, a)
-def prod.snd.{u, v} (p : u × v) : v := prod.rec p (λ a b, b)
-
-local type const u v
-
--- TODO: use namespace
-def tt : bool := bool.tt
-def ff : bool := bool.ff
-def fst : u × v → u := prod.fst
-def snd : u × v → v := prod.snd
-def pair.{u, v} : u → v → u × v := prod.pair
-def star : unit := unit.star
-def inl : u → sum u v := sum.inl
-def inr : v → sum u v := sum.inr
-def zero : nat := nat.zero
-def succ : nat → nat := nat.succ
-def nil : list u := list.nil
-def cons : u → list u → list u := list.cons
-def none : option u := option.none
--- def some : u → option u := option.some
-
-lemma unit.eta_expand (x : unit) : x = star :=
-unit.ind eq.refl
-
-lemma unit.eta_reduce (x : unit) : star = x :=
-eq.symm unit.eta_expand
-
-lemma unit_ext (x₁ x₂ : unit) : x₁ = x₂ :=
-eq.trans unit.eta_expand unit.eta_reduce
-
-lemma prod.fst.pair.{u, v} (x : u) (y : v) : fst (pair x y) = x :=
-eq.congr_fun prod.pair.spec
-
-lemma prod.snd.pair.{u, v} (x : u) (y : v) : snd (pair x y) = y :=
-eq.congr_fun prod.pair.spec
-
-/- FIXME
-lemma prod_ext.{u, v} (p₁ p₂ : u × v) : fst p₁ = fst p₂ → snd p₁ = snd p₂ → p₁ = p₂ :=
-prod.ind
-  take (a₁ : u), take (b₁ : v),
-  prod.ind
-  take (a₂ : u), take (b₂ : v),
-    assume fst ⟨a₁, b₁⟩ = fst ⟨a₂, b₂⟩,
-    assume snd ⟨a₁, b₁⟩ = snd ⟨a₂, b₂⟩,
-    have a₁ = a₂ :=
-      have a₁ = fst ⟨a₁, b₁⟩ := eq.refl,
-      have fst ⟨a₂, b₂⟩ = a₂ := eq.refl,
-      eq.trans «a₁ = fst ⟨a₁, b₁⟩» (eq.trans «fst ⟨a₁, b₁⟩ = fst ⟨a₂, b₂⟩» «fst ⟨a₂, b₂⟩ = a₂»),
-    have b₁ = b₂ :=
-      have b₁ = snd ⟨a₁, b₁⟩ := eq.refl,
-      have snd ⟨a₂, b₂⟩ = b₂ := eq.refl,
-      eq.trans «b₁ = snd ⟨a₁, b₁⟩» (eq.trans «snd ⟨a₁, b₁⟩ = snd ⟨a₂, b₂⟩» «snd ⟨a₂, b₂⟩ = b₂»),
-    have ⟨a₁, b₁⟩ = ⟨a₂, b₁⟩ := eq.ap «a₁ = a₂»,
-    have ⟨a₂, b₁⟩ = ⟨a₂, b₂⟩ := eq.ap «b₁ = b₂»,
-    eq.trans «⟨a₁, b₁⟩ = ⟨a₂, b₁⟩» «⟨a₂, b₁⟩ = ⟨a₂, b₂⟩»
-
-lemma prod.eta.{u, v} (p : prod u v) : p = pair (fst p) (snd p) :=
-prod_ext eq.refl eq.refl
--/
-
-lemma bool.case (b : bool) : b = tt ∨ b = ff :=
-bool.ind (or.left eq.refl) (or.right eq.refl)
-
-lemma bool.tt_ne_ff : tt ≠ ff :=
-assume tt = ff,
-have true = false :=
-  have true = bool.rec tt true false := eq.ap (eq.symm bool.tt.spec),
-  have bool.rec tt true false = bool.rec ff true false := eq.ap «tt = ff»,
-  have bool.rec ff true false = false := eq.ap bool.ff.spec,
-  eq.trans «true = bool.rec tt true false» (eq.trans «bool.rec tt true false = bool.rec ff true false» «bool.rec ff true false = false»),
-contradiction «true = false» true_ne_false
-
 /-
  - choice
  -/
 
 -- The type of inhabited subsets.
--- The command is desugared into the following set of declarations.
---
---   type const inhab : Type → Type
---   const inhab.rec.{u, α} : inhab u → (sub u → α) → α
---   def inhab.rep.{u} : inhab u → sub u := λ (this : inhab u), inhab.rec.{u, sub u} this (λ (rep : sub u), rep)
---   axiom inhab.inhabited.{u} (this : inhab u) : ∃ x, x ∈ inhab.rep this
---   axiom inhab.abs.{u} (s : sub u) : (∃ x, x ∈ s) → ∃ d, s = inhab.rep d
---   axiom inhab.ext.{u} (d₁ d₂ : inhab u) : inhab.rep d₁ = inhab.rep d₂ → d₁ = d₂
---
 structure inhab u := {
   const rep : sub u
   axiom inhabited : ∃ x, x ∈ rep
@@ -635,27 +560,6 @@ uexists.intro
    assume s = inhab.rep c₂,
    have inhab.rep c₁ = inhab.rep c₂ := eq.trans (eq.symm «s = inhab.rep c₁») «s = inhab.rep c₂»,
    inhab.ext «inhab.rep c₁ = inhab.rep c₂»)
-
--- This command introduces:
---
---   const power.inhab.{u} : sub u → inhab (sub u)
---   def power.inhab.rep.{u} (A : sub u) : sub (sub u) := power A
---   lemma power.inhab.inhabited.{u} (A : sub u) : ∃ a, a ∈ power x := (..)
---   axiom power.inhab.spec.{u} (A : sub u) : inhab.rec (power.inhab A) = λ f, f (power.inhab.rep A)
---
-instance power.inhab.{u} (A : sub u) : inhab (sub u) := {
-  def rep : sub (sub u) := power A
-  lemma inhabited : ∃ a, a ∈ power A := exists.intro empty_in_power
-}
-
-instance cup.inhab.{u} (A B : inhab u) : inhab u := {
-  def rep : sub u := inhab.rep A ∪ inhab.rep B
-
-  lemma inhabited : ∃ a, a ∈ inhab.rep A ∪ inhab.rep B :=
-  obtain (x : u), x ∈ inhab.rep A := inhab.inhabited,
-  have x ∈ inhab.rep A ∨ x ∈ inhab.rep B := or.left «x ∈ inhab.rep A»,
-  exists.intro «x ∈ inhab.rep A ∨ x ∈ inhab.rep B»
-}
 
 -- The existence of the constant and the axiom state that every type u is a choice type.
 const choice.{u} : inhab u → u
@@ -722,9 +626,88 @@ or.ind «φ ∨ choice h₁ ≠ choice h₂»
   (assume choice h₁ ≠ choice h₂,
     or.right (mt «φ → choice h₁ = choice h₂» «choice h₁ ≠ choice h₂»))
 
-/-
- - Hilbert's ε-operator
- -/
+-- double negation elimination
+lemma dne (φ : Prop) : ¬¬φ → φ :=
+assume ¬¬φ,
+or.ind em
+  (assume φ,
+   «φ»)
+  (assume ¬φ,
+   absurd (contradiction «¬φ» «¬¬φ»))
+
+lemma peirce (φ ψ : Prop) : ((φ → ψ) → φ) → φ :=
+or.ind em
+  (assume φ,
+   assume (φ → ψ) → φ,
+   «φ»)
+  (assume ¬φ,
+   assume (φ → ψ) → φ,
+   have φ → ψ := assume φ, absurd (contradiction «φ» «¬φ»),
+   «(φ → ψ) → φ» «φ → ψ»)
+
+lemma imp.to_or (φ ψ : Prop) : (φ → ψ) → ¬φ ∨ ψ :=
+assume φ → ψ,
+or.ind em
+  (assume φ,
+   have ψ := «φ → ψ» «φ»,
+   or.right «ψ»)
+  (assume ¬φ,
+   or.left «¬φ»)
+
+lemma or.to_imp (φ ψ : Prop) : ¬φ ∨ ψ → φ → ψ :=
+assume ¬φ ∨ ψ,
+assume φ,
+or.ind «¬φ ∨ ψ»
+  (assume ¬φ,
+   absurd (contradiction «φ» «¬φ»))
+  (assume ψ,
+   «ψ»)
+
+-- An intermediate axiom. This is strictly weaker than em.
+lemma godel_dummet (φ ψ : Prop) : (φ → ψ) ∨ (ψ → φ) :=
+or.ind em
+  (assume φ,
+   have ¬ψ ∨ φ := or.right «φ»,
+   or.right (or.to_imp «¬ψ ∨ φ»))
+  (assume ¬φ,
+   have ¬φ ∨ ψ := or.left «¬φ»,
+   or.left (or.to_imp «¬φ ∨ ψ»))
+
+-- equivalent to the Gödel-Dummet axiom
+lemma imp.right_distr_or (φ ψ ξ : Prop) : (φ → ψ ∨ ξ) → (φ → ψ) ∨ (φ → ξ) :=
+assume φ → ψ ∨ ξ,
+or.ind godel_dummet
+  (assume ψ → ξ,
+   have φ → ξ :=
+     assume φ,
+     have ψ ∨ ξ := «φ → ψ ∨ ξ» «φ»,
+     or.ind «ψ ∨ ξ»
+       (assume ψ,
+        «ψ → ξ» «ψ»)
+       (assume ξ,
+        «ξ»),
+   or.right «φ → ξ»)
+  (assume ξ → ψ,
+   have φ → ψ :=
+     assume φ,
+     have ψ ∨ ξ := «φ → ψ ∨ ξ» «φ»,
+     or.ind «ψ ∨ ξ»
+       (assume ψ,
+        «ψ»)
+       (assume ξ,
+        «ξ → ψ» «ξ»),
+   or.left «φ → ψ»)
+
+-- generalized excluded middle. This is equivalent to em in the presence of ex falso.
+lemma gem (φ ψ : Prop) : φ ∨ (φ → ψ) :=
+or.ind em
+  (assume φ,
+   or.left «φ»)
+  (assume ¬φ,
+   have φ → ψ :=
+     assume φ,
+     absurd (contradiction «φ» «¬φ»),
+   or.right «φ → ψ»)
 
 -- A type operator sending an inhabited type to its propositional truncation.
 -- This type has several names in the literature, such as support type, bracket type, or propositional truncation.
@@ -732,14 +715,42 @@ structure is_inhabited u := {
   axiom inhabited : ∃ (a : u), ⊤
 }
 
+-- (The dual of) the drinker paradox. This is equivalent to independence_of_premise.
+lemma strong_indefinite_description.{u} (h : is_inhabited u) (P : u → Prop) : ∃ x, (∃ y, P y) → P x :=
+or.ind @em[∃ y, P y]
+  (assume ∃ y, P y,
+   obtain (y : u), P y := «∃ y, P y»,
+   @exists.intro[_, y]
+     (assume ∃ y, P y,
+      «P y»))
+  (assume ¬∃ y, P y,
+   obtain (x : u), ⊤ := @is_inhabited.inhabited[h],
+   @exists.intro[_, x]
+    (assume ∃ y, P y,
+     @absurd[P x] (contradiction «∃ y, P y» «¬∃ y, P y»)))
+
+-- Independence of (general) premise. This is equivalent to the drinker paradox.
+lemma independence_of_premise.{u} (h : is_inhabited u) (P : u → Prop) (φ : Prop) : (φ → ∃ x, P x) → (∃ x, φ → P x) :=
+assume φ → ∃ x, P x,
+obtain (x : u), (∃ y, P y) → P x := @strong_indefinite_description[h, P],
+have φ → P x := imp.trans «φ → ∃ x, P x» «(∃ y, P y) → P x»,
+exists.intro «φ → P x»
+
+/-
+ - epsilon
+ -/
+
 -- internal global choice operator
 -- 
 -- Introducing this constant restricts the class of models to toposes whose supports split.
 -- Postulating split supports together with the internal axiom of choice, our logic becomes
 -- precisely an internal logic of toposes satisfying the _external_ axiom of choice.
 --
+--    internal axiom of choice + split supports = external axiom of choice
+--
 -- Note we do not have an object-level function assigning for each type u the choice function,
--- which would imply axiom of choice. For the details of this direction see Lean's standard library.
+-- which is strictly stronger than our choice and would imply the axiom of choice.
+-- For the details of this direction see Lean's standard library.
 --
 -- In the presence of dependent products, this operator corresponds to the law of double negation:
 --
@@ -754,6 +765,7 @@ structure is_inhabited u := {
 -- Assuming IAC, the following are equivalent. E is a topos.
 -- (a) Supports split in E.
 -- (b) Supports split in E/X for each X ∈ E.
+--
 -- Proof:
 --   For (a) => (b), take any object f ∈ E/X, where f : A → X in E.
 --   f has a split support iff there exists a morphism from supp f to f.
@@ -766,31 +778,26 @@ structure is_inhabited u := {
 --
 -- This lemma is very important because the fact the properties of the ambient category are
 -- inherited to its slices corresponds to that introducing a variable does not change the logic.
--- If we add locally defined types in the future, this lemma validates the use of epsilon applying to
+-- If we add locally defined types in the future, this lemma justifies the use of epsilon applying to
 -- such types that may contain free (term) variables.
---
--- To make it easier to check the consistency, epsilon takes a object level witness [is_inhabited u] instead of
--- class [is_inhabited u].
 const epsilon.{u} : is_inhabited u → u
+
+structure pointed u := {
+  const pt : u
+}
+
+instance pointed.mk.{u} (x : u) : pointed u := {
+  def pt : u := x
+}
+
+-- Essentially same as epsilon, but is more structured.
+def is_inhabited.pointed.{u} (h : is_inhabited u) : pointed u := pointed.mk (epsilon h)
 
 -- Construct external epsilon operator from internal epsilon and internal axiom of choice.
 -- A similar construction is found in arXiv:1603.00822.
 
-lemma strong_indefinite_description.{u} (h : is_inhabited u) (P : u → Prop) : ∃ x, (∃ y, P y) → P x :=
-or.ind @em[∃ y, P y]
-  (assume ∃ y, P y,
-   obtain (y : u), P y := «∃ y, P y»,
-   @exists.intro[_, y]
-     (assume ∃ y, P y,
-      «P y»))
-  (assume ¬∃ y, P y,
-   obtain (x : u), ⊤ := @is_inhabited.inhabited[h],
-   @exists.intro[_, x]
-    (assume ∃ y, P y,
-     @absurd[P x] (contradiction «∃ y, P y» «¬∃ y, P y»)))
-
 lemma some_exists.{u} (h : is_inhabited u) : ∃ (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) :=
-ac (take (P : u → Prop), @strong_indefinite_description[h, P])
+ac @strong_indefinite_description[h]
 
 -- The followings are boilerplate. To obtain an object `x` from a proposition `∃ x, ...`, we first define a structure and then
 -- prove its inhabitedness and finally get the term applying the internal epsilon.
@@ -799,28 +806,44 @@ structure Some u := {
   axiom spec (P : u → Prop) : (∃ y, P y) → P (run P)
 }
 
-lemma Some.is_inhabited.{u} (h : is_inhabited u) : ∃ (x : Some u), ⊤ :=
-obtain (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) := @some_exists[h],
-obtain (this : Some u), ε = Some.run this := @Some.abs[ε] «∀ P, (∃ y, P y) → P (ε P)»,
-@exists.intro[_, this] true.intro
-
 instance Some.is_inhabited.{u} (h : is_inhabited u) : is_inhabited (Some u) := {
-  lemma inhabited : ∃ (x : Some u), ⊤ := @Some.is_inhabited[h]
+  lemma inhabited : ∃ (x : Some u), ⊤ :=
+  obtain (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) := @some_exists[h],
+  obtain (this : Some u), ε = Some.run this := @Some.abs[ε] «∀ P, (∃ y, P y) → P (ε P)»,
+  @exists.intro[_, this] true.intro
 }
 
-class instance Some.has.is_inhabited.{u} [has (is_inhabited u)] : has (is_inhabited (Some u)) := {
-  def summon : is_inhabited (Some u) := Some.is_inhabited summon
-}
+def Some.pt.{u} (h : is_inhabited u) : Some u := pointed.pt (is_inhabited.pointed (Some.is_inhabited h))
 
 -- This is what we wanted, the Hilbert epsilon.
-def some.{u} [has (is_inhabited u)] : (u → Prop) → u := Some.run (epsilon summon)
-lemma some.spec.{u} [has (is_inhabited u)] (P : u → Prop) : (∃ y, P y) → P (some P) := @Some.spec[epsilon summon, P]
+def some.{u} [has (is_inhabited u)] : (u → Prop) → u := Some.run (Some.pt summon)
+lemma some.spec.{u} [has (is_inhabited u)] (P : u → Prop) : (∃ y, P y) → P (some P) := @Some.spec[Some.pt summon, P]
 
 /-  
  - natural numbers
  -/
 
+-- The following declarations are introduced.
+--
+-- type const nat : Type
+-- const nat.zero : nat
+-- const nat.succ : nat → nat
+-- axiom nat.ind : ∀ x, ∀ P, P nat.zero → (∀ n, P n → P (nat.succ n)) → P x
+-- const nat.rec.{u} : nat → u → (nat → u → u) → u
+-- axiom nat.zero.spec.{u} : nat.rec nat.zero = (λ x f, x)
+-- axiom nat.succ.spec.{u} : ∀ n, nat.rec (nat.succ n) = λ x f, f n (nat.rec n x f)
+--
+-- Note that iota equations (rules in the form of `rec (ctor ..) = ..`) only hold propositionally in our system.
+-- This is not a theoretical limination but to reduce the search space the higher-order unifier runs on.
+-- If this limitation is too restrictive, please report us.
+type inductive nat
+| zero : nat
+| succ : nat → nat
+
 -- TODO: type ℕ := nat
+
+def zero : nat := nat.zero
+def succ : nat → nat := nat.succ
 
 def nat.add (n m : ℕ) : ℕ := nat.rec n m (λ p, succ)
 def nat.mul (n m : ℕ) : ℕ := nat.rec n zero (λ p, nat.add m)
@@ -835,6 +858,114 @@ class instance nat.has_ast : has_ast ℕ := {
 
 def bit0 (n : ℕ) : ℕ := n + n
 def bit1 (n : ℕ) : ℕ := succ (bit0 n)
+
+/-
+ - basic inductive types
+ -/
+
+-- TODO
+-- one may write like
+--
+--  type inductive prod (u v : Type) : Type
+--  | pair (fst : u) (snd : v) : prod
+--
+type inductive prod u v
+| pair : u → v → prod
+
+type inductive unit
+| star : unit
+
+type inductive sum u v
+| inl : u → sum
+| inr : v → sum
+
+type inductive empty
+
+type inductive list u
+| nil : list
+| cons : u → list → list
+
+type inductive option u
+| none : option
+| some : u → option
+
+type inductive ord
+| zero : ord
+| succ : ord → ord
+| limit : (nat → ord) → ord
+
+type inductive bin_tree u
+| empty : bin_tree
+| leaf : u → bin_tree
+| node : bin_tree → bin_tree → bin_tree
+
+-- type infixr × : 35
+
+def prod.fst.{u, v} (p : u × v) : u := prod.rec p (λ a b, a)
+def prod.snd.{u, v} (p : u × v) : v := prod.rec p (λ a b, b)
+
+local type const u v
+
+-- TODO: use namespace
+def fst : u × v → u := prod.fst
+def snd : u × v → v := prod.snd
+def pair.{u, v} : u → v → u × v := prod.pair
+def star : unit := unit.star
+def inl : u → sum u v := sum.inl
+def inr : v → sum u v := sum.inr
+def nil : list u := list.nil
+def cons : u → list u → list u := list.cons
+def none : option u := option.none
+-- def some : u → option u := option.some
+
+lemma unit.eta_expand (x : unit) : x = star :=
+unit.ind eq.refl
+
+lemma unit.eta_reduce (x : unit) : star = x :=
+eq.symm unit.eta_expand
+
+lemma unit_ext (x₁ x₂ : unit) : x₁ = x₂ :=
+eq.trans unit.eta_expand unit.eta_reduce
+
+lemma prod.fst.pair.{u, v} (x : u) (y : v) : fst (pair x y) = x :=
+eq.congr_fun prod.pair.spec
+
+lemma prod.snd.pair.{u, v} (x : u) (y : v) : snd (pair x y) = y :=
+eq.congr_fun prod.pair.spec
+
+/- FIXME
+lemma prod_ext.{u, v} (p₁ p₂ : u × v) : fst p₁ = fst p₂ → snd p₁ = snd p₂ → p₁ = p₂ :=
+prod.ind
+  take (a₁ : u), take (b₁ : v),
+  prod.ind
+  take (a₂ : u), take (b₂ : v),
+    assume fst ⟨a₁, b₁⟩ = fst ⟨a₂, b₂⟩,
+    assume snd ⟨a₁, b₁⟩ = snd ⟨a₂, b₂⟩,
+    have a₁ = a₂ :=
+      have a₁ = fst ⟨a₁, b₁⟩ := eq.refl,
+      have fst ⟨a₂, b₂⟩ = a₂ := eq.refl,
+      eq.trans «a₁ = fst ⟨a₁, b₁⟩» (eq.trans «fst ⟨a₁, b₁⟩ = fst ⟨a₂, b₂⟩» «fst ⟨a₂, b₂⟩ = a₂»),
+    have b₁ = b₂ :=
+      have b₁ = snd ⟨a₁, b₁⟩ := eq.refl,
+      have snd ⟨a₂, b₂⟩ = b₂ := eq.refl,
+      eq.trans «b₁ = snd ⟨a₁, b₁⟩» (eq.trans «snd ⟨a₁, b₁⟩ = snd ⟨a₂, b₂⟩» «snd ⟨a₂, b₂⟩ = b₂»),
+    have ⟨a₁, b₁⟩ = ⟨a₂, b₁⟩ := eq.ap «a₁ = a₂»,
+    have ⟨a₂, b₁⟩ = ⟨a₂, b₂⟩ := eq.ap «b₁ = b₂»,
+    eq.trans «⟨a₁, b₁⟩ = ⟨a₂, b₁⟩» «⟨a₂, b₁⟩ = ⟨a₂, b₂⟩»
+
+lemma prod.eta.{u, v} (p : prod u v) : p = pair (fst p) (snd p) :=
+prod_ext eq.refl eq.refl
+-/
+
+/-
+ - well-founded
+ -/
+
+-- acc R x :↔ x is in the well-founded part of R
+inductive acc.{u} (R : u → u → Prop) : u → Prop
+| intro (x : u) : (∀ y, R y x → acc y) → acc x
+
+def well_founded.{u} (R : u → u → Prop) : Prop := ∀ x, acc R x
 
 /-
  - (some) algebras
@@ -885,17 +1016,11 @@ assume interchange m₁ m₂,
 monoid.ext (interchange.equates_mult «interchange m₁ m₂») (interchange.equates_unit «interchange m₁ m₂»)
 
 /-
-class structure monoid.hom u v := {
-  class instance dom.monoid : monoid u
-  class instance cod.monoid : monoid v
+structure monoid.hom u v [has (monoid u)] [has (monoid v)] := {
   const f : u → v
   axiom homomorphic (x₁ x₂ : u) : mult (f x₁) (f x₂) = f (mult x₁ x₂)
 }
 -/
-
-structure pointed u := {
-  const pt : u
-}
 
 structure is_prop u := {
   axiom spec (x₁ x₂ : u) : x₁ = x₂
@@ -905,7 +1030,7 @@ inductive topology.{u} (subbase : sub (sub u)) : sub (sub u)
 | subbase (x : sub u) : x ∈ subbase → topology x
 | univ : topology univ
 | inter (x y : sub u) : topology (x ∩ y)
-| union (A : sub (sub u)) : (∀ a, a ∈ A → topology a) → topology (bigcup A)
+| union (A : sub (sub u)) : (∀ a, a ∈ A → topology a) → topology (Cup A)
 
 structure space u := {
   const subbase : sub (sub u)
@@ -973,5 +1098,5 @@ def Join.{u} [has (complete_lattice u)] : sub u → u := complete_lattice.Join s
 
 def monotone.{u, v} [has_le u] [has_le v] (f : u → v) : Prop := ∀ x y, x ≤ y → f x ≤ f y
 
-def lfp.{u} (L : complete_lattice u) (f : u → u) : u :=
-complete_lattice.Meet L { x | complete_lattice.le L (f x) x }
+def lfp.{u} [has (complete_lattice u)] (f : u → u) : u := Meet { x | f x ≤ x }
+def gfp.{u} [has (complete_lattice u)] (f : u → u) : u := Join { x | x ≤ f x }

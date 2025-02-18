@@ -666,4 +666,10 @@ export const unicodeMap = {
 
     // Others
     "emptyset": "∅", // U+2205 ∅ EMPTY SET
+    "sqdoublecap": "⩎", // U+2A4E ⩎ DOUBLE SQUARE INTERSECTION
+    "sqdoublecup": "⩏", // U+2A4F ⩏ DOUBLE SQUARE UNION
+    "doublewedge": "⩕", // U+2A55 ⩕ TWO INTERSECTING LOGICAL AND
+    "doublevee": "⩖", // U+2A56 ⩖ TWO INTERSECTING LOGICAL OR
+    "bigdoublewedge": "⨇", // U+2A07 ⨇ TWO LOGICAL AND OPERATOR
+    "bigdoublevee": "⨈", // U+2A08 ⨈ TWO LOGICAL OR OPERATOR
 };
