@@ -509,17 +509,23 @@ def subset.{u} (s : sub u) (t : sub u) : Prop := ∀ x, x ∈ s → x ∈ t
 def sep.{u} (s : sub u) (φ : u → Prop) : sub u := λ x, x ∈ s ∧ φ x
 def cap.{u} (s : sub u) (t : sub u) : sub u := { x | x ∈ s ∧ x ∈ t }
 def cup.{u} (s : sub u) (t : sub u) : sub u := { x | x ∈ s ∨ x ∈ t }
-def bigcap.{u} (a : sub (sub u)) : sub u := { x | ∀ s, s ∈ a → x ∈ s }
-def bigcup.{u} (a : sub (sub u)) : sub u := { x | ∃ s, s ∈ a ∧ x ∈ s }
+def Cap.{u} (a : sub (sub u)) : sub u := { x | ∀ s, s ∈ a → x ∈ s }
+def Cup.{u} (a : sub (sub u)) : sub u := { x | ∃ s, s ∈ a ∧ x ∈ s }
 def power.{u} (s : sub u) : sub (sub u) := { t | t ⊆ s }
 def setminus.{u} (s : sub u) (t : sub u) : sub u := { x | x ∈ s ∧ x ∉ t }
 def im.{u, v} (f : u → v) (s : sub u) : sub v := { y | ∃ x, x ∈ s ∧ y = f x }
 def insert.{u} (a : u) (s : sub u) : sub u := { x | x = a ∨ x ∈ s }
 
--- I don't know why these are adopted as the standard notation in Lean.
+-- Consolas does not display well the cap and bigcap symbols:
+--
+--    ∩  U+2229 INTERSECTION
+--    ⋂  U+22C2 N-ARY INTERSECTION
+--
+-- that's why we use instead ⋒ U+22D2 DOUBLE INTERSECTION.
+-- In Lean, two character symbols ⋂₀ and ⋃₀ are adopted but I could not find their origin on the internet.
 -- https://github.com/leanprover/lean3/pull/936/commits/549feb5d7f95c0d28450b3778d471becafe58046
--- prefix ⋂₀ : 110 := bigcap
--- prefix ⋃₀ : 110 := bigcup
+prefix ⋒ : 110 := Cap
+prefix ⋓ : 110 := Cup
 
 lemma cantor.{u} : ¬(∃ (e : u → sub u), surjective e) :=
 mt lawvere_fixpoint (
@@ -1010,9 +1016,7 @@ assume interchange m₁ m₂,
 monoid.ext (interchange.equates_mult «interchange m₁ m₂») (interchange.equates_unit «interchange m₁ m₂»)
 
 /-
-class structure monoid.hom u v := {
-  class instance dom.monoid : monoid u
-  class instance cod.monoid : monoid v
+structure monoid.hom u v [has (monoid u)] [has (monoid v)] := {
   const f : u → v
   axiom homomorphic (x₁ x₂ : u) : mult (f x₁) (f x₂) = f (mult x₁ x₂)
 }
@@ -1026,7 +1030,7 @@ inductive topology.{u} (subbase : sub (sub u)) : sub (sub u)
 | subbase (x : sub u) : x ∈ subbase → topology x
 | univ : topology univ
 | inter (x y : sub u) : topology (x ∩ y)
-| union (A : sub (sub u)) : (∀ a, a ∈ A → topology a) → topology (bigcup A)
+| union (A : sub (sub u)) : (∀ a, a ∈ A → topology a) → topology (Cup A)
 
 structure space u := {
   const subbase : sub (sub u)
