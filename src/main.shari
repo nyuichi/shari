@@ -47,6 +47,13 @@ Their consistency is established from semantic arguments.
 |   + epsilon                                        |   in which supports split             |
 |   + inductive types                                |   with NNO                            |
 
+(For those who are familiar with topos theory:
+the model of our logic is almost the same as Lawvere's Elementary Theory of the Category of Sets (ETCS).
+If we assume that the ambient topos is moreover two-valued (that is, it satisfies the _external_ law of
+excluded middle), then it is precisely an ETCS. Nonetheless, two-valuedness is not required for this logic, since
+it is an external property. Inside the logic, one cannot distinguish whether the model is two-valued or not.
+In fact, two-valuedness implies nondegeneracy of the topos.)
+
 The base logic is described by the following pure type system (PTS):
 
 | S | Prop, Type, Kind |
