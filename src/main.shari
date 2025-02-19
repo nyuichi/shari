@@ -529,6 +529,8 @@ def insert.{u} (a : u) (s : sub u) : sub u := { x | x = a ∨ x ∈ s }
 -- that's why we use instead ⋒ U+22D2 DOUBLE INTERSECTION.
 -- In Lean, two character symbols ⋂₀ and ⋃₀ are adopted but I could not find their origin on the internet.
 -- https://github.com/leanprover/lean3/pull/936/commits/549feb5d7f95c0d28450b3778d471becafe58046
+--
+-- TODO: still unreadable?
 prefix ⋒ : 110 := Cap
 prefix ⋓ : 110 := Cup
 
