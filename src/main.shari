@@ -120,9 +120,7 @@ infix > : 50 := has_le.gt
 --
 -- While use of class instantiations are not lowered to terms representing structure objects, the kernel implicitly generates
 -- instance objects that are invisible in the language surface. This design allows us to easily prove the consistency of the logic,
--- otherwise it is very error-prone [KP19].
---
--- - [KP19] Kunˇcar, and Popescu,  A Consistent Foundation for Isabelle/HOL, 2019
+-- otherwise it is very error-prone [Kunˇcar & Popescu, '19].
 
 -- This introduces:
 -- 
