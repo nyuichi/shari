@@ -29,6 +29,7 @@ e[m₁, ⋯, mₙ]                  forall elimination (Note that invocation of 
 assume φ, e                   imp introduction
 e₁ e₁                         imp elimination
 change φ, e                   change the goal to a definitional equivalent
+( e ), { e }                  grouping. no distinction between a pair of parentheses and of braces.
 have φ := e₁, e₂
 obtain (x : τ), φ := e₁, e₂
 calc m₁ = m₂ := e₁ ... = m₃ := e₂ ... = m₄ := e₃, e₄
@@ -572,21 +573,22 @@ uexists.intro
 const choice.{u} : inhab u → u
 axiom choice.spec.{u} (x : inhab u) : choice x ∈ inhab.rep x
 
-lemma ac.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) :=
-assume ∀ x, ∃ y, R x y,
-have ∀ x, ∃! (h : inhab v), R x = inhab.rep h :=
-  take (x : u),
-  -- FIXME: the unifier could not synthesize `R x`. Perhaps because it's a partially applied term?
-  @inhab.uabs[R x] «∀ x, ∃ y, R x y»[x],
-have ∃! (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
-  auc «∀ x, ∃! (h : inhab v), R x = inhab.rep h»,
-obtain (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
-  uexists.exists «∃! (f : u → inhab v), ∀ x, R x = inhab.rep (f x)»,
-exists.intro
-  (take (x : u),
-   have inhab.rep (f x) (choice (f x)) :=
-     choice.spec,
-   eq.transport (eq.symm (eq.congr_fun «∀ x, R x = inhab.rep (f x)»[x])) «inhab.rep (f x) (choice (f x))»)
+lemma ac.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) := {
+  assume ∀ x, ∃ y, R x y,
+  have ∀ x, ∃! (h : inhab v), R x = inhab.rep h :=
+    take (x : u),
+    -- FIXME: the unifier could not synthesize `R x`. Perhaps because it's a partially applied term?
+    @inhab.uabs[R x] «∀ x, ∃ y, R x y»[x],
+  have ∃! (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
+    auc «∀ x, ∃! (h : inhab v), R x = inhab.rep h»,
+  obtain (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
+    uexists.exists «∃! (f : u → inhab v), ∀ x, R x = inhab.rep (f x)»,
+  exists.intro
+    (take (x : u),
+    have inhab.rep (f x) (choice (f x)) :=
+      choice.spec,
+    eq.transport (eq.symm (eq.congr_fun «∀ x, R x = inhab.rep (f x)»[x])) «inhab.rep (f x) (choice (f x))»)
+}
 
 lemma surjective.split.{u, v} (f : u → v) : surjective f → split f :=
 ac
@@ -597,41 +599,42 @@ ac
 -- While em implies (using prop_ext) Prop is _internally two-valued_ i.e.
 -- ∀ φ, φ = ⊤ ∨ φ = ⊥, the ambient topos may not be (externally) two-valued;
 -- it only implies the topos is boolean.
-lemma em (φ : Prop) : φ ∨ ¬φ :=
-have ∃ b, φ ∨ b = tt := exists.intro (or.right eq.refl),
-have ∃ b, φ ∨ b = ff := exists.intro (or.right eq.refl),
-obtain (h₁ : inhab bool), (λ b, φ ∨ b = tt) = inhab.rep h₁ := inhab.abs «∃ b, φ ∨ b = tt»,
-obtain (h₂ : inhab bool), (λ b, φ ∨ b = ff) = inhab.rep h₂ := inhab.abs «∃ b, φ ∨ b = ff»,
-have φ → choice h₁ = choice h₂ :=
-  assume φ,
-  have (λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff) := fun_ext (
-    take (b : bool),
-    have φ ∨ b = tt := or.left «φ»,
-    have φ ∨ b = ff := or.left «φ»,
-    prop_ext (iff.intro (assume φ ∨ b = tt, «φ ∨ b = ff») (assume φ ∨ b = ff, «φ ∨ b = tt»))
-  ),
-  have inhab.rep h₁ = inhab.rep h₂ :=
-    eq.trans (eq.symm «(λ b, φ ∨ b = tt) = inhab.rep h₁») (eq.trans «(λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff)» «(λ b, φ ∨ b = ff) = inhab.rep h₂»),
-  have h₁ = h₂ :=
-    inhab.ext «inhab.rep h₁ = inhab.rep h₂»,
-  eq.congr_arg «h₁ = h₂»,
-have φ ∨ choice h₁ = tt :=
-  eq.transport (eq.symm (eq.congr_fun «(λ b, φ ∨ b = tt) = inhab.rep h₁»)) choice.spec,
-have φ ∨ choice h₂ = ff :=
-  eq.transport (eq.symm (eq.congr_fun «(λ b, φ ∨ b = ff) = inhab.rep h₂»)) choice.spec,
-have φ ∨ choice h₁ ≠ choice h₂ :=
-  or.ind «φ ∨ choice h₁ = tt»
-    (assume φ, or.left «φ»)
-    (assume choice h₁ = tt,
-      or.ind «φ ∨ choice h₂ = ff»
-        (assume φ, or.left «φ»)
-        (assume choice h₂ = ff,
-          or.right (eq.transport (eq.symm «choice h₂ = ff») (eq.transport (eq.symm «choice h₁ = tt») bool.tt_ne_ff)))),
-or.ind «φ ∨ choice h₁ ≠ choice h₂»
-  (assume φ,
-    or.left «φ»)
-  (assume choice h₁ ≠ choice h₂,
-    or.right (mt «φ → choice h₁ = choice h₂» «choice h₁ ≠ choice h₂»))
+lemma em (φ : Prop) : φ ∨ ¬φ := {
+  have ∃ b, φ ∨ b = tt := exists.intro (or.right eq.refl),
+  have ∃ b, φ ∨ b = ff := exists.intro (or.right eq.refl),
+  obtain (h₁ : inhab bool), (λ b, φ ∨ b = tt) = inhab.rep h₁ := inhab.abs «∃ b, φ ∨ b = tt»,
+  obtain (h₂ : inhab bool), (λ b, φ ∨ b = ff) = inhab.rep h₂ := inhab.abs «∃ b, φ ∨ b = ff»,
+  have φ → choice h₁ = choice h₂ :=
+    assume φ,
+    have (λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff) := fun_ext (
+      take (b : bool),
+      have φ ∨ b = tt := or.left «φ»,
+      have φ ∨ b = ff := or.left «φ»,
+      prop_ext (iff.intro (assume φ ∨ b = tt, «φ ∨ b = ff») (assume φ ∨ b = ff, «φ ∨ b = tt»))
+    ),
+    have inhab.rep h₁ = inhab.rep h₂ :=
+      eq.trans (eq.symm «(λ b, φ ∨ b = tt) = inhab.rep h₁») (eq.trans «(λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff)» «(λ b, φ ∨ b = ff) = inhab.rep h₂»),
+    have h₁ = h₂ :=
+      inhab.ext «inhab.rep h₁ = inhab.rep h₂»,
+    eq.congr_arg «h₁ = h₂»,
+  have φ ∨ choice h₁ = tt :=
+    eq.transport (eq.symm (eq.congr_fun «(λ b, φ ∨ b = tt) = inhab.rep h₁»)) choice.spec,
+  have φ ∨ choice h₂ = ff :=
+    eq.transport (eq.symm (eq.congr_fun «(λ b, φ ∨ b = ff) = inhab.rep h₂»)) choice.spec,
+  have φ ∨ choice h₁ ≠ choice h₂ :=
+    or.ind «φ ∨ choice h₁ = tt»
+      (assume φ, or.left «φ»)
+      (assume choice h₁ = tt,
+        or.ind «φ ∨ choice h₂ = ff»
+          (assume φ, or.left «φ»)
+          (assume choice h₂ = ff,
+            or.right (eq.transport (eq.symm «choice h₂ = ff») (eq.transport (eq.symm «choice h₁ = tt») bool.tt_ne_ff)))),
+  or.ind «φ ∨ choice h₁ ≠ choice h₂»
+    (assume φ,
+      or.left «φ»)
+    (assume choice h₁ ≠ choice h₂,
+      or.right (mt «φ → choice h₁ = choice h₂» «choice h₁ ≠ choice h₂»))
+}
 
 -- double negation elimination
 lemma dne (φ : Prop) : ¬¬φ → φ :=

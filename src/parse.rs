@@ -739,6 +739,11 @@ impl<'a> Parser<'a> {
                 self.expect_symbol(")")?;
                 break 'left e;
             }
+            if let Some(_token) = self.expect_symbol_opt("{") {
+                let e = self.subexpr(0)?;
+                self.expect_symbol("}")?;
+                break 'left e;
+            }
             if let Some(_token) = self.expect_symbol_opt("«") {
                 let prop = self.term()?;
                 self.expect_symbol("»")?;
