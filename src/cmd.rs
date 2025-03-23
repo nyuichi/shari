@@ -1723,7 +1723,7 @@ impl Eval {
         for (structure_field, field) in zip(&cmd_structure.fields, &mut fields) {
             match structure_field {
                 StructureField::Const(structure_field) => {
-                    let InstanceField::Def(InstanceDef {
+                    let &mut InstanceField::Def(InstanceDef {
                         name: ref field_name,
                         ref ty,
                         target: _,
@@ -1751,9 +1751,9 @@ impl Eval {
                     num_consts += 1;
                 }
                 StructureField::Axiom(structure_field) => {
-                    let InstanceField::Lemma(InstanceLemma {
+                    let &mut InstanceField::Lemma(InstanceLemma {
                         name: ref field_name,
-                        target,
+                        ref mut target,
                         holes: _,
                         expr: _,
                     }) = field
@@ -2109,10 +2109,10 @@ impl Eval {
         for (structure_field, field) in zip(&cmd_structure.fields, &mut fields) {
             match structure_field {
                 ClassStructureField::Const(structure_field) => {
-                    let ClassInstanceField::Def(ClassInstanceDef {
+                    let &mut ClassInstanceField::Def(ClassInstanceDef {
                         name: ref field_name,
                         ref ty,
-                        target,
+                        ref mut target,
                     }) = field
                     else {
                         bail!("definition expected");
@@ -2130,9 +2130,9 @@ impl Eval {
                     subst.push((*field_name, target.clone()));
                 }
                 ClassStructureField::Axiom(structure_field) => {
-                    let ClassInstanceField::Lemma(ClassInstanceLemma {
+                    let &mut ClassInstanceField::Lemma(ClassInstanceLemma {
                         name: ref field_name,
-                        target,
+                        ref mut target,
                         ref holes,
                         ref mut expr,
                     }) = field
