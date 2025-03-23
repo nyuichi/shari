@@ -3,6 +3,7 @@ name = "shari"
 version = "0.1.0"
 authors = ["Yuichi Nishiwaki <nyuichi@is.s.u-tokyo.ac.jp>"]
 edition = "2021"
+license = "Apache-2.0"
 
 [dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
