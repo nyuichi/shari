@@ -149,7 +149,7 @@ pub struct ConstInfo {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct Nasmespace {
+pub struct Namespace {
     pub type_consts: HashSet<Name>,
     pub consts: HashMap<Name, ConstInfo>,
     pub axioms: HashMap<Name, AxiomInfo>,
@@ -162,7 +162,7 @@ pub struct Nasmespace {
 pub struct Parser<'a> {
     lex: &'a mut Lex,
     tt: &'a TokenTable,
-    ns: &'a Nasmespace,
+    ns: &'a Namespace,
     type_locals: Vec<Name>,
     locals: Vec<Name>,
     holes: Vec<(Name, Type)>,
@@ -172,7 +172,7 @@ impl<'a> Parser<'a> {
     pub fn new(
         lex: &'a mut Lex,
         tt: &'a TokenTable,
-        ns: &'a Nasmespace,
+        ns: &'a Namespace,
         type_variables: Vec<Name>,
     ) -> Self {
         Self {

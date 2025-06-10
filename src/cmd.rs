@@ -5,7 +5,7 @@ use anyhow::bail;
 use crate::{
     elab,
     expr::{self, Expr},
-    parse::{AxiomInfo, ConstInfo, Nasmespace, TokenTable},
+    parse::{AxiomInfo, ConstInfo, Namespace, TokenTable},
     print::{OpTable, Pretty},
     proof::{self, Axiom},
     tt::{
@@ -258,7 +258,7 @@ pub struct ClassInstanceLemma {
 #[derive(Debug, Clone, Default)]
 pub struct Eval {
     pub tt: TokenTable,
-    pub ns: Nasmespace,
+    pub ns: Namespace,
     pub pp: OpTable,
     pub local_type_consts: Vec<Name>,
     pub type_const_table: HashMap<Name, Kind>,
