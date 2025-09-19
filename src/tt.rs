@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::iter::zip;
-use std::sync::atomic::AtomicUsize;
 use std::sync::LazyLock;
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::{mem, slice, vec};
 use thiserror::Error;
@@ -469,6 +469,43 @@ pub struct InstanceGlobal {
     pub args: Vec<Instance>,
 }
 
+impl Display for Instance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Instance::Local(c) => write!(f, "{}", c),
+            Instance::Global(i) => {
+                write!(f, "${}", i.name)?;
+                if !i.ty_args.is_empty() {
+                    write!(f, ".{{")?;
+                    let mut first = true;
+                    for t in &i.ty_args {
+                        if !first {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{t}")?;
+                        first = false;
+                    }
+                    write!(f, "}}")?;
+                }
+                if !i.args.is_empty() {
+                    write!(f, ".[")?;
+                    let mut first = true;
+                    for arg in &i.args {
+                        if !first {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{arg}")?;
+                        first = false;
+                    }
+                    write!(f, "]")?;
+                }
+                Ok(())
+            }
+            Instance::Hole(name) => write!(f, "?{name}"),
+        }
+    }
+}
+
 pub fn mk_instance_local(class: Class) -> Instance {
     Instance::Local(class)
 }
@@ -630,6 +667,18 @@ impl Display for Term {
                         first = false;
                     }
                     write!(f, "}}")?;
+                }
+                if !inner.instances.is_empty() {
+                    write!(f, ".[")?;
+                    let mut first = true;
+                    for i in &inner.instances {
+                        if !first {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{i}")?;
+                        first = false;
+                    }
+                    write!(f, "]")?;
                 }
                 Ok(())
             }

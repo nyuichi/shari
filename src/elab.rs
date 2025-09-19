@@ -10,14 +10,14 @@ use anyhow::{bail, ensure};
 
 use crate::{
     expr::{
-        mk_expr_change, Expr, ExprApp, ExprAssume, ExprAssump, ExprChange, ExprConst, ExprInst,
-        ExprTake,
+        Expr, ExprApp, ExprAssume, ExprAssump, ExprChange, ExprConst, ExprInst, ExprTake,
+        mk_expr_change,
     },
     proof::{self, Axiom},
     tt::{
-        self, mk_const, mk_fresh_type_hole, mk_instance_global, mk_local, mk_type_arrow,
-        mk_type_prop, Class, ClassInstance, ClassType, Const, Instance, InstanceGlobal, Kind,
-        LocalEnv, Name, Parameter, Term, TermAbs, TermApp, TermConst, Type, TypeApp, TypeArrow,
+        self, Class, ClassInstance, ClassType, Const, Instance, InstanceGlobal, Kind, LocalEnv,
+        Name, Parameter, Term, TermAbs, TermApp, TermConst, Type, TypeApp, TypeArrow, mk_const,
+        mk_fresh_type_hole, mk_instance_global, mk_local, mk_type_arrow, mk_type_prop,
     },
 };
 
@@ -543,13 +543,16 @@ impl<'a> Elaborator<'a> {
                 if local_classes.len() != e.instances.len() {
                     bail!("number of class instances mismatch");
                 }
+                let mut instance_subst = vec![];
                 for (instance, local_class) in zip(&e.instances, local_classes) {
                     let mut local_class = local_class.clone();
                     local_class.subst(&type_subst);
                     self.visit_instance(instance, &local_class)?;
+                    instance_subst.push((local_class, instance.clone()));
                 }
                 let mut target = target.clone();
                 target.subst_type(&type_subst);
+                target.subst_instance(&instance_subst);
                 Ok(target)
             }
             Expr::Change(expr) => {
@@ -1149,7 +1152,7 @@ impl<'a> Elaborator<'a> {
         #[cfg(debug_assertions)]
         {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
-            println!("{sp}new instance subst {name}");
+            println!("{sp}new instance subst {name} := {instance}");
         }
 
         self.instance_subst.push((name, instance.clone()));

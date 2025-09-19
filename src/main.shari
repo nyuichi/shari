@@ -44,7 +44,7 @@ Their consistency is established from semantic arguments.
 |----------------------------------------------------|---------------------------------------|
 | intuitionistic higher-order logic (the base logic) | any model of PTS λHOL                 |
 | + fun_ext + prop_ext + auc                         | any topos                             |
-|   + choice                                         |   satisfying internal axiom of choice |
+|   + ac                                             |   satisfying internal axiom of choice |
 |   + epsilon                                        |   in which supports split             |
 |   + inductive types                                |   with NNO                            |
 
@@ -551,6 +551,11 @@ inductive fin.{u} : sub u → Prop
  - choice
  -/
 
+axiom ac.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x)
+
+lemma surjective.split.{u, v} (f : u → v) : surjective f → split f :=
+ac
+
 -- The type of inhabited subsets.
 structure inhab u := {
   const rep : sub u
@@ -569,29 +574,11 @@ uexists.intro
    have inhab.rep c₁ = inhab.rep c₂ := eq.trans (eq.symm «s = inhab.rep c₁») «s = inhab.rep c₂»,
    inhab.ext «inhab.rep c₁ = inhab.rep c₂»)
 
--- The existence of the constant and the axiom state that every type u is a choice type.
-const choice.{u} : inhab u → u
-axiom choice.spec.{u} (x : inhab u) : choice x ∈ inhab.rep x
+def choice.{u} (f : inhab u → u) : Prop := ∀ (x : inhab u), f x ∈ inhab.rep x
 
-lemma ac.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) := {
-  assume ∀ x, ∃ y, R x y,
-  have ∀ x, ∃! (h : inhab v), R x = inhab.rep h :=
-    take (x : u),
-    -- FIXME: the unifier could not synthesize `R x`. Perhaps because it's a partially applied term?
-    @inhab.uabs[R x] «∀ x, ∃ y, R x y»[x],
-  have ∃! (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
-    auc «∀ x, ∃! (h : inhab v), R x = inhab.rep h»,
-  obtain (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
-    uexists.exists «∃! (f : u → inhab v), ∀ x, R x = inhab.rep (f x)»,
-  exists.intro
-    (take (x : u),
-    have inhab.rep (f x) (choice (f x)) :=
-      choice.spec,
-    eq.transport (eq.symm (eq.congr_fun «∀ x, R x = inhab.rep (f x)»[x])) «inhab.rep (f x) (choice (f x))»)
-}
-
-lemma surjective.split.{u, v} (f : u → v) : surjective f → split f :=
-ac
+-- ac holds iff every set has a choice function.
+lemma choice.exists.{u} : ∃ (f : inhab u → u), choice f :=
+ac @inhab.inhabited
 
 -- Diaconescu's argument: ac + prop_ext + fun_ext → em
 --
@@ -604,7 +591,8 @@ lemma em (φ : Prop) : φ ∨ ¬φ := {
   have ∃ b, φ ∨ b = ff := exists.intro (or.right eq.refl),
   obtain (h₁ : inhab bool), (λ b, φ ∨ b = tt) = inhab.rep h₁ := inhab.abs «∃ b, φ ∨ b = tt»,
   obtain (h₂ : inhab bool), (λ b, φ ∨ b = ff) = inhab.rep h₂ := inhab.abs «∃ b, φ ∨ b = ff»,
-  have φ → choice h₁ = choice h₂ :=
+  obtain (c : inhab bool → bool), choice c := choice.exists,
+  have φ → c h₁ = c h₂ :=
     assume φ,
     have (λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff) := fun_ext (
       take (b : bool),
@@ -617,23 +605,23 @@ lemma em (φ : Prop) : φ ∨ ¬φ := {
     have h₁ = h₂ :=
       inhab.ext «inhab.rep h₁ = inhab.rep h₂»,
     eq.congr_arg «h₁ = h₂»,
-  have φ ∨ choice h₁ = tt :=
-    eq.transport (eq.symm (eq.congr_fun «(λ b, φ ∨ b = tt) = inhab.rep h₁»)) choice.spec,
-  have φ ∨ choice h₂ = ff :=
-    eq.transport (eq.symm (eq.congr_fun «(λ b, φ ∨ b = ff) = inhab.rep h₂»)) choice.spec,
-  have φ ∨ choice h₁ ≠ choice h₂ :=
-    or.ind «φ ∨ choice h₁ = tt»
+  have φ ∨ c h₁ = tt :=
+    eq.transport (eq.symm (eq.congr_fun «(λ b, φ ∨ b = tt) = inhab.rep h₁»)) «choice c»[h₁],
+  have φ ∨ c h₂ = ff :=
+    eq.transport (eq.symm (eq.congr_fun «(λ b, φ ∨ b = ff) = inhab.rep h₂»)) «choice c»[h₂],
+  have φ ∨ c h₁ ≠ c h₂ :=
+    or.ind «φ ∨ c h₁ = tt»
       (assume φ, or.left «φ»)
-      (assume choice h₁ = tt,
-        or.ind «φ ∨ choice h₂ = ff»
+      (assume c h₁ = tt,
+        or.ind «φ ∨ c h₂ = ff»
           (assume φ, or.left «φ»)
-          (assume choice h₂ = ff,
-            or.right (eq.transport (eq.symm «choice h₂ = ff») (eq.transport (eq.symm «choice h₁ = tt») bool.tt_ne_ff)))),
-  or.ind «φ ∨ choice h₁ ≠ choice h₂»
+          (assume c h₂ = ff,
+            or.right (eq.transport (eq.symm «c h₂ = ff») (eq.transport (eq.symm «c h₁ = tt») bool.tt_ne_ff)))),
+  or.ind «φ ∨ c h₁ ≠ c h₂»
     (assume φ,
       or.left «φ»)
-    (assume choice h₁ ≠ choice h₂,
-      or.right (mt «φ → choice h₁ = choice h₂» «choice h₁ ≠ choice h₂»))
+    (assume c h₁ ≠ c h₂,
+      or.right (mt «φ → c h₁ = c h₂» «c h₁ ≠ c h₂»))
 }
 
 -- double negation elimination
@@ -792,30 +780,22 @@ exists.intro «φ → P x»
 -- such types that may contain free (term) variables.
 const epsilon.{u} : is_inhabited u → u
 
-structure pointed u := {
-  const pt : u
-}
-
-instance pointed.mk.{u} (x : u) : pointed u := {
-  def pt : u := x
-}
-
--- Essentially same as epsilon, but is more structured.
-def is_inhabited.pointed.{u} (h : is_inhabited u) : pointed u := pointed.mk (epsilon h)
-
 -- Construct external epsilon operator from internal epsilon and internal axiom of choice.
 -- A similar construction is found in arXiv:1603.00822.
+-- The followings are boilerplate. To obtain an object `x` from a proposition `∃ x, ...`, we first define a structure and then
+-- prove its inhabitedness and finally get the term applying the internal epsilon.
 
+-- Step 1. First prove the existence of the some operator.
 lemma some_exists.{u} (h : is_inhabited u) : ∃ (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) :=
 ac @strong_indefinite_description[h]
 
--- The followings are boilerplate. To obtain an object `x` from a proposition `∃ x, ...`, we first define a structure and then
--- prove its inhabitedness and finally get the term applying the internal epsilon.
+-- Step 2. Define a type that contains only terms behaving like the some operator.
 structure Some u := {
   const run : (u → Prop) → u
   axiom spec (P : u → Prop) : (∃ y, P y) → P (run P)
 }
 
+-- Step 3. Prove the inhabitedness of the previously defined type using Step 1.
 instance Some.is_inhabited.{u} (h : is_inhabited u) : is_inhabited (Some u) := {
   lemma inhabited : ∃ (x : Some u), ⊤ :=
   obtain (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) := @some_exists[h],
@@ -823,11 +803,23 @@ instance Some.is_inhabited.{u} (h : is_inhabited u) : is_inhabited (Some u) := {
   @exists.intro[_, this] true.intro
 }
 
-def Some.pt.{u} (h : is_inhabited u) : Some u := pointed.pt (is_inhabited.pointed (Some.is_inhabited h))
+-- Step 4. Use epsilon to curves out the operator. This was what we wanted, the Hilbert epsilon.
+def some.{u} [has (is_inhabited u)] : (u → Prop) → u := Some.run (epsilon (Some.is_inhabited summon))
+lemma some.spec.{u} [has (is_inhabited u)] (P : u → Prop) : (∃ y, P y) → P (some P) := @Some.spec[_, P]
 
--- This is what we wanted, the Hilbert epsilon.
-def some.{u} [has (is_inhabited u)] : (u → Prop) → u := Some.run (Some.pt summon)
-lemma some.spec.{u} [has (is_inhabited u)] (P : u → Prop) : (∃ y, P y) → P (some P) := @Some.spec[Some.pt summon, P]
+
+instance choice.is_inhabited.{u} : is_inhabited (inhab u → u) := {
+  lemma inhabited : ∃ (f : inhab u → u), ⊤ :=
+  obtain (f : inhab u → u), choice f := choice.exists,
+  @exists.intro[_, f] true.intro
+}
+
+class instance choice.has.is_inhabited.{u} : has (is_inhabited (inhab u → u)) := {
+  def summon : is_inhabited (inhab u → u) := choice.is_inhabited
+}
+
+def choose.{u} : inhab u → u := some choice
+lemma choose.spec.{u} : choice choose.{u} := some.spec choice.exists
 
 /-  
  - natural numbers

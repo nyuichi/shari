@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use crate::proof::{
-    self, mk_proof_assump, mk_proof_conv, mk_proof_forall_elim, mk_proof_forall_intro,
-    mk_proof_imp_elim, mk_proof_imp_intro, mk_proof_ref, Axiom, Forall, Imp, Proof,
+    self, Axiom, Forall, Imp, Proof, mk_proof_assump, mk_proof_conv, mk_proof_forall_elim,
+    mk_proof_forall_intro, mk_proof_imp_elim, mk_proof_imp_intro, mk_proof_ref,
 };
 use crate::tt::Instance;
 use crate::tt::{self, Name, Parameter, Term, Type};
@@ -162,16 +162,31 @@ impl std::fmt::Display for Expr {
                 write!(f, "({})[{}]", e.expr, e.arg)
             }
             Expr::Const(e) => {
-                write!(f, "{}.{{", e.name)?;
-                let mut first = true;
-                for t in &e.ty_args {
-                    if !first {
-                        write!(f, ", ")?;
+                write!(f, "{}", e.name)?;
+                if !e.ty_args.is_empty() {
+                    let mut first = true;
+                    for t in &e.ty_args {
+                        if !first {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", t)?;
+                        first = false;
                     }
-                    write!(f, "{}", t)?;
-                    first = false;
+                    write!(f, "}}")?
                 }
-                write!(f, "}}")
+                if !e.instances.is_empty() {
+                    write!(f, ".[")?;
+                    let mut first = true;
+                    for i in &e.instances {
+                        if !first {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", i)?;
+                        first = false;
+                    }
+                    write!(f, "]")?
+                }
+                Ok(())
             }
             Expr::Change(e) => {
                 write!(f, "change {}, {}", e.target, e.expr)
