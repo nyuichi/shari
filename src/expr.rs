@@ -313,7 +313,7 @@ pub struct Env<'a> {
     pub tt_local_env: &'a mut tt::LocalEnv,
 }
 
-impl<'a> Env<'a> {
+impl Env<'_> {
     fn run_help(&mut self, expr: &Expr) -> (Proof, Term) {
         match expr {
             Expr::Assump(expr) => {

@@ -185,7 +185,7 @@ pub struct LocalEnv {
     pub local_axioms: Vec<Term>,
 }
 
-impl<'a> Env<'a> {
+impl Env<'_> {
     // prop is trusted
     pub fn check_prop(
         &self,

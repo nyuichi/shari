@@ -2088,7 +2088,7 @@ pub fn elaborate_term(
     let mut elab = Elaborator::new(proof_env, local_env, vec![]);
 
     let t = elab.visit_term(target)?;
-    let error = Error::Visit(format!("type mismatch"));
+    let error = Error::Visit("type mismatch".to_string());
     elab.type_constraints.push((t, ty.clone(), error));
 
     if let Err(error) = elab.solve() {

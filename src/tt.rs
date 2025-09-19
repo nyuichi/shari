@@ -1554,7 +1554,7 @@ pub struct Env<'a> {
     pub class_instance_table: &'a HashMap<Name, ClassInstance>,
 }
 
-impl<'a> Env<'a> {
+impl Env<'_> {
     pub fn infer_kind(&self, local_env: &LocalEnv, t: &Type) -> Option<Kind> {
         match t {
             Type::Const(name) => Some(self.type_const_table.get(name)?.clone()),

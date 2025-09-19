@@ -381,7 +381,7 @@ iff.intro
 --   const bool.rec.{α} : bool → (Prop → α) → α
 --   def bool.rep : bool → Prop := λ (this : bool), bool.rec.{Prop} this (λ (rep : Prop), rep)
 --   axiom bool.spec.{u} (this : bool) : bool.rep this = ⊤ ∨ bool.rep this = ⊥
---   axiom bool.abs.{u} (rep : Prop) : rep = ⊤ ∨ rep = ⊥ → ∃ this, rep = bool.rep this
+--   axiom bool.abs.{u, α} (rep : Prop) : rep = ⊤ ∨ rep = ⊥ → ∃ this, bool.rec.{α} this = λ (f : Prop → α), f rep
 --   axiom bool.ext.{u} (this₁ this₂ : bool) : bool.rep this₁ = bool.rep this₂ → this₁ = this₂
 --
 -- Of course, bool can be also defined in terms of an inductive type.
@@ -564,6 +564,19 @@ structure inhab u := {
 
 lemma inhab.uabs.{u} (s : sub u) : (∃ x, x ∈ s) → ∃! c, s = inhab.rep c :=
 assume ∃ x, x ∈ s,
+-- TODO: add obtain instance syntax
+--
+--   obtain instance c : inhab u := {
+--     def rep : sub u := s
+--     lemma inhabited : ∃ x, x ∈ rep := «∃ x, x ∈ s»
+--   },
+--
+-- which is desugared to
+--
+--   let c.rep : sub u := s,
+--   have c.inhabited : ∃ x, x ∈ c.rep := «∃ x, x ∈ s»,
+--   obtain (c : bool), inhab.rec c = λ (f : sub u → α), f c.rep := @inhab.abs[c.rep] c.inhabited,
+--
 obtain (c : inhab u), s = inhab.rep c := inhab.abs «∃ x, x ∈ s»,
 uexists.intro
   (exists.intro «s = inhab.rep c»)
@@ -821,7 +834,7 @@ class instance choice.has.is_inhabited.{u} : has (is_inhabited (inhab u → u)) 
 def choose.{u} : inhab u → u := some choice
 lemma choose.spec.{u} : choice choose.{u} := some.spec choice.exists
 
-/-  
+/-
  - natural numbers
  -/
 
