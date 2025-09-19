@@ -589,7 +589,7 @@ uexists.intro
 
 def choice.{u} (f : inhab u → u) : Prop := ∀ (x : inhab u), f x ∈ inhab.rep x
 
--- ac holds iff every set has a choice function.
+-- ac holds iff every type has a choice function.
 lemma choice.exists.{u} : ∃ (f : inhab u → u), choice f :=
 ac @inhab.inhabited
 
@@ -761,6 +761,7 @@ exists.intro «φ → P x»
 --
 -- Note we do not have an object-level function assigning for each type u the choice function,
 -- which is strictly stronger than our choice and would imply the axiom of choice.
+-- (Such a function is sometimes referred to as a _global choice function_.)
 -- For the details of this direction see Lean's standard library.
 --
 -- In the presence of dependent products, this operator corresponds to the law of double negation:
@@ -821,18 +822,44 @@ def some.{u} [has (is_inhabited u)] : (u → Prop) → u := Some.run (epsilon (S
 lemma some.spec.{u} [has (is_inhabited u)] (P : u → Prop) : (∃ y, P y) → P (some P) := @Some.spec[_, P]
 
 
-instance choice.is_inhabited.{u} : is_inhabited (inhab u → u) := {
+instance choose.is_inhabited.{u} : is_inhabited (inhab u → u) := {
   lemma inhabited : ∃ (f : inhab u → u), ⊤ :=
   obtain (f : inhab u → u), choice f := choice.exists,
   @exists.intro[_, f] true.intro
 }
 
-class instance choice.has.is_inhabited.{u} : has (is_inhabited (inhab u → u)) := {
-  def summon : is_inhabited (inhab u → u) := choice.is_inhabited
+class instance choose.has.is_inhabited.{u} : has (is_inhabited (inhab u → u)) := {
+  def summon : is_inhabited (inhab u → u) := choose.is_inhabited
 }
 
+-- External axiom of choice
 def choose.{u} : inhab u → u := some choice
 lemma choose.spec.{u} : choice choose.{u} := some.spec choice.exists
+
+instance is_inhabited.inhab.{u} (h : is_inhabited u) : inhab u := {
+  def rep : sub u := λ x, ⊤
+  lemma inhabited : ∃ x, x ∈ rep := @is_inhabited.inhabited[h]
+}
+
+def epsilon₂.{u} : is_inhabited u → u := λ h, choose (is_inhabited.inhab h)
+
+lemma ac₂.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) := {
+  assume ∀ x, ∃ y, R x y,
+  have ∀ x, ∃! (h : inhab v), R x = inhab.rep h :=
+    take (x : u),
+    -- FIXME: the unifier could not synthesize `R x`. Perhaps because it's a partially applied term?
+    @inhab.uabs[R x] «∀ x, ∃ y, R x y»[x],
+  have ∃! (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
+    auc «∀ x, ∃! (h : inhab v), R x = inhab.rep h»,
+  obtain (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
+    uexists.exists «∃! (f : u → inhab v), ∀ x, R x = inhab.rep (f x)»,
+  exists.intro
+    (take (x : u),
+    have inhab.rep (f x) (choose (f x)) :=
+      @choose.spec[f x],
+    eq.transport (eq.symm (eq.congr_fun «∀ x, R x = inhab.rep (f x)»[x])) «inhab.rep (f x) (choose (f x))»)
+}
+
 
 /-
  - natural numbers
