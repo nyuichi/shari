@@ -45,7 +45,7 @@ Their consistency is established from semantic arguments.
 | intuitionistic higher-order logic (the base logic) | any model of PTS λHOL                 |
 | + fun_ext + prop_ext + auc                         | any topos                             |
 |   + ac                                             |   satisfying internal axiom of choice |
-|   + epsilon                                        |   in which supports split             |
+|   + indefinite_description                         |   in which supports split             |
 |   + inductive types                                |   with NNO                            |
 
 (For those who are familiar with topos theory:
@@ -232,8 +232,10 @@ def has_le.gt.{u} [has_le u] (x y : u) : Prop := y < x
 
 -- Three axioms of topos (cf. [Introduction to CATEGORY THEORY and CATEGORICAL LOGIC, T. Streicher, '03])
 axiom prop_ext (φ ψ : Prop) : (φ ↔ ψ) → φ = ψ
+
 -- The fact that this axiom holds means every topos is always internally well-pointed.
 axiom fun_ext.{u, v} (f₁ f₂ : u → v) : (∀ x, f₁ x = f₂ x) → f₁ = f₂
+
 axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) → ∃! f, ∀ x, R x (f x)
 
 lemma eq.transport.{u} (m₁ m₂ : u) (P : u → Prop) : m₁ = m₂ → P m₁ → P m₂ := eq.ind
@@ -391,6 +393,10 @@ structure is_singleton u := {
 -- For a unary predicate φ(x), we can extract the unique element satisfying φ by first passing through the
 -- comprehension type t := { x | φ(x) }.
 const definite_description.{u} : is_singleton u → u
+
+-- The followings are boilerplate.
+-- To obtain an object `x` from a proposition `∃! x, ...`, we first define a structure and then
+-- prove its unique inhabitedness and finally get the term applying definite description.
 
 structure is_empty u := {
   axiom empty : ¬∃ (x : u), ⊤
@@ -777,6 +783,12 @@ or.ind em
 
 -- A type operator sending an inhabited type to its propositional truncation.
 -- This type has several names in the literature, such as support type, bracket type, or propositional truncation.
+--
+-- In the presence of dependent products, this operator corresponds to the law of double negation:
+--
+--   is_inhabited u ≅ Π (p : Prop), (u → El(p)) → El(p)
+--
+-- where we assume Prop is a Tarski universe.
 structure is_inhabited u := {
   axiom inhabited : ∃ (a : u), ⊤
 }
@@ -806,72 +818,13 @@ obtain (x : u), (∃ y, P y) → P x := @strong_indefinite_description[h, P],
 have φ → P x := imp.trans «φ → ∃ x, P x» «(∃ y, P y) → P x»,
 exists.intro «φ → P x»
 
-/-
- - epsilon
- -/
-
--- internal global choice operator
--- 
--- Introducing this constant restricts the class of models to toposes whose supports split.
--- Postulating split supports together with the internal axiom of choice, our logic becomes
--- precisely an internal logic of toposes satisfying the _external_ axiom of choice.
---
---    internal axiom of choice + split supports = external axiom of choice
---
--- Note we do not have an object-level function assigning for each type u the choice function,
--- which is strictly stronger than our choice and would imply the axiom of choice.
--- (Such a function is sometimes referred to as a _global choice function_.)
--- For the details of this direction see Lean's standard library.
---
--- In the presence of dependent products, this operator corresponds to the law of double negation:
---
---   is_inhabited u ≅ Π (p : Prop), (u → El(p)) → El(p)
---
--- where we assume Prop is a Tarski universe.
---
--- One can interpret this function in Kripke-Joyal semantics as follows:
--- whenever one proves ⊢ ∃ (x : u), ⊤, hence ⊩ ∃ (x : u), ⊤, which in general
--- means there exist an object V, V → 1 epi and V → u, one can safely assume V was 1.
---
--- Assuming IAC, the following are equivalent. E is a topos.
--- (a) Supports split in E.
--- (b) Supports split in E/X for each X ∈ E.
---
--- Proof:
---   For (a) => (b), take any object f ∈ E/X, where f : A → X in E.
---   f has a split support iff there exists a morphism from supp f to f.
---   We want to construct such a morphism.
---   supp f in E/X is given by the inclusion i : im f → X in E.
---   By external AC (which follows from IAC + SS) of C, we have a section
---   s : im f → A of an epi q : A → im f.
---   Since f s = i q s = i = supp f, s is a morphism in E/X from supp f to f.
--- QED.
---
--- This lemma is very important because the fact the properties of the ambient category are
--- inherited to its slices corresponds to that introducing a variable does not change the logic.
--- If we add locally defined types in the future, this lemma justifies the use of epsilon applying to
--- such types that may contain free (term) variables.
-const epsilon.{u} : is_inhabited u → u
-
--- Indefinite description
---
--- This operation is strictly weaker than epsilon.
--- When ⊢ ∃ (a : A), ⊤ holds, indefinite_description yields ⊢ indefinite_description : A,
--- which only requires split supports for those A with |A| ≅ 1. Moreover, it is not stable under slices.
-def indefinite_description.{u} [has (is_inhabited u)] : u := epsilon summon
-
--- Construct external epsilon operator from internal epsilon and internal axiom of choice.
--- A similar construction is found in arXiv:1603.00822.
--- The followings are boilerplate. To obtain an object `x` from a proposition `∃ x, ...`, we first define a structure and then
--- prove its inhabitedness and finally get the term applying the internal epsilon.
-
--- Step 1. First prove the existence of the some operator.
-lemma some_exists.{u} (h : is_inhabited u) : ∃ (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) :=
+-- This is equivalent to axiom of choice.
+lemma some.exists.{u} (h : is_inhabited u) : ∃ (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) :=
 ac @strong_indefinite_description[h]
 
 lemma ac₃.{u, v} (h : is_inhabited v) (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) :=
 assume ∀ x, ∃ y, R x y,
-obtain (ε : (v → Prop) → v), ∀ P, (∃ y, P y) → P (ε P) := @some_exists[h],
+obtain (ε : (v → Prop) → v), ∀ P, (∃ y, P y) → P (ε P) := @some.exists[h],
 @exists.intro[_, (λ x, ε (R x))]
   (take (x : u),
    have ∃ y, R x y := «∀ x, ∃ y, R x y»[_],
@@ -920,24 +873,66 @@ lemma em₂ (φ : Prop) : φ ∨ ¬φ := {
       or.right (mt «φ → c h₁ = c h₂» «c h₁ ≠ c h₂»))
 }
 
--- Step 2. Define a type that contains only terms behaving like the some operator.
+/-
+ - Indefinite description
+ -/
+
+-- Introducing this constant restricts the class of models to toposes whose supports split.
+-- Postulating split supports together with the internal axiom of choice, our logic becomes
+-- precisely an internal logic of toposes satisfying the _external_ axiom of choice.
+--
+--    internal axiom of choice + split supports = external axiom of choice
+--
+-- Assuming IAC, the following are equivalent. E is a topos.
+-- (a) Supports split in E.
+-- (b) Supports split in E/X for each X ∈ E.
+--
+-- Proof:
+--   For (a) => (b), take any object f ∈ E/X, where f : A → X in E.
+--   f has a split support iff there exists a morphism from supp f to f.
+--   We want to construct such a morphism.
+--   supp f in E/X is given by the inclusion i : im f → X in E.
+--   By external AC (which follows from IAC + SS) of C, we have a section
+--   s : im f → A of an epi q : A → im f.
+--   Since f s = i q s = i = supp f, s is a morphism in E/X from supp f to f.
+-- QED.
+--
+-- This lemma is very important because the fact the properties of the ambient category are
+-- inherited to its slices corresponds to that introducing a variable does not change the logic.
+-- If we add locally defined types in the future, this lemma justifies the use of indefinite_description
+-- applying to such types that may contain free (term) variables.
+const indefinite_description.{u} : is_inhabited u → u
+
+/-
+ -  Hilbert's epsilon
+ -/
+
+-- Construct Hilbert's epsilon from (internal) axiom of choice and indefinite description.
+-- A similar construction is found in arXiv:1603.00822.
+
 structure Some u := {
   const run : (u → Prop) → u
   axiom spec (P : u → Prop) : (∃ y, P y) → P (run P)
 }
 
--- Step 3. Prove the inhabitedness of the previously defined type using Step 1.
 instance Some.is_inhabited.{u} (h : is_inhabited u) : is_inhabited (Some u) := {
   lemma inhabited : ∃ (x : Some u), ⊤ :=
-  obtain (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) := @some_exists[h],
+  obtain (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) := @some.exists[h],
   obtain (this : Some u), ε = Some.run this := @Some.abs[ε] «∀ P, (∃ y, P y) → P (ε P)»,
   @exists.intro[_, this] true.intro
 }
 
--- Step 4. Use epsilon to carve out the operator. This was what we wanted, the Hilbert epsilon.
-def some.{u} [has (is_inhabited u)] : (u → Prop) → u := Some.run (epsilon (Some.is_inhabited summon))
+def some.{u} [has (is_inhabited u)] : (u → Prop) → u := Some.run (indefinite_description (Some.is_inhabited summon))
 lemma some.spec.{u} [has (is_inhabited u)] (P : u → Prop) : (∃ y, P y) → P (some P) := @Some.spec[_, P]
 
+/-
+ - Global choice
+ -/
+
+-- The global choice operator is an object-level function assigning for each type u the choice function.
+-- This operator corresponds to external axiom of choice.
+-- We could postulate this operator first and then derive axiom of choice and indefinite description,
+-- but our choice is was to use two weaker primitives and combine them to construct the stronger operator.
 
 instance global_choice.is_inhabited.{u} : is_inhabited (inhab u → u) := {
   lemma inhabited : ∃ (f : inhab u → u), ⊤ :=
@@ -949,7 +944,6 @@ class instance global_choice.has.is_inhabited.{u} : has (is_inhabited (inhab u �
   def summon : is_inhabited (inhab u → u) := global_choice.is_inhabited
 }
 
--- External axiom of choice
 def global_choice.{u} : inhab u → u := some choice
 lemma global_choice.spec.{u} : choice global_choice.{u} := some.spec choice.exists
 
