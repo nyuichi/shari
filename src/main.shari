@@ -390,8 +390,9 @@ structure is_singleton u := {
 -- For a unary predicate φ(x), we can extract the unique element satisfying φ by first passing through the
 -- comprehension type t := { x | φ(x) }.
 --
--- Note that indefinite_description is not an operation allowed in every topos.
-const definite_description.{u} [has (is_singleton u)] : u
+-- We call it "global" because it can only be used when the unique existence can be proved without
+-- any assumptions. This is strictly weaker than the local version.
+const global_definite_description.{u} [has (is_singleton u)] : u
 
 structure is_empty u := {
   axiom empty : ¬∃ (x : u), ⊤
@@ -428,7 +429,7 @@ class instance EmptyFunction.has.is_singleton.{u, v} [has (is_empty u)] : has (i
   def summon : is_singleton (u → v) := EmptyFunction.is_singleton
 }
 
-def empty_function.{u, v} [has (is_empty u)] : u → v := definite_description
+def empty_function.{u, v} [has (is_empty u)] : u → v := global_definite_description
 
 
 -- The type of decidable propositions.
