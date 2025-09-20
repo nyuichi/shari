@@ -379,20 +379,18 @@ structure is_singleton u := {
 
 -- Definite description
 --
--- This operation is permitted in any topos.
+-- This construct exists in any topos.
 -- Proof:
---   Suppose ∃! (a : t), ⊤ holds. Because ∃ (a : t), ⊤ implies A → 1 is epi, the i that appears in the image
---   factorisation i ∘ p = ! is an isomorphism |t| ≅ 1.
---   Take arbitrary x, y : u → t. By uniqueness we obtain x = y, hence t → 1 is mono. Therefore the p obtained
---   from the image factorisation i ∘ p = ! is an isomorphism t ≅ |t|.
---   Consequently there is a unique arrow 1 → 1 ≅ t.
+--   Let U := { * : 1 | ∃! (x : A), ⊤ }.
+--   We prove that there uniquely exists a morphism s : U → A.
+--   By definition U ⊩ ∃! (x : A), ⊤.
+--   By existence, there exist an epi z : V ->> U and a morphism a : V -> A.
+--   Since z is regular, we have a pair p₁,p₂ : V ×[U] V → V such that z = coeq(p₁,p₂).
+--   By uniqueness, a p₁ = a p₂. By the universality of coeuqlizers, we obtain s : U → A.
 --
 -- For a unary predicate φ(x), we can extract the unique element satisfying φ by first passing through the
 -- comprehension type t := { x | φ(x) }.
---
--- We call it "global" because it can only be used when the unique existence can be proved without
--- any assumptions. This is strictly weaker than the local version.
-const global_definite_description.{u} [has (is_singleton u)] : u
+const definite_description.{u} : is_singleton u → u
 
 structure is_empty u := {
   axiom empty : ¬∃ (x : u), ⊤
@@ -429,7 +427,7 @@ class instance EmptyFunction.has.is_singleton.{u, v} [has (is_empty u)] : has (i
   def summon : is_singleton (u → v) := EmptyFunction.is_singleton
 }
 
-def empty_function.{u, v} [has (is_empty u)] : u → v := global_definite_description
+def empty_function.{u, v} [has (is_empty u)] : u → v := definite_description summon
 
 
 -- The type of decidable propositions.
