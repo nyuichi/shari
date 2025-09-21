@@ -43,7 +43,7 @@ Their consistency is established from semantic arguments.
 | logic                                              | models                                |
 |----------------------------------------------------|---------------------------------------|
 | intuitionistic higher-order logic (the base logic) | any model of PTS λHOL                 |
-| + fun_ext + prop_ext + auc                         | any topos                             |
+| + fun_ext + prop_ext + auc + definite_description  | any topos                             |
 |   + ac                                             |   satisfying internal axiom of choice |
 |   + indefinite_description                         |   in which supports split             |
 |   + inductive types                                |   with NNO                            |
