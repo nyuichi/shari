@@ -1641,75 +1641,97 @@ pub struct Env<'a> {
 
 impl Env<'_> {
     // TODO: infer_foo と check_foo は不整合を見つけたらすぐ panic して良い。
-    pub fn infer_kind(&self, local_env: &LocalEnv, t: &Type) -> Option<Kind> {
+    pub fn infer_kind(&self, local_env: &LocalEnv, t: &Type) -> Kind {
         match t {
-            Type::Const(name) => Some(self.type_const_table.get(&name.name)?.clone()),
+            Type::Const(name) => self
+                .type_const_table
+                .get(&name.name)
+                .unwrap_or_else(|| panic!("unknown type constant: {:?}", name.name))
+                .clone(),
             Type::Arrow(inner) => {
-                if !self.check_kind(local_env, &inner.dom, Kind::base()) {
-                    return None;
+                let dom_kind = self.infer_kind(local_env, &inner.dom);
+                if dom_kind != Kind::base() {
+                    panic!(
+                        "arrow domain must have base kind, but got {:?} for {:?}",
+                        dom_kind, inner.dom
+                    );
                 }
-                if !self.check_kind(local_env, &inner.cod, Kind::base()) {
-                    return None;
+                let cod_kind = self.infer_kind(local_env, &inner.cod);
+                if cod_kind != Kind::base() {
+                    panic!(
+                        "arrow codomain must have base kind, but got {:?} for {:?}",
+                        cod_kind, inner.cod
+                    );
                 }
-                Some(Kind::base())
+                Kind::base()
             }
             Type::App(inner) => {
-                let fun_kind = self.infer_kind(local_env, &inner.fun)?;
+                let fun_kind = self.infer_kind(local_env, &inner.fun);
                 if fun_kind.0 == 0 {
-                    return None;
+                    panic!("cannot apply a term of base kind: {:?}", inner.fun);
                 }
-                if !self.check_kind(local_env, &inner.arg, Kind::base()) {
-                    return None;
+                let arg_kind = self.infer_kind(local_env, &inner.arg);
+                if arg_kind != Kind::base() {
+                    panic!(
+                        "type application argument must have base kind, but got {:?} for {:?}",
+                        arg_kind, inner.arg
+                    );
                 }
-                Some(Kind(fun_kind.0 - 1))
+                Kind(fun_kind.0 - 1)
             }
             Type::Local(x) => {
                 for local_type in &local_env.local_types {
                     if *local_type == x.name {
-                        return Some(Kind::base());
+                        return Kind::base();
                     }
                 }
-                None
+                panic!("unbound local type: {:?}", x.name);
             }
-            Type::Hole(_) => None,
+            Type::Hole(_) => panic!("cannot infer kind of a hole"),
         }
     }
 
-    pub fn check_kind(&self, local_env: &LocalEnv, t: &Type, kind: Kind) -> bool {
-        let Some(k) = self.infer_kind(local_env, t) else {
-            return false;
-        };
-        k == kind
+    pub fn check_kind(&self, local_env: &LocalEnv, t: &Type, kind: Kind) {
+        let inferred = self.infer_kind(local_env, t);
+        if inferred != kind {
+            panic!(
+                "kind mismatch: expected {:?}, got {:?} for type {:?}",
+                kind, inferred, t
+            );
+        }
     }
 
-    pub fn is_wft(&self, local_env: &LocalEnv, t: &Type) -> bool {
-        self.check_kind(local_env, t, Kind::base())
+    pub fn is_wft(&self, local_env: &LocalEnv, t: &Type) {
+        self.check_kind(local_env, t, Kind::base());
     }
 
-    pub fn is_wfc(&self, local_env: &LocalEnv, c: &Class) -> bool {
-        let Some(class_type) = self.class_predicate_table.get(&c.name) else {
-            return false;
-        };
+    pub fn is_wfc(&self, local_env: &LocalEnv, c: &Class) {
+        let class_type = self
+            .class_predicate_table
+            .get(&c.name)
+            .unwrap_or_else(|| panic!("unknown class predicate: {:?}", c.name));
         if class_type.arity != c.args.len() {
-            return false;
+            panic!(
+                "class {:?} expects {} arguments but got {}",
+                c.name,
+                class_type.arity,
+                c.args.len()
+            );
         }
         for arg in &c.args {
-            if !self.is_wft(local_env, arg) {
-                return false;
-            }
+            self.is_wft(local_env, arg);
         }
-        true
     }
 
-    pub fn infer_class(&self, local_env: &LocalEnv, i: &Instance) -> Option<Class> {
+    pub fn infer_class(&self, local_env: &LocalEnv, i: &Instance) -> Class {
         match i {
             Instance::Local(i) => {
                 for local_class in &local_env.local_classes {
                     if local_class == i {
-                        return Some(i.clone());
+                        return i.clone();
                     }
                 }
-                None
+                panic!("unknown local class instance: {:?}", i);
             }
             Instance::Global(i) => {
                 let InstanceGlobal {
@@ -1722,52 +1744,59 @@ impl Env<'_> {
                     local_classes,
                     target,
                     method_table: _,
-                } = self.class_instance_table.get(name)?;
+                } = self
+                    .class_instance_table
+                    .get(name)
+                    .unwrap_or_else(|| panic!("unknown class instance: {:?}", name));
                 if local_types.len() != ty_args.len() {
-                    return None;
+                    panic!(
+                        "class instance {:?} expects {} type arguments but got {}",
+                        name,
+                        local_types.len(),
+                        ty_args.len()
+                    );
                 }
                 for ty_arg in ty_args {
-                    if !self.is_wft(local_env, ty_arg) {
-                        return None;
-                    }
+                    self.is_wft(local_env, ty_arg);
                 }
                 let mut type_subst = vec![];
                 for (&x, t) in zip(local_types, ty_args) {
                     type_subst.push((x, t.clone()));
                 }
                 if local_classes.len() != args.len() {
-                    return None;
+                    panic!(
+                        "class instance {:?} expects {} class arguments but got {}",
+                        name,
+                        local_classes.len(),
+                        args.len()
+                    );
                 }
                 for (local_class, arg) in zip(local_classes, args) {
                     let mut local_class = local_class.clone();
                     local_class.subst(&type_subst);
-                    if !self.check_class(local_env, arg, &local_class) {
-                        return None;
-                    }
+                    self.check_class(local_env, arg, &local_class);
                 }
                 let mut target = target.clone();
                 target.subst(&type_subst);
-                Some(target)
+                target
             }
-            Instance::Hole(_) => None,
+            Instance::Hole(_) => panic!("cannot infer class of a hole"),
         }
     }
 
     // t is trusted
-    pub fn check_class(&self, local_env: &LocalEnv, i: &Instance, class: &Class) -> bool {
-        let Some(c) = self.infer_class(local_env, i) else {
-            return false;
-        };
-        c == *class
+    pub fn check_class(&self, local_env: &LocalEnv, i: &Instance, class: &Class) {
+        let inferred = self.infer_class(local_env, i);
+        if inferred != *class {
+            panic!("class mismatch: expected {:?}, got {:?}", class, inferred);
+        }
     }
 
-    pub fn infer_type(&self, local_env: &mut LocalEnv, m: &Term) -> Option<Type> {
+    pub fn infer_type(&self, local_env: &mut LocalEnv, m: &Term) -> Type {
         match m {
-            Term::Var(_) => None,
+            Term::Var(_) => panic!("cannot infer type of a raw variable"),
             Term::Abs(m) => {
-                if !self.is_wft(local_env, &m.binder_type) {
-                    return None;
-                }
+                self.is_wft(local_env, &m.binder_type);
                 let x = Parameter {
                     name: Name::fresh_from(m.binder_name),
                     ty: m.binder_type.clone(),
@@ -1775,155 +1804,167 @@ impl Env<'_> {
                 let mut n = m.body.clone();
                 n.open(&mk_local(x.name));
                 local_env.locals.push(x);
-                let target = self.infer_type(local_env, &n)?;
+                let target = self.infer_type(local_env, &n);
                 let x = local_env.locals.pop().unwrap();
-                Some(mk_type_arrow(x.ty, target))
+                mk_type_arrow(x.ty, target)
             }
             Term::App(m) => {
-                let fun_ty = self.infer_type(local_env, &m.fun)?;
+                let fun_ty = self.infer_type(local_env, &m.fun);
                 match fun_ty {
                     Type::Arrow(fun_ty) => {
-                        if !self.check_type(local_env, &m.arg, &fun_ty.dom) {
-                            return None;
-                        }
-                        Some(fun_ty.cod.clone())
+                        self.check_type(local_env, &m.arg, &fun_ty.dom);
+                        fun_ty.cod.clone()
                     }
-                    _ => None,
+                    _ => panic!(
+                        "expected a function type but got {:?} for term {:?}",
+                        fun_ty, m.fun
+                    ),
                 }
             }
             Term::Local(inner) => {
                 for y in local_env.locals.iter().rev() {
                     if inner.name == y.name {
-                        return Some(y.ty.clone());
+                        return y.ty.clone();
                     }
                 }
-                None
+                panic!("unbound local term: {:?}", inner.name);
             }
             Term::Const(m) => {
                 let Const {
                     local_types,
                     local_classes,
                     ty,
-                } = self.const_table.get(&m.name)?;
+                } = self
+                    .const_table
+                    .get(&m.name)
+                    .unwrap_or_else(|| panic!("unknown constant: {:?}", m.name));
                 if local_types.len() != m.ty_args.len() {
-                    return None;
+                    panic!(
+                        "constant {:?} expects {} type arguments but got {}",
+                        m.name,
+                        local_types.len(),
+                        m.ty_args.len()
+                    );
                 }
                 for ty_arg in &m.ty_args {
-                    if !self.is_wft(local_env, ty_arg) {
-                        return None;
-                    }
+                    self.is_wft(local_env, ty_arg);
                 }
                 let mut type_subst = vec![];
                 for (&x, t) in zip(local_types, &m.ty_args) {
                     type_subst.push((x, t.clone()));
                 }
                 if local_classes.len() != m.instances.len() {
-                    return None;
+                    panic!(
+                        "constant {:?} expects {} class arguments but got {}",
+                        m.name,
+                        local_classes.len(),
+                        m.instances.len()
+                    );
                 }
                 for (local_class, instance) in zip(local_classes, &m.instances) {
                     let mut local_class = local_class.clone();
                     local_class.subst(&type_subst);
-                    if !self.is_wfc(local_env, &local_class) {
-                        return None;
-                    }
-                    if !self.check_class(local_env, instance, &local_class) {
-                        return None;
-                    }
+                    self.is_wfc(local_env, &local_class);
+                    self.check_class(local_env, instance, &local_class);
                 }
                 let mut ty = ty.clone();
                 ty.subst(&type_subst);
-                Some(ty)
+                ty
             }
-            Term::Hole(_) => None,
+            Term::Hole(_) => panic!("cannot infer type of a hole"),
         }
     }
 
-    pub fn check_type(&self, local_env: &mut LocalEnv, m: &Term, target: &Type) -> bool {
-        let Some(t) = self.infer_type(local_env, m) else {
-            return false;
-        };
-        t == *target
+    pub fn check_type(&self, local_env: &mut LocalEnv, m: &Term, target: &Type) {
+        let inferred = self.infer_type(local_env, m);
+        if inferred != *target {
+            panic!(
+                "type mismatch: expected {:?}, got {:?} for term {:?}",
+                target, inferred, m
+            );
+        }
     }
 
-    pub fn is_wff(&self, local_env: &mut LocalEnv, m: &Term) -> bool {
-        self.check_type(local_env, m, &mk_type_prop())
+    pub fn is_wff(&self, local_env: &mut LocalEnv, m: &Term) {
+        self.check_type(local_env, m, &mk_type_prop());
     }
 
-    pub fn infer_conv(&self, local_env: &mut LocalEnv, path: &Path) -> Option<Conv> {
+    pub fn infer_conv(&self, local_env: &mut LocalEnv, path: &Path) -> Conv {
         match path {
             Path::Refl(m) => {
-                let _ty = self.infer_type(local_env, m)?;
-                Some(Conv {
+                let _ty = self.infer_type(local_env, m);
+                Conv {
                     left: m.clone(),
                     right: m.clone(),
-                })
+                }
             }
             Path::Symm(path) => {
-                let h = self.infer_conv(local_env, path)?;
-                Some(Conv {
+                let h = self.infer_conv(local_env, path);
+                Conv {
                     left: h.right,
                     right: h.left,
-                })
+                }
             }
             Path::Trans(path) => {
-                let h1 = self.infer_conv(local_env, &path.0)?;
-                let h2 = self.infer_conv(local_env, &path.1)?;
+                let h1 = self.infer_conv(local_env, &path.0);
+                let h2 = self.infer_conv(local_env, &path.1);
                 if !h1.right.alpha_eq(&h2.left) {
-                    return None;
+                    panic!("transitivity mismatch: {:?} ≠ {:?}", h1.right, h2.left);
                 }
                 // h1.right == h2.left means the types in the both sides match.
-                Some(Conv {
+                Conv {
                     left: h1.left,
                     right: h2.right,
-                })
+                }
             }
             Path::CongrApp(path) => {
-                let mut h1 = self.infer_conv(local_env, &path.0)?;
-                let h2 = self.infer_conv(local_env, &path.1)?;
+                let mut h1 = self.infer_conv(local_env, &path.0);
+                let h2 = self.infer_conv(local_env, &path.1);
                 h1.left.apply([h2.left]);
                 h1.right.apply([h2.right]);
-                let _ty = self.infer_type(local_env, &h1.left)?;
-                Some(h1)
+                let _ty = self.infer_type(local_env, &h1.left);
+                h1
             }
             Path::CongrAbs(path) => {
-                if !self.is_wft(local_env, &path.1) {
-                    return None;
-                }
+                self.is_wft(local_env, &path.1);
                 local_env.locals.push(Parameter {
                     name: path.0,
                     ty: path.1.clone(),
                 });
-                let mut h = self.infer_conv(local_env, &path.2)?;
+                let mut h = self.infer_conv(local_env, &path.2);
                 let x = local_env.locals.pop().unwrap();
                 h.left.abs(slice::from_ref(&x));
                 h.right.abs(slice::from_ref(&x));
-                Some(h)
+                h
             }
             Path::Beta(m) => {
-                let _ty = self.infer_type(local_env, m)?;
+                let _ty = self.infer_type(local_env, m);
                 let left = m.clone();
                 let Term::App(m) = m else {
-                    return None;
+                    panic!("beta reduction expects an application: {:?}", m);
                 };
                 let Term::Abs(fun) = &m.fun else {
-                    return None;
+                    panic!("beta reduction expects an abstraction: {:?}", m.fun);
                 };
                 let mut right = fun.body.clone();
                 right.open(&m.arg);
-                Some(Conv { left, right })
+                Conv { left, right }
             }
             Path::Delta(m) => {
-                let _ty = self.infer_type(local_env, m)?;
+                let _ty = self.infer_type(local_env, m);
                 let left = m.clone();
                 let Term::Const(m) = m else {
-                    return None;
+                    panic!("delta reduction expects a constant: {:?}", m);
                 };
                 let Delta {
                     local_types,
                     local_classes,
                     target,
                     height: _,
-                } = self.delta_table.get(&m.name)?;
+                } = self
+                    .delta_table
+                    .get(&m.name)
+                    .unwrap_or_else(|| panic!("unknown delta definition: {:?}", m.name));
                 let mut type_subst = vec![];
                 for (&x, t) in zip(local_types, &m.ty_args) {
                     type_subst.push((x, t.clone()));
@@ -1937,22 +1978,28 @@ impl Env<'_> {
                 let mut target = target.clone();
                 target.subst_type(&type_subst);
                 target.subst_instance(&instance_subst);
-                Some(Conv {
+                Conv {
                     left,
                     right: target,
-                })
+                }
             }
             Path::Kappa(m) => {
-                let _ty = self.infer_type(local_env, m)?;
+                let _ty = self.infer_type(local_env, m);
                 let left = m.clone();
                 let Term::Const(n) = m else {
-                    return None;
+                    panic!("kappa reduction expects a constant: {:?}", m);
                 };
                 if n.instances.is_empty() {
-                    return None;
+                    panic!(
+                        "kappa reduction expects at least one instance for {:?}",
+                        n.name
+                    );
                 }
                 let Instance::Global(recv) = &n.instances[0] else {
-                    return None;
+                    panic!(
+                        "kappa reduction expects a global receiver instance for {:?}",
+                        n.name
+                    );
                 };
                 let InstanceGlobal {
                     name,
@@ -1966,8 +2013,13 @@ impl Env<'_> {
                     local_classes,
                     target: _,
                     method_table,
-                } = self.class_instance_table.get(name)?;
-                let target = method_table.get(&n.name)?;
+                } = self
+                    .class_instance_table
+                    .get(name)
+                    .unwrap_or_else(|| panic!("unknown class instance: {:?}", name));
+                let target = method_table.get(&n.name).unwrap_or_else(|| {
+                    panic!("missing method {:?} on instance {:?}", n.name, name)
+                });
                 let mut type_subst = vec![];
                 for (&x, t) in zip(local_types, ty_args) {
                     type_subst.push((x, t.clone()));
@@ -1981,10 +2033,10 @@ impl Env<'_> {
                 let mut target = target.clone();
                 target.subst_type(&type_subst);
                 target.subst_instance(&instance_subst);
-                Some(Conv {
+                Conv {
                     left,
                     right: target,
-                })
+                }
             }
         }
     }
