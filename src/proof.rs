@@ -197,11 +197,11 @@ impl Env<'_> {
         local_env: &mut LocalEnv,
         h: &Proof,
         prop: &Term,
-    ) -> bool {
-        let Some(p) = self.infer_prop(tt_local_env, local_env, h) else {
-            return false;
-        };
-        p.alpha_eq(prop)
+    ) {
+        let inferred = self.infer_prop(tt_local_env, local_env, h);
+        if !inferred.alpha_eq(prop) {
+            panic!("proposition mismatch: expected {}, got {}", prop, inferred);
+        }
     }
 
     pub fn infer_prop(
@@ -209,47 +209,42 @@ impl Env<'_> {
         tt_local_env: &mut tt::LocalEnv,
         local_env: &mut LocalEnv,
         h: &Proof,
-    ) -> Option<Term> {
+    ) -> Term {
         match h {
             Proof::Assump(p) => {
                 for local_axiom in &local_env.local_axioms {
                     if p.alpha_eq(local_axiom) {
-                        return Some(p.clone());
+                        return p.clone();
                     }
                 }
-                None
+                panic!("unknown assumption: {}", p);
             }
             Proof::ImpIntro(h) => {
                 let (p, h) = &**h;
-                if !self.tt_env.is_wff(tt_local_env, p) {
-                    return None;
-                }
+                self.tt_env.check_wff(tt_local_env, p);
                 local_env.local_axioms.push(p.clone());
-                let mut target = self.infer_prop(tt_local_env, local_env, h)?;
+                let mut target = self.infer_prop(tt_local_env, local_env, h);
                 let p = local_env.local_axioms.pop().unwrap();
                 target.guard([p]);
-                Some(target)
+                target
             }
             Proof::ImpElim(h) => {
                 let (h1, h2) = &**h;
-                let h1 = self.infer_prop(tt_local_env, local_env, h1)?;
-                let Ok(Imp { lhs, rhs }) = h1.clone().try_into() else {
-                    return None;
-                };
-                if !self.check_prop(tt_local_env, local_env, h2, &lhs) {
-                    return None;
-                }
-                Some(rhs)
+                let h1 = self.infer_prop(tt_local_env, local_env, h1);
+                let Imp { lhs, rhs } = h1
+                    .clone()
+                    .try_into()
+                    .unwrap_or_else(|_| panic!("implication expected, got {}", h1));
+                self.check_prop(tt_local_env, local_env, h2, &lhs);
+                rhs
             }
             Proof::ForallIntro(h) => {
                 let &(name, ref ty, ref h) = &**h;
-                if !self.tt_env.is_wft(tt_local_env, ty) {
-                    return None;
-                }
+                self.tt_env.check_wft(tt_local_env, ty);
                 for c in &local_env.local_axioms {
                     if !c.is_fresh(&[name]) {
                         // eigenvariable condition fails
-                        return None;
+                        panic!("eigenvariable condition violated by {}", c);
                     }
                 }
                 let x = Parameter {
@@ -257,31 +252,28 @@ impl Env<'_> {
                     ty: ty.clone(),
                 };
                 tt_local_env.locals.push(x);
-                let mut target = self.infer_prop(tt_local_env, local_env, h)?;
+                let mut target = self.infer_prop(tt_local_env, local_env, h);
                 let x = tt_local_env.locals.pop().unwrap();
                 target.generalize(&[x]);
-                Some(target)
+                target
             }
             Proof::ForallElim(h) => {
                 let (m, h) = &**h;
-                let h = self.infer_prop(tt_local_env, local_env, h)?;
-                let Ok(Forall { domain, pred }) = h.clone().try_into() else {
-                    return None;
-                };
-                if !self.tt_env.check_type(tt_local_env, m, &domain) {
-                    return None;
-                }
+                let h = self.infer_prop(tt_local_env, local_env, h);
+                let Forall { domain, pred } = h
+                    .clone()
+                    .try_into()
+                    .unwrap_or_else(|_| panic!("∀ expected, got {}", h));
+                self.tt_env.check_type(tt_local_env, m, &domain);
                 let mut target = pred;
                 target.apply([m.clone()]);
-                Some(target)
+                target
             }
             Proof::Conv(h) => {
                 let (h1, h2) = &**h;
-                let h1 = self.tt_env.infer_conv(tt_local_env, h1)?;
-                if !self.check_prop(tt_local_env, local_env, h2, &h1.left) {
-                    return None;
-                }
-                Some(h1.right)
+                let h1 = self.tt_env.infer_conv(tt_local_env, h1);
+                self.check_prop(tt_local_env, local_env, h2, &h1.left);
+                h1.right
             }
             Proof::Ref(h) => {
                 let (name, ty_args, instances) = &**h;
@@ -289,35 +281,42 @@ impl Env<'_> {
                     local_types,
                     local_classes,
                     target,
-                } = self.axiom_table.get(name)?;
+                } = self
+                    .axiom_table
+                    .get(name)
+                    .unwrap_or_else(|| panic!("unknown axiom: {:?}", name));
                 if ty_args.len() != local_types.len() {
-                    return None;
+                    panic!(
+                        "axiom {:?} expects {} type arguments but got {}",
+                        name,
+                        local_types.len(),
+                        ty_args.len()
+                    );
                 }
                 for ty_arg in ty_args {
-                    if !self.tt_env.is_wft(tt_local_env, ty_arg) {
-                        return None;
-                    }
+                    self.tt_env.check_wft(tt_local_env, ty_arg);
                 }
                 let mut type_subst = vec![];
                 for (&x, t) in zip(local_types, ty_args) {
                     type_subst.push((x, t.clone()))
                 }
                 if local_classes.len() != instances.len() {
-                    return None;
+                    panic!(
+                        "axiom {:?} expects {} class arguments but got {}",
+                        name,
+                        local_classes.len(),
+                        instances.len()
+                    );
                 }
                 for (local_class, instance) in zip(local_classes, instances) {
                     let mut local_class = local_class.clone();
                     local_class.subst(&type_subst);
-                    if !self
-                        .tt_env
-                        .check_class(tt_local_env, instance, &local_class)
-                    {
-                        return None;
-                    }
+                    self.tt_env
+                        .check_class(tt_local_env, instance, &local_class);
                 }
                 let mut target = target.clone();
                 target.subst_type(&type_subst);
-                Some(target)
+                target
             }
         }
     }

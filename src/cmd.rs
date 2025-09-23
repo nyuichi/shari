@@ -328,19 +328,13 @@ impl Eval {
         local_classes: Vec<Class>,
         target: Term,
     ) {
-        assert!(
-            self.tt_env().is_wff(
-                &mut LocalEnv {
-                    local_types: local_types.clone(),
-                    local_classes: local_classes.clone(),
-                    locals: vec![],
-                },
-                &target,
-            ),
-            "{:?}, {:?}, {}",
-            local_types,
-            local_classes,
-            target
+        self.tt_env().check_wff(
+            &mut LocalEnv {
+                local_types: local_types.clone(),
+                local_classes: local_classes.clone(),
+                locals: vec![],
+            },
+            &target,
         );
 
         // TODO: remove and integrate into axiom_table
@@ -424,15 +418,15 @@ impl Eval {
             ty,
         } = self.const_table.get(&name).unwrap();
 
-        assert!(self.tt_env().check_type(
+        self.tt_env().check_type(
             &mut LocalEnv {
                 local_types: local_types.clone(),
                 local_classes: local_classes.clone(),
                 locals: vec![],
             },
             &target,
-            ty
-        ));
+            ty,
+        );
 
         self.delta_table.insert(
             name,
@@ -728,14 +722,12 @@ impl Eval {
                     tt_local_env: &mut local_env,
                 }
                 .run(&expr);
-                if !self.proof_env().check_prop(
+                self.proof_env().check_prop(
                     &mut local_env,
                     &mut proof::LocalEnv::default(),
                     &h,
                     &target,
-                ) {
-                    bail!("proof failed");
-                }
+                );
                 self.add_axiom(name, local_types, local_classes, target);
                 Ok(())
             }
@@ -1849,14 +1841,12 @@ impl Eval {
                         tt_local_env: &mut local_env,
                     }
                     .run(&*expr);
-                    if !self.proof_env().check_prop(
+                    self.proof_env().check_prop(
                         &mut local_env,
                         &mut proof::LocalEnv::default(),
                         &h,
                         target,
-                    ) {
-                        bail!("proof failed");
-                    }
+                    );
 
                     let fullname = Name::intern(&format!("{}.{}", name, field_name)).unwrap();
                     let mut target = target.clone();
@@ -2158,14 +2148,12 @@ impl Eval {
                         tt_local_env: &mut local_env,
                     }
                     .run(&*expr);
-                    if !self.proof_env().check_prop(
+                    self.proof_env().check_prop(
                         &mut local_env,
                         &mut proof::LocalEnv::default(),
                         &h,
                         target,
-                    ) {
-                        bail!("proof failed");
-                    }
+                    );
                 }
             }
         }
