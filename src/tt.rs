@@ -506,9 +506,9 @@ pub struct InstanceGlobal {
 impl Display for Instance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Instance::Local(c) => write!(f, "{}", c),
+            Instance::Local(c) => write!(f, "${}", c),
             Instance::Global(i) => {
-                write!(f, "${}", i.name)?;
+                write!(f, "{}", i.name)?;
                 if !i.ty_args.is_empty() {
                     write!(f, ".{{")?;
                     let mut first = true;
@@ -694,54 +694,70 @@ impl Default for Term {
     }
 }
 
-// TODO: もうちょっとまともな表示にする。デバッグがつらい。
 impl Display for Term {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Term::Var(inner) => {
-                write!(f, "(var {})", inner.index)
-            }
-            Term::Abs(inner) => {
-                write!(f, "(lam {} {})", inner.binder_type, inner.body)
-            }
-            Term::App(inner) => {
-                write!(f, "({} {})", inner.fun, inner.arg)
-            }
-            Term::Local(inner) => {
-                write!(f, "(local {})", inner.name)
-            }
-            Term::Const(inner) => {
-                write!(f, "{}", inner.name)?;
-                if !inner.ty_args.is_empty() {
-                    write!(f, ".{{")?;
-                    let mut first = true;
-                    for t in &inner.ty_args {
-                        if !first {
-                            write!(f, ", ")?;
-                        }
-                        write!(f, "{t}")?;
-                        first = false;
+        const TERM_PREC_LAM: u8 = 0;
+        const TERM_PREC_APP: u8 = 1;
+        const TERM_PREC_ATOM: u8 = 2;
+
+        fn fmt_term(term: &Term, f: &mut std::fmt::Formatter<'_>, prec: u8) -> std::fmt::Result {
+            match term {
+                Term::Var(inner) => write!(f, "#{}", inner.index),
+                Term::Abs(inner) => {
+                    let needs_paren = prec > TERM_PREC_LAM;
+                    if needs_paren {
+                        write!(f, "(")?;
                     }
-                    write!(f, "}}")?;
-                }
-                if !inner.instances.is_empty() {
-                    write!(f, ".[")?;
-                    let mut first = true;
-                    for i in &inner.instances {
-                        if !first {
-                            write!(f, ", ")?;
-                        }
-                        write!(f, "{i}")?;
-                        first = false;
+                    write!(f, "λ{}:{}. ", inner.binder_name, inner.binder_type)?;
+                    fmt_term(&inner.body, f, TERM_PREC_LAM)?;
+                    if needs_paren {
+                        write!(f, ")")?;
                     }
-                    write!(f, "]")?;
+                    Ok(())
                 }
-                Ok(())
-            }
-            Term::Hole(inner) => {
-                write!(f, "(hole {})", inner.name)
+                Term::App(inner) => {
+                    let needs_paren = prec > TERM_PREC_APP;
+                    if needs_paren {
+                        write!(f, "(")?;
+                    }
+                    fmt_term(&inner.fun, f, TERM_PREC_APP)?;
+                    write!(f, " ")?;
+                    fmt_term(&inner.arg, f, TERM_PREC_ATOM)?;
+                    if needs_paren {
+                        write!(f, ")")?;
+                    }
+                    Ok(())
+                }
+                Term::Local(inner) => write!(f, "${}", inner.name),
+                Term::Const(inner) => {
+                    write!(f, "{}", inner.name)?;
+                    if !inner.ty_args.is_empty() {
+                        write!(f, ".{{")?;
+                        for (idx, t) in inner.ty_args.iter().enumerate() {
+                            if idx > 0 {
+                                write!(f, ", ")?;
+                            }
+                            write!(f, "{t}")?;
+                        }
+                        write!(f, "}}")?;
+                    }
+                    if !inner.instances.is_empty() {
+                        write!(f, ".[")?;
+                        for (idx, i) in inner.instances.iter().enumerate() {
+                            if idx > 0 {
+                                write!(f, ", ")?;
+                            }
+                            write!(f, "{i}")?;
+                        }
+                        write!(f, "]")?;
+                    }
+                    Ok(())
+                }
+                Term::Hole(inner) => write!(f, "?{}", inner.name),
             }
         }
+
+        fmt_term(self, f, TERM_PREC_LAM)
     }
 }
 
