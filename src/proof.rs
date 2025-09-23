@@ -4,7 +4,7 @@ use std::{collections::HashMap, iter::zip, sync::Arc, vec};
 
 use std::sync::LazyLock;
 
-use crate::tt::{self, Class, Instance, Name, Parameter, Path, Term, Type};
+use crate::tt::{self, Class, Instance, Name, Parameter, Term, Type};
 
 // TODO: Proof tree object は処理系が遅くなる原因なのでやめたい。
 // elabの中でexprをガチャガチャしないといけないのでexprは用意して、exprをrunするときに proof.rs で用意された証明規則に対応する関数を呼び出してその関数実行が通ればOKにしたい。
@@ -42,11 +42,11 @@ pub enum Proof {
     /// ```
     ForallElim(Arc<(Term, Proof)>),
     /// ```text
-    /// Γ ⊢ p : φ ≡ ψ    Γ | Φ ⊢ h : φ
-    /// -------------------------------
-    /// Γ | Φ ⊢ conv p, h : ψ
+    /// Γ ⊢ φ ≡ ψ    Γ | Φ ⊢ h : φ
+    /// ---------------------------
+    /// Γ | Φ ⊢ conv ψ, h : ψ
     /// ```
-    Conv(Arc<(Path, Proof)>),
+    Conv(Arc<(Term, Proof)>),
     /// ```text
     ///
     /// -------------------------- (c.{uᵢ} :⇔ φ)
@@ -106,8 +106,8 @@ pub fn mk_proof_forall_elim(m: Term, h: Proof) -> Proof {
     Proof::ForallElim(Arc::new((m, h)))
 }
 
-pub fn mk_proof_conv(h1: Path, h2: Proof) -> Proof {
-    Proof::Conv(Arc::new((h1, h2)))
+pub fn mk_proof_conv(target: Term, h: Proof) -> Proof {
+    Proof::Conv(Arc::new((target, h)))
 }
 
 pub fn mk_proof_ref(name: Name, ty_args: Vec<Type>, instances: Vec<Instance>) -> Proof {
@@ -270,10 +270,16 @@ impl Env<'_> {
                 target
             }
             Proof::Conv(h) => {
-                let (h1, h2) = &**h;
-                let h1 = self.tt_env.infer_conv(tt_local_env, h1);
-                self.check_prop(tt_local_env, local_env, h2, &h1.left);
-                h1.right
+                let (target, proof) = &**h;
+                self.tt_env.check_wff(tt_local_env, target);
+                let source = self.infer_prop(tt_local_env, local_env, proof);
+                if !self.tt_env.equiv(&source, target) {
+                    panic!(
+                        "conversion failed: expected {} but proof showed {}",
+                        target, source
+                    );
+                }
+                target.clone()
             }
             Proof::Ref(h) => {
                 let (name, ty_args, instances) = &**h;

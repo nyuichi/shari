@@ -795,7 +795,7 @@ impl<'a> Elaborator<'a> {
         for arg in &mut m.args_mut() {
             arg.whnf();
             while self.inst_head(arg) {
-                if arg.whnf().is_none() {
+                if !arg.whnf() {
                     break;
                 }
             }
@@ -1253,7 +1253,7 @@ impl<'a> Elaborator<'a> {
             self.term_constraints.push((local_env, left, right, error));
             return None;
         }
-        if left.whnf().is_some() || right.whnf().is_some() {
+        if left.whnf() || right.whnf() {
             self.term_constraints.push((local_env, left, right, error));
             return None;
         }
@@ -1276,7 +1276,7 @@ impl<'a> Elaborator<'a> {
                         return None;
                     }
                 }
-                if self.proof_env.tt_env.unfold_head(&mut left).is_some() {
+                if self.proof_env.tt_env.unfold_head(&mut left) {
                     self.term_constraints.push((local_env, left, right, error));
                     return None;
                 } else {
@@ -1392,7 +1392,7 @@ impl<'a> Elaborator<'a> {
             if !right.contains_local(left_head.name) {
                 return Some(error);
             }
-            if self.proof_env.tt_env.unfold_head(&mut right).is_some() {
+            if self.proof_env.tt_env.unfold_head(&mut right) {
                 self.term_constraints.push((local_env, left, right, error));
                 return None;
             }
@@ -1408,7 +1408,7 @@ impl<'a> Elaborator<'a> {
                 self.add_postponed_constraint(local_env, left, right, error);
                 return None;
             }
-            if self.proof_env.tt_env.unfold_head(&mut left).is_some() {
+            if self.proof_env.tt_env.unfold_head(&mut left) {
                 self.term_constraints
                     .push((local_env.clone(), left, right, error));
                 return None;
@@ -1420,7 +1420,7 @@ impl<'a> Elaborator<'a> {
                 self.add_postponed_constraint(local_env, left, right, error);
                 return None;
             }
-            if self.proof_env.tt_env.unfold_head(&mut right).is_some() {
+            if self.proof_env.tt_env.unfold_head(&mut right) {
                 self.term_constraints
                     .push((local_env.clone(), left, right, error));
                 return None;
@@ -1458,14 +1458,14 @@ impl<'a> Elaborator<'a> {
         }
         match left_height.cmp(&right_height) {
             std::cmp::Ordering::Greater => {
-                self.proof_env.tt_env.unfold_head(&mut left).unwrap();
+                self.proof_env.tt_env.unfold_head(&mut left);
             }
             std::cmp::Ordering::Less => {
-                self.proof_env.tt_env.unfold_head(&mut right).unwrap();
+                self.proof_env.tt_env.unfold_head(&mut right);
             }
             std::cmp::Ordering::Equal => {
-                self.proof_env.tt_env.unfold_head(&mut left).unwrap();
-                self.proof_env.tt_env.unfold_head(&mut right).unwrap();
+                self.proof_env.tt_env.unfold_head(&mut left);
+                self.proof_env.tt_env.unfold_head(&mut right);
             }
         }
         self.term_constraints.push((local_env, left, right, error));
@@ -1737,8 +1737,8 @@ impl<'a> Elaborator<'a> {
             let mut node = Node::default();
             let mut left = c.left.clone();
             let mut right = c.right.clone();
-            self.proof_env.tt_env.unfold_head(&mut left).unwrap();
-            self.proof_env.tt_env.unfold_head(&mut right).unwrap();
+            self.proof_env.tt_env.unfold_head(&mut left);
+            self.proof_env.tt_env.unfold_head(&mut right);
             node.term_constraints
                 .push((c.local_env.clone(), left, right, c.error.clone()));
             node

@@ -393,8 +393,10 @@ impl Env<'_> {
             Expr::Change(expr) => {
                 let ExprChange { target, expr } = &**expr;
                 let (h, p) = self.run_help(expr);
-                let path = self.proof_env.tt_env.equiv(&p, target).unwrap();
-                (mk_proof_conv(path, h), target.clone())
+                if !self.proof_env.tt_env.equiv(&p, target) {
+                    panic!("conversion failed: {} ≠ {}", p, target);
+                }
+                (mk_proof_conv(target.clone(), h), target.clone())
             }
         }
     }

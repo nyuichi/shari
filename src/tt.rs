@@ -6,7 +6,7 @@ use std::iter::zip;
 use std::sync::LazyLock;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
-use std::{mem, slice, vec};
+use std::{mem, vec};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
@@ -1421,14 +1421,13 @@ impl Term {
         }
     }
 
-    fn beta_reduce(&mut self) -> Option<Path> {
-        let path = mk_path_beta(self.clone());
+    fn beta_reduce(&mut self) -> bool {
         let Term::App(inner) = self else {
-            return None;
+            return false;
         };
         let TermApp { fun, arg } = Arc::make_mut(inner);
         let Term::Abs(inner) = fun else {
-            return None;
+            return false;
         };
         let TermAbs {
             binder_type: _,
@@ -1438,24 +1437,26 @@ impl Term {
         body.open(arg);
         *self = mem::take(body);
         assert!(self.is_lclosed());
-        Some(path)
+        true
     }
 
-    pub fn whnf(&mut self) -> Option<Path> {
-        match self {
-            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) | Term::Abs(_) => None,
-            Term::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                let p;
-                if let Some(p_fun) = inner.fun.whnf() {
-                    let p_arg = mk_path_refl(inner.arg.clone());
-                    p = mk_path_congr_app(p_fun, p_arg);
-                } else {
-                    p = self.beta_reduce()?;
+    pub fn whnf(&mut self) -> bool {
+        let mut changed = false;
+        loop {
+            match self {
+                Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) | Term::Abs(_) => {
+                    return changed;
                 }
-                match self.whnf() {
-                    Some(p_next) => Some(mk_path_trans(p, p_next)),
-                    None => Some(p),
+                Term::App(inner) => {
+                    let inner = Arc::make_mut(inner);
+                    if inner.fun.whnf() {
+                        changed = true;
+                    }
+                    if self.beta_reduce() {
+                        changed = true;
+                        continue;
+                    }
+                    return changed;
                 }
             }
         }
@@ -1491,133 +1492,6 @@ impl Term {
             }
             Term::Hole(_) => {}
         }
-    }
-}
-
-/// Judgmental equality for the definitional equality.
-/// The type inhabitation problem of `Conv` shall be decidable.
-///
-/// The formation rule of Conv is as follows:
-/// ```text
-/// Γ ⊢ m₁ : τ    Γ ⊢ m₂ : τ
-/// -------------------------
-/// Γ ⊢ m₁ ≡ m₂ : τ
-/// ```
-#[derive(Debug, Clone)]
-pub struct Conv {
-    pub left: Term,
-    pub right: Term,
-}
-
-impl std::fmt::Display for Conv {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ≡ {}", self.left, self.right)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum Path {
-    /// ```text
-    ///
-    /// ------------------
-    /// Γ ⊢ refl m : m ≡ m
-    /// ```
-    Refl(Term),
-    /// ```text
-    /// Γ ⊢ h : m₁ ≡ m₂
-    /// --------------------
-    /// Γ ⊢ symm h : m₂ ≡ m₁
-    /// ```
-    Symm(Arc<Path>),
-    /// ```text
-    /// Γ ⊢ h₁ : m₁ ≡ m₂   Γ ⊢ h₂ : m₂ ≡ m₃
-    /// ------------------------------------
-    /// Γ ⊢ trans h₁ h₂ : m₁ ≡ m₃
-    /// ```
-    Trans(Arc<(Path, Path)>),
-    /// ```text
-    /// Γ ⊢ h₁ : f₁ ≡ f₂   Γ ⊢ h₂ : a₁ ≡ a₂
-    /// ------------------------------------
-    /// Γ ⊢ congr_app h₁ h₂ : f₁ a₁ ≡ f₂ a₂
-    /// ```
-    CongrApp(Arc<(Path, Path)>),
-    /// ```text
-    /// Γ, x : τ ⊢ h : m₁ ≡ m₂
-    /// ------------------------------------------------------------
-    /// Γ ⊢ congr_abs (x : τ), h : (λ (x : τ), m₁) ≡ (λ (x : τ), m₂)
-    /// ```
-    CongrAbs(Arc<(Name, Type, Path)>),
-    /// ```text
-    ///
-    /// --------------------------------------------------------
-    /// Γ ⊢ beta_reduce ((λ x, m₁) m₂) : (λ x, m₁) m₂ ≡ [m₂/x]m₁
-    /// ```
-    Beta(Term),
-    /// ```text
-    ///
-    /// --------------------------------------------------------------------------------------- (c.{u₁ ⋯ uₙ} :≡ m)
-    /// Γ ⊢ delta_reduce c.{t₁ ⋯ tₙ}[i₁ ⋯ iₘ] : c.{t₁ ⋯ tₙ}[i₁ ⋯ iₘ] ≡ [i₁ ⋯ iₘ][t₁/u₁ ⋯ tₙ/uₙ]m
-    /// ```
-    Delta(Term),
-    Kappa(Term),
-}
-
-impl Display for Path {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Path::Refl(m) => write!(f, "(refl {m})"),
-            Path::Symm(h) => write!(f, "(symm {h})"),
-            Path::Trans(inner) => write!(f, "(trans {} {})", inner.0, inner.1),
-            Path::CongrApp(inner) => write!(f, "(congr_app {} {})", inner.0, inner.1),
-            Path::CongrAbs(inner) => {
-                write!(f, "(congr_abs ({} : {}), {})", inner.0, inner.1, inner.2)
-            }
-            Path::Beta(m) => write!(f, "(beta {m})"),
-            Path::Delta(m) => {
-                write!(f, "(delta {m})")
-            }
-            Path::Kappa(m) => {
-                write!(f, "(kappa {m})")
-            }
-        }
-    }
-}
-
-pub fn mk_path_refl(m: Term) -> Path {
-    Path::Refl(m)
-}
-
-pub fn mk_path_symm(h: Path) -> Path {
-    Path::Symm(Arc::new(h))
-}
-
-pub fn mk_path_trans(h1: Path, h2: Path) -> Path {
-    Path::Trans(Arc::new((h1, h2)))
-}
-
-pub fn mk_path_congr_app(h1: Path, h2: Path) -> Path {
-    Path::CongrApp(Arc::new((h1, h2)))
-}
-
-pub fn mk_path_congr_abs(name: Name, t: Type, h: Path) -> Path {
-    Path::CongrAbs(Arc::new((name, t, h)))
-}
-
-pub fn mk_path_beta(m: Term) -> Path {
-    Path::Beta(m)
-}
-
-pub fn mk_path_delta(m: Term) -> Path {
-    Path::Delta(m)
-}
-
-pub fn mk_path_kappa(m: Term) -> Path {
-    Path::Kappa(m)
-}
-
-impl Path {
-    pub fn is_refl(&self) -> bool {
-        matches!(self, Path::Refl(_))
     }
 }
 
@@ -1926,173 +1800,23 @@ impl Env<'_> {
         self.check_type(local_env, m, &mk_type_prop());
     }
 
-    pub fn infer_conv(&self, local_env: &mut LocalEnv, path: &Path) -> Conv {
-        match path {
-            Path::Refl(m) => {
-                let _ty = self.infer_type(local_env, m);
-                Conv {
-                    left: m.clone(),
-                    right: m.clone(),
-                }
-            }
-            Path::Symm(path) => {
-                let h = self.infer_conv(local_env, path);
-                Conv {
-                    left: h.right,
-                    right: h.left,
-                }
-            }
-            Path::Trans(path) => {
-                let h1 = self.infer_conv(local_env, &path.0);
-                let h2 = self.infer_conv(local_env, &path.1);
-                if !h1.right.alpha_eq(&h2.left) {
-                    panic!("transitivity mismatch: {:?} ≠ {:?}", h1.right, h2.left);
-                }
-                // h1.right == h2.left means the types in the both sides match.
-                Conv {
-                    left: h1.left,
-                    right: h2.right,
-                }
-            }
-            Path::CongrApp(path) => {
-                let mut h1 = self.infer_conv(local_env, &path.0);
-                let h2 = self.infer_conv(local_env, &path.1);
-                h1.left.apply([h2.left]);
-                h1.right.apply([h2.right]);
-                let _ty = self.infer_type(local_env, &h1.left);
-                h1
-            }
-            Path::CongrAbs(path) => {
-                self.check_wft(local_env, &path.1);
-                local_env.locals.push(Parameter {
-                    name: path.0,
-                    ty: path.1.clone(),
-                });
-                let mut h = self.infer_conv(local_env, &path.2);
-                let x = local_env.locals.pop().unwrap();
-                h.left.abs(slice::from_ref(&x));
-                h.right.abs(slice::from_ref(&x));
-                h
-            }
-            Path::Beta(m) => {
-                let _ty = self.infer_type(local_env, m);
-                let left = m.clone();
-                let Term::App(m) = m else {
-                    panic!("beta reduction expects an application: {:?}", m);
-                };
-                let Term::Abs(fun) = &m.fun else {
-                    panic!("beta reduction expects an abstraction: {:?}", m.fun);
-                };
-                let mut right = fun.body.clone();
-                right.open(&m.arg);
-                Conv { left, right }
-            }
-            Path::Delta(m) => {
-                let _ty = self.infer_type(local_env, m);
-                let left = m.clone();
-                let Term::Const(m) = m else {
-                    panic!("delta reduction expects a constant: {:?}", m);
-                };
-                let Delta {
-                    local_types,
-                    local_classes,
-                    target,
-                    height: _,
-                } = self
-                    .delta_table
-                    .get(&m.name)
-                    .unwrap_or_else(|| panic!("unknown delta definition: {:?}", m.name));
-                let mut type_subst = vec![];
-                for (&x, t) in zip(local_types, &m.ty_args) {
-                    type_subst.push((x, t.clone()));
-                }
-                let mut instance_subst = vec![];
-                for (local_class, instance) in zip(local_classes, &m.instances) {
-                    let mut local_class = local_class.clone();
-                    local_class.subst(&type_subst);
-                    instance_subst.push((local_class, instance.clone()));
-                }
-                let mut target = target.clone();
-                target.subst_type(&type_subst);
-                target.subst_instance(&instance_subst);
-                Conv {
-                    left,
-                    right: target,
-                }
-            }
-            Path::Kappa(m) => {
-                let _ty = self.infer_type(local_env, m);
-                let left = m.clone();
-                let Term::Const(n) = m else {
-                    panic!("kappa reduction expects a constant: {:?}", m);
-                };
-                if n.instances.is_empty() {
-                    panic!(
-                        "kappa reduction expects at least one instance for {:?}",
-                        n.name
-                    );
-                }
-                let Instance::Global(recv) = &n.instances[0] else {
-                    panic!(
-                        "kappa reduction expects a global receiver instance for {:?}",
-                        n.name
-                    );
-                };
-                let InstanceGlobal {
-                    name,
-                    ty_args,
-                    args,
-                } = &**recv;
-                // assert_eq!(ty_args, &n.ty_args);
-                // assert_eq!(&args[..], &n.instances[1..]);
-                let ClassInstance {
-                    local_types,
-                    local_classes,
-                    target: _,
-                    method_table,
-                } = self
-                    .class_instance_table
-                    .get(name)
-                    .unwrap_or_else(|| panic!("unknown class instance: {:?}", name));
-                let target = method_table.get(&n.name).unwrap_or_else(|| {
-                    panic!("missing method {:?} on instance {:?}", n.name, name)
-                });
-                let mut type_subst = vec![];
-                for (&x, t) in zip(local_types, ty_args) {
-                    type_subst.push((x, t.clone()));
-                }
-                let mut instance_subst = vec![];
-                for (local_class, instance) in zip(local_classes, args) {
-                    let mut local_class = local_class.clone();
-                    local_class.subst(&type_subst);
-                    instance_subst.push((local_class, instance.clone()));
-                }
-                let mut target = target.clone();
-                target.subst_type(&type_subst);
-                target.subst_instance(&instance_subst);
-                Conv {
-                    left,
-                    right: target,
-                }
-            }
-        }
-    }
-
     // c.{u₁, ⋯, uₙ} := n
     // assert_eq!(m, c.{u₁, ⋯, uₙ})
     // self.delta_reduce(m);
     // assert_eq!(m, n)
-    fn delta_reduce(&self, m: &mut Term) -> Option<Path> {
-        let orig_m = m.clone();
+    fn delta_reduce(&self, m: &mut Term) -> bool {
         let Term::Const(n) = m else {
-            return None;
+            return false;
         };
-        let Delta {
+        let Some(Delta {
             local_types,
             local_classes,
             target,
             height: _,
-        } = self.delta_table.get(&n.name)?;
+        }) = self.delta_table.get(&n.name)
+        else {
+            return false;
+        };
         let mut type_subst = vec![];
         for (&x, t) in zip(local_types, &n.ty_args) {
             type_subst.push((x, t.clone()));
@@ -2107,20 +1831,21 @@ impl Env<'_> {
         target.subst_type(&type_subst);
         target.subst_instance(&instance_subst);
         *m = target;
-        Some(mk_path_delta(orig_m))
+        true
     }
 
-    fn kappa_reduce(&self, m: &mut Term) -> Option<Path> {
-        let orig_m = m.clone();
+    fn kappa_reduce(&self, m: &mut Term) -> bool {
         let Term::Const(n) = m else {
-            return None;
+            return false;
         };
-        let Kappa = self.kappa_table.get(&n.name)?;
+        if self.kappa_table.get(&n.name).is_none() {
+            return false;
+        }
         if n.instances.is_empty() {
-            return None;
+            return false;
         }
         let Instance::Global(recv) = &n.instances[0] else {
-            return None;
+            return false;
         };
         let InstanceGlobal {
             name,
@@ -2129,13 +1854,18 @@ impl Env<'_> {
         } = &**recv;
         // assert_eq!(ty_args, &n.ty_args);
         // assert_eq!(&args[..], &n.instances[1..]);
-        let ClassInstance {
+        let Some(ClassInstance {
             local_types,
             local_classes,
             target: _,
             method_table,
-        } = &self.class_instance_table.get(name)?;
-        let target = method_table.get(&n.name)?;
+        }) = self.class_instance_table.get(name)
+        else {
+            return false;
+        };
+        let Some(target) = method_table.get(&n.name) else {
+            return false;
+        };
         let mut type_subst = vec![];
         for (&x, t) in zip(local_types, ty_args) {
             type_subst.push((x, t.clone()));
@@ -2150,18 +1880,16 @@ impl Env<'_> {
         target.subst_type(&type_subst);
         target.subst_instance(&instance_subst);
         *m = target;
-        Some(mk_path_kappa(orig_m))
+        true
     }
 
-    pub fn unfold_head(&self, m: &mut Term) -> Option<Path> {
+    pub fn unfold_head(&self, m: &mut Term) -> bool {
         match m {
-            Term::Var(_) | Term::Local(_) | Term::Abs(_) | Term::Hole(_) => None,
-            Term::Const(_) => self.delta_reduce(m).or_else(|| self.kappa_reduce(m)),
+            Term::Var(_) | Term::Local(_) | Term::Abs(_) | Term::Hole(_) => false,
+            Term::Const(_) => self.delta_reduce(m) || self.kappa_reduce(m),
             Term::App(m) => {
-                let TermApp { fun, arg } = Arc::make_mut(m);
-                let h_fun = self.unfold_head(fun)?;
-                let h_arg = mk_path_refl(arg.clone());
-                Some(mk_path_congr_app(h_fun, h_arg))
+                let TermApp { fun, .. } = Arc::make_mut(m);
+                self.unfold_head(fun)
             }
         }
     }
@@ -2193,9 +1921,9 @@ impl Env<'_> {
         self.delta_table.contains_key(&name)
     }
 
-    fn equiv_help(&self, m1: &mut Term, m2: &mut Term) -> Option<Path> {
+    fn equiv_help(&self, m1: &mut Term, m2: &mut Term) -> bool {
         if m1.alpha_eq(m2) {
-            return Some(mk_path_refl(m1.clone()));
+            return true;
         }
         if let (Term::Abs(inner1), Term::Abs(inner2)) = (&mut *m1, &mut *m2) {
             let inner1 = Arc::make_mut(inner1);
@@ -2204,18 +1932,14 @@ impl Env<'_> {
             let local = mk_local(x);
             inner1.body.open(&local);
             inner2.body.open(&local);
-            let h = self.equiv_help(&mut inner1.body, &mut inner2.body)?;
-            return Some(mk_path_congr_abs(x, inner1.binder_type.clone(), h));
+            return self.equiv_help(&mut inner1.body, &mut inner2.body);
         }
-        let h1 = m1.whnf().unwrap_or_else(|| mk_path_refl(m1.clone()));
-        let h2 = match m2.whnf() {
-            Some(h) => mk_path_symm(h),
-            None => mk_path_refl(m2.clone()),
-        };
-        // TODO: optimize this condition check
-        if !h1.is_refl() || !h2.is_refl() {
+
+        let reduced1 = m1.whnf();
+        let reduced2 = m2.whnf();
+        if reduced1 || reduced2 {
             if m1.alpha_eq(m2) {
-                return Some(mk_path_trans(h1, h2));
+                return true;
             }
             if let (Term::Abs(inner1), Term::Abs(inner2)) = (&mut *m1, &mut *m2) {
                 let inner1 = Arc::make_mut(inner1);
@@ -2224,53 +1948,53 @@ impl Env<'_> {
                 let local = mk_local(x);
                 inner1.body.open(&local);
                 inner2.body.open(&local);
-                let h = self.equiv_help(&mut inner1.body, &mut inner2.body)?;
-                let h = mk_path_congr_abs(x, inner1.binder_type.clone(), h);
-                return Some(mk_path_trans(h1, mk_path_trans(h, h2)));
+                // TODO: use loop
+                return self.equiv_help(&mut inner1.body, &mut inner2.body);
             }
         }
-        if let Term::Abs(_) = m1 {
-            let h = self.equiv_help(m2, m1)?;
-            return Some(mk_path_trans(h1, mk_path_trans(mk_path_symm(h), h2)));
+
+        if matches!(m1, Term::Abs(_)) {
+            return self.equiv_help(m2, m1);
         }
-        if let Term::Abs(_) = m2 {
+        if matches!(m2, Term::Abs(_)) {
             // m1 must be unfoldable
-            let h = self.unfold_head(m1)?;
-            let h1 = mk_path_trans(h1, h);
-            let h = self.equiv_help(m1, m2)?;
-            return Some(mk_path_trans(h1, mk_path_trans(h, h2)));
+            if !self.unfold_head(m1) {
+                return false;
+            }
+            return self.equiv_help(m1, m2);
         }
+
         let head1 = m1.head();
         let head2 = m2.head();
         if let (Term::Local(head1), Term::Local(head2)) = (head1, head2) {
             if head1.name != head2.name {
-                return None;
+                return false;
             }
             let args1 = m1.args();
             let args2 = m2.args();
             if args1.len() != args2.len() {
-                return None;
+                return false;
             }
-            let mut h = mk_path_refl(mk_local(head1.name));
             for (a1, a2) in std::iter::zip(args1, args2) {
                 let mut a1 = a1.clone();
                 let mut a2 = a2.clone();
-                let h_arg = self.equiv_help(&mut a1, &mut a2)?;
-                h = mk_path_congr_app(h, h_arg);
+                if !self.equiv_help(&mut a1, &mut a2) {
+                    return false;
+                }
             }
-            return Some(mk_path_trans(h1, mk_path_trans(h, h2)));
+            return true;
         }
-        if let Term::Local(_) = head1 {
-            let h = self.equiv_help(m2, m1)?;
-            return Some(mk_path_trans(h1, mk_path_trans(mk_path_symm(h), h2)));
+        if matches!(head1, Term::Local(_)) {
+            return self.equiv_help(m2, m1);
         }
-        if let Term::Local(_) = head2 {
+        if matches!(head2, Term::Local(_)) {
             // m1 must be unfoldable
-            let h = self.unfold_head(m1)?;
-            let h1 = mk_path_trans(h1, h);
-            let h = self.equiv_help(m1, m2)?;
-            return Some(mk_path_trans(h1, mk_path_trans(h, h2)));
+            if !self.unfold_head(m1) {
+                return false;
+            }
+            return self.equiv_help(m1, m2);
         }
+
         let (Term::Const(head1_inner), Term::Const(head2_inner)) = (head1, head2) else {
             panic!("holes found");
         };
@@ -2279,67 +2003,109 @@ impl Env<'_> {
             let args1 = m1.args();
             let args2 = m2.args();
             if args1.len() == args2.len() {
-                'args_eq: {
-                    let mut h = mk_path_refl(head1.clone());
-                    for (a1, a2) in std::iter::zip(args1, args2) {
-                        let mut a1 = a1.clone();
-                        let mut a2 = a2.clone();
-                        let Some(h_arg) = self.equiv_help(&mut a1, &mut a2) else {
-                            break 'args_eq;
-                        };
-                        h = mk_path_congr_app(h, h_arg);
+                let mut all_equiv = true;
+                for (a1, a2) in std::iter::zip(args1, args2) {
+                    let mut a1 = a1.clone();
+                    let mut a2 = a2.clone();
+                    if !self.equiv_help(&mut a1, &mut a2) {
+                        all_equiv = false;
+                        break;
                     }
-                    return Some(mk_path_trans(h1, mk_path_trans(h, h2)));
+                }
+                if all_equiv {
+                    return true;
                 }
             }
         }
+
         if self.has_kappa(head1_inner.name) || self.has_kappa(head2_inner.name) {
-            let h;
-            if let Some(h3) = self.unfold_head(m1) {
-                let h4 = self.equiv_help(m1, m2)?;
-                h = mk_path_trans(h3, h4);
-            } else if let Some(h3) = self.unfold_head(m2) {
-                let h4 = self.equiv_help(m1, m2)?;
-                h = mk_path_trans(h4, mk_path_symm(h3));
-            } else {
-                return None;
+            if self.unfold_head(m1) {
+                return self.equiv_help(m1, m2);
             }
-            return Some(mk_path_trans(h1, mk_path_trans(h, h2)));
+            if self.unfold_head(m2) {
+                return self.equiv_help(m1, m2);
+            }
+            return false;
         }
+
         let height1 = self.delta_height(head1_inner.name);
         let height2 = self.delta_height(head2_inner.name);
         if height1 == 0 && height2 == 0 {
-            return None;
+            return false;
         }
-        let h = match height1.cmp(&height2) {
+
+        match height1.cmp(&height2) {
             std::cmp::Ordering::Less => {
-                let h3 = mk_path_symm(self.unfold_head(m2).unwrap());
-                let h4 = self.equiv_help(m1, m2)?;
-                mk_path_trans(h4, h3)
+                if !self.unfold_head(m2) {
+                    return false;
+                }
+                self.equiv_help(m1, m2)
             }
             std::cmp::Ordering::Equal => {
-                let h3 = self.unfold_head(m1).unwrap();
-                let h4 = mk_path_symm(self.unfold_head(m2).unwrap());
-                let h5 = self.equiv_help(m1, m2)?;
-                mk_path_trans(h3, mk_path_trans(h5, h4))
+                if !self.unfold_head(m1) {
+                    return false;
+                }
+                if !self.unfold_head(m2) {
+                    return false;
+                }
+                self.equiv_help(m1, m2)
             }
             std::cmp::Ordering::Greater => {
-                let h3 = self.unfold_head(m1).unwrap();
-                let h4 = self.equiv_help(m1, m2)?;
-                mk_path_trans(h3, h4)
+                if !self.unfold_head(m1) {
+                    return false;
+                }
+                self.equiv_help(m1, m2)
             }
-        };
-        Some(mk_path_trans(h1, mk_path_trans(h, h2)))
+        }
     }
 
-    // Both terms must be ground
-    pub fn equiv(&self, m1: &Term, m2: &Term) -> Option<Path> {
+    /// Judgmental equality for the definitional equality.
+    /// The type inhabitation problem of `m₁ ≡ m₂` is decidable.
+    ///
+    /// The formation rule is as follows:
+    ///
+    /// Γ ⊢ m₁ : τ    Γ ⊢ m₂ : τ
+    /// -------------------------
+    /// Γ ⊢ m₁ ≡ m₂ : τ
+    ///
+    /// The inference rules are as follows:
+    ///
+    /// ------------------
+    /// Γ ⊢ refl m : m ≡ m
+    ///
+    /// Γ ⊢ h : m₁ ≡ m₂
+    /// --------------------
+    /// Γ ⊢ symm h : m₂ ≡ m₁
+    ///
+    /// Γ ⊢ h₁ : m₁ ≡ m₂   Γ ⊢ h₂ : m₂ ≡ m₃
+    /// ------------------------------------
+    /// Γ ⊢ trans h₁ h₂ : m₁ ≡ m₃
+    ///
+    /// Γ ⊢ h₁ : f₁ ≡ f₂   Γ ⊢ h₂ : a₁ ≡ a₂
+    /// ------------------------------------
+    /// Γ ⊢ congr_app h₁ h₂ : f₁ a₁ ≡ f₂ a₂
+    ///
+    /// Γ, x : τ ⊢ h : m₁ ≡ m₂
+    /// ------------------------------------------------------------
+    /// Γ ⊢ congr_abs (x : τ), h : (λ (x : τ), m₁) ≡ (λ (x : τ), m₂)
+    ///
+    ///
+    /// --------------------------------------------------------
+    /// Γ ⊢ beta_reduce ((λ x, m₁) m₂) : (λ x, m₁) m₂ ≡ [m₂/x]m₁
+    ///
+    ///
+    /// --------------------------------------------------------------------------------------- (c.{u₁ ⋯ uₙ} :≡ m)
+    /// Γ ⊢ delta_reduce c.{t₁ ⋯ tₙ}[i₁ ⋯ iₘ] : c.{t₁ ⋯ tₙ}[i₁ ⋯ iₘ] ≡ [i₁ ⋯ iₘ][t₁/u₁ ⋯ tₙ/uₙ]m
+    ///
+    /// Both terms must be ground
+    pub fn equiv(&self, m1: &Term, m2: &Term) -> bool {
         let mut m1 = m1.clone();
         let mut m2 = m2.clone();
         self.equiv_help(&mut m1, &mut m2)
     }
 }
 
+// TODO: add more tests for Term::equiv
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2384,7 +2150,7 @@ mod tests {
     }
 
     fn is_equiv(env: &Env<'_>, left: &Term, right: &Term) -> bool {
-        env.equiv(left, right).is_some()
+        env.equiv(left, right)
     }
 
     #[test]
