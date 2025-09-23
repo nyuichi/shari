@@ -164,23 +164,45 @@ impl Default for Type {
 
 impl Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Type::Const(inner) => {
-                write!(f, "{}", inner.name)
-            }
-            Type::Arrow(inner) => {
-                write!(f, "({} → {})", inner.dom, inner.cod)
-            }
-            Type::App(inner) => {
-                write!(f, "({} {})", inner.fun, inner.arg)
-            }
-            Type::Local(inner) => {
-                write!(f, "(local {})", inner.name)
-            }
-            Type::Hole(inner) => {
-                write!(f, "?{}", inner.name)
+        const TYPE_PREC_ARROW: u8 = 0;
+        const TYPE_PREC_APP: u8 = 1;
+        const TYPE_PREC_ATOM: u8 = 2;
+
+        fn fmt_type(ty: &Type, f: &mut std::fmt::Formatter<'_>, prec: u8) -> std::fmt::Result {
+            match ty {
+                Type::Const(inner) => write!(f, "{}", inner.name),
+                Type::Arrow(inner) => {
+                    let needs_paren = prec > TYPE_PREC_ARROW;
+                    if needs_paren {
+                        write!(f, "(")?;
+                    }
+                    fmt_type(&inner.dom, f, TYPE_PREC_APP)?;
+                    write!(f, " → ")?;
+                    fmt_type(&inner.cod, f, TYPE_PREC_ARROW)?;
+                    if needs_paren {
+                        write!(f, ")")?;
+                    }
+                    Ok(())
+                }
+                Type::App(inner) => {
+                    let needs_paren = prec > TYPE_PREC_APP;
+                    if needs_paren {
+                        write!(f, "(")?;
+                    }
+                    fmt_type(&inner.fun, f, TYPE_PREC_APP)?;
+                    write!(f, " ")?;
+                    fmt_type(&inner.arg, f, TYPE_PREC_ATOM)?;
+                    if needs_paren {
+                        write!(f, ")")?;
+                    }
+                    Ok(())
+                }
+                Type::Local(inner) => write!(f, "${}", inner.name),
+                Type::Hole(inner) => write!(f, "?{}", inner.name),
             }
         }
+
+        fmt_type(self, f, TYPE_PREC_ARROW)
     }
 }
 
