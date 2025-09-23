@@ -232,7 +232,7 @@ impl<'a> Elaborator<'a> {
         target
     }
 
-    fn visit_term(&mut self, m: &mut Term) -> anyhow::Result<Type> {
+    fn visit_term(&mut self, m: &Term) -> anyhow::Result<Type> {
         match m {
             Term::Local(inner) => {
                 let name = inner.name;
@@ -255,31 +255,31 @@ impl<'a> Elaborator<'a> {
                 bail!("term not locally closed");
             }
             Term::Abs(m) => {
-                let &mut TermAbs {
-                    binder_type: ref arg_ty,
+                let TermAbs {
+                    binder_type,
                     binder_name,
-                    ref mut body,
-                } = Arc::make_mut(m);
+                    body,
+                } = &**m;
 
-                let arg_ty_kind = self.visit_type(arg_ty)?;
-                if !arg_ty_kind.is_base() {
-                    bail!("expected Type, but got {arg_ty_kind}");
+                let binder_type_kind = self.visit_type(binder_type)?;
+                if !binder_type_kind.is_base() {
+                    bail!("expected Type, but got {binder_type_kind}");
                 }
 
                 let x = Parameter {
-                    name: Name::fresh_from(binder_name),
-                    ty: arg_ty.clone(),
+                    name: Name::fresh_from(*binder_name),
+                    ty: binder_type.clone(),
                 };
+                let mut body = body.clone();
                 body.open(&mk_local(x.name));
                 self.tt_local_env.locals.push(x);
-                let body_ty = self.visit_term(body)?;
-                let x = self.tt_local_env.locals.pop().unwrap();
-                body.close(x.name);
+                let body_ty = self.visit_term(&mut body)?;
+                self.tt_local_env.locals.pop();
 
-                Ok(mk_type_arrow(arg_ty.clone(), body_ty))
+                Ok(mk_type_arrow(binder_type.clone(), body_ty))
             }
             Term::App(m) => {
-                let TermApp { fun, arg } = Arc::make_mut(m);
+                let TermApp { fun, arg } = &**m;
 
                 let fun_ty = self.visit_term(fun)?;
                 let arg_ty = self.visit_term(arg)?;
