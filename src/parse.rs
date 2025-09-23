@@ -1,10 +1,10 @@
 use crate::cmd::{
     ClassInstanceDef, ClassInstanceField, ClassInstanceLemma, ClassStructureAxiom,
     ClassStructureConst, ClassStructureField, Cmd, CmdAxiom, CmdClassInstance, CmdClassStructure,
-    CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdInstance, CmdLemma,
-    CmdLocalTypeConst, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive,
-    Constructor, DataConstructor, Fixity, InstanceDef, InstanceField, InstanceLemma, Operator,
-    StructureAxiom, StructureConst, StructureField,
+    CmdConst, CmdDef, CmdEndNamespace, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdInstance,
+    CmdLemma, CmdLocalTypeConst, CmdNamespace, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst,
+    CmdTypeInductive, CmdUse, Constructor, DataConstructor, Fixity, InstanceDef, InstanceField,
+    InstanceLemma, Operator, StructureAxiom, StructureConst, StructureField,
 };
 use crate::proof::{
     Expr, mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_change, mk_expr_const, mk_expr_inst,
@@ -46,6 +46,33 @@ impl TokenTable {
         };
         Ok(())
     }
+}
+
+fn split_ident_to_components(ident: &str) -> Vec<String> {
+    ident.split('.').map(|s| s.to_owned()).collect()
+}
+
+fn components_to_name(components: &[String]) -> Name {
+    Name::intern(&components.join(".")).expect("logic flaw")
+}
+
+fn try_candidate_path<F>(
+    path: Vec<String>,
+    predicate: &mut F,
+    seen: &mut HashSet<String>,
+) -> Option<Name>
+where
+    F: FnMut(&Name) -> bool,
+{
+    if path.is_empty() {
+        return None;
+    }
+    let key = path.join(".");
+    if !seen.insert(key.clone()) {
+        return None;
+    }
+    let name = Name::intern(&key).expect("logic flaw");
+    if predicate(&name) { Some(name) } else { None }
 }
 
 enum Led {
@@ -157,6 +184,9 @@ pub struct Namespace {
     pub class_predicates: HashSet<Name>,
     // mapping name to type arity
     pub locals: Vec<Name>,
+    pub namespace_stack: Vec<String>,
+    pub imported_namespaces: Vec<Vec<String>>,
+    pub used_entities: Vec<(String, Name)>,
 }
 
 pub struct Parser<'a> {
@@ -166,6 +196,9 @@ pub struct Parser<'a> {
     type_locals: Vec<Name>,
     locals: Vec<Name>,
     holes: Vec<(Name, Type)>,
+    namespace_stack: Vec<String>,
+    imported_namespaces: Vec<Vec<String>>,
+    used_entities: Vec<(String, Name)>,
 }
 
 impl<'a> Parser<'a> {
@@ -182,6 +215,9 @@ impl<'a> Parser<'a> {
             type_locals: type_variables,
             locals: vec![],
             holes: vec![],
+            namespace_stack: ns.namespace_stack.clone(),
+            imported_namespaces: ns.imported_namespaces.clone(),
+            used_entities: ns.used_entities.clone(),
         }
     }
 
@@ -247,16 +283,6 @@ impl<'a> Parser<'a> {
         Ok(token)
     }
 
-    fn ident_opt(&mut self) -> Option<Token> {
-        if let Some(token) = self.peek_opt() {
-            if token.is_ident() {
-                self.advance();
-                return Some(token);
-            }
-        }
-        None
-    }
-
     fn expect_ident(&mut self, name: &str) -> Result<(), ParseError> {
         let token = self.any_token()?;
         if token.kind == TokenKind::Ident && token.as_str() == name {
@@ -315,13 +341,133 @@ impl<'a> Parser<'a> {
         Self::fail(token, format!("expected keyword '{}'", kw))
     }
 
+    fn binder_ident(&mut self) -> Result<Token, ParseError> {
+        let token = self.ident()?;
+        if token.as_str().contains('.') {
+            return Self::fail(token, "dots are not allowed in local identifiers");
+        }
+        Ok(token)
+    }
+
+    fn binder_ident_opt(&mut self) -> Option<Token> {
+        if let Some(token) = self.peek_opt() {
+            if token.is_ident() {
+                if token.as_str().contains('.') {
+                    // consume to provide a consistent error later when parsed in context
+                    // where identifier is mandatory
+                    return None;
+                }
+                self.advance();
+                return Some(token);
+            }
+        }
+        None
+    }
+
+    fn binder_name(&mut self) -> Result<Name, ParseError> {
+        Ok(Name::try_from(self.binder_ident()?.as_str()).expect("logic flaw"))
+    }
+
+    fn binder_name_opt(&mut self) -> Option<Name> {
+        self.binder_ident_opt()
+            .map(|token| Name::try_from(token.as_str()).expect("logic flaw"))
+    }
+
     fn name(&mut self) -> Result<Name, ParseError> {
         Ok(Name::try_from(self.ident()?.as_str()).expect("logic flaw"))
     }
 
-    fn name_opt(&mut self) -> Option<Name> {
-        self.ident_opt()
-            .map(|token| Name::try_from(token.as_str()).expect("logic flaw"))
+    fn qualify_components(&self, raw: &[String]) -> Vec<String> {
+        let mut result = self.namespace_stack.clone();
+        result.extend_from_slice(raw);
+        result
+    }
+
+    fn definition_name(&mut self) -> Result<Name, ParseError> {
+        let token = self.ident()?;
+        let components = split_ident_to_components(token.as_str());
+        let qualified = if components
+            .first()
+            .is_some_and(|part| part.as_str() == "_root_")
+        {
+            if components.len() <= 1 {
+                return Self::fail(token, "invalid name");
+            }
+            components[1..].to_vec()
+        } else {
+            self.qualify_components(&components)
+        };
+        Ok(components_to_name(&qualified))
+    }
+
+    fn read_path(&mut self) -> Result<Vec<String>, ParseError> {
+        let token = self.ident()?;
+        Ok(split_ident_to_components(token.as_str()))
+    }
+
+    fn resolve_name<F>(&self, raw: &[String], mut predicate: F) -> Option<Name>
+    where
+        F: FnMut(&Name) -> bool,
+    {
+        if raw.len() == 1 {
+            if let Some((_, name)) = self
+                .used_entities
+                .iter()
+                .rev()
+                .find(|(alias, _)| alias == &raw[0])
+            {
+                if predicate(name) {
+                    return Some(*name);
+                }
+            }
+        }
+
+        if raw
+            .first()
+            .is_some_and(|component| component.as_str() == "_root_")
+        {
+            if raw.len() <= 1 {
+                return None;
+            }
+            let name = components_to_name(&raw[1..]);
+            if predicate(&name) {
+                return Some(name);
+            }
+            return None;
+        }
+
+        let mut seen = HashSet::new();
+        if let Some(name) =
+            try_candidate_path(self.qualify_components(raw), &mut predicate, &mut seen)
+        {
+            return Some(name);
+        }
+
+        for imported in &self.imported_namespaces {
+            let mut path = imported.clone();
+            path.extend_from_slice(raw);
+            if let Some(name) = try_candidate_path(path, &mut predicate, &mut seen) {
+                return Some(name);
+            }
+        }
+
+        try_candidate_path(raw.to_vec(), &mut predicate, &mut seen)
+    }
+
+    fn resolve_const_components(&self, raw: &[String]) -> Option<Name> {
+        self.resolve_name(raw, |name| self.ns.consts.contains_key(name))
+    }
+
+    fn resolve_axiom_components(&self, raw: &[String]) -> Option<Name> {
+        self.resolve_name(raw, |name| self.ns.axioms.contains_key(name))
+    }
+
+    fn resolve_type_const_components(&self, raw: &[String]) -> Option<Name> {
+        self.resolve_name(raw, |name| self.ns.type_consts.contains(name))
+    }
+
+    fn resolve_class_components(&self, raw: &[String]) -> Option<Name> {
+        self.resolve_name(raw, |name| self.ns.class_predicates.contains(name))
     }
 
     fn kind(&mut self) -> Result<Kind, ParseError> {
@@ -340,8 +486,10 @@ impl<'a> Parser<'a> {
             let name: Name = token.as_str().try_into().expect("logic flaw");
             if self.type_locals.iter().any(|x| x == &name) || self.ns.type_locals.contains(&name) {
                 Ok(mk_type_local(name))
-            } else if self.ns.type_consts.contains(&name) {
-                Ok(mk_type_const(name))
+            } else if let Some(resolved) =
+                self.resolve_type_const_components(&split_ident_to_components(token.as_str()))
+            {
+                Ok(mk_type_const(resolved))
             } else if token.as_str() == "sub" {
                 let t = self.subty(1024)?;
                 Ok(mk_type_arrow(t, mk_type_prop()))
@@ -402,8 +550,8 @@ impl<'a> Parser<'a> {
     fn typed_parameter(&mut self, _token: Token) -> Result<(Vec<Name>, Type), ParseError> {
         let mut idents = vec![];
         // needs at least one parameter
-        idents.push(self.name()?);
-        while let Some(name) = self.name_opt() {
+        idents.push(self.binder_name()?);
+        while let Some(name) = self.binder_name_opt() {
             idents.push(name);
         }
         self.expect_symbol(":")?;
@@ -435,8 +583,14 @@ impl<'a> Parser<'a> {
                 for name in names {
                     params.push((name, Some(t.clone())));
                 }
-            } else if let Some(name) = self.name_opt() {
-                params.push((name, None));
+            } else if let Some(token) = self.peek_opt() {
+                if token.is_ident() {
+                    let name = self.binder_name()?;
+                    params.push((name, None));
+                    continue;
+                } else {
+                    break;
+                }
             } else {
                 break;
             }
@@ -449,10 +603,10 @@ impl<'a> Parser<'a> {
         if !token.is_ident() {
             return Self::fail(token, "expected class name");
         }
-        let name = Name::try_from(token.as_str()).expect("logic flaw");
-        if !self.ns.class_predicates.contains(&name) {
+        let Some(name) = self.resolve_class_components(&split_ident_to_components(token.as_str()))
+        else {
             return Self::fail(token, "unknown class");
-        }
+        };
         let mut args = vec![];
         while let Some(t) = self.optional(|this| this.subty(1024)) {
             args.push(t);
@@ -531,7 +685,7 @@ impl<'a> Parser<'a> {
     }
 
     fn term_sep(&mut self, _token: Token) -> Result<Term, ParseError> {
-        let name = self.name()?;
+        let name = self.binder_name()?;
         let ty;
         if let Some(_token) = self.expect_symbol_opt(":") {
             ty = self.ty()?;
@@ -549,20 +703,30 @@ impl<'a> Parser<'a> {
     }
 
     fn term_var(&mut self, token: Token, entity: Option<Name>) -> Result<Term, ParseError> {
+        if entity.is_none() {
+            let raw_name = Name::try_from(token.as_str()).expect("logic flaw");
+            for x in self.locals.iter().rev() {
+                if x == &raw_name {
+                    return Ok(mk_local(raw_name));
+                }
+            }
+            for x in self.ns.locals.iter() {
+                if x == &raw_name {
+                    return Ok(mk_local(raw_name));
+                }
+            }
+        }
         let name = match entity {
-            None => Name::try_from(token.as_str()).expect("logic flaw"),
             Some(s) => s,
+            None => {
+                let Some(name) =
+                    self.resolve_const_components(&split_ident_to_components(token.as_str()))
+                else {
+                    return Self::fail(token, "unknown variable");
+                };
+                name
+            }
         };
-        for x in self.locals.iter().rev() {
-            if x == &name {
-                return Ok(mk_local(name));
-            }
-        }
-        for x in self.ns.locals.iter() {
-            if x == &name {
-                return Ok(mk_local(name));
-            }
-        }
         let Some(const_info) = self.ns.consts.get(&name).cloned() else {
             return Self::fail(token, "unknown variable");
         };
@@ -673,7 +837,10 @@ impl<'a> Parser<'a> {
     }
 
     fn expr_const(&mut self, token: Token, auto_inst: bool) -> Result<Expr, ParseError> {
-        let name = Name::try_from(token.as_str()).unwrap();
+        let Some(name) = self.resolve_axiom_components(&split_ident_to_components(token.as_str()))
+        else {
+            return Self::fail(token, "unknown variable");
+        };
         let Some(axiom_info) = self.ns.axioms.get(&name).cloned() else {
             return Self::fail(token, "unknown variable");
         };
@@ -764,7 +931,7 @@ impl<'a> Parser<'a> {
                 }
                 "take" => {
                     self.expect_symbol("(")?;
-                    let name = self.name()?;
+                    let name = self.binder_name()?;
                     self.expect_symbol(":")?;
                     let ty = self.ty()?;
                     self.expect_symbol(")")?;
@@ -790,7 +957,7 @@ impl<'a> Parser<'a> {
                 }
                 "obtain" => {
                     self.expect_symbol("(")?;
-                    let name = self.name()?;
+                    let name = self.binder_name()?;
                     self.expect_symbol(":")?;
                     let ty = self.ty()?;
                     self.expect_symbol(")")?;
@@ -928,7 +1095,7 @@ impl<'a> Parser<'a> {
             let mut local_types = vec![];
             if self.expect_symbol_opt("}").is_none() {
                 loop {
-                    let token = self.ident()?;
+                    let token = self.binder_ident()?;
                     let tv = Name::intern(token.as_str()).unwrap();
                     for v in &local_types {
                         if &tv == v {
@@ -949,6 +1116,13 @@ impl<'a> Parser<'a> {
     }
 
     pub fn cmd(&mut self) -> Result<Cmd, ParseError> {
+        if let Some(token) = self.peek_opt() {
+            if token.is_symbol() && token.as_str() == "}" {
+                self.advance();
+                return Ok(Cmd::EndNamespace(CmdEndNamespace));
+            }
+        }
+
         let keyword = self.keyword()?;
         let cmd = match keyword.as_str() {
             "infixr" => {
@@ -1041,11 +1215,33 @@ impl<'a> Parser<'a> {
                 let local_type_const_cmd = self.local_type_const_cmd(keyword)?;
                 Cmd::LocalTypeConst(local_type_const_cmd)
             }
+            "namespace" => {
+                let namespace_cmd = self.namespace_cmd(keyword)?;
+                Cmd::Namespace(namespace_cmd)
+            }
+            "use" => {
+                let use_cmd = self.use_cmd(keyword)?;
+                Cmd::Use(use_cmd)
+            }
             _ => {
                 return Self::fail(keyword, "expected command");
             }
         };
         Ok(cmd)
+    }
+
+    fn namespace_cmd(&mut self, _token: Token) -> Result<CmdNamespace, ParseError> {
+        let path = self.read_path()?;
+        self.expect_symbol("{")?;
+        Ok(CmdNamespace { path })
+    }
+
+    fn use_cmd(&mut self, _token: Token) -> Result<CmdUse, ParseError> {
+        let mut paths = vec![self.read_path()?];
+        while self.expect_symbol_opt(",").is_some() {
+            paths.push(self.read_path()?);
+        }
+        Ok(CmdUse { paths })
     }
 
     fn infixr_cmd(&mut self, _token: Token) -> Result<CmdInfixr, ParseError> {
@@ -1057,7 +1253,12 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let entity = self.name()?;
+        let token = self.ident()?;
+        let Some(entity) =
+            self.resolve_const_components(&split_ident_to_components(token.as_str()))
+        else {
+            return Self::fail(token, "unknown constant");
+        };
         Ok(CmdInfixr {
             op: op.as_str().to_owned(),
             prec,
@@ -1074,7 +1275,12 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let entity = self.name()?;
+        let token = self.ident()?;
+        let Some(entity) =
+            self.resolve_const_components(&split_ident_to_components(token.as_str()))
+        else {
+            return Self::fail(token, "unknown constant");
+        };
         Ok(CmdInfixl {
             op: op.as_str().to_owned(),
             prec,
@@ -1091,7 +1297,12 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let entity = self.name()?;
+        let token = self.ident()?;
+        let Some(entity) =
+            self.resolve_const_components(&split_ident_to_components(token.as_str()))
+        else {
+            return Self::fail(token, "unknown constant");
+        };
         Ok(CmdInfix {
             op: op.as_str().to_owned(),
             prec,
@@ -1108,7 +1319,12 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let entity = self.name()?;
+        let token = self.ident()?;
+        let Some(entity) =
+            self.resolve_const_components(&split_ident_to_components(token.as_str()))
+        else {
+            return Self::fail(token, "unknown constant");
+        };
         Ok(CmdPrefix {
             op: op.as_str().to_owned(),
             prec,
@@ -1119,7 +1335,12 @@ impl<'a> Parser<'a> {
     fn nofix_cmd(&mut self, _token: Token) -> Result<CmdNofix, ParseError> {
         let op = self.symbol()?;
         self.expect_symbol(":=")?;
-        let entity = self.name()?;
+        let token = self.ident()?;
+        let Some(entity) =
+            self.resolve_const_components(&split_ident_to_components(token.as_str()))
+        else {
+            return Self::fail(token, "unknown constant");
+        };
         Ok(CmdNofix {
             op: op.as_str().to_owned(),
             entity,
@@ -1127,7 +1348,7 @@ impl<'a> Parser<'a> {
     }
 
     fn def_cmd(&mut self, _token: Token) -> Result<CmdDef, ParseError> {
-        let name = self.name()?;
+        let name = self.definition_name()?;
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.type_locals.push(*ty);
@@ -1159,7 +1380,7 @@ impl<'a> Parser<'a> {
     }
 
     fn axiom_cmd(&mut self, _token: Token) -> Result<CmdAxiom, ParseError> {
-        let name = self.name()?;
+        let name = self.definition_name()?;
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.type_locals.push(*ty);
@@ -1185,7 +1406,7 @@ impl<'a> Parser<'a> {
     }
 
     fn lemma_cmd(&mut self, _token: Token) -> Result<CmdLemma, ParseError> {
-        let name = self.name()?;
+        let name = self.definition_name()?;
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.type_locals.push(*ty);
@@ -1219,7 +1440,7 @@ impl<'a> Parser<'a> {
     }
 
     fn const_cmd(&mut self, _token: Token) -> Result<CmdConst, ParseError> {
-        let name = self.name()?;
+        let name = self.definition_name()?;
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.type_locals.push(*ty);
@@ -1239,7 +1460,7 @@ impl<'a> Parser<'a> {
     }
 
     fn type_const_cmd(&mut self, _token: Token) -> Result<CmdTypeConst, ParseError> {
-        let name = self.name()?;
+        let name = self.definition_name()?;
         self.expect_symbol(":")?;
         let kind = self.kind()?;
         Ok(CmdTypeConst { name, kind })
@@ -1247,18 +1468,22 @@ impl<'a> Parser<'a> {
 
     fn local_type_const_cmd(&mut self, _token: Token) -> Result<CmdLocalTypeConst, ParseError> {
         let mut variables = vec![];
-        while let Some(name) = self.name_opt() {
-            variables.push(name);
+        while let Some(token) = self.peek_opt() {
+            if token.is_ident() {
+                variables.push(self.binder_name()?);
+            } else {
+                break;
+            }
         }
         Ok(CmdLocalTypeConst { variables })
     }
 
     fn type_inductive_cmd(&mut self, _token: Token) -> Result<CmdTypeInductive, ParseError> {
-        let name = self.name()?;
+        let name = self.definition_name()?;
         self.type_locals.push(name);
 
         let mut local_types = vec![];
-        while let Some(token) = self.ident_opt() {
+        while let Some(token) = self.binder_ident_opt() {
             let tv = Name::intern(token.as_str()).unwrap();
             for v in &local_types {
                 if &tv == v {
@@ -1296,7 +1521,7 @@ impl<'a> Parser<'a> {
     }
 
     fn inductive_cmd(&mut self, _token: Token) -> Result<CmdInductive, ParseError> {
-        let name = self.name()?;
+        let name = self.definition_name()?;
         self.locals.push(name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
@@ -1345,9 +1570,9 @@ impl<'a> Parser<'a> {
     }
 
     fn structure_cmd(&mut self, _token: Token) -> Result<CmdStructure, ParseError> {
-        let name = self.name()?;
+        let name = self.definition_name()?;
         let mut local_types = vec![];
-        while let Some(token) = self.ident_opt() {
+        while let Some(token) = self.binder_ident_opt() {
             let tv = Name::intern(token.as_str()).unwrap();
             for v in &local_types {
                 if &tv == v {
@@ -1407,7 +1632,7 @@ impl<'a> Parser<'a> {
     }
 
     fn instance_cmd(&mut self, _token: Token) -> Result<CmdInstance, ParseError> {
-        let name = self.name()?;
+        let name = self.definition_name()?;
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.type_locals.push(*ty);
@@ -1494,9 +1719,9 @@ impl<'a> Parser<'a> {
     }
 
     fn class_structure_cmd(&mut self, _token: Token) -> Result<CmdClassStructure, ParseError> {
-        let name = self.name()?;
+        let name = self.definition_name()?;
         let mut local_types = vec![];
-        while let Some(token) = self.ident_opt() {
+        while let Some(token) = self.binder_ident_opt() {
             let tv = Name::intern(token.as_str()).unwrap();
             for v in &local_types {
                 if &tv == v {
@@ -1556,7 +1781,7 @@ impl<'a> Parser<'a> {
     }
 
     fn class_instance_cmd(&mut self, _token: Token) -> Result<CmdClassInstance, ParseError> {
-        let name = self.name()?;
+        let name = self.definition_name()?;
         let local_types = self.local_type_parameters()?;
         for &ty in &local_types {
             self.type_locals.push(ty);

@@ -275,7 +275,7 @@ impl Iterator for Lex {
                     }
                     "infixr" | "nofix" | "infixl" | "infix" | "prefix" | "axiom" | "def"
                     | "lemma" | "const" | "type" | "local" | "inductive" | "structure"
-                    | "instance" | "class" => {
+                    | "instance" | "class" | "namespace" | "use" => {
                         kind = TokenKind::Keyword;
                     }
                     _ => {

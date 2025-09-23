@@ -33,6 +33,9 @@ pub enum Cmd {
     Instance(CmdInstance),
     ClassStructure(CmdClassStructure),
     ClassInstance(CmdClassInstance),
+    Namespace(CmdNamespace),
+    EndNamespace(CmdEndNamespace),
+    Use(CmdUse),
 }
 
 #[derive(Clone, Debug)]
@@ -113,6 +116,24 @@ pub struct CmdTypeConst {
 #[derive(Clone, Debug)]
 pub struct CmdLocalTypeConst {
     pub variables: Vec<Name>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CmdNamespace {
+    pub path: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CmdEndNamespace;
+
+#[derive(Clone, Debug)]
+pub struct CmdUse {
+    pub paths: Vec<Vec<String>>,
+}
+
+#[derive(Debug, Clone)]
+struct NamespaceFrame {
+    previous_stack: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -269,6 +290,9 @@ pub struct Eval {
     pub class_instance_table: HashMap<Name, ClassInstance>,
     pub structure_table: HashMap<Name, CmdStructure>,
     pub class_structure_table: HashMap<Name, CmdClassStructure>,
+    namespace_history: Vec<NamespaceFrame>,
+    import_counts: Vec<usize>,
+    entity_use_counts: Vec<usize>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -288,7 +312,44 @@ pub struct Operator {
     pub entity: Name,
 }
 
+fn components_to_name(components: &[String]) -> Name {
+    Name::intern(&components.join(".")).expect("logic flaw")
+}
+
 impl Eval {
+    fn ensure_import_base(&mut self) {
+        if self.import_counts.is_empty() {
+            self.import_counts.push(0);
+        }
+        if self.entity_use_counts.is_empty() {
+            self.entity_use_counts.push(0);
+        }
+    }
+
+    fn qualify_path(&self, path: &[String]) -> Vec<String> {
+        if path
+            .first()
+            .is_some_and(|component| component.as_str() == "_root_")
+        {
+            path[1..].to_vec()
+        } else {
+            let mut qualified = self.ns.namespace_stack.clone();
+            qualified.extend_from_slice(path);
+            qualified
+        }
+    }
+
+    fn normalize_namespace_arg(path: &[String]) -> Vec<String> {
+        if path
+            .first()
+            .is_some_and(|component| component.as_str() == "_root_")
+        {
+            path[1..].to_vec()
+        } else {
+            path.to_vec()
+        }
+    }
+
     fn add_const(
         &mut self,
         name: Name,
@@ -513,7 +574,67 @@ impl Eval {
     }
 
     pub fn run_cmd(&mut self, cmd: Cmd) -> anyhow::Result<()> {
+        self.ensure_import_base();
         match cmd {
+            Cmd::Namespace(inner) => {
+                let CmdNamespace { path } = inner;
+                let appended = Self::normalize_namespace_arg(&path);
+                let previous_stack = self.ns.namespace_stack.clone();
+                if path
+                    .first()
+                    .is_some_and(|component| component.as_str() == "_root_")
+                {
+                    self.ns.namespace_stack.clear();
+                }
+                self.ns.namespace_stack.extend(appended);
+                self.namespace_history
+                    .push(NamespaceFrame { previous_stack });
+                self.import_counts.push(0);
+                self.entity_use_counts.push(0);
+                Ok(())
+            }
+            Cmd::EndNamespace(_inner) => {
+                let Some(frame) = self.namespace_history.pop() else {
+                    bail!("no namespace to end");
+                };
+                if let Some(count) = self.import_counts.pop() {
+                    for _ in 0..count {
+                        self.ns.imported_namespaces.pop();
+                    }
+                }
+                if let Some(count) = self.entity_use_counts.pop() {
+                    for _ in 0..count {
+                        self.ns.used_entities.pop();
+                    }
+                }
+                self.ns.namespace_stack = frame.previous_stack;
+                Ok(())
+            }
+            Cmd::Use(inner) => {
+                for path in inner.paths {
+                    let qualified = self.qualify_path(&path);
+                    let Some(last) = qualified.last().cloned() else {
+                        bail!("invalid use target");
+                    };
+                    let name = components_to_name(&qualified);
+                    if self.ns.consts.contains_key(&name)
+                        || self.ns.axioms.contains_key(&name)
+                        || self.ns.type_consts.contains(&name)
+                        || self.ns.class_predicates.contains(&name)
+                    {
+                        self.ns.used_entities.push((last, name));
+                        if let Some(count) = self.entity_use_counts.last_mut() {
+                            *count += 1;
+                        }
+                    } else {
+                        self.ns.imported_namespaces.push(qualified);
+                        if let Some(count) = self.import_counts.last_mut() {
+                            *count += 1;
+                        }
+                    }
+                }
+                Ok(())
+            }
             Cmd::Infix(inner) => {
                 let CmdInfix { op, prec, entity } = inner;
                 let op = Operator {
