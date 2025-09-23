@@ -659,10 +659,10 @@ impl<'a> Parser<'a> {
     // Returns (?M l₁ ⋯ lₙ) where ?M is fresh and l₁ ⋯ lₙ are the context in place.
     fn mk_term_hole(&mut self) -> Term {
         let mut hole = mk_fresh_hole();
-        let Term::Hole(name) = &hole else {
+        let Term::Hole(inner) = &hole else {
             unreachable!()
         };
-        self.holes.push((*name, mk_fresh_type_hole()));
+        self.holes.push((inner.name, mk_fresh_type_hole()));
         hole.apply(self.locals.iter().map(|name| mk_local(*name)));
 
         hole
