@@ -221,7 +221,7 @@ impl Env<'_> {
             }
             Proof::ImpIntro(h) => {
                 let (p, h) = &**h;
-                self.tt_env.is_wff(tt_local_env, p);
+                self.tt_env.check_wff(tt_local_env, p);
                 local_env.local_axioms.push(p.clone());
                 let mut target = self.infer_prop(tt_local_env, local_env, h);
                 let p = local_env.local_axioms.pop().unwrap();
@@ -240,7 +240,7 @@ impl Env<'_> {
             }
             Proof::ForallIntro(h) => {
                 let &(name, ref ty, ref h) = &**h;
-                self.tt_env.is_wft(tt_local_env, ty);
+                self.tt_env.check_wft(tt_local_env, ty);
                 for c in &local_env.local_axioms {
                     if !c.is_fresh(&[name]) {
                         // eigenvariable condition fails
@@ -294,7 +294,7 @@ impl Env<'_> {
                     );
                 }
                 for ty_arg in ty_args {
-                    self.tt_env.is_wft(tt_local_env, ty_arg);
+                    self.tt_env.check_wft(tt_local_env, ty_arg);
                 }
                 let mut type_subst = vec![];
                 for (&x, t) in zip(local_types, ty_args) {

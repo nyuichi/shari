@@ -1640,7 +1640,6 @@ pub struct Env<'a> {
 }
 
 impl Env<'_> {
-    // TODO: infer_foo と check_foo は不整合を見つけたらすぐ panic して良い。
     pub fn infer_kind(&self, local_env: &LocalEnv, t: &Type) -> Kind {
         match t {
             Type::Const(name) => self
@@ -1701,11 +1700,11 @@ impl Env<'_> {
         }
     }
 
-    pub fn is_wft(&self, local_env: &LocalEnv, t: &Type) {
+    pub fn check_wft(&self, local_env: &LocalEnv, t: &Type) {
         self.check_kind(local_env, t, Kind::base());
     }
 
-    pub fn is_wfc(&self, local_env: &LocalEnv, c: &Class) {
+    pub fn check_wfc(&self, local_env: &LocalEnv, c: &Class) {
         let class_type = self
             .class_predicate_table
             .get(&c.name)
@@ -1719,7 +1718,7 @@ impl Env<'_> {
             );
         }
         for arg in &c.args {
-            self.is_wft(local_env, arg);
+            self.check_wft(local_env, arg);
         }
     }
 
@@ -1757,7 +1756,7 @@ impl Env<'_> {
                     );
                 }
                 for ty_arg in ty_args {
-                    self.is_wft(local_env, ty_arg);
+                    self.check_wft(local_env, ty_arg);
                 }
                 let mut type_subst = vec![];
                 for (&x, t) in zip(local_types, ty_args) {
@@ -1796,7 +1795,7 @@ impl Env<'_> {
         match m {
             Term::Var(_) => panic!("cannot infer type of a raw variable"),
             Term::Abs(m) => {
-                self.is_wft(local_env, &m.binder_type);
+                self.check_wft(local_env, &m.binder_type);
                 let x = Parameter {
                     name: Name::fresh_from(m.binder_name),
                     ty: m.binder_type.clone(),
@@ -1847,7 +1846,7 @@ impl Env<'_> {
                     );
                 }
                 for ty_arg in &m.ty_args {
-                    self.is_wft(local_env, ty_arg);
+                    self.check_wft(local_env, ty_arg);
                 }
                 let mut type_subst = vec![];
                 for (&x, t) in zip(local_types, &m.ty_args) {
@@ -1864,7 +1863,7 @@ impl Env<'_> {
                 for (local_class, instance) in zip(local_classes, &m.instances) {
                     let mut local_class = local_class.clone();
                     local_class.subst(&type_subst);
-                    self.is_wfc(local_env, &local_class);
+                    self.check_wfc(local_env, &local_class);
                     self.check_class(local_env, instance, &local_class);
                 }
                 let mut ty = ty.clone();
@@ -1885,7 +1884,7 @@ impl Env<'_> {
         }
     }
 
-    pub fn is_wff(&self, local_env: &mut LocalEnv, m: &Term) {
+    pub fn check_wff(&self, local_env: &mut LocalEnv, m: &Term) {
         self.check_type(local_env, m, &mk_type_prop());
     }
 
@@ -1926,7 +1925,7 @@ impl Env<'_> {
                 h1
             }
             Path::CongrAbs(path) => {
-                self.is_wft(local_env, &path.1);
+                self.check_wft(local_env, &path.1);
                 local_env.locals.push(Parameter {
                     name: path.0,
                     ty: path.1.clone(),

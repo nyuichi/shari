@@ -328,7 +328,7 @@ impl Eval {
         local_classes: Vec<Class>,
         target: Term,
     ) {
-        self.tt_env().is_wff(
+        self.tt_env().check_wff(
             &mut LocalEnv {
                 local_types: local_types.clone(),
                 local_classes: local_classes.clone(),
