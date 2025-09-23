@@ -139,56 +139,112 @@ pub fn mk_expr_change(target: Term, expr: Expr) -> Expr {
     Expr::Change(Arc::new(ExprChange { target, expr }))
 }
 
-// TODO: もうちょっとまともな表示にする。デバッグがつらい。
 impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Expr::Assump(e) => {
-                write!(f, "«{}»", e.target)
-            }
-            Expr::Assume(e) => {
-                write!(f, "assume {}, {}", e.local_axiom, e.expr)
-            }
-            Expr::App(e) => {
-                write!(f, "({}) {}", e.expr1, e.expr2)
-            }
-            Expr::Take(e) => {
-                write!(f, "take ({} : {}), {}", e.name, e.ty, e.expr)
-            }
-            Expr::Inst(e) => {
-                write!(f, "({})[{}]", e.expr, e.arg)
-            }
-            Expr::Const(e) => {
-                write!(f, "{}", e.name)?;
-                if !e.ty_args.is_empty() {
-                    let mut first = true;
-                    for t in &e.ty_args {
-                        if !first {
-                            write!(f, ", ")?;
-                        }
-                        write!(f, "{}", t)?;
-                        first = false;
-                    }
-                    write!(f, "}}")?
-                }
-                if !e.instances.is_empty() {
-                    write!(f, ".[")?;
-                    let mut first = true;
-                    for i in &e.instances {
-                        if !first {
-                            write!(f, ", ")?;
-                        }
-                        write!(f, "{}", i)?;
-                        first = false;
-                    }
-                    write!(f, "]")?
-                }
-                Ok(())
-            }
-            Expr::Change(e) => {
-                write!(f, "change {}, {}", e.target, e.expr)
+        const PREC_LOWEST: u8 = 0;
+        const PREC_PREFIX: u8 = 1;
+        const PREC_APP: u8 = 2;
+        const PREC_INST: u8 = 3;
+        const PREC_ATOM: u8 = 4;
+
+        fn precedence(expr: &Expr) -> u8 {
+            match expr {
+                Expr::Assump(_) | Expr::Const(_) => PREC_ATOM,
+                Expr::Inst(_) => PREC_INST,
+                Expr::App(_) => PREC_APP,
+                Expr::Assume(_) | Expr::Take(_) | Expr::Change(_) => PREC_PREFIX,
             }
         }
+
+        fn collect_inst_chain<'a>(expr: &'a Expr, args: &mut Vec<&'a Term>) -> &'a Expr {
+            match expr {
+                Expr::Inst(inner) => {
+                    args.push(&inner.arg);
+                    collect_inst_chain(&inner.expr, args)
+                }
+                _ => expr,
+            }
+        }
+
+        fn fmt_expr(
+            expr: &Expr,
+            f: &mut std::fmt::Formatter<'_>,
+            parent_prec: u8,
+        ) -> std::fmt::Result {
+            let my_prec = precedence(expr);
+            let needs_paren = my_prec < parent_prec;
+            if needs_paren {
+                write!(f, "(")?;
+            }
+
+            match expr {
+                Expr::Assump(e) => {
+                    write!(f, "«{}»", e.target)?;
+                }
+                Expr::Assume(e) => {
+                    write!(f, "assume {}, ", e.local_axiom)?;
+                    fmt_expr(&e.expr, f, PREC_LOWEST)?;
+                }
+                Expr::App(e) => {
+                    fmt_expr(&e.expr1, f, PREC_APP)?;
+                    write!(f, " ")?;
+                    fmt_expr(&e.expr2, f, PREC_INST)?;
+                }
+                Expr::Take(e) => {
+                    write!(f, "take ({} : {}), ", e.name, e.ty)?;
+                    fmt_expr(&e.expr, f, PREC_LOWEST)?;
+                }
+                Expr::Inst(_) => {
+                    let mut args = Vec::new();
+                    let base = collect_inst_chain(expr, &mut args);
+                    args.reverse();
+                    fmt_expr(base, f, PREC_INST)?;
+                    write!(f, "[")?;
+                    for (idx, arg) in args.iter().enumerate() {
+                        if idx > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", arg)?;
+                    }
+                    write!(f, "]")?;
+                }
+                Expr::Const(e) => {
+                    write!(f, "{}", e.name)?;
+                    if !e.ty_args.is_empty() {
+                        write!(f, ".{{")?;
+                        for (idx, t) in e.ty_args.iter().enumerate() {
+                            if idx > 0 {
+                                write!(f, ", ")?;
+                            }
+                            write!(f, "{t}")?;
+                        }
+                        write!(f, "}}")?;
+                    }
+                    if !e.instances.is_empty() {
+                        write!(f, ".[")?;
+                        for (idx, i) in e.instances.iter().enumerate() {
+                            if idx > 0 {
+                                write!(f, ", ")?;
+                            }
+                            write!(f, "{i}")?;
+                        }
+                        write!(f, "]")?;
+                    }
+                }
+                Expr::Change(e) => {
+                    write!(f, "change {}, ", e.target)?;
+                    fmt_expr(&e.expr, f, PREC_LOWEST)?;
+                }
+            }
+
+            if needs_paren {
+                write!(f, ")")?;
+            }
+
+            Ok(())
+        }
+
+        fmt_expr(self, f, PREC_LOWEST)
     }
 }
 
