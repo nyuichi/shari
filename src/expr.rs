@@ -143,6 +143,7 @@ pub fn mk_expr_change(target: Term, expr: Expr) -> Expr {
     Expr::Change(Arc::new(ExprChange { target, expr }))
 }
 
+// TODO: もうちょっとまともな表示にする。デバッグがつらい。
 impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

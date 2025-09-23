@@ -6,6 +6,9 @@ use std::sync::LazyLock;
 
 use crate::tt::{self, Class, Instance, Name, Parameter, Path, Term, Type};
 
+// TODO: Proof tree object は処理系が遅くなる原因なのでやめたい。
+// elabの中でexprをガチャガチャしないといけないのでexprは用意して、exprをrunするときに proof.rs で用意された証明規則に対応する関数を呼び出してその関数実行が通ればOKにしたい。
+// 同様の理由で Path も捨てたい。
 #[derive(Debug, Clone)]
 pub enum Proof {
     /// ```text
@@ -114,6 +117,7 @@ pub fn mk_proof_ref(name: Name, ty_args: Vec<Type>, instances: Vec<Instance>) ->
 static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp").unwrap());
 static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall").unwrap());
 
+// TODO: これ(とForall)イケてないからやめたい。struct Formula { inner: Term }を用意して、Formulaにgeneralizeとかguardとかを実装したい。
 #[derive(Debug, Clone)]
 pub struct Imp {
     pub lhs: Term,

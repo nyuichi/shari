@@ -10,6 +10,8 @@
  - [ ] improved error reporting
  - [ ] coercion
  - [ ] namespace
+ - [ ] local typedef
+ - [ ] more tests
  -/
 
 /-

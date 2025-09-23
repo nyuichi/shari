@@ -694,6 +694,7 @@ impl Default for Term {
     }
 }
 
+// TODO: もうちょっとまともな表示にする。デバッグがつらい。
 impl Display for Term {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -821,6 +822,9 @@ pub struct Parameter {
 
 impl Term {
     /// self.open(x) == [x/0]self
+    /// TODO:
+    /// - open をもっと軽くする。Term の全ての variant に bound を持たせて、その値を見て不必要な clone を行わないようにする。
+    /// - 結果的に &mut Term を mod の外で触らなくて良くなるはずなので、crate 全体では Term を clone しまくる実装になるはず。(全部 pass by value になる。) なので大工事になる。
     pub fn open(&mut self, x: &Term) {
         self.open_at(x, 0)
     }
@@ -847,6 +851,7 @@ impl Term {
     }
 
     /// self.close(x) == [0/x]self
+    /// TODO: close も　is_closed というフィールドを Term に持たせてそれを使うようにする。そもそも今関数は pub じゃなくてよくなるはず。
     pub fn close(&mut self, name: Name) {
         assert!(self.is_lclosed());
         self.close_at(name, 0)
@@ -1347,6 +1352,7 @@ impl Term {
         }
     }
 
+    // TODO: こっちを Eq の impl にする。
     pub fn alpha_eq(&self, other: &Term) -> bool {
         match (self, other) {
             (Term::Var(index1), Term::Var(index2)) => index1.index == index2.index,
@@ -1605,9 +1611,7 @@ pub struct Const {
 
 #[derive(Debug, Clone)]
 pub struct Delta {
-    // TODO: remove this?
     pub local_types: Vec<Name>,
-    // TODO: remove this?
     pub local_classes: Vec<Class>,
     pub target: Term,
     // equal to height(target)
@@ -1636,6 +1640,7 @@ pub struct Env<'a> {
 }
 
 impl Env<'_> {
+    // TODO: infer_foo と check_foo は不整合を見つけたらすぐ panic して良い。
     pub fn infer_kind(&self, local_env: &LocalEnv, t: &Type) -> Option<Kind> {
         match t {
             Type::Const(name) => Some(self.type_const_table.get(&name.name)?.clone()),
