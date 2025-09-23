@@ -2301,3 +2301,128 @@ impl Env<'_> {
         self.equiv_help(&mut m1, &mut m2)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    struct EnvFixture {
+        type_const_table: HashMap<Name, Kind>,
+        const_table: HashMap<Name, Const>,
+        delta_table: HashMap<Name, Delta>,
+        kappa_table: HashMap<Name, Kappa>,
+        class_predicate_table: HashMap<Name, ClassType>,
+        class_instance_table: HashMap<Name, ClassInstance>,
+    }
+
+    impl EnvFixture {
+        fn new() -> Self {
+            Self {
+                type_const_table: HashMap::new(),
+                const_table: HashMap::new(),
+                delta_table: HashMap::new(),
+                kappa_table: HashMap::new(),
+                class_predicate_table: HashMap::new(),
+                class_instance_table: HashMap::new(),
+            }
+        }
+
+        fn with_delta(mut self, name: Name, delta: Delta) -> Self {
+            self.delta_table.insert(name, delta);
+            self
+        }
+
+        fn env(&self) -> Env<'_> {
+            Env {
+                type_const_table: &self.type_const_table,
+                const_table: &self.const_table,
+                delta_table: &self.delta_table,
+                kappa_table: &self.kappa_table,
+                class_predicate_table: &self.class_predicate_table,
+                class_instance_table: &self.class_instance_table,
+            }
+        }
+    }
+
+    fn is_equiv(env: &Env<'_>, left: &Term, right: &Term) -> bool {
+        env.equiv(left, right).is_some()
+    }
+
+    #[test]
+    fn equiv_alpha_eq_constants() {
+        let fixture = EnvFixture::new();
+        let env = fixture.env();
+
+        let c = Name::intern("c").unwrap();
+        let left = mk_const(c, vec![], vec![]);
+        let right = mk_const(c, vec![], vec![]);
+
+        assert!(is_equiv(&env, &left, &right));
+    }
+
+    #[test]
+    fn equiv_beta_reduces_application() {
+        let fixture = EnvFixture::new();
+        let env = fixture.env();
+
+        let x = Name::intern("x").unwrap();
+        let a = Name::intern("a").unwrap();
+        let body = mk_var(0);
+        let lambda = mk_abs(x, mk_type_prop(), body);
+        let arg = mk_const(a, vec![], vec![]);
+        let applied = mk_app(lambda, arg.clone());
+
+        assert!(is_equiv(&env, &applied, &arg));
+    }
+
+    #[test]
+    fn equiv_delta_unfolds_constant() {
+        let c = Name::intern("c").unwrap();
+        let d = Name::intern("d").unwrap();
+
+        let delta = Delta {
+            local_types: vec![],
+            local_classes: vec![],
+            target: mk_const(d, vec![], vec![]),
+            height: 0,
+        };
+
+        let fixture = EnvFixture::new().with_delta(c, delta);
+        let env = fixture.env();
+
+        let defined = mk_const(c, vec![], vec![]);
+        let body = mk_const(d, vec![], vec![]);
+
+        assert!(is_equiv(&env, &defined, &body));
+    }
+
+    #[test]
+    fn equiv_detects_constant_mismatch() {
+        let fixture = EnvFixture::new();
+        let env = fixture.env();
+
+        let c = Name::intern("c").unwrap();
+        let d = Name::intern("d").unwrap();
+        let left = mk_const(c, vec![], vec![]);
+        let right = mk_const(d, vec![], vec![]);
+
+        assert!(!is_equiv(&env, &left, &right));
+    }
+
+    #[test]
+    fn equiv_detects_argument_mismatch() {
+        let fixture = EnvFixture::new();
+        let env = fixture.env();
+
+        let f = Name::intern("f").unwrap();
+        let a = Name::intern("a").unwrap();
+        let b = Name::intern("b").unwrap();
+
+        let fun = mk_const(f, vec![], vec![]);
+        let left = mk_app(fun.clone(), mk_const(a, vec![], vec![]));
+        let right = mk_app(fun, mk_const(b, vec![], vec![]));
+
+        assert!(!is_equiv(&env, &left, &right));
+    }
+}
