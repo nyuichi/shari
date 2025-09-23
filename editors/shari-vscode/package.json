@@ -1,0 +1,36 @@
+{
+  "name": "shari-syntax",
+  "displayName": "Shari Language Support",
+  "description": "Syntax highlighting for the Shari proof language.",
+  "version": "0.0.1",
+  "publisher": "shari",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "shari",
+        "aliases": [
+          "Shari",
+          "shari"
+        ],
+        "extensions": [
+          ".shari"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "shari",
+        "scopeName": "source.shari",
+        "path": "./syntaxes/shari.tmLanguage.json"
+      }
+    ]
+  }
+}
