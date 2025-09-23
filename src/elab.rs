@@ -9,11 +9,10 @@ use std::{
 use anyhow::{bail, ensure};
 
 use crate::{
-    expr::{
-        Expr, ExprApp, ExprAssume, ExprAssump, ExprChange, ExprConst, ExprInst, ExprTake,
-        mk_expr_change,
+    proof::{
+        self, Axiom, Expr, ExprApp, ExprAssume, ExprAssump, ExprChange, ExprConst, ExprInst,
+        ExprTake, mk_expr_change,
     },
-    proof::{self, Axiom},
     tt::{
         self, Class, ClassInstance, ClassType, Const, Instance, InstanceGlobal, Kind, LocalEnv,
         Name, Parameter, Term, TermAbs, TermApp, TermConst, Type, TypeApp, TypeArrow, mk_const,

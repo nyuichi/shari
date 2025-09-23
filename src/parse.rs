@@ -6,7 +6,7 @@ use crate::cmd::{
     Constructor, DataConstructor, Fixity, InstanceDef, InstanceField, InstanceLemma, Operator,
     StructureAxiom, StructureConst, StructureField,
 };
-use crate::expr::{
+use crate::proof::{
     Expr, mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_change, mk_expr_const, mk_expr_inst,
     mk_expr_take,
 };

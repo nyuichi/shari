@@ -4,10 +4,9 @@ use anyhow::bail;
 
 use crate::{
     elab,
-    expr::{self, Expr},
     parse::{AxiomInfo, ConstInfo, Namespace, TokenTable},
     print::{OpTable, Pretty},
-    proof::{self, Axiom},
+    proof::{self, Axiom, Expr},
     tt::{
         self, Class, ClassInstance, ClassType, Const, Delta, Kappa, Kind, LocalEnv, Name,
         Parameter, Term, Type, mk_const, mk_fresh_type_hole, mk_instance_local, mk_local,
@@ -717,15 +716,10 @@ impl Eval {
                 }
                 self.elaborate_term(&mut local_env, &mut target, &mk_type_prop())?;
                 self.elaborate_expr(&mut local_env, holes.clone(), &mut expr, &target)?;
-                let h = expr::Env {
-                    proof_env: self.proof_env(),
-                    tt_local_env: &mut local_env,
-                }
-                .run(&expr);
                 self.proof_env().check_prop(
                     &mut local_env,
                     &mut proof::LocalEnv::default(),
-                    &h,
+                    &expr,
                     &target,
                 );
                 self.add_axiom(name, local_types, local_classes, target);
@@ -1836,15 +1830,10 @@ impl Eval {
                     target.subst(&subst);
                     expr.subst(&subst);
                     self.elaborate_expr(&mut local_env, holes.clone(), expr, target)?;
-                    let h = expr::Env {
-                        proof_env: self.proof_env(),
-                        tt_local_env: &mut local_env,
-                    }
-                    .run(&*expr);
                     self.proof_env().check_prop(
                         &mut local_env,
                         &mut proof::LocalEnv::default(),
-                        &h,
+                        expr,
                         target,
                     );
 
@@ -2143,15 +2132,10 @@ impl Eval {
                         bail!("target mismatch");
                     }
                     self.elaborate_expr(&mut local_env, holes.clone(), expr, target)?;
-                    let h = expr::Env {
-                        proof_env: self.proof_env(),
-                        tt_local_env: &mut local_env,
-                    }
-                    .run(&*expr);
                     self.proof_env().check_prop(
                         &mut local_env,
                         &mut proof::LocalEnv::default(),
-                        &h,
+                        expr,
                         target,
                     );
                 }

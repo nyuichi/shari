@@ -1,117 +1,297 @@
 //! Prove by type synthesis.
 
-use std::{collections::HashMap, iter::zip, sync::Arc, vec};
-
 use std::sync::LazyLock;
+use std::{collections::HashMap, iter::zip, sync::Arc};
 
 use crate::tt::{self, Class, Instance, Name, Parameter, Term, Type};
 
-// TODO: Proof tree object は処理系が遅くなる原因なのでやめたい。
-// elabの中でexprをガチャガチャしないといけないのでexprは用意して、exprをrunするときに proof.rs で用意された証明規則に対応する関数を呼び出してその関数実行が通ればOKにしたい。
-// 同様の理由で Path も捨てたい。
+/// p ::= «φ»
+///     | assume φ, p
+///     | p p
+///     | take (x : τ), p
+///     | p[m]
+///     | c.{u₁, ⋯, uₙ}
+///     | change φ, p
+///
+///
+/// --------------- (φ ∈ Φ)
+/// Γ | Φ ⊢ «φ» : φ
+///
+/// Γ | Φ, φ ⊢ h : ψ
+/// ----------------------------
+/// Γ | Φ ⊢ assume φ, h : φ → ψ
+///
+/// Γ | Φ ⊢ h₁ : ψ → ξ    Γ | Φ ⊢ h₂ : ψ
+/// -------------------------------------
+/// Γ | Φ ⊢ h₁ h₂ : ξ
+///
+/// Γ, x : u | Φ ⊢ h : φ
+/// --------------------------------------- (x # Φ)
+/// Γ | Φ ⊢ take (x : u), h : ∀ (x : u), φ
+///
+/// Γ | Φ ⊢ h : ∀ ψ
+/// ------------------- (Γ ⊢ m : u)
+/// Γ | Φ ⊢ h[m] : ψ m
+///
+/// -------------------------
+/// Γ | Φ ⊢ c.{u₁, ⋯, uₙ} : φ
+///
+/// Γ | Φ ⊢ h : ψ     ψ ≈ φ
+/// ------------------------
+/// Γ | Φ ⊢ change φ, h : φ
+///
 #[derive(Debug, Clone)]
-pub enum Proof {
-    /// ```text
-    ///
-    /// ---------------------- (φ ∈ Φ)
-    /// Γ | Φ ⊢ assump φ : φ
-    /// ```
-    Assump(Term),
-    /// ```text
-    /// Γ | Φ, φ ⊢ h : ψ
-    /// ------------------------------
-    /// Γ | Φ ⊢ imp_intro φ, h : φ → ψ
-    /// ```
-    ImpIntro(Arc<(Term, Proof)>),
-    /// ```text
-    /// Γ | Φ ⊢ h₁ : φ → ψ    Γ | Φ ⊢ h₂ : φ
-    /// -------------------------------------
-    /// Γ | Φ ⊢ imp_elim h₁ h₂ : ψ
-    /// ```
-    ImpElim(Arc<(Proof, Proof)>),
-    /// ```text
-    /// Γ, x : τ | Φ ⊢ h : φ
-    /// ---------------------------------------------- ((x : τ) # Φ)
-    /// Γ | Φ ⊢ forall_intro (x : τ), h : ∀ (x : τ), φ
-    /// ```
-    ForallIntro(Arc<(Name, Type, Proof)>),
-    /// ```text
-    /// Γ | Φ ⊢ h : ∀ φ
-    /// ------------------------------
-    /// Γ | Φ ⊢ forall_elim m, h : φ m
-    /// ```
-    ForallElim(Arc<(Term, Proof)>),
-    /// ```text
-    /// Γ ⊢ φ ≡ ψ    Γ | Φ ⊢ h : φ
-    /// ---------------------------
-    /// Γ | Φ ⊢ conv ψ, h : ψ
-    /// ```
-    Conv(Arc<(Term, Proof)>),
-    /// ```text
-    ///
-    /// -------------------------- (c.{uᵢ} :⇔ φ)
-    /// Γ | Φ ⊢ c.{tᵢ} : [τᵢ/uᵢ]φ
-    /// ```
-    Ref(Arc<(Name, Vec<Type>, Vec<Instance>)>),
+pub enum Expr {
+    Assump(Arc<ExprAssump>),
+    Assume(Arc<ExprAssume>),
+    App(Arc<ExprApp>),
+    Take(Arc<ExprTake>),
+    Inst(Arc<ExprInst>),
+    Const(Arc<ExprConst>),
+    Change(Arc<ExprChange>),
 }
 
-impl std::fmt::Display for Proof {
+#[derive(Debug, Clone)]
+pub struct ExprAssump {
+    pub target: Term,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExprAssume {
+    pub local_axiom: Term,
+    pub expr: Expr,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExprApp {
+    pub expr1: Expr,
+    pub expr2: Expr,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExprTake {
+    pub name: Name,
+    pub ty: Type,
+    pub expr: Expr,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExprInst {
+    pub expr: Expr,
+    pub arg: Term,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExprConst {
+    pub name: Name,
+    pub ty_args: Vec<Type>,
+    pub instances: Vec<Instance>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExprChange {
+    pub target: Term,
+    pub expr: Expr,
+}
+
+impl Default for Expr {
+    fn default() -> Self {
+        static DEFAULT: LazyLock<Expr> = LazyLock::new(|| mk_expr_assump(Default::default()));
+        DEFAULT.clone()
+    }
+}
+
+pub fn mk_expr_assump(m: Term) -> Expr {
+    Expr::Assump(Arc::new(ExprAssump { target: m }))
+}
+
+pub fn mk_expr_assume(h: Term, e: Expr) -> Expr {
+    Expr::Assume(Arc::new(ExprAssume {
+        local_axiom: h,
+        expr: e,
+    }))
+}
+
+pub fn mk_expr_app(e1: Expr, e2: Expr) -> Expr {
+    Expr::App(Arc::new(ExprApp {
+        expr1: e1,
+        expr2: e2,
+    }))
+}
+
+pub fn mk_expr_take(name: Name, ty: Type, e: Expr) -> Expr {
+    Expr::Take(Arc::new(ExprTake { name, ty, expr: e }))
+}
+
+pub fn mk_expr_inst(e: Expr, m: Term) -> Expr {
+    Expr::Inst(Arc::new(ExprInst { expr: e, arg: m }))
+}
+
+pub fn mk_expr_const(name: Name, ty_args: Vec<Type>, instances: Vec<Instance>) -> Expr {
+    Expr::Const(Arc::new(ExprConst {
+        name,
+        ty_args,
+        instances,
+    }))
+}
+
+pub fn mk_expr_change(target: Term, expr: Expr) -> Expr {
+    Expr::Change(Arc::new(ExprChange { target, expr }))
+}
+
+// TODO: もうちょっとまともな表示にする。デバッグがつらい。
+impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Proof::Assump(prop) => write!(f, "(assump {prop})"),
-            Proof::ImpIntro(inner) => write!(f, "(imp_intro {}, {})", inner.0, inner.1),
-            Proof::ImpElim(inner) => write!(f, "(imp_elim {} {})", inner.0, inner.1),
-            Proof::ForallIntro(inner) => {
-                write!(f, "(forall_intro ({} : {}), {})", inner.0, inner.1, inner.2)
+            Expr::Assump(e) => {
+                write!(f, "«{}»", e.target)
             }
-            Proof::ForallElim(inner) => write!(f, "(forall_elim {}, {})", inner.0, inner.1),
-            Proof::Conv(inner) => write!(f, "(conv {}, {})", inner.0, inner.1),
-            Proof::Ref(inner) => {
-                write!(f, "{}", inner.0)?;
-                if !inner.1.is_empty() {
-                    write!(f, ".{{")?;
+            Expr::Assume(e) => {
+                write!(f, "assume {}, {}", e.local_axiom, e.expr)
+            }
+            Expr::App(e) => {
+                write!(f, "({}) {}", e.expr1, e.expr2)
+            }
+            Expr::Take(e) => {
+                write!(f, "take ({} : {}), {}", e.name, e.ty, e.expr)
+            }
+            Expr::Inst(e) => {
+                write!(f, "({})[{}]", e.expr, e.arg)
+            }
+            Expr::Const(e) => {
+                write!(f, "{}", e.name)?;
+                if !e.ty_args.is_empty() {
                     let mut first = true;
-                    for t in &inner.1 {
+                    for t in &e.ty_args {
                         if !first {
                             write!(f, ", ")?;
                         }
-                        write!(f, "{t}")?;
+                        write!(f, "{}", t)?;
                         first = false;
                     }
-                    write!(f, "}}")?;
+                    write!(f, "}}")?
+                }
+                if !e.instances.is_empty() {
+                    write!(f, ".[")?;
+                    let mut first = true;
+                    for i in &e.instances {
+                        if !first {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", i)?;
+                        first = false;
+                    }
+                    write!(f, "]")?
                 }
                 Ok(())
+            }
+            Expr::Change(e) => {
+                write!(f, "change {}, {}", e.target, e.expr)
             }
         }
     }
 }
 
-pub fn mk_proof_assump(p: Term) -> Proof {
-    Proof::Assump(p)
-}
+impl Expr {
+    pub fn is_ground(&self) -> bool {
+        match self {
+            Expr::Assump(e) => {
+                let ExprAssump { target } = &**e;
+                target.is_ground()
+            }
+            Expr::Assume(e) => {
+                let ExprAssume { local_axiom, expr } = &**e;
+                local_axiom.is_ground() && expr.is_ground()
+            }
+            Expr::App(e) => {
+                let ExprApp { expr1, expr2 } = &**e;
+                expr1.is_ground() && expr2.is_ground()
+            }
+            Expr::Take(e) => {
+                let ExprTake { expr, .. } = &**e;
+                expr.is_ground()
+            }
+            Expr::Inst(e) => {
+                let ExprInst { expr, arg } = &**e;
+                expr.is_ground() && arg.is_ground()
+            }
+            Expr::Const(_) => true,
+            Expr::Change(e) => {
+                let ExprChange { target, expr } = &**e;
+                target.is_ground() && expr.is_ground()
+            }
+        }
+    }
 
-pub fn mk_proof_imp_intro(p: Term, h: Proof) -> Proof {
-    Proof::ImpIntro(Arc::new((p, h)))
-}
+    pub fn is_type_ground(&self) -> bool {
+        match self {
+            Expr::Assump(e) => {
+                let ExprAssump { target } = &**e;
+                target.is_type_ground()
+            }
+            Expr::Assume(e) => {
+                let ExprAssume { local_axiom, expr } = &**e;
+                local_axiom.is_type_ground() && expr.is_type_ground()
+            }
+            Expr::App(e) => {
+                let ExprApp { expr1, expr2 } = &**e;
+                expr1.is_type_ground() && expr2.is_type_ground()
+            }
+            Expr::Take(e) => {
+                let ExprTake { ty, expr, .. } = &**e;
+                ty.is_ground() && expr.is_type_ground()
+            }
+            Expr::Inst(e) => {
+                let ExprInst { expr, arg } = &**e;
+                expr.is_type_ground() && arg.is_ground()
+            }
+            Expr::Const(e) => {
+                let ExprConst {
+                    ty_args, instances, ..
+                } = &**e;
+                ty_args.iter().all(|t| t.is_ground())
+                    && instances.iter().all(|i| i.is_type_ground())
+            }
+            Expr::Change(e) => {
+                let ExprChange { target, expr } = &**e;
+                target.is_type_ground() && expr.is_type_ground()
+            }
+        }
+    }
 
-pub fn mk_proof_imp_elim(h1: Proof, h2: Proof) -> Proof {
-    Proof::ImpElim(Arc::new((h1, h2)))
-}
-
-pub fn mk_proof_forall_intro(x: Name, t: Type, h: Proof) -> Proof {
-    Proof::ForallIntro(Arc::new((x, t, h)))
-}
-
-pub fn mk_proof_forall_elim(m: Term, h: Proof) -> Proof {
-    Proof::ForallElim(Arc::new((m, h)))
-}
-
-pub fn mk_proof_conv(target: Term, h: Proof) -> Proof {
-    Proof::Conv(Arc::new((target, h)))
-}
-
-pub fn mk_proof_ref(name: Name, ty_args: Vec<Type>, instances: Vec<Instance>) -> Proof {
-    Proof::Ref(Arc::new((name, ty_args, instances)))
+    pub fn subst(&mut self, subst: &[(Name, Term)]) {
+        match self {
+            Expr::Assump(e) => {
+                let ExprAssump { target } = Arc::make_mut(e);
+                target.subst(subst);
+            }
+            Expr::Assume(e) => {
+                let ExprAssume { local_axiom, expr } = Arc::make_mut(e);
+                local_axiom.subst(subst);
+                expr.subst(subst);
+            }
+            Expr::App(e) => {
+                let ExprApp { expr1, expr2 } = Arc::make_mut(e);
+                expr1.subst(subst);
+                expr2.subst(subst);
+            }
+            Expr::Take(e) => {
+                let ExprTake { expr, .. } = Arc::make_mut(e);
+                expr.subst(subst);
+            }
+            Expr::Inst(e) => {
+                let ExprInst { expr, arg } = Arc::make_mut(e);
+                expr.subst(subst);
+                arg.subst(subst);
+            }
+            Expr::Const(_) => {}
+            Expr::Change(e) => {
+                let ExprChange { target, expr } = Arc::make_mut(e);
+                target.subst(subst);
+                expr.subst(subst);
+            }
+        }
+    }
 }
 
 static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp").unwrap());
@@ -195,10 +375,10 @@ impl Env<'_> {
         &self,
         tt_local_env: &mut tt::LocalEnv,
         local_env: &mut LocalEnv,
-        h: &Proof,
+        expr: &Expr,
         prop: &Term,
     ) {
-        let inferred = self.infer_prop(tt_local_env, local_env, h);
+        let inferred = self.infer_prop(tt_local_env, local_env, expr);
         if !inferred.alpha_eq(prop) {
             panic!("proposition mismatch: expected {}, got {}", prop, inferred);
         }
@@ -208,81 +388,74 @@ impl Env<'_> {
         &self,
         tt_local_env: &mut tt::LocalEnv,
         local_env: &mut LocalEnv,
-        h: &Proof,
+        expr: &Expr,
     ) -> Term {
-        match h {
-            Proof::Assump(p) => {
+        match expr {
+            Expr::Assump(e) => {
+                let ExprAssump { target } = &**e;
                 for local_axiom in &local_env.local_axioms {
-                    if p.alpha_eq(local_axiom) {
-                        return p.clone();
+                    if target.alpha_eq(local_axiom) {
+                        return target.clone();
                     }
                 }
-                panic!("unknown assumption: {}", p);
+                panic!("unknown assumption: {}", target);
             }
-            Proof::ImpIntro(h) => {
-                let (p, h) = &**h;
-                self.tt_env.check_wff(tt_local_env, p);
-                local_env.local_axioms.push(p.clone());
-                let mut target = self.infer_prop(tt_local_env, local_env, h);
+            Expr::Assume(e) => {
+                let ExprAssume { local_axiom, expr } = &**e;
+                self.tt_env.check_wff(tt_local_env, local_axiom);
+                local_env.local_axioms.push(local_axiom.clone());
+                let mut target = self.infer_prop(tt_local_env, local_env, expr);
                 let p = local_env.local_axioms.pop().unwrap();
                 target.guard([p]);
                 target
             }
-            Proof::ImpElim(h) => {
-                let (h1, h2) = &**h;
-                let h1 = self.infer_prop(tt_local_env, local_env, h1);
+            Expr::App(e) => {
+                let ExprApp { expr1, expr2 } = &**e;
+                let h1 = self.infer_prop(tt_local_env, local_env, expr1);
                 let Imp { lhs, rhs } = h1
                     .clone()
                     .try_into()
                     .unwrap_or_else(|_| panic!("implication expected, got {}", h1));
-                self.check_prop(tt_local_env, local_env, h2, &lhs);
+                self.check_prop(tt_local_env, local_env, expr2, &lhs);
                 rhs
             }
-            Proof::ForallIntro(h) => {
-                let &(name, ref ty, ref h) = &**h;
+            Expr::Take(e) => {
+                let ExprTake { name, ty, expr } = &**e;
                 self.tt_env.check_wft(tt_local_env, ty);
                 for c in &local_env.local_axioms {
-                    if !c.is_fresh(&[name]) {
+                    if !c.is_fresh(&[name.clone()]) {
                         // eigenvariable condition fails
                         panic!("eigenvariable condition violated by {}", c);
                     }
                 }
-                let x = Parameter {
-                    name,
+                let param = Parameter {
+                    name: name.clone(),
                     ty: ty.clone(),
                 };
-                tt_local_env.locals.push(x);
-                let mut target = self.infer_prop(tt_local_env, local_env, h);
+                tt_local_env.locals.push(param);
+                let mut target = self.infer_prop(tt_local_env, local_env, expr);
                 let x = tt_local_env.locals.pop().unwrap();
                 target.generalize(&[x]);
                 target
             }
-            Proof::ForallElim(h) => {
-                let (m, h) = &**h;
-                let h = self.infer_prop(tt_local_env, local_env, h);
+            Expr::Inst(e) => {
+                let ExprInst { expr, arg } = &**e;
+                let h = self.infer_prop(tt_local_env, local_env, expr);
                 let Forall { domain, pred } = h
                     .clone()
                     .try_into()
                     .unwrap_or_else(|_| panic!("∀ expected, got {}", h));
-                self.tt_env.check_type(tt_local_env, m, &domain);
+                self.tt_env.check_type(tt_local_env, arg, &domain);
                 let mut target = pred;
-                target.apply([m.clone()]);
+                target.apply([arg.clone()]);
                 target
             }
-            Proof::Conv(h) => {
-                let (target, proof) = &**h;
-                self.tt_env.check_wff(tt_local_env, target);
-                let source = self.infer_prop(tt_local_env, local_env, proof);
-                if !self.tt_env.equiv(&source, target) {
-                    panic!(
-                        "conversion failed: expected {} but proof showed {}",
-                        target, source
-                    );
-                }
-                target.clone()
-            }
-            Proof::Ref(h) => {
-                let (name, ty_args, instances) = &**h;
+            Expr::Const(e) => {
+                let ExprConst {
+                    name,
+                    ty_args,
+                    instances,
+                } = &**e;
                 let Axiom {
                     local_types,
                     local_classes,
@@ -323,6 +496,18 @@ impl Env<'_> {
                 let mut target = target.clone();
                 target.subst_type(&type_subst);
                 target
+            }
+            Expr::Change(e) => {
+                let ExprChange { target, expr } = &**e;
+                self.tt_env.check_wff(tt_local_env, target);
+                let source = self.infer_prop(tt_local_env, local_env, expr);
+                if !self.tt_env.equiv(&source, target) {
+                    panic!(
+                        "conversion failed: expected {} but proof showed {}",
+                        target, source
+                    );
+                }
+                target.clone()
             }
         }
     }

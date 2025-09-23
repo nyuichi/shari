@@ -6,7 +6,6 @@ use parse::Parser;
 
 mod cmd;
 mod elab;
-mod expr;
 mod lex;
 mod parse;
 mod print;
