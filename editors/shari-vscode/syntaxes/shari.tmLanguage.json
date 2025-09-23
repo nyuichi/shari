@@ -1,0 +1,128 @@
+{
+  "scopeName": "source.shari",
+  "name": "Shari",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#contextualKeywords"
+    },
+    {
+      "include": "#delimiters"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "include": "#lineComment"
+        },
+        {
+          "include": "#blockComment"
+        }
+      ]
+    },
+    "lineComment": {
+      "name": "comment.line.double-dash.shari",
+      "begin": "--",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.comment.shari"
+        }
+      },
+      "end": "$"
+    },
+    "blockComment": {
+      "name": "comment.block.shari",
+      "begin": "/-",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.comment.begin.shari"
+        }
+      },
+      "end": "-/",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.comment.end.shari"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#blockComment"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.shari",
+          "begin": "\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.shari"
+            }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.shari"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.shari",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.shari",
+          "match": "\\b(?:infixr|nofix|infixl|infix|prefix|axiom|def|lemma|const|type|local|inductive|structure|instance|class)\\b"
+        }
+      ]
+    },
+    "contextualKeywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.contextual.shari",
+          "match": "\\b(?:have|obtain|assume|change|calc|take)\\b"
+        }
+      ]
+    },
+    "delimiters": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.shari",
+          "match": "[;,.]"
+        },
+        {
+          "name": "punctuation.section.parens.shari",
+          "match": "[()]"
+        },
+        {
+          "name": "punctuation.section.braces.shari",
+          "match": "[{}]"
+        },
+        {
+          "name": "punctuation.section.brackets.shari",
+          "match": "\\[|\\]"
+        },
+        {
+          "name": "punctuation.section.angle.shari",
+          "match": "[«»]"
+        }
+      ]
+    }
+  }
+}
