@@ -117,11 +117,21 @@ impl Kind {
 
 #[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd)]
 pub enum Type {
-    Const(Name),
+    #[non_exhaustive]
+    Const(Arc<TypeConst>),
+    #[non_exhaustive]
     Arrow(Arc<TypeArrow>),
+    #[non_exhaustive]
     App(Arc<TypeApp>),
-    Local(Name),
-    Hole(Name),
+    #[non_exhaustive]
+    Local(Arc<TypeLocal>),
+    #[non_exhaustive]
+    Hole(Arc<TypeHole>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct TypeConst {
+    pub name: Name,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -136,9 +146,19 @@ pub struct TypeApp {
     pub arg: Type,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct TypeLocal {
+    pub name: Name,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct TypeHole {
+    pub name: Name,
+}
+
 impl Default for Type {
     fn default() -> Self {
-        Type::Hole(Default::default())
+        mk_type_hole(Name::default())
     }
 }
 
@@ -146,7 +166,7 @@ impl Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Type::Const(inner) => {
-                write!(f, "{inner}")
+                write!(f, "{}", inner.name)
             }
             Type::Arrow(inner) => {
                 write!(f, "({} → {})", inner.dom, inner.cod)
@@ -155,30 +175,43 @@ impl Display for Type {
                 write!(f, "({} {})", inner.fun, inner.arg)
             }
             Type::Local(inner) => {
-                write!(f, "(local {inner})")
+                write!(f, "(local {})", inner.name)
             }
             Type::Hole(inner) => {
-                write!(f, "?{inner}")
+                write!(f, "?{}", inner.name)
             }
         }
     }
 }
 
-pub fn mk_type_arrow(dom: Type, mut cod: Type) -> Type {
-    cod.arrow([dom]);
-    cod
+#[inline]
+pub fn mk_type_arrow(dom: Type, cod: Type) -> Type {
+    Type::Arrow(Arc::new(TypeArrow { dom, cod }))
 }
 
+#[inline]
 pub fn mk_fresh_type_hole() -> Type {
-    Type::Hole(Name::fresh_with_name("α"))
+    mk_type_hole(Name::fresh_with_name("α"))
 }
 
+#[inline]
+pub fn mk_type_hole(name: Name) -> Type {
+    Type::Hole(Arc::new(TypeHole { name }))
+}
+
+#[inline]
 pub fn mk_type_local(name: Name) -> Type {
-    Type::Local(name)
+    Type::Local(Arc::new(TypeLocal { name }))
 }
 
+#[inline]
 pub fn mk_type_const(name: Name) -> Type {
-    Type::Const(name)
+    Type::Const(Arc::new(TypeConst { name }))
+}
+
+#[inline]
+pub fn mk_type_app(fun: Type, arg: Type) -> Type {
+    Type::App(Arc::new(TypeApp { fun, arg }))
 }
 
 pub fn mk_type_prop() -> Type {
@@ -194,10 +227,8 @@ impl Type {
         let mut iter = cs.into_iter();
         if let Some(item) = iter.next() {
             self.arrow(iter);
-            *self = Type::Arrow(Arc::new(TypeArrow {
-                dom: item,
-                cod: mem::take(self),
-            }));
+            let cod = mem::take(self);
+            *self = mk_type_arrow(item, cod);
         }
     }
 
@@ -227,13 +258,13 @@ impl Type {
 
     pub fn apply(&mut self, args: impl IntoIterator<Item = Type>) {
         for arg in args {
-            *self = Type::App(Arc::new(TypeApp {
-                fun: mem::take(self),
-                arg,
-            }));
+            let fun = mem::take(self);
+            *self = mk_type_app(fun, arg);
         }
     }
 
+    #[allow(unused)]
+    #[deprecated(note = "left for future use")]
     pub fn unapply(&mut self) -> Vec<Type> {
         let mut acc = vec![];
         let mut t = self;
@@ -251,7 +282,8 @@ impl Type {
         match self {
             Self::Const(_) => {}
             Self::Local(x) => {
-                if let Some((_, t)) = subst.iter().find(|(y, _)| y == x) {
+                let name = x.name;
+                if let Some((_, t)) = subst.iter().find(|(y, _)| *y == name) {
                     *self = t.clone();
                 }
             }
@@ -285,7 +317,7 @@ impl Type {
             Type::Const(_) => false,
             Type::Arrow(t) => t.dom.contains_local(name) || t.cod.contains_local(name),
             Type::App(t) => t.fun.contains_local(name) || t.arg.contains_local(name),
-            &Type::Local(t) => t == name,
+            Type::Local(t) => t.name == name,
             Type::Hole(_) => false,
         }
     }
@@ -296,7 +328,7 @@ impl Type {
             Type::Arrow(t) => t.dom.contains_hole(name) || t.cod.contains_hole(name),
             Type::App(t) => t.fun.contains_hole(name) || t.arg.contains_hole(name),
             Type::Local(_) => false,
-            &Type::Hole(n) => n == name,
+            Type::Hole(n) => n.name == name,
         }
     }
 
@@ -345,7 +377,8 @@ impl Type {
                     && target.arg.matches_help(&pattern.arg, subst)
             }
             Type::Local(_) => self == pattern,
-            &Type::Hole(pattern) => {
+            Type::Hole(pattern) => {
+                let pattern = pattern.name;
                 if let Some((_, t)) = subst.iter().find(|&&(x, _)| x == pattern) {
                     self.matches_help(&t.clone(), subst)
                 } else {
@@ -369,7 +402,7 @@ impl Type {
             }
             Type::Local(_) => {}
             Type::Hole(name) => {
-                buf.push(*name);
+                buf.push(name.name);
             }
         }
     }
@@ -379,7 +412,8 @@ impl Type {
             Self::Const(_) => {}
             Self::Local(_) => {}
             Self::Hole(x) => {
-                if let Some((_, t)) = subst.iter().find(|(y, _)| y == x) {
+                let name = x.name;
+                if let Some((_, t)) = subst.iter().find(|(y, _)| *y == name) {
                     *self = t.clone();
                 }
             }
@@ -583,12 +617,23 @@ impl Instance {
 /// Use syn's convention [https://docs.rs/syn/latest/syn/enum.Expr.html#syntax-tree-enums].
 #[derive(Clone, Debug)]
 pub enum Term {
-    Var(usize),
+    #[non_exhaustive]
+    Var(Arc<TermVar>),
+    #[non_exhaustive]
     Abs(Arc<TermAbs>),
+    #[non_exhaustive]
     App(Arc<TermApp>),
-    Local(Name),
+    #[non_exhaustive]
+    Local(Arc<TermLocal>),
+    #[non_exhaustive]
     Const(Arc<TermConst>),
-    Hole(Name),
+    #[non_exhaustive]
+    Hole(Arc<TermHole>),
+}
+
+#[derive(Clone, Debug)]
+pub struct TermVar {
+    pub index: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -606,15 +651,25 @@ pub struct TermApp {
 }
 
 #[derive(Clone, Debug)]
+pub struct TermLocal {
+    pub name: Name,
+}
+
+#[derive(Clone, Debug)]
 pub struct TermConst {
     pub name: Name,
     pub ty_args: Vec<Type>,
     pub instances: Vec<Instance>,
 }
 
+#[derive(Clone, Debug)]
+pub struct TermHole {
+    pub name: Name,
+}
+
 impl From<TermConst> for Term {
     fn from(value: TermConst) -> Self {
-        Term::Const(Arc::new(value))
+        mk_const(value.name, value.ty_args, value.instances)
     }
 }
 
@@ -635,15 +690,15 @@ impl TermConst {
 
 impl Default for Term {
     fn default() -> Self {
-        Term::Var(usize::MAX)
+        mk_var(usize::MAX)
     }
 }
 
 impl Display for Term {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Term::Var(i) => {
-                write!(f, "(var {i})")
+            Term::Var(inner) => {
+                write!(f, "(var {})", inner.index)
             }
             Term::Abs(inner) => {
                 write!(f, "(lam {} {})", inner.binder_type, inner.body)
@@ -651,8 +706,8 @@ impl Display for Term {
             Term::App(inner) => {
                 write!(f, "({} {})", inner.fun, inner.arg)
             }
-            Term::Local(name) => {
-                write!(f, "(local {name})")
+            Term::Local(inner) => {
+                write!(f, "(local {})", inner.name)
             }
             Term::Const(inner) => {
                 write!(f, "{}", inner.name)?;
@@ -682,13 +737,14 @@ impl Display for Term {
                 }
                 Ok(())
             }
-            Term::Hole(name) => {
-                write!(f, "(hole {})", name)
+            Term::Hole(inner) => {
+                write!(f, "(hole {})", inner.name)
             }
         }
     }
 }
 
+#[inline]
 pub fn mk_abs(binder_name: Name, binder_type: Type, body: Term) -> Term {
     Term::Abs(Arc::new(TermAbs {
         binder_type,
@@ -697,10 +753,17 @@ pub fn mk_abs(binder_name: Name, binder_type: Type, body: Term) -> Term {
     }))
 }
 
+#[inline]
 pub fn mk_app(fun: Term, arg: Term) -> Term {
     Term::App(Arc::new(TermApp { fun, arg }))
 }
 
+#[inline]
+pub fn mk_var(index: usize) -> Term {
+    Term::Var(Arc::new(TermVar { index }))
+}
+
+#[inline]
 pub fn mk_const(name: Name, ty_args: Vec<Type>, instances: Vec<Instance>) -> Term {
     Term::Const(Arc::new(TermConst {
         name,
@@ -709,12 +772,19 @@ pub fn mk_const(name: Name, ty_args: Vec<Type>, instances: Vec<Instance>) -> Ter
     }))
 }
 
+#[inline]
 pub fn mk_local(name: Name) -> Term {
-    Term::Local(name)
+    Term::Local(Arc::new(TermLocal { name }))
 }
 
+#[inline]
 pub fn mk_fresh_hole() -> Term {
-    Term::Hole(Name::fresh())
+    mk_hole(Name::fresh())
+}
+
+#[inline]
+pub fn mk_hole(name: Name) -> Term {
+    Term::Hole(Arc::new(TermHole { name }))
 }
 
 #[derive(Debug, Clone)]
@@ -758,8 +828,8 @@ impl Term {
     fn open_at(&mut self, x: &Term, level: usize) {
         match self {
             Self::Local(_) => {}
-            Self::Var(i) => {
-                if *i == level {
+            Self::Var(inner) => {
+                if inner.index == level {
                     *self = x.clone();
                 }
             }
@@ -784,9 +854,9 @@ impl Term {
 
     fn close_at(&mut self, name: Name, level: usize) {
         match self {
-            Self::Local(x) => {
-                if x == &name {
-                    *self = Self::Var(level);
+            Self::Local(inner) => {
+                if inner.name == name {
+                    *self = mk_var(level);
                 }
             }
             Self::Var(_) => {}
@@ -806,7 +876,7 @@ impl Term {
     /// {x₁, ⋯, xₙ} # self <==> ∀ i, xᵢ ∉ FV(self)
     pub fn is_fresh(&self, free_list: &[Name]) -> bool {
         match self {
-            Self::Local(x) => !free_list.contains(x),
+            Self::Local(inner) => !free_list.contains(&inner.name),
             Self::Var(_) => true,
             Self::Abs(inner) => inner.body.is_fresh(free_list),
             Self::App(inner) => inner.fun.is_fresh(free_list) && inner.arg.is_fresh(free_list),
@@ -819,7 +889,7 @@ impl Term {
     /// The term is borrowed from nominal set theory.
     pub fn is_supported_by(&self, free_list: &[Name]) -> bool {
         match self {
-            Self::Local(x) => free_list.contains(x),
+            Self::Local(inner) => free_list.contains(&inner.name),
             Self::Var(_) => true,
             Self::Abs(inner) => inner.body.is_supported_by(free_list),
             Self::App(inner) => {
@@ -830,6 +900,8 @@ impl Term {
         }
     }
 
+    #[allow(unused)]
+    #[deprecated(note = "left for future use")]
     pub fn is_closed(&self) -> bool {
         self.is_supported_by(&[])
     }
@@ -841,7 +913,7 @@ impl Term {
     fn is_lclosed_at(&self, level: usize) -> bool {
         match self {
             Self::Local(_) => true,
-            Self::Var(i) => *i < level,
+            Self::Var(inner) => inner.index < level,
             Self::Abs(inner) => inner.body.is_lclosed_at(level + 1),
             Self::App(inner) => inner.fun.is_lclosed_at(level) && inner.arg.is_lclosed_at(level),
             Self::Const(_) => true,
@@ -849,13 +921,15 @@ impl Term {
         }
     }
 
+    #[allow(unused)]
+    #[deprecated(note = "left for future use")]
     pub fn is_body(&self) -> bool {
         self.is_lclosed_at(1)
     }
 
     pub fn contains_var(&self, i: usize) -> bool {
         match self {
-            &Term::Var(level) => i == level,
+            Term::Var(inner) => i == inner.index,
             Term::Abs(inner) => inner.body.contains_var(i + 1),
             Term::App(inner) => inner.fun.contains_var(i) || inner.arg.contains_var(i),
             Term::Local(_) => false,
@@ -923,6 +997,8 @@ impl Term {
         matches!(self, Term::Hole(_))
     }
 
+    #[allow(unused)]
+    #[deprecated(note = "left for future use")]
     pub fn is_const(&self) -> bool {
         matches!(self, Term::Const(_))
     }
@@ -942,11 +1018,11 @@ impl Term {
                 return None;
             };
             for a in &arg_locals {
-                if a == arg {
+                if *a == arg.name {
                     return None;
                 }
             }
-            arg_locals.push(*arg);
+            arg_locals.push(arg.name);
         }
         Some(arg_locals)
     }
@@ -1005,6 +1081,8 @@ impl Term {
 
     // λ x₁ ⋯ xₙ, m ↦ [x₁, ⋯ , xₙ]
     // Fresh names are generated on the fly.
+    #[allow(unused)]
+    #[deprecated(note = "left for future use")]
     pub fn unabs(&mut self) -> Vec<Parameter> {
         let mut xs = vec![];
         while let Term::Abs(inner) = self {
@@ -1027,12 +1105,14 @@ impl Term {
     fn unabs_help(&mut self, xs: &[Parameter], level: usize) {
         match self {
             Self::Local(_) => {}
-            Self::Var(i) => {
-                if *i < level {
+            Self::Var(inner) => {
+                let index = inner.index;
+                if index < level {
                     return;
                 }
-                if *i - level < xs.len() {
-                    *self = mk_local(xs[xs.len() - 1 - (*i - level)].name);
+                let offset = index - level;
+                if offset < xs.len() {
+                    *self = mk_local(xs[xs.len() - 1 - offset].name);
                 }
             }
             Self::Abs(inner) => {
@@ -1065,10 +1145,11 @@ impl Term {
 
     fn abs_help(&mut self, xs: &[Parameter], level: usize) {
         match self {
-            &mut Self::Local(l) => {
+            Self::Local(inner) => {
+                let name = inner.name;
                 for (i, x) in xs.iter().rev().enumerate() {
-                    if l == x.name {
-                        *self = Self::Var(level + i);
+                    if name == x.name {
+                        *self = mk_var(level + i);
                         return;
                     }
                 }
@@ -1227,9 +1308,9 @@ impl Term {
                 inner.fun.subst(subst);
                 inner.arg.subst(subst);
             }
-            Term::Local(name) => {
+            Term::Local(inner) => {
                 for (x, m) in subst {
-                    if name == x {
+                    if inner.name == *x {
                         *self = m.clone();
                         break;
                     }
@@ -1268,30 +1349,30 @@ impl Term {
 
     pub fn alpha_eq(&self, other: &Term) -> bool {
         match (self, other) {
-            (Term::Var(index1), Term::Var(index2)) => index1 == index2,
+            (Term::Var(index1), Term::Var(index2)) => index1.index == index2.index,
             (Term::Abs(inner1), Term::Abs(inner2)) => {
                 inner1.binder_type == inner2.binder_type && inner1.body.alpha_eq(&inner2.body)
             }
             (Term::App(inner1), Term::App(inner2)) => {
                 inner1.fun.alpha_eq(&inner2.fun) && inner1.arg.alpha_eq(&inner2.arg)
             }
-            (Term::Local(name1), Term::Local(name2)) => name1 == name2,
+            (Term::Local(name1), Term::Local(name2)) => name1.name == name2.name,
             (Term::Const(inner1), Term::Const(inner2)) => inner1.alpha_eq(inner2),
-            (Term::Hole(name1), Term::Hole(name2)) => name1 == name2,
+            (Term::Hole(name1), Term::Hole(name2)) => name1.name == name2.name,
             _ => false,
         }
     }
 
     pub fn maybe_alpha_eq(&self, other: &Term) -> bool {
         match (self, other) {
-            (Term::Var(index1), Term::Var(index2)) => index1 == index2,
+            (Term::Var(index1), Term::Var(index2)) => index1.index == index2.index,
             (Term::Abs(inner1), Term::Abs(inner2)) => inner1.body.maybe_alpha_eq(&inner2.body),
             (Term::App(inner1), Term::App(inner2)) => {
                 inner1.fun.maybe_alpha_eq(&inner2.fun) && inner1.arg.maybe_alpha_eq(&inner2.arg)
             }
-            (Term::Local(name1), Term::Local(name2)) => name1 == name2,
+            (Term::Local(name1), Term::Local(name2)) => name1.name == name2.name,
             (Term::Const(inner1), Term::Const(inner2)) => inner1.name == inner2.name,
-            (Term::Hole(name1), Term::Hole(name2)) => name1 == name2,
+            (Term::Hole(name1), Term::Hole(name2)) => name1.name == name2.name,
             _ => false,
         }
     }
@@ -1341,7 +1422,7 @@ impl Term {
             Term::Var(_) => false,
             Term::Abs(m) => m.body.contains_local(name),
             Term::App(m) => m.fun.contains_local(name) || m.arg.contains_local(name),
-            &Term::Local(m) => m == name,
+            Term::Local(inner) => inner.name == name,
             Term::Const(_) => false,
             Term::Hole(_) => false,
         }
@@ -1557,7 +1638,7 @@ pub struct Env<'a> {
 impl Env<'_> {
     pub fn infer_kind(&self, local_env: &LocalEnv, t: &Type) -> Option<Kind> {
         match t {
-            Type::Const(name) => Some(self.type_const_table.get(name)?.clone()),
+            Type::Const(name) => Some(self.type_const_table.get(&name.name)?.clone()),
             Type::Arrow(inner) => {
                 if !self.check_kind(local_env, &inner.dom, Kind::base()) {
                     return None;
@@ -1579,7 +1660,7 @@ impl Env<'_> {
             }
             Type::Local(x) => {
                 for local_type in &local_env.local_types {
-                    if local_type == x {
+                    if *local_type == x.name {
                         return Some(Kind::base());
                     }
                 }
@@ -1705,9 +1786,9 @@ impl Env<'_> {
                     _ => None,
                 }
             }
-            &Term::Local(x) => {
+            Term::Local(inner) => {
                 for y in local_env.locals.iter().rev() {
-                    if x == y.name {
+                    if inner.name == y.name {
                         return Some(y.ty.clone());
                     }
                 }
@@ -2068,7 +2149,7 @@ impl Env<'_> {
         let head1 = m1.head();
         let head2 = m2.head();
         if let (Term::Local(head1), Term::Local(head2)) = (head1, head2) {
-            if head1 != head2 {
+            if head1.name != head2.name {
                 return None;
             }
             let args1 = m1.args();
@@ -2076,7 +2157,7 @@ impl Env<'_> {
             if args1.len() != args2.len() {
                 return None;
             }
-            let mut h = mk_path_refl(Term::Local(*head1));
+            let mut h = mk_path_refl(mk_local(head1.name));
             for (a1, a2) in std::iter::zip(args1, args2) {
                 let mut a1 = a1.clone();
                 let mut a2 = a2.clone();
@@ -2096,16 +2177,16 @@ impl Env<'_> {
             let h = self.equiv_help(m1, m2)?;
             return Some(mk_path_trans(h1, mk_path_trans(h, h2)));
         }
-        let (Term::Const(head1), Term::Const(head2)) = (head1, head2) else {
+        let (Term::Const(head1_inner), Term::Const(head2_inner)) = (head1, head2) else {
             panic!("holes found");
         };
         // optimization
-        if head1.alpha_eq(head2) {
+        if head1_inner.alpha_eq(head2_inner) {
             let args1 = m1.args();
             let args2 = m2.args();
             if args1.len() == args2.len() {
                 'args_eq: {
-                    let mut h = mk_path_refl(Term::Const(head1.clone()));
+                    let mut h = mk_path_refl(head1.clone());
                     for (a1, a2) in std::iter::zip(args1, args2) {
                         let mut a1 = a1.clone();
                         let mut a2 = a2.clone();
@@ -2118,7 +2199,7 @@ impl Env<'_> {
                 }
             }
         }
-        if self.has_kappa(head1.name) || self.has_kappa(head2.name) {
+        if self.has_kappa(head1_inner.name) || self.has_kappa(head2_inner.name) {
             let h;
             if let Some(h3) = self.unfold_head(m1) {
                 let h4 = self.equiv_help(m1, m2)?;
@@ -2131,8 +2212,8 @@ impl Env<'_> {
             }
             return Some(mk_path_trans(h1, mk_path_trans(h, h2)));
         }
-        let height1 = self.delta_height(head1.name);
-        let height2 = self.delta_height(head2.name);
+        let height1 = self.delta_height(head1_inner.name);
+        let height2 = self.delta_height(head2_inner.name);
         if height1 == 0 && height2 == 0 {
             return None;
         }

@@ -244,7 +244,8 @@ impl<'a> Printer<'a> {
         };
 
         match m {
-            &Term::Var(i) => {
+            Term::Var(inner) => {
+                let i = inner.index;
                 if i >= local_names.len() {
                     write!(f, "#Var({i})")
                 } else {
@@ -254,11 +255,11 @@ impl<'a> Printer<'a> {
                     }
                 }
             }
-            Term::Local(name) => {
-                write!(f, "{name}")
+            Term::Local(inner) => {
+                write!(f, "{}", inner.name)
             }
-            Term::Hole(name) => {
-                write!(f, "?{name}")
+            Term::Hole(inner) => {
+                write!(f, "?{}", inner.name)
             }
             Term::Const(inner) => {
                 write!(f, "{}", inner.name)?;
@@ -338,7 +339,7 @@ impl<'a> Printer<'a> {
         prec: usize,
     ) -> std::fmt::Result {
         match t {
-            Type::Const(name) => write!(f, "{name}"),
+            Type::Const(inner) => write!(f, "{}", inner.name),
             Type::Arrow(inner) => {
                 if prec >= 25 {
                     write!(f, "(")?;
@@ -363,8 +364,8 @@ impl<'a> Printer<'a> {
                 }
                 Ok(())
             }
-            Type::Hole(name) => write!(f, "{name}"),
-            Type::Local(name) => write!(f, "{name}"),
+            Type::Hole(inner) => write!(f, "{}", inner.name),
+            Type::Local(inner) => write!(f, "{}", inner.name),
         }
     }
 

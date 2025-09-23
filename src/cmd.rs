@@ -9,9 +9,9 @@ use crate::{
     print::{OpTable, Pretty},
     proof::{self, Axiom},
     tt::{
-        self, mk_const, mk_fresh_type_hole, mk_instance_local, mk_local, mk_type_arrow,
-        mk_type_const, mk_type_local, mk_type_prop, Class, ClassInstance, ClassType, Const, Delta,
-        Kappa, Kind, LocalEnv, Name, Parameter, Term, Type,
+        self, Class, ClassInstance, ClassType, Const, Delta, Kappa, Kind, LocalEnv, Name,
+        Parameter, Term, Type, mk_const, mk_fresh_type_hole, mk_instance_local, mk_local,
+        mk_type_arrow, mk_type_const, mk_type_local, mk_type_prop,
     },
 };
 
@@ -1210,7 +1210,9 @@ impl Eval {
             let ctor_args = m.unguard();
             ctor_args_list.push(ctor_args.clone());
             if !m.head().alpha_eq(&mk_local(name)) {
-                bail!("invalid constructor. Currently only Horn clauses are supported in inductive clauses: {m}");
+                bail!(
+                    "invalid constructor. Currently only Horn clauses are supported in inductive clauses: {m}"
+                );
             }
             for a in m.args() {
                 if a.contains_local(name) {
@@ -1708,7 +1710,8 @@ impl Eval {
         let Type::Const(structure_name) = target_ty.head() else {
             bail!("type of instance must be a structure");
         };
-        let Some(cmd_structure) = self.structure_table.get(structure_name) else {
+        let structure_name = structure_name.name;
+        let Some(cmd_structure) = self.structure_table.get(&structure_name) else {
             bail!("type of instance must be a structure");
         };
         let mut type_subst = vec![];
