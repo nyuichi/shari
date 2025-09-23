@@ -33,6 +33,9 @@ pub enum Cmd {
     Instance(CmdInstance),
     ClassStructure(CmdClassStructure),
     ClassInstance(CmdClassInstance),
+    Namespace(CmdNamespace),
+    EndNamespace(CmdEndNamespace),
+    Import(CmdImport),
 }
 
 #[derive(Clone, Debug)]
@@ -113,6 +116,27 @@ pub struct CmdTypeConst {
 #[derive(Clone, Debug)]
 pub struct CmdLocalTypeConst {
     pub variables: Vec<Name>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CmdNamespace {
+    pub path: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CmdEndNamespace {
+    pub path: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CmdImport {
+    pub paths: Vec<Vec<String>>,
+}
+
+#[derive(Debug, Clone)]
+struct NamespaceFrame {
+    appended: Vec<String>,
+    previous_stack: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -269,6 +293,8 @@ pub struct Eval {
     pub class_instance_table: HashMap<Name, ClassInstance>,
     pub structure_table: HashMap<Name, CmdStructure>,
     pub class_structure_table: HashMap<Name, CmdClassStructure>,
+    namespace_history: Vec<NamespaceFrame>,
+    import_counts: Vec<usize>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -289,6 +315,36 @@ pub struct Operator {
 }
 
 impl Eval {
+    fn ensure_import_base(&mut self) {
+        if self.import_counts.is_empty() {
+            self.import_counts.push(0);
+        }
+    }
+
+    fn qualify_path(&self, path: &[String]) -> Vec<String> {
+        if path
+            .first()
+            .is_some_and(|component| component.as_str() == "_root_")
+        {
+            path[1..].to_vec()
+        } else {
+            let mut qualified = self.ns.namespace_stack.clone();
+            qualified.extend_from_slice(path);
+            qualified
+        }
+    }
+
+    fn normalize_namespace_arg(path: &[String]) -> Vec<String> {
+        if path
+            .first()
+            .is_some_and(|component| component.as_str() == "_root_")
+        {
+            path[1..].to_vec()
+        } else {
+            path.to_vec()
+        }
+    }
+
     fn add_const(
         &mut self,
         name: Name,
@@ -513,7 +569,55 @@ impl Eval {
     }
 
     pub fn run_cmd(&mut self, cmd: Cmd) -> anyhow::Result<()> {
+        self.ensure_import_base();
         match cmd {
+            Cmd::Namespace(inner) => {
+                let CmdNamespace { path } = inner;
+                let appended = Self::normalize_namespace_arg(&path);
+                let previous_stack = self.ns.namespace_stack.clone();
+                if path
+                    .first()
+                    .is_some_and(|component| component.as_str() == "_root_")
+                {
+                    self.ns.namespace_stack.clear();
+                }
+                self.ns.namespace_stack.extend(appended.clone());
+                self.namespace_history.push(NamespaceFrame {
+                    appended,
+                    previous_stack,
+                });
+                self.import_counts.push(0);
+                Ok(())
+            }
+            Cmd::EndNamespace(inner) => {
+                let Some(frame) = self.namespace_history.last() else {
+                    bail!("no namespace to end");
+                };
+                if let Some(path) = inner.path {
+                    let expected = Self::normalize_namespace_arg(&path);
+                    if expected != frame.appended {
+                        bail!("namespace mismatch");
+                    }
+                }
+                let frame = self.namespace_history.pop().unwrap();
+                if let Some(count) = self.import_counts.pop() {
+                    for _ in 0..count {
+                        self.ns.imported_namespaces.pop();
+                    }
+                }
+                self.ns.namespace_stack = frame.previous_stack;
+                Ok(())
+            }
+            Cmd::Import(inner) => {
+                for path in inner.paths {
+                    let qualified = self.qualify_path(&path);
+                    self.ns.imported_namespaces.push(qualified);
+                    if let Some(count) = self.import_counts.last_mut() {
+                        *count += 1;
+                    }
+                }
+                Ok(())
+            }
             Cmd::Infix(inner) => {
                 let CmdInfix { op, prec, entity } = inner;
                 let op = Operator {
