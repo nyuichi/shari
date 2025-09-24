@@ -353,7 +353,7 @@ impl Expr {
 static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp").unwrap());
 static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall").unwrap());
 
-// TODO: これ(とForall)イケてないからやめたい。struct Formula { inner: Term }を用意して、Formulaにgeneralizeとかguardとかを実装したい。
+// TODO: ImpとForallは削除する。try_intoを使ってるところはtt::Termのunguard1, ungeneralize1を使うようにする。
 #[derive(Debug, Clone)]
 pub struct Imp {
     pub lhs: Term,

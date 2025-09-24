@@ -1238,6 +1238,7 @@ impl Term {
         count
     }
 
+    // TODO: proof.rsにstruct Prop { inner: Term }を用意して、Propにgeneralizeとかguardとかcount_forallとかを実装したい。
     pub fn generalize(&mut self, xs: &[Parameter]) {
         static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall").unwrap());
 
@@ -1264,7 +1265,7 @@ impl Term {
         acc
     }
 
-    fn ungeneralize1(&mut self) -> Option<Parameter> {
+    pub fn ungeneralize1(&mut self) -> Option<Parameter> {
         static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall").unwrap());
 
         let Term::App(m) = self else {
@@ -1319,7 +1320,7 @@ impl Term {
         acc
     }
 
-    fn unguard1(&mut self) -> Option<Term> {
+    pub fn unguard1(&mut self) -> Option<Term> {
         static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp").unwrap());
 
         let Term::App(m) = self else {
