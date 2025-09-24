@@ -834,7 +834,13 @@ impl<'a> Parser<'a> {
                     //   have m₃ = m₄ := e₃,
                     //   eq.trans «m₁ = m₃» «m₃ = m₄»,
                     // e
-                    let lhs = self.subterm(50)?; // TODO: get the precedence from main.shari.
+                    let eq_prec = self
+                        .tt
+                        .led
+                        .get("=")
+                        .expect("\"=\" operator is not registered in token table")
+                        .prec;
+                    let lhs = self.subterm(eq_prec)?;
                     let mut rhs_list = vec![];
                     loop {
                         self.expect_symbol("=")?;
