@@ -1,4 +1,3 @@
-use regex::Regex;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::hash::Hash;
@@ -7,7 +6,6 @@ use std::sync::LazyLock;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::{mem, vec};
-use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
 pub struct Name(usize);
@@ -21,23 +19,11 @@ impl Display for Name {
         let Some(nickname) = self.nickname() else {
             return write!(f, "{}", self.0);
         };
-        if Name::intern(&nickname).unwrap() == *self {
+        if Name::intern(&nickname) == *self {
             write!(f, "{}", nickname)
         } else {
             write!(f, "{}{}", nickname, self.0)
         }
-    }
-}
-
-#[derive(Error, Debug, Clone)]
-#[error("invalid name")]
-pub struct InvalidNameError;
-
-impl TryFrom<&str> for Name {
-    type Error = InvalidNameError;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Name::intern(value)
     }
 }
 
@@ -63,16 +49,10 @@ impl Name {
         new_name
     }
 
-    pub fn intern(value: &str) -> Result<Name, InvalidNameError> {
-        static RE: LazyLock<Regex> = LazyLock::new(|| {
-            regex::Regex::new(r"[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*(\.[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*)*").unwrap()
-        });
-        if !RE.is_match(value) {
-            return Err(InvalidNameError);
-        }
+    pub fn intern(value: &str) -> Name {
         let mut name_table = NAME_TABLE.lock().unwrap();
         if let Some(&name) = name_table.get(value) {
-            return Ok(name);
+            return name;
         }
         let name = Name::fresh();
         name_table.insert(value.to_owned(), name);
@@ -83,7 +63,7 @@ impl Name {
             .lock()
             .unwrap()
             .insert(name, value.to_owned());
-        Ok(name)
+        name
     }
 
     fn nickname(&self) -> Option<String> {
@@ -237,7 +217,7 @@ pub fn mk_type_app(fun: Type, arg: Type) -> Type {
 }
 
 pub fn mk_type_prop() -> Type {
-    static T_PROP: LazyLock<Type> = LazyLock::new(|| mk_type_const(Name::intern("Prop").unwrap()));
+    static T_PROP: LazyLock<Type> = LazyLock::new(|| mk_type_const(Name::intern("Prop")));
     T_PROP.clone()
 }
 
@@ -1212,7 +1192,7 @@ impl Term {
     }
 
     pub fn count_forall(&self) -> usize {
-        static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall").unwrap());
+        static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall"));
 
         let mut count = 0;
         let mut m = self;
@@ -1240,7 +1220,7 @@ impl Term {
 
     // TODO: proof.rsにstruct Prop { inner: Term }を用意して、Propにgeneralizeとかguardとかcount_forallとかを実装したい。
     pub fn generalize(&mut self, xs: &[Parameter]) {
-        static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall").unwrap());
+        static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall"));
 
         self.abs_help(xs, 0);
 
@@ -1266,7 +1246,7 @@ impl Term {
     }
 
     pub fn ungeneralize1(&mut self) -> Option<Parameter> {
-        static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall").unwrap());
+        static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall"));
 
         let Term::App(m) = self else {
             return None;
@@ -1301,7 +1281,7 @@ impl Term {
     }
 
     fn guard_help(&mut self, mut guards: impl Iterator<Item = Term>) {
-        static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp").unwrap());
+        static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp"));
 
         if let Some(guard) = guards.next() {
             self.guard_help(guards);
@@ -1321,7 +1301,7 @@ impl Term {
     }
 
     pub fn unguard1(&mut self) -> Option<Term> {
-        static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp").unwrap());
+        static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp"));
 
         let Term::App(m) = self else {
             return None;
@@ -1420,7 +1400,6 @@ impl Term {
         }
     }
 
-    // TODO: こっちを Eq の impl にする。
     pub fn alpha_eq(&self, other: &Term) -> bool {
         match (self, other) {
             (Term::Var(index1), Term::Var(index2)) => index1.index == index2.index,
@@ -2188,7 +2167,7 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let c = Name::intern("c").unwrap();
+        let c = Name::intern("c");
         let left = mk_const(c, vec![], vec![]);
         let right = mk_const(c, vec![], vec![]);
 
@@ -2200,8 +2179,8 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let x = Name::intern("x").unwrap();
-        let a = Name::intern("a").unwrap();
+        let x = Name::intern("x");
+        let a = Name::intern("a");
         let body = mk_var(0);
         let lambda = mk_abs(x, mk_type_prop(), body);
         let arg = mk_const(a, vec![], vec![]);
@@ -2212,8 +2191,8 @@ mod tests {
 
     #[test]
     fn equiv_delta_unfolds_constant() {
-        let c = Name::intern("c").unwrap();
-        let d = Name::intern("d").unwrap();
+        let c = Name::intern("c");
+        let d = Name::intern("d");
 
         let delta = Delta {
             local_types: vec![],
@@ -2236,8 +2215,8 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let c = Name::intern("c").unwrap();
-        let d = Name::intern("d").unwrap();
+        let c = Name::intern("c");
+        let d = Name::intern("d");
         let left = mk_const(c, vec![], vec![]);
         let right = mk_const(d, vec![], vec![]);
 
@@ -2249,9 +2228,9 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let f = Name::intern("f").unwrap();
-        let a = Name::intern("a").unwrap();
-        let b = Name::intern("b").unwrap();
+        let f = Name::intern("f");
+        let a = Name::intern("a");
+        let b = Name::intern("b");
 
         let fun = mk_const(f, vec![], vec![]);
         let left = mk_app(fun.clone(), mk_const(a, vec![], vec![]));

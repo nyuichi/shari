@@ -128,10 +128,9 @@ impl<'a> Printer<'a> {
                             let mut x = inner.binder_name;
                             'refresh: for refresh_index in 0.. {
                                 if refresh_index > 0 {
-                                    x = Name::try_from(
+                                    x = Name::intern(
                                         format!("{}{refresh_index}", inner.binder_name).as_str(),
-                                    )
-                                    .unwrap();
+                                    );
                                 }
                                 for (i, local_name) in local_names.iter().rev().enumerate() {
                                     if local_name == &x && inner.body.contains_var(i + 1) {
@@ -168,10 +167,9 @@ impl<'a> Printer<'a> {
                             let mut x = inner.binder_name;
                             'refresh: for refresh_index in 0.. {
                                 if refresh_index > 0 {
-                                    x = Name::try_from(
+                                    x = Name::intern(
                                         format!("{}{refresh_index}", inner.binder_name).as_str(),
-                                    )
-                                    .unwrap();
+                                    );
                                 }
                                 for (i, local_name) in local_names.iter().rev().enumerate() {
                                     if local_name == &x && inner.body.contains_var(i + 1) {
@@ -208,10 +206,9 @@ impl<'a> Printer<'a> {
                             let mut x = inner.binder_name;
                             'refresh: for refresh_index in 0.. {
                                 if refresh_index > 0 {
-                                    x = Name::try_from(
+                                    x = Name::intern(
                                         format!("{}{refresh_index}", inner.binder_name).as_str(),
-                                    )
-                                    .unwrap();
+                                    );
                                 }
                                 for (i, local_name) in local_names.iter().rev().enumerate() {
                                     if local_name == &x && inner.body.contains_var(i + 1) {
@@ -284,10 +281,7 @@ impl<'a> Printer<'a> {
                 let mut x = inner.binder_name;
                 'refresh: for refresh_index in 0.. {
                     if refresh_index > 0 {
-                        x = Name::try_from(
-                            format!("{}{refresh_index}", inner.binder_name).as_str(),
-                        )
-                        .unwrap();
+                        x = Name::intern(format!("{}{refresh_index}", inner.binder_name).as_str());
                     }
                     for (i, local_name) in local_names.iter().rev().enumerate() {
                         if local_name == &x && inner.body.contains_var(i + 1) {

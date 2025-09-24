@@ -508,11 +508,7 @@ impl<'a> Elaborator<'a> {
                 pred.apply([mk_local(x.name)]);
                 pred.abs(&[x]);
 
-                let mut target = mk_const(
-                    Name::intern("forall").unwrap(),
-                    vec![arg_ty.clone()],
-                    vec![],
-                );
+                let mut target = mk_const(Name::intern("forall"), vec![arg_ty.clone()], vec![]);
                 target.apply([pred]);
                 self.term_constraints.push((
                     self.tt_local_env.clone(),

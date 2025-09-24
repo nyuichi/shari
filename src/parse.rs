@@ -301,12 +301,11 @@ impl<'a> Parser<'a> {
     }
 
     fn name(&mut self) -> Result<Name, ParseError> {
-        Ok(Name::try_from(self.ident()?.as_str()).expect("logic flaw"))
+        Ok(Name::intern(self.ident()?.as_str()))
     }
 
     fn name_opt(&mut self) -> Option<Name> {
-        self.ident_opt()
-            .map(|token| Name::try_from(token.as_str()).expect("logic flaw"))
+        self.ident_opt().map(|token| Name::intern(token.as_str()))
     }
 
     fn kind(&mut self) -> Result<Kind, ParseError> {
@@ -322,7 +321,7 @@ impl<'a> Parser<'a> {
     fn type_primary(&mut self) -> Result<Type, ParseError> {
         let token = self.any_token()?;
         if token.is_ident() {
-            let name: Name = token.as_str().try_into().expect("logic flaw");
+            let name = Name::intern(token.as_str());
             if self.type_locals.iter().any(|x| x == &name) {
                 Ok(mk_type_local(name))
             } else if self.type_const_table.contains_key(&name) {
@@ -331,7 +330,7 @@ impl<'a> Parser<'a> {
                 let t = self.subty(1024)?;
                 Ok(mk_type_arrow(t, mk_type_prop()))
             } else if token.as_str() == "ℕ" {
-                Ok(mk_type_const(Name::intern("nat").unwrap()))
+                Ok(mk_type_const(Name::intern("nat")))
             } else {
                 Self::fail(token, "unknown type variable")
             }
@@ -365,7 +364,7 @@ impl<'a> Parser<'a> {
                 }
                 self.advance();
                 let s = self.subty(34)?;
-                let mut prod = mk_type_const(Name::intern("prod").unwrap());
+                let mut prod = mk_type_const(Name::intern("prod"));
                 prod.apply([t, s]);
                 t = prod;
             } else if token.is_ident()
@@ -434,7 +433,7 @@ impl<'a> Parser<'a> {
         if !token.is_ident() {
             return Self::fail(token, "expected class name");
         }
-        let name = Name::try_from(token.as_str()).expect("logic flaw");
+        let name = Name::intern(token.as_str());
         if !self.class_predicate_table.contains_key(&name) {
             return Self::fail(token, "unknown class");
         }
@@ -509,7 +508,7 @@ impl<'a> Parser<'a> {
         for x in binders.into_iter().rev() {
             m.abs(slice::from_ref(&x));
             let f = mem::take(&mut m);
-            m = mk_const(Name::try_from(binder).unwrap(), vec![x.ty], vec![]);
+            m = mk_const(Name::intern(binder), vec![x.ty], vec![]);
             m.apply(vec![f]);
         }
         Ok(m)
@@ -535,7 +534,7 @@ impl<'a> Parser<'a> {
 
     fn term_var(&mut self, token: Token, entity: Option<Name>) -> Result<Term, ParseError> {
         let name = match entity {
-            None => Name::try_from(token.as_str()).expect("logic flaw"),
+            None => Name::intern(token.as_str()),
             Some(s) => s,
         };
         for x in self.locals.iter().rev() {
@@ -649,7 +648,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expr_const(&mut self, token: Token, auto_inst: bool) -> Result<Expr, ParseError> {
-        let name = Name::try_from(token.as_str()).unwrap();
+        let name = Name::intern(token.as_str());
         let Some(axiom_info) = self.axiom_table.get(&name) else {
             return Self::fail(token, "unknown variable");
         };
@@ -687,17 +686,13 @@ impl<'a> Parser<'a> {
     }
 
     fn mk_eq(lhs: Term, rhs: Term) -> Term {
-        let mut eq = mk_const(
-            Name::intern("eq").unwrap(),
-            vec![mk_fresh_type_hole()],
-            vec![],
-        );
+        let mut eq = mk_const(Name::intern("eq"), vec![mk_fresh_type_hole()], vec![]);
         eq.apply([lhs, rhs]);
         eq
     }
 
     fn mk_eq_trans(&mut self, e1: Expr, e2: Expr) -> Expr {
-        let name = Name::intern("eq.trans").unwrap();
+        let name = Name::intern("eq.trans");
         let ty_args = vec![mk_fresh_type_hole()];
         let instances = vec![];
         let mut eq_trans = mk_expr_const(name, ty_args, instances);
@@ -782,11 +777,7 @@ impl<'a> Parser<'a> {
                     self.locals.pop();
 
                     // Expand[obtain (x : τ), p := e1, e2] := exists.ind.{τ}[_, _] e1 (take (x : τ), assume p, e2)
-                    let e = mk_expr_const(
-                        Name::intern("exists.ind").unwrap(),
-                        vec![ty.clone()],
-                        vec![],
-                    );
+                    let e = mk_expr_const(Name::intern("exists.ind"), vec![ty.clone()], vec![]);
                     let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_app(e, e1);
@@ -911,7 +902,7 @@ impl<'a> Parser<'a> {
             if self.expect_symbol_opt("}").is_none() {
                 loop {
                     let token = self.ident()?;
-                    let tv = Name::intern(token.as_str()).unwrap();
+                    let tv = Name::intern(token.as_str());
                     for v in &local_types {
                         if &tv == v {
                             return Self::fail(token, "duplicate type variable")?;
@@ -1241,7 +1232,7 @@ impl<'a> Parser<'a> {
 
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
-            let tv = Name::intern(token.as_str()).unwrap();
+            let tv = Name::intern(token.as_str());
             for v in &local_types {
                 if &tv == v {
                     return Self::fail(token, "duplicate type variable")?;
@@ -1253,7 +1244,7 @@ impl<'a> Parser<'a> {
         let mut ctors: Vec<DataConstructor> = vec![];
         while let Some(_token) = self.expect_symbol_opt("|") {
             let token = self.ident()?;
-            let ctor_name = Name::intern(token.as_str()).unwrap();
+            let ctor_name = Name::intern(token.as_str());
             for ctor in &ctors {
                 if ctor_name == ctor.name {
                     return Self::fail(token, "duplicate constructor")?;
@@ -1293,7 +1284,7 @@ impl<'a> Parser<'a> {
         let mut ctors: Vec<Constructor> = vec![];
         while let Some(_token) = self.expect_symbol_opt("|") {
             let token = self.ident()?;
-            let ctor_name = Name::intern(token.as_str()).unwrap();
+            let ctor_name = Name::intern(token.as_str());
             for ctor in &ctors {
                 if ctor_name == ctor.name {
                     return Self::fail(token, "duplicate constructor")?;
@@ -1330,7 +1321,7 @@ impl<'a> Parser<'a> {
         let name = self.name()?;
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
-            let tv = Name::intern(token.as_str()).unwrap();
+            let tv = Name::intern(token.as_str());
             for v in &local_types {
                 if &tv == v {
                     return Self::fail(token, "duplicate type variable")?;
@@ -1479,7 +1470,7 @@ impl<'a> Parser<'a> {
         let name = self.name()?;
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
-            let tv = Name::intern(token.as_str()).unwrap();
+            let tv = Name::intern(token.as_str());
             for v in &local_types {
                 if &tv == v {
                     return Self::fail(token, "duplicate type variable")?;
