@@ -407,6 +407,7 @@ impl<'a> Elaborator<'a> {
         }
     }
 
+    // TODO: take expr as &Expr
     fn visit_expr(&mut self, expr: &mut Expr) -> anyhow::Result<Term> {
         match expr {
             Expr::Assump(expr) => {
