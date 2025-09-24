@@ -341,7 +341,7 @@ impl Eval {
             name,
             AxiomInfo {
                 type_arity: local_types.len(),
-                num_params: target.clone().ungeneralize().len(),
+                num_params: target.count_forall(),
                 num_local_classes: local_classes.len(),
             },
         );

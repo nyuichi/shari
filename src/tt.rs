@@ -1211,6 +1211,33 @@ impl Term {
         }
     }
 
+    pub fn count_forall(&self) -> usize {
+        static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall").unwrap());
+
+        let mut count = 0;
+        let mut m = self;
+        loop {
+            let Term::App(app) = m else {
+                break;
+            };
+            let app = app.as_ref();
+            let Term::Const(head) = &app.fun else {
+                break;
+            };
+            if head.name != *FORALL {
+                break;
+            }
+            let Term::Abs(abs) = &app.arg else {
+                break;
+            };
+            let body = &abs.as_ref().body;
+            count += 1;
+            m = body;
+        }
+
+        count
+    }
+
     pub fn generalize(&mut self, xs: &[Parameter]) {
         static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall").unwrap());
 
