@@ -7,17 +7,17 @@ use crate::cmd::{
     StructureAxiom, StructureConst, StructureField,
 };
 use crate::proof::{
-    Expr, mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_change, mk_expr_const, mk_expr_inst,
-    mk_expr_take,
+    Axiom, Expr, mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_change, mk_expr_const,
+    mk_expr_inst, mk_expr_take,
 };
 use crate::tt::{
-    Class, Instance, Kind, Name, Parameter, Term, Type, mk_const, mk_fresh_hole,
+    Class, ClassType, Const, Instance, Kind, Name, Parameter, Term, Type, mk_const, mk_fresh_hole,
     mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const, mk_type_local, mk_type_prop,
 };
 
 use crate::lex::{Lex, LexError, SourceInfo, Token, TokenKind};
 use anyhow::bail;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::{mem, slice};
 use thiserror::Error;
@@ -135,34 +135,13 @@ pub enum ParseError {
     Eof { source_info: SourceInfo },
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct AxiomInfo {
-    pub type_arity: usize,
-    pub num_params: usize,
-    pub num_local_classes: usize,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct ConstInfo {
-    pub type_arity: usize,
-    pub num_local_classes: usize,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct Namespace {
-    pub type_consts: HashSet<Name>,
-    pub consts: HashMap<Name, ConstInfo>,
-    pub axioms: HashMap<Name, AxiomInfo>,
-    pub type_locals: Vec<Name>,
-    pub class_predicates: HashSet<Name>,
-    // mapping name to type arity
-    pub locals: Vec<Name>,
-}
-
 pub struct Parser<'a> {
     lex: &'a mut Lex,
     tt: &'a TokenTable,
-    ns: &'a Namespace,
+    type_const_table: &'a HashMap<Name, Kind>,
+    const_table: &'a HashMap<Name, Const>,
+    axiom_table: &'a HashMap<Name, Axiom>,
+    class_predicate_table: &'a HashMap<Name, ClassType>,
     type_locals: Vec<Name>,
     locals: Vec<Name>,
     holes: Vec<(Name, Type)>,
@@ -172,13 +151,19 @@ impl<'a> Parser<'a> {
     pub fn new(
         lex: &'a mut Lex,
         tt: &'a TokenTable,
-        ns: &'a Namespace,
+        type_const_table: &'a HashMap<Name, Kind>,
+        const_table: &'a HashMap<Name, Const>,
+        axiom_table: &'a HashMap<Name, Axiom>,
+        class_predicate_table: &'a HashMap<Name, ClassType>,
         type_variables: Vec<Name>,
     ) -> Self {
         Self {
             lex,
             tt,
-            ns,
+            type_const_table,
+            const_table,
+            axiom_table,
+            class_predicate_table,
             type_locals: type_variables,
             locals: vec![],
             holes: vec![],
@@ -338,9 +323,9 @@ impl<'a> Parser<'a> {
         let token = self.any_token()?;
         if token.is_ident() {
             let name: Name = token.as_str().try_into().expect("logic flaw");
-            if self.type_locals.iter().any(|x| x == &name) || self.ns.type_locals.contains(&name) {
+            if self.type_locals.iter().any(|x| x == &name) {
                 Ok(mk_type_local(name))
-            } else if self.ns.type_consts.contains(&name) {
+            } else if self.type_const_table.contains_key(&name) {
                 Ok(mk_type_const(name))
             } else if token.as_str() == "sub" {
                 let t = self.subty(1024)?;
@@ -450,7 +435,7 @@ impl<'a> Parser<'a> {
             return Self::fail(token, "expected class name");
         }
         let name = Name::try_from(token.as_str()).expect("logic flaw");
-        if !self.ns.class_predicates.contains(&name) {
+        if !self.class_predicate_table.contains_key(&name) {
             return Self::fail(token, "unknown class");
         }
         let mut args = vec![];
@@ -558,18 +543,9 @@ impl<'a> Parser<'a> {
                 return Ok(mk_local(name));
             }
         }
-        for x in self.ns.locals.iter() {
-            if x == &name {
-                return Ok(mk_local(name));
-            }
-        }
-        let Some(const_info) = self.ns.consts.get(&name).cloned() else {
+        let Some(const_info) = self.const_table.get(&name) else {
             return Self::fail(token, "unknown variable");
         };
-        let ConstInfo {
-            type_arity,
-            num_local_classes,
-        } = const_info;
         let mut ty_args = vec![];
         if let Some(_token) = self.expect_symbol_opt(".{") {
             if self.expect_symbol_opt("}").is_none() {
@@ -582,12 +558,12 @@ impl<'a> Parser<'a> {
                 self.expect_symbol("}")?;
             }
         } else {
-            for _ in 0..type_arity {
+            for _ in 0..const_info.local_types.len() {
                 ty_args.push(mk_fresh_type_hole());
             }
         }
         let mut instances = vec![];
-        for _ in 0..num_local_classes {
+        for _ in 0..const_info.local_classes.len() {
             instances.push(Instance::Hole(Name::fresh()));
         }
         Ok(mk_const(name, ty_args, instances))
@@ -674,7 +650,7 @@ impl<'a> Parser<'a> {
 
     fn expr_const(&mut self, token: Token, auto_inst: bool) -> Result<Expr, ParseError> {
         let name = Name::try_from(token.as_str()).unwrap();
-        let Some(axiom_info) = self.ns.axioms.get(&name).cloned() else {
+        let Some(axiom_info) = self.axiom_table.get(&name) else {
             return Self::fail(token, "unknown variable");
         };
         let mut ty_args = vec![];
@@ -689,17 +665,17 @@ impl<'a> Parser<'a> {
                 self.expect_symbol("}")?;
             }
         } else {
-            for _ in 0..axiom_info.type_arity {
+            for _ in 0..axiom_info.local_types.len() {
                 ty_args.push(mk_fresh_type_hole());
             }
         }
         let mut instances = vec![];
-        for _ in 0..axiom_info.num_local_classes {
+        for _ in 0..axiom_info.local_classes.len() {
             instances.push(Instance::Hole(Name::fresh()));
         }
         let mut expr = mk_expr_const(name, ty_args, instances);
         if auto_inst {
-            for _ in 0..axiom_info.num_params {
+            for _ in 0..axiom_info.target.count_forall() {
                 expr = mk_expr_inst(expr, self.mk_term_hole());
             }
         }

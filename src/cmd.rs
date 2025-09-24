@@ -4,7 +4,7 @@ use anyhow::bail;
 
 use crate::{
     elab,
-    parse::{AxiomInfo, ConstInfo, Namespace, TokenTable},
+    parse::TokenTable,
     print::{OpTable, Pretty},
     proof::{self, Axiom, Expr},
     tt::{
@@ -257,7 +257,6 @@ pub struct ClassInstanceLemma {
 #[derive(Debug, Clone, Default)]
 pub struct Eval {
     pub tt: TokenTable,
-    pub ns: Namespace,
     pub pp: OpTable,
     pub local_type_consts: Vec<Name>,
     pub type_const_table: HashMap<Name, Kind>,
@@ -296,15 +295,6 @@ impl Eval {
         local_classes: Vec<Class>,
         ty: Type,
     ) {
-        // TODO: remove and integrate into const_table
-        self.ns.consts.insert(
-            name,
-            ConstInfo {
-                type_arity: local_types.len(),
-                num_local_classes: local_classes.len(),
-            },
-        );
-
         self.const_table.insert(
             name,
             Const {
@@ -336,16 +326,6 @@ impl Eval {
             &target,
         );
 
-        // TODO: remove and integrate into axiom_table
-        self.ns.axioms.insert(
-            name,
-            AxiomInfo {
-                type_arity: local_types.len(),
-                num_params: target.count_forall(),
-                num_local_classes: local_classes.len(),
-            },
-        );
-
         self.axiom_table.insert(
             name,
             Axiom {
@@ -362,9 +342,6 @@ impl Eval {
     }
 
     fn add_type_const(&mut self, name: Name, kind: Kind) {
-        // TODO: remove this
-        self.ns.type_consts.insert(name);
-
         self.type_const_table.insert(name, kind.clone());
 
         log::info!(
@@ -377,9 +354,6 @@ impl Eval {
     }
 
     fn add_class_predicate(&mut self, name: Name, ty: ClassType) {
-        // TODO: remove this
-        self.ns.class_predicates.insert(name);
-
         self.class_predicate_table.insert(name, ty);
 
         log::info!(
