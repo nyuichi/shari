@@ -890,6 +890,8 @@ impl Term {
 
     /// self.close(x) == [0/x]self
     /// TODO: close も　is_closed というフィールドを Term に持たせてそれを使うようにする。そもそも今関数は pub じゃなくてよくなるはず。
+    #[allow(unused)]
+    #[deprecated(note = "left for future use")]
     pub fn close(&mut self, name: Name) {
         assert!(self.is_lclosed());
         self.close_at(name, 0)
