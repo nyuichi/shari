@@ -653,8 +653,25 @@ lemma surjective.split.{u, v} (f : u → v) : surjective f → split f := ac
 
 def choice.{u} (f : inhab u → u) : Prop := ∀ (x : inhab u), f x ∈ inhab.rep x
 
+-- choice function exists for any inhabited type
+-- this is an equivalent formulation of ac
+-- later we will introduce a constructive version of this lemma, called `global_choice`.
 lemma choice.exists.{u} : ∃ (f : inhab u → u), choice f :=
 ac @inhab.inhabited
+
+lemma ac_from_choice_exists.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) :=
+obtain (c : inhab v → v), choice c := choice.exists,
+assume ∀ x, ∃ y, R x y,
+have ∀ x, ∃! (s : inhab v), R x = inhab.rep s :=
+  take (x : u),
+  have ∃ (y : v), R x y := «∀ x, ∃ y, R x y»[x],
+    -- FIXME: the unifier could not synthesize `R x`
+  @inhab.uabs[R x] «∃ (y : v), R x y»,
+have ∃! (g : u → inhab v), ∀ x, R x = inhab.rep (g x) := auc «∀ x, ∃! (s : inhab v), R x = inhab.rep s»,
+obtain (g : u → inhab v), ∀ x, R x = inhab.rep (g x) := uexists.exists «∃! (g : u → inhab v), ∀ x, R x = inhab.rep (g x)»,
+@exists.intro[_, λ x, c (g x)] (take (x : u),
+  have c (g x) ∈ inhab.rep (g x) := «choice c»[g x],
+  eq.transport (eq.symm «∀ x, R x = inhab.rep (g x)»[x]) «c (g x) ∈ inhab.rep (g x)»)
 
 -- Diaconescu's argument: ac + prop_ext + fun_ext → em
 --
