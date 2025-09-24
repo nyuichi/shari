@@ -498,14 +498,22 @@ impl<'a> Elaborator<'a> {
                 let forall = self.visit_expr(expr)?;
                 let arg_ty = self.visit_term(arg)?;
 
-                let pred = self.mk_term_hole(mk_type_arrow(arg_ty.clone(), mk_type_prop()));
+                let hole = self.mk_term_hole(mk_type_arrow(arg_ty.clone(), mk_type_prop()));
+
+                let x = Parameter {
+                    name: Name::fresh(),
+                    ty: arg_ty.clone(),
+                };
+                let mut pred = hole.clone();
+                pred.apply([mk_local(x.name)]);
+                pred.abs(&[x]);
 
                 let mut target = mk_const(
                     Name::intern("forall").unwrap(),
                     vec![arg_ty.clone()],
                     vec![],
                 );
-                target.apply([pred.clone()]);
+                target.apply([pred]);
                 self.term_constraints.push((
                     self.tt_local_env.clone(),
                     forall,
@@ -515,7 +523,7 @@ impl<'a> Elaborator<'a> {
 
                 *expr = mk_expr_change(target, mem::take(expr));
 
-                let mut ret = pred;
+                let mut ret = hole;
                 ret.apply([arg.clone()]);
                 Ok(ret)
             }

@@ -3,7 +3,7 @@
 use std::sync::LazyLock;
 use std::{collections::HashMap, iter::zip, sync::Arc};
 
-use crate::tt::{self, Class, Instance, Name, Parameter, Term, Type};
+use crate::tt::{self, Class, Instance, Name, Parameter, Term, TermAbs, Type};
 
 /// p ::= «φ»
 ///     | assume φ, p
@@ -29,9 +29,9 @@ use crate::tt::{self, Class, Instance, Name, Parameter, Term, Type};
 /// --------------------------------------- (x # Φ)
 /// Γ | Φ ⊢ take (x : u), h : ∀ (x : u), φ
 ///
-/// Γ | Φ ⊢ h : ∀ ψ
-/// ------------------- (Γ ⊢ m : u)
-/// Γ | Φ ⊢ h[m] : ψ m
+/// Γ | Φ ⊢ h : ∀ x, ψ
+/// --------------------- (Γ ⊢ m : u)
+/// Γ | Φ ⊢ h[m] : ψ[m/x]
 ///
 /// -------------------------
 /// Γ | Φ ⊢ c.{u₁, ⋯, uₙ} : φ
@@ -402,7 +402,18 @@ impl TryFrom<Term> for Forall {
             return Err(());
         }
         let pred = args.pop().unwrap();
-        Ok(Forall { domain, pred })
+        let Term::Abs(mut abs) = pred else {
+            return Err(());
+        };
+        let TermAbs {
+            binder_type: _,
+            binder_name: _,
+            body,
+        } = Arc::make_mut(&mut abs);
+        Ok(Forall {
+            domain,
+            pred: std::mem::take(body),
+        })
     }
 }
 
@@ -503,7 +514,7 @@ impl Env<'_> {
                     .unwrap_or_else(|_| panic!("∀ expected, got {}", h));
                 self.tt_env.check_type(tt_local_env, arg, &domain);
                 let mut target = pred;
-                target.apply([arg.clone()]);
+                target.open(arg);
                 target
             }
             Expr::Const(e) => {
