@@ -3,7 +3,7 @@
 use std::sync::LazyLock;
 use std::{collections::HashMap, iter::zip, sync::Arc};
 
-use crate::tt::{self, Class, Instance, Name, Parameter, Term, TermAbs, Type};
+use crate::tt::{self, Class, Instance, Name, Parameter, Term, Type};
 
 /// p ::= «φ»
 ///     | assume φ, p
@@ -350,73 +350,6 @@ impl Expr {
     }
 }
 
-static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp").unwrap());
-static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall").unwrap());
-
-// TODO: ImpとForallは削除する。try_intoを使ってるところはtt::Termのunguard1, ungeneralize1を使うようにする。
-#[derive(Debug, Clone)]
-pub struct Imp {
-    pub lhs: Term,
-    pub rhs: Term,
-}
-
-impl TryFrom<Term> for Imp {
-    type Error = ();
-
-    fn try_from(mut value: Term) -> Result<Self, Self::Error> {
-        let mut args = value.unapply();
-        let Term::Const(head) = value else {
-            return Err(());
-        };
-        if head.name != *IMP {
-            return Err(());
-        }
-        if args.len() != 2 {
-            return Err(());
-        }
-        let rhs = args.pop().unwrap();
-        let lhs = args.pop().unwrap();
-        Ok(Self { lhs, rhs })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Forall {
-    pub domain: Type,
-    pub pred: Term,
-}
-
-impl TryFrom<Term> for Forall {
-    type Error = ();
-
-    fn try_from(mut value: Term) -> Result<Self, Self::Error> {
-        let mut args = value.unapply();
-        let Term::Const(mut head) = value else {
-            return Err(());
-        };
-        if head.name != *FORALL {
-            return Err(());
-        }
-        let domain = Arc::make_mut(&mut head).ty_args.pop().unwrap();
-        if args.len() != 1 {
-            return Err(());
-        }
-        let pred = args.pop().unwrap();
-        let Term::Abs(mut abs) = pred else {
-            return Err(());
-        };
-        let TermAbs {
-            binder_type: _,
-            binder_name: _,
-            body,
-        } = Arc::make_mut(&mut abs);
-        Ok(Forall {
-            domain,
-            pred: std::mem::take(body),
-        })
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Axiom {
     pub local_types: Vec<Name>,
@@ -478,13 +411,12 @@ impl Env<'_> {
             }
             Expr::App(e) => {
                 let ExprApp { expr1, expr2 } = &**e;
-                let h1 = self.infer_prop(tt_local_env, local_env, expr1);
-                let Imp { lhs, rhs } = h1
-                    .clone()
-                    .try_into()
-                    .unwrap_or_else(|_| panic!("implication expected, got {}", h1));
+                let mut target = self.infer_prop(tt_local_env, local_env, expr1);
+                let Some(lhs) = target.unguard1() else {
+                    panic!("implication expected, got {}", target);
+                };
                 self.check_prop(tt_local_env, local_env, expr2, &lhs);
-                rhs
+                target
             }
             Expr::Take(e) => {
                 let ExprTake { name, ty, expr } = &**e;
@@ -507,14 +439,12 @@ impl Env<'_> {
             }
             Expr::Inst(e) => {
                 let ExprInst { expr, arg } = &**e;
-                let h = self.infer_prop(tt_local_env, local_env, expr);
-                let Forall { domain, pred } = h
-                    .clone()
-                    .try_into()
-                    .unwrap_or_else(|_| panic!("∀ expected, got {}", h));
-                self.tt_env.check_type(tt_local_env, arg, &domain);
-                let mut target = pred;
-                target.open(arg);
+                let mut target = self.infer_prop(tt_local_env, local_env, expr);
+                let Some(Parameter { name, ty }) = target.ungeneralize1() else {
+                    panic!("∀ expected, got {}", target);
+                };
+                self.tt_env.check_type(tt_local_env, arg, &ty);
+                target.subst(&[(name, arg.clone())]);
                 target
             }
             Expr::Const(e) => {
