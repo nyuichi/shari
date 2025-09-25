@@ -378,9 +378,9 @@ impl Env<'_> {
         expr: &Expr,
         prop: &Term,
     ) {
-        let inferred = self.infer_prop(tt_local_env, local_env, expr);
-        if !inferred.alpha_eq(prop) {
-            panic!("proposition mismatch: expected {}, got {}", prop, inferred);
+        let p = self.infer_prop(tt_local_env, local_env, expr);
+        if !p.alpha_eq(prop) {
+            panic!("proposition mismatch: expected {}, got {}", prop, p);
         }
     }
 

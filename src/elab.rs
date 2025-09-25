@@ -2137,8 +2137,13 @@ pub fn elaborate_expr(
 
     let mut elab = Elaborator::new(proof_env, local_env, term_holes);
 
-    *e = mk_expr_change(prop.clone(), mem::take(e));
-    elab.visit_expr(e)?;
+    let p = elab.visit_expr(e)?;
+    elab.term_constraints.push((
+        elab.tt_local_env.clone(),
+        p,
+        prop.clone(),
+        Error::Visit(format!("proposition mismatch: expected {prop}")),
+    ));
 
     if let Err(error) = elab.solve() {
         bail!("unification failed: {error}");
@@ -2148,6 +2153,8 @@ pub fn elaborate_expr(
 
     ensure!(e.is_ground());
     ensure!(e.is_type_ground());
+
+    *e = mk_expr_change(prop.clone(), mem::take(e));
 
     #[cfg(debug_assertions)]
     {
