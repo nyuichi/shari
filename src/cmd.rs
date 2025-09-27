@@ -254,6 +254,195 @@ pub struct ClassInstanceLemma {
     pub expr: Expr,
 }
 
+impl std::fmt::Display for Cmd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Cmd::Infix(cmd) => write!(f, "infix {} {} {}", cmd.op, cmd.prec, cmd.entity),
+            Cmd::Infixr(cmd) => write!(f, "infixr {} {} {}", cmd.op, cmd.prec, cmd.entity),
+            Cmd::Infixl(cmd) => write!(f, "infixl {} {} {}", cmd.op, cmd.prec, cmd.entity),
+            Cmd::Prefix(cmd) => write!(f, "prefix {} {} {}", cmd.op, cmd.prec, cmd.entity),
+            Cmd::Nofix(cmd) => write!(f, "nofix {} {}", cmd.op, cmd.entity),
+            Cmd::Def(cmd) => write!(
+                f,
+                "def {}.{{{}}} : {} := {}",
+                cmd.name,
+                cmd.local_types
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                cmd.ty,
+                cmd.target
+            ),
+            Cmd::Axiom(cmd) => write!(
+                f,
+                "axiom {}.{{{}}} : {}",
+                cmd.name,
+                cmd.local_types
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                cmd.target
+            ),
+            Cmd::Lemma(cmd) => write!(
+                f,
+                "lemma {}.{{{}}} : {} := {}",
+                cmd.name,
+                cmd.local_types
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                cmd.target,
+                cmd.expr
+            ),
+            Cmd::Const(cmd) => write!(
+                f,
+                "const {}.{{{}}} : {}",
+                cmd.name,
+                cmd.local_types
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                cmd.ty
+            ),
+            Cmd::TypeConst(cmd) => write!(f, "type const {} : {}", cmd.name, cmd.kind),
+            Cmd::LocalTypeConst(cmd) => write!(
+                f,
+                "local type const {}",
+                cmd.variables
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+            Cmd::TypeInductive(cmd) => write!(
+                f,
+                "inductive {}.{{{}}} {{\n{}\n}}",
+                cmd.name,
+                cmd.local_types
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                cmd.ctors
+                    .iter()
+                    .map(|ctor| format!("{} : {}", ctor.name, ctor.ty))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+            Cmd::Inductive(cmd) => write!(
+                f,
+                "inductive {}.{{{}}} ({}) : {} {{\n{}\n}}",
+                cmd.name,
+                cmd.local_types
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                cmd.params
+                    .iter()
+                    .map(|p| format!("{} : {}", p.name, p.ty))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                cmd.target_ty,
+                cmd.ctors
+                    .iter()
+                    .map(|ctor| format!("{} : {}", ctor.name, ctor.target))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+            Cmd::Structure(cmd) => write!(
+                f,
+                "structure {}.{{{}}} {{\n{}\n}}",
+                cmd.name,
+                cmd.local_types
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                cmd.fields
+                    .iter()
+                    .map(|field| match field {
+                        StructureField::Const(c) => format!("  constant {} : {}", c.name, c.ty),
+                        StructureField::Axiom(a) => format!("  axiom {} : {}", a.name, a.target),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+            Cmd::Instance(cmd) => write!(
+                f,
+                "instance {}.{{{}}} ({}) : {} {{\n{}\n}}",
+                cmd.name,
+                cmd.local_types
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                cmd.params
+                    .iter()
+                    .map(|p| format!("{} : {}", p.name, p.ty))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                cmd.target_ty,
+                cmd.fields
+                    .iter()
+                    .map(|field| match field {
+                        InstanceField::Def(d) =>
+                            format!("  def {} : {} := {}", d.name, d.ty, d.target),
+                        InstanceField::Lemma(l) =>
+                            format!("  lemma {} : {} := {}", l.name, l.target, l.expr),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+            Cmd::ClassStructure(cmd) => write!(
+                f,
+                "class structure {}.{{{}}} {{\n{}\n}}",
+                cmd.name,
+                cmd.local_types
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                cmd.fields
+                    .iter()
+                    .map(|field| match field {
+                        ClassStructureField::Const(c) =>
+                            format!("  constant {} : {}", c.name, c.ty),
+                        ClassStructureField::Axiom(a) =>
+                            format!("  axiom {} : {}", a.name, a.target),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+            Cmd::ClassInstance(cmd) => write!(
+                f,
+                "class instance {}.{{{}}} : {} {{\n{}\n}}",
+                cmd.name,
+                cmd.local_types
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                cmd.target,
+                cmd.fields
+                    .iter()
+                    .map(|field| match field {
+                        ClassInstanceField::Def(d) =>
+                            format!("  def {} : {} := {}", d.name, d.ty, d.target),
+                        ClassInstanceField::Lemma(l) =>
+                            format!("  lemma {} : {} := {}", l.name, l.target, l.expr),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Eval {
     pub tt: TokenTable,

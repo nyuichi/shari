@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::{mem, vec};
 
+// TODO: struct Path(Name) を用意して Const の中身を Path にする。
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
 pub struct Name(usize);
 
@@ -617,6 +618,8 @@ impl Instance {
 
 /// Locally nameless representation. See [Charguéraud, 2012].
 /// Use syn's convention [https://docs.rs/syn/latest/syn/enum.Expr.html#syntax-tree-enums].
+/// TODO: non_exhausive はやめる。
+/// TODO: Term のメソッドは基本的に &mut self を取らずに &self をとって Term を返すようにする。全部 immutable にする。
 #[derive(Clone, Debug)]
 pub enum Term {
     #[non_exhaustive]
@@ -1500,6 +1503,27 @@ impl Term {
                 }
             }
             Term::Hole(_) => {}
+        }
+    }
+
+    pub fn replace_hole(&mut self, f: &impl Fn(Name) -> Option<Term>) {
+        match self {
+            Term::Var(_) => {}
+            Term::Abs(inner) => {
+                Arc::make_mut(inner).body.replace_hole(f);
+            }
+            Term::App(inner) => {
+                let inner = Arc::make_mut(inner);
+                inner.fun.replace_hole(f);
+                inner.arg.replace_hole(f);
+            }
+            Term::Local(_) => {}
+            Term::Const(_) => {}
+            Term::Hole(inner) => {
+                if let Some(m) = f(inner.name) {
+                    *self = m;
+                }
+            }
         }
     }
 }

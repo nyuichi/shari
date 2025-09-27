@@ -10,6 +10,7 @@
  - [ ] improved error reporting
  - [ ] coercion
  - [ ] namespace
+ - [ ] let expr
  - [ ] local typedef
  - [ ] more tests
  -/
@@ -171,6 +172,11 @@ class structure has u := {
 
 def summon.{u} [has u] : u := has.summon
 
+-- The unifier uses this class to resolve unconstrained metavariables.
+class structure default u := {
+  const value : u
+}
+
 -- A predicative version of Leibniz equality (attributed to Paulin).
 -- The following set of declarations are generated.
 -- (Notice that the order of arguments in eq.ind is slightly modified from [Dybjer, '97].)
@@ -222,6 +228,10 @@ def not (φ : Prop) : Prop := φ → ⊥
 
 class instance Prop.has_neg : has_neg Prop := {
   def neg : Prop → Prop := not
+}
+
+class instance Prop.default : default Prop := {
+  def value : Prop := ⊤
 }
 
 def iff (φ : Prop) (ψ : Prop) : Prop := (φ → ψ) ∧ (ψ → φ)
@@ -479,6 +489,10 @@ instance bool.tt : bool := {
 instance bool.ff : bool := {
   def rep : Prop := ⊥
   lemma spec : rep = ⊤ ∨ rep = ⊥ := or.right eq.refl
+}
+
+class instance bool.default : default bool := {
+  def value : bool := bool.tt
 }
 
 def tt : bool := bool.tt

@@ -348,6 +348,43 @@ impl Expr {
             }
         }
     }
+
+    pub fn replace_hole<F>(&mut self, f: &F)
+    where
+        F: Fn(Name) -> Option<Term>,
+    {
+        match self {
+            Expr::Assump(e) => {
+                let ExprAssump { target } = Arc::make_mut(e);
+                target.replace_hole(f);
+            }
+            Expr::Assume(e) => {
+                let ExprAssume { local_axiom, expr } = Arc::make_mut(e);
+                local_axiom.replace_hole(f);
+                expr.replace_hole(f);
+            }
+            Expr::App(e) => {
+                let ExprApp { expr1, expr2 } = Arc::make_mut(e);
+                expr1.replace_hole(f);
+                expr2.replace_hole(f);
+            }
+            Expr::Take(e) => {
+                let ExprTake { expr, .. } = Arc::make_mut(e);
+                expr.replace_hole(f);
+            }
+            Expr::Inst(e) => {
+                let ExprInst { expr, arg } = Arc::make_mut(e);
+                expr.replace_hole(f);
+                arg.replace_hole(f);
+            }
+            Expr::Const(_) => {}
+            Expr::Change(e) => {
+                let ExprChange { target, expr } = Arc::make_mut(e);
+                target.replace_hole(f);
+                expr.replace_hole(f);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

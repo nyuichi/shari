@@ -29,7 +29,10 @@ pub fn process(input: &str) -> anyhow::Result<()> {
         )
         .cmd()
         {
-            Ok(cmd) => cmd,
+            Ok(cmd) => {
+                log::trace!("parsed command:\n{cmd}");
+                cmd
+            }
             Err(e) => {
                 return Err(e).context("parse error");
             }
