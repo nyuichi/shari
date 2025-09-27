@@ -135,6 +135,7 @@ pub enum ParseError {
     Eof { source_info: SourceInfo },
 }
 
+// TODO: instance lemma の中で hole を作ると引数にそれまでの instance def が入っちゃって後々 elab で const に置き換えられるので無駄。あと instance 自体の引数が2回ぐらい hole の引数に入ってしまうバグがありそう。
 pub struct Parser<'a> {
     lex: &'a mut Lex,
     tt: &'a TokenTable,
