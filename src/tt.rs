@@ -1241,42 +1241,44 @@ impl Term {
     // Fresh names are generated on the fly.
     // Does not check ty_args of forall.
     pub fn ungeneralize(&mut self) -> Vec<Parameter> {
+        let mut target = mem::take(self);
         let mut acc = vec![];
-        while let Some(x) = self.ungeneralize1() {
-            acc.push(x);
+        while let Some((binder, body)) = target.ungeneralize1() {
+            acc.push(binder);
+            target = body;
         }
+        *self = target;
         acc
     }
 
-    pub fn ungeneralize1(&mut self) -> Option<Parameter> {
+    pub fn ungeneralize1(&self) -> Option<(Parameter, Term)> {
         static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall"));
 
         let Term::App(m) = self else {
             return None;
         };
-        let m = Arc::make_mut(m);
         let Term::Const(head) = &m.fun else {
             return None;
         };
         if head.name != *FORALL {
             return None;
         }
-        let Term::Abs(abs) = &mut m.arg else {
+        let Term::Abs(abs) = &m.arg else {
             return None;
         };
         let TermAbs {
             binder_type,
             binder_name,
             body,
-        } = Arc::make_mut(abs);
+        } = &**abs;
         let name = Name::fresh_from(*binder_name);
+        let mut body = body.clone();
         body.open(&mk_local(name));
-        let ret = Parameter {
+        let binder = Parameter {
             name,
-            ty: mem::take(binder_type),
+            ty: binder_type.clone(),
         };
-        *self = mem::take(body);
-        Some(ret)
+        Some((binder, body))
     }
 
     pub fn guard(&mut self, guards: impl IntoIterator<Item = Term>) {
@@ -1296,34 +1298,32 @@ impl Term {
     }
 
     pub fn unguard(&mut self) -> Vec<Term> {
+        let mut target = mem::take(self);
         let mut acc = vec![];
-        while let Some(guard) = self.unguard1() {
-            acc.push(guard);
+        while let Some((lhs, rhs)) = target.unguard1() {
+            acc.push(lhs);
+            target = rhs;
         }
+        *self = target;
         acc
     }
 
-    pub fn unguard1(&mut self) -> Option<Term> {
+    pub fn unguard1(&self) -> Option<(Term, Term)> {
         static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp"));
 
         let Term::App(m) = self else {
             return None;
         };
-        let m = Arc::make_mut(m);
-        let Term::App(n) = &mut m.fun else {
+        let Term::App(n) = &m.fun else {
             return None;
         };
-        let n = Arc::make_mut(n);
         let Term::Const(head) = &n.fun else {
             return None;
         };
         if head.name != *IMP {
             return None;
         }
-        let left = mem::take(&mut n.arg);
-        let right = mem::take(&mut m.arg);
-        *self = right;
-        Some(left)
+        Some((n.arg.clone(), m.arg.clone()))
     }
 
     pub fn subst_type(&mut self, subst: &[(Name, Type)]) {

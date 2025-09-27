@@ -448,12 +448,12 @@ impl Env<'_> {
             }
             Expr::App(e) => {
                 let ExprApp { expr1, expr2 } = &**e;
-                let mut target = self.infer_prop(tt_local_env, local_env, expr1);
-                let Some(lhs) = target.unguard1() else {
+                let target = self.infer_prop(tt_local_env, local_env, expr1);
+                let Some((lhs, rhs)) = target.unguard1() else {
                     panic!("implication expected, got {}", target);
                 };
                 self.check_prop(tt_local_env, local_env, expr2, &lhs);
-                target
+                rhs
             }
             Expr::Take(e) => {
                 let ExprTake { name, ty, expr } = &**e;
@@ -476,13 +476,13 @@ impl Env<'_> {
             }
             Expr::Inst(e) => {
                 let ExprInst { expr, arg } = &**e;
-                let mut target = self.infer_prop(tt_local_env, local_env, expr);
-                let Some(Parameter { name, ty }) = target.ungeneralize1() else {
+                let target = self.infer_prop(tt_local_env, local_env, expr);
+                let Some((Parameter { name, ty }, mut body)) = target.ungeneralize1() else {
                     panic!("∀ expected, got {}", target);
                 };
                 self.tt_env.check_type(tt_local_env, arg, &ty);
-                target.subst(&[(name, arg.clone())]);
-                target
+                body.subst(&[(name, arg.clone())]);
+                body
             }
             Expr::Const(e) => {
                 let ExprConst {

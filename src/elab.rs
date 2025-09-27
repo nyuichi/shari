@@ -453,6 +453,18 @@ impl<'a> Elaborator<'a> {
                 let fun = self.visit_expr(expr1)?;
                 let arg = self.visit_expr(expr2)?;
 
+                if let Some((lhs, rhs)) = fun.unguard1() {
+                    let error = Error::Visit(format!(
+                        "argument proposition mismatch: expected {}, but got {}",
+                        lhs, arg
+                    ));
+                    self.push_term_constraint(self.tt_local_env.clone(), lhs.clone(), arg, error);
+
+                    *expr2 = mk_expr_change(lhs, mem::take(expr2));
+
+                    return Ok(rhs);
+                }
+
                 let ret = self.mk_term_hole(mk_type_prop());
 
                 let mut target = ret.clone();
@@ -497,6 +509,16 @@ impl<'a> Elaborator<'a> {
 
                 let forall = self.visit_expr(expr)?;
                 let arg_ty = self.visit_term(arg)?;
+
+                if let Some((binder, mut body)) = forall.ungeneralize1() {
+                    let error = Error::Visit(format!(
+                        "type argument mismatch: expected {}, but got {}",
+                        binder.ty, arg_ty
+                    ));
+                    self.type_constraints.push((binder.ty, arg_ty, error));
+                    body.subst(&[(binder.name, arg.clone())]);
+                    return Ok(body);
+                }
 
                 let hole = self.mk_term_hole(mk_type_arrow(arg_ty.clone(), mk_type_prop()));
 
@@ -1652,7 +1674,7 @@ impl<'a> Elaborator<'a> {
                     #[cfg(debug_assertions)]
                     {
                         let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
-                        println!("{sp}conflict in terms");
+                        println!("{sp}conflict in terms: {error}");
                     }
                     return Some(error);
                 }

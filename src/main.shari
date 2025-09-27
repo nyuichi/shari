@@ -318,8 +318,12 @@ def unique.{u} (P : u → Prop) : Prop := ∀ (x₁ x₂ : u), P x₁ → P x₂
 lemma uexists.intro.{u} (P : u → Prop) : exists P → unique P → uexists P :=
 assume exists P,
 assume unique P,
-obtain (x : u), P x := «exists P»,
+-- TODO: fix this bug or make the kernel to recognize eta equality of lambdas.
+-- obtain (x : u), P x := «exists P»,
+-- exists.intro (and.intro «P x» (take (y : u), assume P y, «unique P»[x, y] «P x» «P y»))
+@exists.ind[P, _] «exists P» (take (x : u), assume P x,
 exists.intro (and.intro «P x» (take (y : u), assume P y, «unique P»[x, y] «P x» «P y»))
+)
 
 lemma uexists.exists.{u} (P : u → Prop) : uexists P → exists P :=
 assume uexists P,
