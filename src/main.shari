@@ -13,6 +13,7 @@
  - [ ] let expr
  - [ ] local typedef
  - [ ] more tests
+ - [ ] kernel support for eta equality of lambdas
  -/
 
 /-
@@ -189,7 +190,7 @@ class structure default u := {
 -- least reflexive relation à la Martin-Löf because this induces a much simpler elimination rule.
 --
 -- The existence of inductive (predicate) families follows from the fact that every topos
--- validates the Knaster-Tarski fixedpoint theorem. [_citation needed_]
+-- validates the Knaster-Tarski fixedpoint theorem. See e.g. [Some flavours of topos theory, F. Borceux, '22].
 inductive eq.{u} (x : u) : u → Prop
 | refl : eq x
 
@@ -487,6 +488,7 @@ structure bool := {
 --
 instance bool.tt : bool := {
   def rep : Prop := ⊤
+  -- TODO: name collision
   lemma spec : rep = ⊤ ∨ rep = ⊥ := or.left eq.refl
 }
 
@@ -598,25 +600,111 @@ def subset.{u} (s : sub u) (t : sub u) : Prop := ∀ x, x ∈ s → x ∈ t
 def sep.{u} (s : sub u) (φ : u → Prop) : sub u := λ x, x ∈ s ∧ φ x
 def cap.{u} (s : sub u) (t : sub u) : sub u := { x | x ∈ s ∧ x ∈ t }
 def cup.{u} (s : sub u) (t : sub u) : sub u := { x | x ∈ s ∨ x ∈ t }
-def Cap.{u} (a : sub (sub u)) : sub u := { x | ∀ s, s ∈ a → x ∈ s }
-def Cup.{u} (a : sub (sub u)) : sub u := { x | ∃ s, s ∈ a ∧ x ∈ s }
+def bigcap.{u} (a : sub (sub u)) : sub u := { x | ∀ s, s ∈ a → x ∈ s }
+def bigcup.{u} (a : sub (sub u)) : sub u := { x | ∃ s, s ∈ a ∧ x ∈ s }
 def power.{u} (s : sub u) : sub (sub u) := { t | t ⊆ s }
 def setminus.{u} (s : sub u) (t : sub u) : sub u := { x | x ∈ s ∧ x ∉ t }
 def im.{u, v} (f : u → v) (s : sub u) : sub v := { y | ∃ x, x ∈ s ∧ y = f x }
 def insert.{u} (a : u) (s : sub u) : sub u := { x | x = a ∨ x ∈ s }
 
--- Consolas does not display well the cap and bigcap symbols:
+lemma set.ext.{u} (s t : sub u) : (∀ x, x ∈ s ↔ x ∈ t) → s = t :=
+assume ∀ x, x ∈ s ↔ x ∈ t,
+fun_ext (take (x : u), prop_ext («∀ x, x ∈ s ↔ x ∈ t»[x]))
+
+lemma subset.trans.{u} (s t r : sub u) : s ⊆ t → t ⊆ r → s ⊆ r :=
+assume s ⊆ t,
+assume t ⊆ r,
+take (x : u),
+assume x ∈ s,
+have x ∈ t := «s ⊆ t»[x] «x ∈ s»,
+«t ⊆ r»[x] «x ∈ t»
+
+lemma subset.refl.{u} (s : sub u) : s ⊆ s :=
+take (x : u),
+assume x ∈ s,
+«x ∈ s»
+
+lemma subset.antisymm.{u} (s t : sub u) : s ⊆ t → t ⊆ s → s = t :=
+assume s ⊆ t,
+assume t ⊆ s,
+have ∀ x, x ∈ s ↔ x ∈ t :=
+  take (x : u),
+  iff.intro («s ⊆ t»[x]) («t ⊆ s»[x]),
+set.ext «∀ x, x ∈ s ↔ x ∈ t»
+
+-- Note: Consolas does not display well the cap and bigcap symbols:
 --
 --    ∩  U+2229 INTERSECTION
 --    ⋂  U+22C2 N-ARY INTERSECTION
 --
--- that's why we use instead ⋒ U+22D2 DOUBLE INTERSECTION.
+-- We can perhaps use instead ⋒ U+22D2 DOUBLE INTERSECTION.
 -- In Lean, two character symbols ⋂₀ and ⋃₀ are adopted but I could not find their origin on the internet.
 -- https://github.com/leanprover/lean3/pull/936/commits/549feb5d7f95c0d28450b3778d471becafe58046
---
--- TODO: still unreadable?
-prefix ⋒ : 110 := Cap
-prefix ⋓ : 110 := Cup
+prefix ⋂ : 110 := bigcap
+prefix ⋃ : 110 := bigcup
+
+lemma bigcap.lower_bound.{u} (a : sub (sub u)) (s : sub u) : s ∈ a → ⋂ a ⊆ s :=
+assume s ∈ a,
+take (x : u),
+assume x ∈ ⋂ a,
+«x ∈ ⋂ a»[s] «s ∈ a»
+
+-- While Sub(X) is not a complete Heyting lattice object, it is indeed internally complete as this lemma shows.
+lemma bigcap.universal.{u} (a : sub (sub u)) (s : sub u) : (∀ t, t ∈ a → s ⊆ t) → s ⊆ ⋂ a :=
+assume ∀ t, t ∈ a → s ⊆ t,
+take (x : u),
+assume x ∈ s,
+have x ∈ ⋂ a :=
+  take (t : sub u),
+  assume t ∈ a,
+  have s ⊆ t := «∀ t, t ∈ a → s ⊆ t»[t] «t ∈ a»,
+  «s ⊆ t»[x] «x ∈ s»,
+«x ∈ ⋂ a»
+
+lemma bigcup.upper_bound.{u} (a : sub (sub u)) (s : sub u) : s ∈ a → s ⊆ ⋃ a :=
+assume s ∈ a,
+take (x : u),
+assume x ∈ s,
+@exists.intro[_, s] (and.intro «s ∈ a» «x ∈ s»)
+
+def monotone.{u} (f : sub u → sub u) : Prop := ∀ s t, s ⊆ t → f s ⊆ f t
+
+def mu.{u} (f : sub u → sub u) : sub u := ⋂ { s | f s ⊆ s }
+
+lemma mu.lower_bound.{u} (f : sub u → sub u) (s : sub u) : f s ⊆ s → mu f ⊆ s := bigcap.lower_bound
+
+lemma mu.is_prefix.{u} (f : sub u → sub u) : monotone f → f (mu f) ⊆ mu f :=
+assume monotone f,
+have ∀ s, f s ⊆ s → f (mu f) ⊆ s :=
+  take (s : sub u),
+  assume f s ⊆ s,
+  have mu f ⊆ s := mu.lower_bound «f s ⊆ s»,
+  have f (mu f) ⊆ f s := «monotone f»[mu f, s] «mu f ⊆ s»,
+  subset.trans «f (mu f) ⊆ f s» «f s ⊆ s»,
+bigcap.universal «∀ s, f s ⊆ s → f (mu f) ⊆ s»
+
+lemma mu.is_postfix.{u} (f : sub u → sub u) : monotone f → mu f ⊆ f (mu f) :=
+assume monotone f,
+have f (mu f) ⊆ mu f := mu.is_prefix «monotone f»,
+have f (f (mu f)) ⊆ f (mu f) := «monotone f»[f (mu f), mu f] «f (mu f) ⊆ mu f»,
+mu.lower_bound «f (f (mu f)) ⊆ f (mu f)»
+
+lemma mu.fixed_point.{u} (f : sub u → sub u) : monotone f → mu f = f (mu f) :=
+assume monotone f,
+have f (mu f) ⊆ mu f := mu.is_prefix «monotone f»,
+have mu f ⊆ f (mu f) := mu.is_postfix «monotone f»,
+subset.antisymm «mu f ⊆ f (mu f)» «f (mu f) ⊆ mu f»
+
+-- Knaster-Tarski
+lemma mu.least_fixed_point.{u} (f : sub u → sub u) : monotone f → mu f = f (mu f) ∧ (∀ s, s = f s → mu f ⊆ s) :=
+assume monotone f,
+have mu f = f (mu f) := mu.fixed_point «monotone f»,
+have ∀ s, s = f s → mu f ⊆ s :=
+  take (s : sub u),
+  assume s = f s,
+  have f s ⊆ s := eq.transport «s = f s» subset.refl,
+  mu.lower_bound «f s ⊆ s»,
+and.intro «mu f = f (mu f)» «∀ s, s = f s → mu f ⊆ s»
 
 lemma cantor.{u} : ¬(∃ (e : u → sub u), surjective e) :=
 mt lawvere_fixpoint (
@@ -1220,7 +1308,7 @@ inductive topology.{u} (subbase : sub (sub u)) : sub (sub u)
 | subbase (x : sub u) : x ∈ subbase → topology x
 | univ : topology univ
 | inter (x y : sub u) : topology (x ∩ y)
-| union (A : sub (sub u)) : (∀ a, a ∈ A → topology a) → topology (Cup A)
+| union (A : sub (sub u)) : (∀ a, a ∈ A → topology a) → topology (bigcup A)
 
 structure space u := {
   const subbase : sub (sub u)
