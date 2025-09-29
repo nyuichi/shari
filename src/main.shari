@@ -1114,6 +1114,9 @@ lemma ac₂.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀
 -- Note that iota equations (rules in the form of `rec (ctor ..) = ..`) only hold propositionally in our system.
 -- This is not a theoretical limitation but a measure to reduce the search space the higher-order unifier runs on.
 -- If this limitation is too restrictive, please report us.
+--
+-- Any topos with a natural number object is a model of W-types, hence supports general inductive types.
+-- [Moerdijk & Palmgren, '00]
 type inductive nat
 | zero : nat
 | succ : nat → nat
