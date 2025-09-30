@@ -926,12 +926,20 @@ impl<'a> Elaborator<'a> {
             Type::Arrow(inner) => {
                 let dom = self.fully_inst_type(&inner.dom);
                 let cod = self.fully_inst_type(&inner.cod);
-                mk_type_arrow(dom, cod)
+                if inner.dom.ptr_eq(&dom) && inner.cod.ptr_eq(&cod) {
+                    t.clone()
+                } else {
+                    mk_type_arrow(dom, cod)
+                }
             }
             Type::App(inner) => {
                 let fun = self.fully_inst_type(&inner.fun);
                 let arg = self.fully_inst_type(&inner.arg);
-                mk_type_app(fun, arg)
+                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
+                    t.clone()
+                } else {
+                    mk_type_app(fun, arg)
+                }
             }
             Type::Local(_) => t.clone(),
             Type::Hole(name) => {

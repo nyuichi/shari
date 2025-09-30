@@ -287,12 +287,20 @@ impl Type {
             Type::Arrow(inner) => {
                 let dom = inner.dom.subst(subst);
                 let cod = inner.cod.subst(subst);
-                mk_type_arrow(dom, cod)
+                if inner.dom.ptr_eq(&dom) && inner.cod.ptr_eq(&cod) {
+                    self.clone()
+                } else {
+                    mk_type_arrow(dom, cod)
+                }
             }
             Type::App(inner) => {
                 let fun = inner.fun.subst(subst);
                 let arg = inner.arg.subst(subst);
-                mk_type_app(fun, arg)
+                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
+                    self.clone()
+                } else {
+                    mk_type_app(fun, arg)
+                }
             }
         }
     }
@@ -353,6 +361,18 @@ impl Type {
         }
         args.reverse();
         args
+    }
+
+    #[inline]
+    pub fn ptr_eq(&self, other: &Type) -> bool {
+        match (self, other) {
+            (Type::Const(a), Type::Const(b)) => Arc::ptr_eq(a, b),
+            (Type::Arrow(a), Type::Arrow(b)) => Arc::ptr_eq(a, b),
+            (Type::App(a), Type::App(b)) => Arc::ptr_eq(a, b),
+            (Type::Local(a), Type::Local(b)) => Arc::ptr_eq(a, b),
+            (Type::Hole(a), Type::Hole(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
     }
 
     fn matches_help(&self, pattern: &Type, subst: &mut Vec<(Name, Type)>) -> bool {
@@ -418,12 +438,20 @@ impl Type {
             Type::Arrow(inner) => {
                 let dom = inner.dom.inst(subst);
                 let cod = inner.cod.inst(subst);
-                mk_type_arrow(dom, cod)
+                if inner.dom.ptr_eq(&dom) && inner.cod.ptr_eq(&cod) {
+                    self.clone()
+                } else {
+                    mk_type_arrow(dom, cod)
+                }
             }
             Type::App(inner) => {
                 let fun = inner.fun.inst(subst);
                 let arg = inner.arg.inst(subst);
-                mk_type_app(fun, arg)
+                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
+                    self.clone()
+                } else {
+                    mk_type_app(fun, arg)
+                }
             }
         }
     }
