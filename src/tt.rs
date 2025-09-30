@@ -98,15 +98,10 @@ impl Kind {
 
 #[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd)]
 pub enum Type {
-    #[non_exhaustive]
     Const(Arc<TypeConst>),
-    #[non_exhaustive]
     Arrow(Arc<TypeArrow>),
-    #[non_exhaustive]
     App(Arc<TypeApp>),
-    #[non_exhaustive]
     Local(Arc<TypeLocal>),
-    #[non_exhaustive]
     Hole(Arc<TypeHole>),
 }
 
@@ -618,21 +613,14 @@ impl Instance {
 
 /// Locally nameless representation. See [Charguéraud, 2012].
 /// Use syn's convention [https://docs.rs/syn/latest/syn/enum.Expr.html#syntax-tree-enums].
-/// TODO: non_exhausive はやめる。
 /// TODO: Term のメソッドは基本的に &mut self を取らずに &self をとって Term を返すようにする。全部 immutable にする。
 #[derive(Clone, Debug)]
 pub enum Term {
-    #[non_exhaustive]
     Var(Arc<TermVar>),
-    #[non_exhaustive]
     Abs(Arc<TermAbs>),
-    #[non_exhaustive]
     App(Arc<TermApp>),
-    #[non_exhaustive]
     Local(Arc<TermLocal>),
-    #[non_exhaustive]
     Const(Arc<TermConst>),
-    #[non_exhaustive]
     Hole(Arc<TermHole>),
 }
 
@@ -1921,7 +1909,7 @@ impl Env<'_> {
             Term::Var(_) | Term::Local(_) | Term::Abs(_) | Term::Hole(_) => false,
             Term::Const(_) => self.delta_reduce(m) || self.kappa_reduce(m),
             Term::App(m) => {
-                let TermApp { fun, .. } = Arc::make_mut(m);
+                let TermApp { fun, arg: _arg } = Arc::make_mut(m);
                 self.unfold_head(fun)
             }
         }

@@ -1365,7 +1365,7 @@ class instance complete_lattice.has_le.{u} [has (complete_lattice u)] : has_le u
 def Meet.{u} [has (complete_lattice u)] : sub u → u := complete_lattice.Meet summon
 def Join.{u} [has (complete_lattice u)] : sub u → u := complete_lattice.Join summon
 
-def monotone.{u, v} [has_le u] [has_le v] (f : u → v) : Prop := ∀ x y, x ≤ y → f x ≤ f y
+-- def monotone.{u, v} [has_le u] [has_le v] (f : u → v) : Prop := ∀ x y, x ≤ y → f x ≤ f y
 
 def lfp.{u} [has (complete_lattice u)] (f : u → u) : u := Meet { x | f x ≤ x }
 def gfp.{u} [has (complete_lattice u)] (f : u → u) : u := Join { x | x ≤ f x }
