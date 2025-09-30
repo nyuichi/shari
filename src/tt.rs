@@ -219,29 +219,25 @@ pub fn mk_type_prop() -> Type {
 
 /// See [Barendregt+, 06](https://ftp.science.ru.nl/CSI/CompMath.Found/I.pdf).
 impl Type {
-    /// t.arrow([t1, t2]);
-    /// assert_eq!(t, "t1 → t2 → t");
-    pub fn arrow(&mut self, cs: impl IntoIterator<Item = Type>) {
-        let mut iter = cs.into_iter();
-        if let Some(item) = iter.next() {
-            self.arrow(iter);
-            let cod = mem::take(self);
-            *self = mk_type_arrow(item, cod);
+    /// t.arrow([t1, t2]) // => t1 → t2 → t
+    pub fn arrow(&self, cs: impl IntoIterator<Item = Type>) -> Type {
+        let mut cod = self.clone();
+        let domains: Vec<Type> = cs.into_iter().collect();
+        for dom in domains.into_iter().rev() {
+            cod = mk_type_arrow(dom, cod);
         }
+        cod
     }
 
-    /// assert_eq!(t, "t1 → t2 → t");
-    /// assert_eq!(t.unarrow(), [t1, t2]);
-    pub fn unarrow(&mut self) -> Vec<Type> {
-        let mut ts = vec![];
-        let mut t = &mut *self;
-        while let Type::Arrow(inner) = t {
-            let TypeArrow { dom, cod } = Arc::make_mut(inner);
-            ts.push(mem::take(dom));
-            t = cod;
+    /// Splits self into domains and the terminal codomain.
+    pub fn unarrow(&self) -> (Vec<Type>, Type) {
+        let mut doms = Vec::new();
+        let mut current = self;
+        while let Type::Arrow(inner) = current {
+            doms.push(inner.dom.clone());
+            current = &inner.cod;
         }
-        *self = mem::take(t);
-        ts
+        (doms, current.clone())
     }
 
     pub fn components(&self) -> Vec<&Type> {
@@ -254,47 +250,49 @@ impl Type {
         cs
     }
 
-    pub fn apply(&mut self, args: impl IntoIterator<Item = Type>) {
+    pub fn apply(&self, args: impl IntoIterator<Item = Type>) -> Type {
+        let mut fun = self.clone();
         for arg in args {
-            let fun = mem::take(self);
-            *self = mk_type_app(fun, arg);
+            fun = mk_type_app(fun, arg);
         }
+        fun
     }
 
     #[allow(unused)]
     #[deprecated(note = "left for future use")]
-    pub fn unapply(&mut self) -> Vec<Type> {
-        let mut acc = vec![];
-        let mut t = self;
-        while let Type::App(s) = t {
-            let s = Arc::make_mut(s);
-            acc.push(mem::take(&mut s.arg));
-            t = &mut s.fun;
+    pub fn unapply(&self) -> (Type, Vec<Type>) {
+        let mut args = vec![];
+        let mut current = self;
+        while let Type::App(inner) = current {
+            args.push(inner.arg.clone());
+            current = &inner.fun;
         }
-        acc.reverse();
-        acc
+        args.reverse();
+        (current.clone(), args)
     }
 
     /// Simultaneously substitute `t₁ ⋯ tₙ` for locals with names `x₁ ⋯ xₙ`.
-    pub fn subst(&mut self, subst: &[(Name, Type)]) {
+    pub fn subst(&self, subst: &[(Name, Type)]) -> Type {
         match self {
-            Self::Const(_) => {}
-            Self::Local(x) => {
+            Type::Const(_) => self.clone(),
+            Type::Local(x) => {
                 let name = x.name;
-                if let Some((_, t)) = subst.iter().find(|(y, _)| *y == name) {
-                    *self = t.clone();
-                }
+                subst
+                    .iter()
+                    .find(|(y, _)| *y == name)
+                    .map(|(_, t)| t.clone())
+                    .unwrap_or_else(|| self.clone())
             }
-            Self::Hole(_) => {}
-            Self::Arrow(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.dom.subst(subst);
-                inner.cod.subst(subst);
+            Type::Hole(_) => self.clone(),
+            Type::Arrow(inner) => {
+                let dom = inner.dom.subst(subst);
+                let cod = inner.cod.subst(subst);
+                mk_type_arrow(dom, cod)
             }
-            Self::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.fun.subst(subst);
-                inner.arg.subst(subst);
+            Type::App(inner) => {
+                let fun = inner.fun.subst(subst);
+                let arg = inner.arg.subst(subst);
+                mk_type_app(fun, arg)
             }
         }
     }
@@ -405,25 +403,27 @@ impl Type {
         }
     }
 
-    pub fn inst(&mut self, subst: &[(Name, Type)]) {
+    pub fn inst(&self, subst: &[(Name, Type)]) -> Type {
         match self {
-            Self::Const(_) => {}
-            Self::Local(_) => {}
-            Self::Hole(x) => {
+            Type::Const(_) => self.clone(),
+            Type::Local(_) => self.clone(),
+            Type::Hole(x) => {
                 let name = x.name;
-                if let Some((_, t)) = subst.iter().find(|(y, _)| *y == name) {
-                    *self = t.clone();
-                }
+                subst
+                    .iter()
+                    .find(|(y, _)| *y == name)
+                    .map(|(_, t)| t.clone())
+                    .unwrap_or_else(|| self.clone())
             }
-            Self::Arrow(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.dom.inst(subst);
-                inner.cod.inst(subst);
+            Type::Arrow(inner) => {
+                let dom = inner.dom.inst(subst);
+                let cod = inner.cod.inst(subst);
+                mk_type_arrow(dom, cod)
             }
-            Self::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.fun.inst(subst);
-                inner.arg.inst(subst);
+            Type::App(inner) => {
+                let fun = inner.fun.inst(subst);
+                let arg = inner.arg.inst(subst);
+                mk_type_app(fun, arg)
             }
         }
     }
@@ -457,7 +457,7 @@ impl Class {
 
     pub fn subst(&mut self, subst: &[(Name, Type)]) {
         for t in &mut self.args {
-            t.subst(subst);
+            *t = t.subst(subst);
         }
     }
 
@@ -566,11 +566,12 @@ impl Instance {
         match self {
             Instance::Local(c) => c.subst(subst),
             Instance::Global(i) => {
-                for t in &mut Arc::make_mut(i).ty_args {
-                    t.subst(subst);
+                let inner = Arc::make_mut(i);
+                for t in &mut inner.ty_args {
+                    *t = t.subst(subst);
                 }
-                for i in &mut Arc::make_mut(i).args {
-                    i.subst_type(subst);
+                for arg in &mut inner.args {
+                    arg.subst_type(subst);
                 }
             }
             Instance::Hole(_) => {}
@@ -1319,7 +1320,7 @@ impl Term {
             Term::Var(_) => {}
             Term::Abs(inner) => {
                 let inner = Arc::make_mut(inner);
-                inner.binder_type.subst(subst);
+                inner.binder_type = inner.binder_type.subst(subst);
                 inner.body.subst_type(subst);
             }
             Term::App(inner) => {
@@ -1330,7 +1331,7 @@ impl Term {
             Term::Local(_) => {}
             Term::Const(inner) => {
                 for s in &mut Arc::make_mut(inner).ty_args {
-                    s.subst(subst);
+                    *s = s.subst(subst);
                 }
                 for i in &mut Arc::make_mut(inner).instances {
                     i.subst_type(subst);
@@ -1799,9 +1800,7 @@ impl Env<'_> {
                     self.check_wfc(local_env, &local_class);
                     self.check_class(local_env, instance, &local_class);
                 }
-                let mut ty = ty.clone();
-                ty.subst(&type_subst);
-                ty
+                ty.subst(&type_subst)
             }
             Term::Hole(_) => panic!("cannot infer type of a hole"),
         }

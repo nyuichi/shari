@@ -365,9 +365,7 @@ impl<'a> Parser<'a> {
                 }
                 self.advance();
                 let s = self.subty(34)?;
-                let mut prod = mk_type_const(Name::intern("prod"));
-                prod.apply([t, s]);
-                t = prod;
+                t = mk_type_const(Name::intern("prod")).apply([t, s]);
             } else if token.is_ident()
                 || (token.is_symbol() && token.as_str() == "(")
                 || (token.is_symbol() && token.as_str() == "${")
@@ -375,7 +373,7 @@ impl<'a> Parser<'a> {
                 if rbp >= 1024 {
                     break;
                 }
-                t.apply([self.subty(1024)?]);
+                t = t.apply([self.subty(1024)?]);
             } else {
                 break;
             }
@@ -1120,7 +1118,7 @@ impl<'a> Parser<'a> {
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
         for param in params.into_iter().rev() {
-            t.arrow([param.ty.clone()]);
+            t = t.arrow([param.ty.clone()]);
             m.abs(&[param]);
         }
         Ok(CmdDef {
@@ -1413,7 +1411,7 @@ impl<'a> Parser<'a> {
                     let mut field_target = self.term()?;
                     self.locals.truncate(self.locals.len() - field_params.len());
                     for field_param in field_params.into_iter().rev() {
-                        field_ty.arrow([field_param.ty.clone()]);
+                        field_ty = field_ty.arrow([field_param.ty.clone()]);
                         field_target.abs(&[field_param]);
                     }
                     fields.push(InstanceField::Def(InstanceDef {
@@ -1557,7 +1555,7 @@ impl<'a> Parser<'a> {
                     let mut field_target = self.term()?;
                     self.locals.truncate(self.locals.len() - field_params.len());
                     for field_param in field_params.into_iter().rev() {
-                        field_ty.arrow([field_param.ty.clone()]);
+                        field_ty = field_ty.arrow([field_param.ty.clone()]);
                         field_target.abs(&[field_param]);
                     }
                     fields.push(ClassInstanceField::Def(ClassInstanceDef {

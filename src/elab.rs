@@ -16,7 +16,8 @@ use crate::{
     tt::{
         self, Class, ClassInstance, ClassType, Const, Instance, InstanceGlobal, Kind, LocalEnv,
         Name, Parameter, Term, TermAbs, TermApp, TermConst, Type, TypeApp, TypeArrow, mk_const,
-        mk_fresh_type_hole, mk_hole, mk_instance_global, mk_local, mk_type_arrow, mk_type_prop,
+        mk_fresh_type_hole, mk_hole, mk_instance_global, mk_local, mk_type_app, mk_type_arrow,
+        mk_type_prop,
     },
 };
 
@@ -213,8 +214,7 @@ impl<'a> Elaborator<'a> {
 
     // generate a fresh hole of form `?M l₁ ⋯ lₙ` where l₁ ⋯ lₙ are the local variables
     fn mk_term_hole(&mut self, ty: Type) -> Term {
-        let mut hole_ty = ty;
-        hole_ty.arrow(
+        let hole_ty = ty.arrow(
             self.tt_local_env
                 .locals
                 .iter()
@@ -286,8 +286,7 @@ impl<'a> Elaborator<'a> {
                 let ret_ty = mk_fresh_type_hole();
 
                 let error = Error::Visit(format!("not an arrow: {}", fun_ty));
-                self.type_constraints
-                    .push((fun_ty, mk_type_arrow(arg_ty, ret_ty.clone()), error));
+                self.push_type_constraint(fun_ty, mk_type_arrow(arg_ty, ret_ty.clone()), error);
 
                 Ok(ret_ty)
             }
@@ -321,9 +320,7 @@ impl<'a> Elaborator<'a> {
                     local_class.subst(&type_subst);
                     self.visit_instance(instance, &local_class)?;
                 }
-                let mut ty = ty.clone();
-                ty.subst(&type_subst);
-                Ok(ty)
+                Ok(ty.subst(&type_subst))
             }
         }
     }
@@ -415,8 +412,7 @@ impl<'a> Elaborator<'a> {
 
                 let target_ty = self.visit_term(target)?;
                 let error = Error::Visit(format!("not a proposition: {}", target_ty));
-                self.type_constraints
-                    .push((target_ty, mk_type_prop(), error));
+                self.push_type_constraint(target_ty, mk_type_prop(), error);
 
                 let mut found = false;
                 for local in &self.local_axioms {
@@ -437,8 +433,7 @@ impl<'a> Elaborator<'a> {
 
                 let local_axiom_ty = self.visit_term(local_axiom)?;
                 let error = Error::Visit(format!("not a proposition: {}", local_axiom_ty));
-                self.type_constraints
-                    .push((local_axiom_ty, mk_type_prop(), error));
+                self.push_type_constraint(local_axiom_ty, mk_type_prop(), error);
 
                 self.local_axioms.push(local_axiom.clone());
                 let mut target = self.visit_expr(expr)?;
@@ -515,7 +510,7 @@ impl<'a> Elaborator<'a> {
                         "type argument mismatch: expected {}, but got {}",
                         binder.ty, arg_ty
                     ));
-                    self.type_constraints.push((binder.ty, arg_ty, error));
+                    self.push_type_constraint(binder.ty, arg_ty, error);
                     body.subst(&[(binder.name, arg.clone())]);
                     return Ok(body);
                 }
@@ -587,8 +582,7 @@ impl<'a> Elaborator<'a> {
 
                 let target_ty = self.visit_term(target)?;
                 let error = Error::Visit(format!("not a proposition: {}", target_ty));
-                self.type_constraints
-                    .push((target_ty, mk_type_prop(), error));
+                self.push_type_constraint(target_ty, mk_type_prop(), error);
                 let expr_prop = self.visit_expr(expr)?;
                 self.push_term_constraint(
                     self.tt_local_env.clone(),
@@ -695,6 +689,15 @@ impl<'a> Elaborator<'a> {
             println!("{sp}→pushing constraint: {} =?= {}", left, right);
         }
         self.term_constraints.push((local_env, left, right, error));
+    }
+
+    fn push_type_constraint(&mut self, left: Type, right: Type, error: Error) {
+        #[cfg(debug_assertions)]
+        {
+            let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
+            println!("{sp}→pushing type constraint: {} =?= {}", left, right);
+        }
+        self.type_constraints.push((left, right, error));
     }
 
     fn watch(&mut self, c: Rc<EqConstraint>) {
@@ -846,16 +849,11 @@ impl<'a> Elaborator<'a> {
         false
     }
 
-    fn inst_type_head(&self, ty: &mut Type) -> bool {
+    fn inst_type_head(&self, ty: &Type) -> Option<Type> {
         let Type::Hole(name) = ty else {
-            return false;
+            return None;
         };
-        let hole_name = name.name;
-        let Some(target) = self.type_subst_map.get(&hole_name).cloned() else {
-            return false;
-        };
-        *ty = target;
-        true
+        self.type_subst_map.get(&name.name).cloned()
     }
 
     fn inst_recv(&self, m: &mut TermConst) {
@@ -890,7 +888,7 @@ impl<'a> Elaborator<'a> {
                     binder_type,
                     body,
                 } = Arc::make_mut(m);
-                self.fully_inst_type(binder_type);
+                *binder_type = self.fully_inst_type(binder_type);
                 self.fully_inst(body);
             }
             Term::App(m) => {
@@ -906,7 +904,7 @@ impl<'a> Elaborator<'a> {
                     instances,
                 } = Arc::make_mut(m);
                 for ty in ty_args {
-                    self.fully_inst_type(ty);
+                    *ty = self.fully_inst_type(ty);
                 }
                 for instance in instances {
                     self.fully_inst_instance(instance);
@@ -922,34 +920,34 @@ impl<'a> Elaborator<'a> {
         }
     }
 
-    fn fully_inst_type(&self, t: &mut Type) {
+    fn fully_inst_type(&self, t: &Type) -> Type {
         match t {
-            Type::Const(_) => {}
-            Type::Arrow(t) => {
-                let TypeArrow { dom, cod } = Arc::make_mut(t);
-                self.fully_inst_type(dom);
-                self.fully_inst_type(cod);
+            Type::Const(_) => t.clone(),
+            Type::Arrow(inner) => {
+                let dom = self.fully_inst_type(&inner.dom);
+                let cod = self.fully_inst_type(&inner.cod);
+                mk_type_arrow(dom, cod)
             }
-            Type::App(t) => {
-                let TypeApp { fun, arg } = Arc::make_mut(t);
-                self.fully_inst_type(fun);
-                self.fully_inst_type(arg);
+            Type::App(inner) => {
+                let fun = self.fully_inst_type(&inner.fun);
+                let arg = self.fully_inst_type(&inner.arg);
+                mk_type_app(fun, arg)
             }
-            Type::Local(_) => {}
+            Type::Local(_) => t.clone(),
             Type::Hole(name) => {
                 let hole_name = name.name;
-                let Some(a) = self.type_subst_map.get(&hole_name).cloned() else {
-                    return;
-                };
-                *t = a;
-                self.fully_inst_type(t);
+                if let Some(a) = self.type_subst_map.get(&hole_name) {
+                    self.fully_inst_type(a)
+                } else {
+                    t.clone()
+                }
             }
         }
     }
 
     fn fully_inst_class(&self, class: &mut Class) {
         for arg in &mut class.args {
-            self.fully_inst_type(arg);
+            *arg = self.fully_inst_type(arg);
         }
     }
 
@@ -965,7 +963,7 @@ impl<'a> Elaborator<'a> {
                     args,
                 } = Arc::make_mut(instance);
                 for ty_arg in ty_args {
-                    self.fully_inst_type(ty_arg);
+                    *ty_arg = self.fully_inst_type(ty_arg);
                 }
                 for arg in args {
                     self.fully_inst_instance(arg);
@@ -999,7 +997,7 @@ impl<'a> Elaborator<'a> {
             }
             Expr::Take(expr) => {
                 let ExprTake { name: _, ty, expr } = Arc::make_mut(expr);
-                self.fully_inst_type(ty);
+                *ty = self.fully_inst_type(ty);
                 self.fully_inst_expr(expr);
             }
             Expr::Inst(expr) => {
@@ -1014,7 +1012,7 @@ impl<'a> Elaborator<'a> {
                     instances,
                 } = Arc::make_mut(expr);
                 for ty in ty_args {
-                    self.fully_inst_type(ty);
+                    *ty = self.fully_inst_type(ty);
                 }
                 for instance in instances {
                     self.fully_inst_instance(instance);
@@ -1026,10 +1024,6 @@ impl<'a> Elaborator<'a> {
                 self.fully_inst_expr(expr);
             }
         }
-    }
-
-    fn add_type_constraint(&mut self, t1: Type, t2: Type, error: Error) {
-        self.type_constraints.push((t1, t2, error));
     }
 
     fn add_delta_constraint(&mut self, local_env: LocalEnv, left: Term, right: Term, error: Error) {
@@ -1281,16 +1275,25 @@ impl<'a> Elaborator<'a> {
         if t1 == t2 {
             return None;
         }
-        if self.inst_type_head(&mut t1) || self.inst_type_head(&mut t2) {
-            self.add_type_constraint(t1, t2, error);
+        let mut instantiated = false;
+        if let Some(new_t1) = self.inst_type_head(&t1) {
+            t1 = new_t1;
+            instantiated = true;
+        }
+        if let Some(new_t2) = self.inst_type_head(&t2) {
+            t2 = new_t2;
+            instantiated = true;
+        }
+        if instantiated {
+            self.push_type_constraint(t1, t2, error);
             return None;
         }
         match (t1, t2) {
             (Type::Arrow(inner1), Type::Arrow(inner2)) => {
                 let inner1 = Arc::try_unwrap(inner1).unwrap_or_else(|arc| (*arc).clone());
                 let inner2 = Arc::try_unwrap(inner2).unwrap_or_else(|arc| (*arc).clone());
-                self.add_type_constraint(inner1.dom, inner2.dom, error.clone());
-                self.add_type_constraint(inner1.cod, inner2.cod, error);
+                self.push_type_constraint(inner1.dom, inner2.dom, error.clone());
+                self.push_type_constraint(inner1.cod, inner2.cod, error);
             }
             (Type::App(inner1), Type::App(inner2)) => {
                 // Since we have no higher-kinded polymorphism, it is impossible to match the following two types:
@@ -1299,13 +1302,12 @@ impl<'a> Elaborator<'a> {
                 // this unificaiton phase.
                 let inner1 = Arc::try_unwrap(inner1).unwrap_or_else(|arc| (*arc).clone());
                 let inner2 = Arc::try_unwrap(inner2).unwrap_or_else(|arc| (*arc).clone());
-                self.add_type_constraint(inner1.fun, inner2.fun, error.clone());
-                self.add_type_constraint(inner1.arg, inner2.arg, error);
+                self.push_type_constraint(inner1.fun, inner2.fun, error.clone());
+                self.push_type_constraint(inner1.arg, inner2.arg, error);
             }
             (Type::Hole(name), t) | (t, Type::Hole(name)) => {
                 let hole_name = name.name;
-                let mut t = t.clone();
-                self.fully_inst_type(&mut t); // TODO: avoid instantiation
+                let t = self.fully_inst_type(&t); // TODO: avoid instantiation
                 if t.contains_hole(hole_name) {
                     return Some(error);
                 }
@@ -1329,7 +1331,7 @@ impl<'a> Elaborator<'a> {
             return None;
         }
         if let (Term::Abs(l), Term::Abs(r)) = (&mut left, &mut right) {
-            self.add_type_constraint(l.binder_type.clone(), r.binder_type.clone(), error.clone());
+            self.push_type_constraint(l.binder_type.clone(), r.binder_type.clone(), error.clone());
             let x = Parameter {
                 name: Name::fresh(),
                 ty: mem::take(&mut Arc::make_mut(l).binder_type),
@@ -1523,7 +1525,7 @@ impl<'a> Elaborator<'a> {
             }
             // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where f is not unfoldable.
             for (t1, t2) in left_head.ty_args.iter().zip(right_head.ty_args.iter()) {
-                self.add_type_constraint(t1.clone(), t2.clone(), error.clone());
+                self.push_type_constraint(t1.clone(), t2.clone(), error.clone());
             }
             let left_args = left.unapply();
             let right_args = right.unapply();
@@ -1582,11 +1584,7 @@ impl<'a> Elaborator<'a> {
             };
             let ty_args = type_subst
                 .into_iter()
-                .map(|(_, ty)| {
-                    let mut ty = ty.clone();
-                    ty.inst(&subst);
-                    ty
-                })
+                .map(|(_, ty)| ty.inst(&subst))
                 .collect::<Vec<_>>();
             let subst = zip(local_types, &ty_args)
                 .map(|(&name, ty)| (name, ty.clone()))
@@ -1638,10 +1636,8 @@ impl<'a> Elaborator<'a> {
                 #[cfg(debug_assertions)]
                 {
                     let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
-                    let mut t1 = t1.clone();
-                    self.fully_inst_type(&mut t1);
-                    let mut t2 = t2.clone();
-                    self.fully_inst_type(&mut t2);
+                    let t1 = self.fully_inst_type(&t1);
+                    let t2 = self.fully_inst_type(&t2);
                     println!("{sp}find conflict in {t1} =?= {t2}");
                 }
                 if let Some(error) = self.find_conflict_in_types(t1, t2, error) {
@@ -1790,7 +1786,7 @@ impl<'a> Elaborator<'a> {
             self.add_subst(x, m, error);
         }
         for (left, right, error) in node.type_constraints.into_iter().rev() {
-            self.type_constraints.push((left, right, error));
+            self.push_type_constraint(left, right, error);
         }
         for (local_env, left, right, error) in node.term_constraints.into_iter().rev() {
             self.push_term_constraint(local_env, left, right, error);
@@ -1853,24 +1849,19 @@ impl<'a> Elaborator<'a> {
         let mut nodes = vec![];
 
         // τ(?M)
-        let left_head_ty = {
-            let mut t = self.get_hole_type(left_head).unwrap().clone();
-            self.fully_inst_type(&mut t); // TODO: avoid full instantiation
-            t
-        };
+        let left_head_ty = self
+            .get_hole_type(left_head)
+            .map(|t| self.fully_inst_type(t)) // TODO: avoid full instantiation
+            .unwrap();
 
         // τ(?M t[1] .. t[p]) (= τ(@ u[1] .. u[q]))
-        let left_ty = {
-            let mut t = left_head_ty.target().clone();
-            t.arrow(
-                left_head_ty
-                    .components()
-                    .into_iter()
-                    .skip(left_args.len())
-                    .cloned(),
-            );
-            t
-        };
+        let left_ty = left_head_ty.target().arrow(
+            left_head_ty
+                .components()
+                .into_iter()
+                .skip(left_args.len())
+                .cloned(),
+        );
 
         // z[1] .. z[p]
         let new_binders = left_head_ty
@@ -1927,8 +1918,9 @@ impl<'a> Elaborator<'a> {
             }
             let m = z.ty.components().len() - left_ty.components().len();
 
-            let mut t = z.ty.target().clone();
-            t.arrow(z.ty.components().into_iter().skip(m).cloned());
+            let t =
+                z.ty.target()
+                    .arrow(z.ty.components().into_iter().skip(m).cloned());
 
             // Y[1] .. Y[m]
             let arg_holes =
@@ -1937,8 +1929,7 @@ impl<'a> Elaborator<'a> {
                     .take(m)
                     .map(|&arg_ty| {
                         let new_hole = Name::fresh();
-                        let mut ty = arg_ty.clone();
-                        ty.arrow(new_binders.iter().map(|z| z.ty.clone()));
+                        let ty = arg_ty.arrow(new_binders.iter().map(|z| z.ty.clone()));
                         (new_hole, ty)
                     })
                     .collect::<Vec<_>>();
@@ -1991,10 +1982,8 @@ impl<'a> Elaborator<'a> {
                 for (&x, t) in zip(local_types, &right_head_inner.ty_args) {
                     subst.push((x, t.clone()));
                 }
-                let mut ty = ty.clone();
-                ty.subst(&subst);
-                self.fully_inst_type(&mut ty); // TODO: avoid full instantiation
-                ty
+                let ty = ty.subst(&subst);
+                self.fully_inst_type(&ty) // TODO: avoid full instantiation
             };
 
             // τ(u[1]) ⋯ τ(u[q])
@@ -2010,8 +1999,7 @@ impl<'a> Elaborator<'a> {
                 .iter()
                 .map(|arg_ty| {
                     let new_hole = Name::fresh();
-                    let mut ty = arg_ty.clone();
-                    ty.arrow(new_binders.iter().map(|z| z.ty.clone()));
+                    let ty = arg_ty.arrow(new_binders.iter().map(|z| z.ty.clone()));
                     (new_hole, ty)
                 })
                 .collect::<Vec<_>>();
@@ -2156,9 +2144,9 @@ impl<'a> Elaborator<'a> {
 
     // TODO: 本当は find_conflict の中でやるべき。ノードごとに生成した hole を記録して、制約がなくなった hole について inhabitant を合成する。
     fn synthesize_inhabitant(&self, mut facts: Vec<(Name, Type)>, goal: &Type) -> Option<Term> {
-        let mut goal = goal.clone();
+        let (components, goal_base) = goal.unarrow();
         let mut binders = vec![];
-        for component in goal.unarrow() {
+        for component in components {
             let binder = Parameter {
                 name: Name::fresh(),
                 ty: component.clone(),
@@ -2166,6 +2154,7 @@ impl<'a> Elaborator<'a> {
             binders.push(binder.clone());
             facts.push((binder.name, component));
         }
+        let goal = goal_base;
         if let Some(instance) = self.resolve_class(
             &self.tt_local_env,
             &Class {
@@ -2182,9 +2171,8 @@ impl<'a> Elaborator<'a> {
             return Some(m);
         }
         for (name, fact) in &facts {
-            let mut fact = fact.clone();
-            let xs = fact.unarrow();
-            if fact == goal {
+            let (xs, head) = fact.unarrow();
+            if head == goal {
                 let mut args = vec![];
                 for x in &xs {
                     if let Some(arg) = self.synthesize_inhabitant(facts.clone(), x) {
@@ -2234,7 +2222,7 @@ pub fn elaborate_term(
 
     let t = elab.visit_term(target)?;
     let error = Error::Visit("type mismatch".to_string());
-    elab.type_constraints.push((t, ty.clone(), error));
+    elab.push_type_constraint(t, ty.clone(), error);
 
     if let Err(error) = elab.solve() {
         bail!("unification failed: {error}");
