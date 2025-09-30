@@ -2200,9 +2200,7 @@ impl Eval {
                 for &name in &instance.local_types {
                     type_subst.push((name, mk_fresh_type_hole()));
                 }
-                let mut target = instance.target.clone();
-                target.subst(&type_subst);
-                target
+                instance.target.subst(&type_subst)
             };
             if target.matches(&instance_target).is_some() {
                 bail!("overlapping instances are disallowed");

@@ -522,8 +522,7 @@ impl Env<'_> {
                     );
                 }
                 for (local_class, instance) in zip(local_classes, instances) {
-                    let mut local_class = local_class.clone();
-                    local_class.subst(&type_subst);
+                    let local_class = local_class.subst(&type_subst);
                     self.tt_env
                         .check_class(tt_local_env, instance, &local_class);
                 }

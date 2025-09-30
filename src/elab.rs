@@ -316,8 +316,7 @@ impl<'a> Elaborator<'a> {
                     bail!("number of class instances mismatch");
                 }
                 for (instance, local_class) in zip(&n.instances, local_classes) {
-                    let mut local_class = local_class.clone();
-                    local_class.subst(&type_subst);
+                    let local_class = local_class.subst(&type_subst);
                     self.visit_instance(instance, &local_class)?;
                 }
                 Ok(ty.subst(&type_subst))
@@ -369,13 +368,11 @@ impl<'a> Elaborator<'a> {
                     bail!("number of class instances mismatch");
                 }
                 for (instance, local_class) in zip(args, local_classes) {
-                    let mut local_class = local_class.clone();
-                    local_class.subst(&type_subst);
+                    let local_class = local_class.subst(&type_subst);
                     self.visit_instance(instance, &local_class)?;
                 }
-                let mut target = target.clone();
-                target.subst(&type_subst);
-                if target != *class {
+                let instantiated_target = target.subst(&type_subst);
+                if instantiated_target != *class {
                     bail!("class mismatch");
                 }
                 Ok(())
@@ -567,8 +564,7 @@ impl<'a> Elaborator<'a> {
                 }
                 let mut instance_subst = vec![];
                 for (instance, local_class) in zip(&e.instances, local_classes) {
-                    let mut local_class = local_class.clone();
-                    local_class.subst(&type_subst);
+                    let local_class = local_class.subst(&type_subst);
                     self.visit_instance(instance, &local_class)?;
                     instance_subst.push((local_class, instance.clone()));
                 }
@@ -906,8 +902,16 @@ impl<'a> Elaborator<'a> {
                 for ty in ty_args {
                     *ty = self.fully_inst_type(ty);
                 }
-                for instance in instances {
-                    self.fully_inst_instance(instance);
+                let new_instances = instances
+                    .iter()
+                    .map(|instance| self.fully_inst_instance(instance))
+                    .collect::<Vec<_>>();
+                if instances
+                    .iter()
+                    .zip(&new_instances)
+                    .any(|(lhs, rhs)| lhs != rhs)
+                {
+                    *instances = new_instances;
                 }
             }
             Term::Hole(inner) => {
@@ -953,36 +957,66 @@ impl<'a> Elaborator<'a> {
         }
     }
 
-    fn fully_inst_class(&self, class: &mut Class) {
-        for arg in &mut class.args {
-            *arg = self.fully_inst_type(arg);
+    fn fully_inst_class(&self, class: &Class) -> Class {
+        let args = class
+            .args
+            .iter()
+            .map(|arg| self.fully_inst_type(arg))
+            .collect::<Vec<_>>();
+        if class.args.iter().zip(&args).all(|(lhs, rhs)| lhs == rhs) {
+            class.clone()
+        } else {
+            Class {
+                name: class.name,
+                args,
+            }
         }
     }
 
-    fn fully_inst_instance(&self, instance: &mut Instance) {
+    fn fully_inst_instance(&self, instance: &Instance) -> Instance {
         match instance {
             Instance::Local(class) => {
-                self.fully_inst_class(class);
+                let new_class = self.fully_inst_class(class);
+                if &new_class == class {
+                    instance.clone()
+                } else {
+                    Instance::Local(new_class)
+                }
             }
             Instance::Global(instance) => {
                 let InstanceGlobal {
-                    name: _,
+                    name,
                     ty_args,
                     args,
-                } = Arc::make_mut(instance);
-                for ty_arg in ty_args {
-                    *ty_arg = self.fully_inst_type(ty_arg);
-                }
-                for arg in args {
-                    self.fully_inst_instance(arg);
+                } = &**instance;
+                let new_ty_args = ty_args
+                    .iter()
+                    .map(|ty_arg| self.fully_inst_type(ty_arg))
+                    .collect::<Vec<_>>();
+                let new_args = args
+                    .iter()
+                    .map(|arg| self.fully_inst_instance(arg))
+                    .collect::<Vec<_>>();
+                if ty_args
+                    .iter()
+                    .zip(&new_ty_args)
+                    .all(|(lhs, rhs)| lhs == rhs)
+                    && args.iter().zip(&new_args).all(|(lhs, rhs)| lhs == rhs)
+                {
+                    Instance::Global(instance.clone())
+                } else {
+                    Instance::Global(Arc::new(InstanceGlobal {
+                        name: *name,
+                        ty_args: new_ty_args,
+                        args: new_args,
+                    }))
                 }
             }
             Instance::Hole(name) => {
                 let Some(target) = self.instance_subst_map.get(name) else {
-                    return;
+                    return instance.clone();
                 };
-                *instance = target.clone();
-                self.fully_inst_instance(instance);
+                self.fully_inst_instance(target)
             }
         }
     }
@@ -1022,8 +1056,16 @@ impl<'a> Elaborator<'a> {
                 for ty in ty_args {
                     *ty = self.fully_inst_type(ty);
                 }
-                for instance in instances {
-                    self.fully_inst_instance(instance);
+                let new_instances = instances
+                    .iter()
+                    .map(|instance| self.fully_inst_instance(instance))
+                    .collect::<Vec<_>>();
+                if instances
+                    .iter()
+                    .zip(&new_instances)
+                    .any(|(lhs, rhs)| lhs != rhs)
+                {
+                    *instances = new_instances;
                 }
             }
             Expr::Change(expr) => {
@@ -1584,8 +1626,7 @@ impl<'a> Elaborator<'a> {
             for &local_type in local_types {
                 type_subst.push((local_type, mk_fresh_type_hole()));
             }
-            let mut target = target.clone();
-            target.subst(&type_subst);
+            let target = target.subst(&type_subst);
             // TODO: C a ?b ⇒ C ?b c ⇒ C a c
             let Some(subst) = class.matches(&target) else {
                 continue;
@@ -1599,8 +1640,7 @@ impl<'a> Elaborator<'a> {
                 .collect::<Vec<_>>();
             let mut args = vec![];
             for local_class in local_classes {
-                let mut local_class = local_class.clone();
-                local_class.subst(&subst);
+                let local_class = local_class.subst(&subst);
                 let Some(instance) = self.resolve_class(local_env, &local_class) else {
                     continue 'next_instance;
                 };
@@ -1615,10 +1655,10 @@ impl<'a> Elaborator<'a> {
         &mut self,
         local_env: LocalEnv,
         hole: Name,
-        mut class: Class,
+        class: Class,
         error: Error,
     ) -> Option<Error> {
-        self.fully_inst_class(&mut class);
+        let class = self.fully_inst_class(&class);
         // TODO: infer a type class instance for a class like (C a ?b).
         if !class.is_ground() {
             self.add_class_constraint(local_env, hole, class, error);

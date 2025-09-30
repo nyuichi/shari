@@ -483,9 +483,26 @@ impl Class {
         self.args.iter().any(|t| t.contains_local(name))
     }
 
-    pub fn subst(&mut self, subst: &[(Name, Type)]) {
-        for t in &mut self.args {
-            *t = t.subst(subst);
+    pub fn subst(&self, subst: &[(Name, Type)]) -> Class {
+        let mut changed = false;
+        let args: Vec<Type> = self
+            .args
+            .iter()
+            .map(|t| {
+                let new_t = t.subst(subst);
+                if !changed && !t.ptr_eq(&new_t) {
+                    changed = true;
+                }
+                new_t
+            })
+            .collect();
+        if changed {
+            Class {
+                name: self.name,
+                args,
+            }
+        } else {
+            self.clone()
         }
     }
 
@@ -515,14 +532,14 @@ impl Class {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instance {
     Local(Class),
     Global(Arc<InstanceGlobal>),
     Hole(Name),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceGlobal {
     pub name: Name,
     pub ty_args: Vec<Type>,
@@ -590,19 +607,44 @@ impl Instance {
         }
     }
 
-    fn subst_type(&mut self, subst: &[(Name, Type)]) {
+    fn subst_type(&self, subst: &[(Name, Type)]) -> Instance {
         match self {
-            Instance::Local(c) => c.subst(subst),
+            Instance::Local(c) => Instance::Local(c.subst(subst)),
             Instance::Global(i) => {
-                let inner = Arc::make_mut(i);
-                for t in &mut inner.ty_args {
-                    *t = t.subst(subst);
-                }
-                for arg in &mut inner.args {
-                    arg.subst_type(subst);
+                let mut changed = false;
+                let ty_args: Vec<Type> = i
+                    .ty_args
+                    .iter()
+                    .map(|t| {
+                        let new_t = t.subst(subst);
+                        if !changed && !t.ptr_eq(&new_t) {
+                            changed = true;
+                        }
+                        new_t
+                    })
+                    .collect();
+                let args: Vec<Instance> = i
+                    .args
+                    .iter()
+                    .map(|arg| {
+                        let new_arg = arg.subst_type(subst);
+                        if !changed && !arg.ptr_eq(&new_arg) {
+                            changed = true;
+                        }
+                        new_arg
+                    })
+                    .collect();
+                if changed {
+                    Instance::Global(Arc::new(InstanceGlobal {
+                        name: i.name,
+                        ty_args,
+                        args,
+                    }))
+                } else {
+                    self.clone()
                 }
             }
-            Instance::Hole(_) => {}
+            Instance::Hole(_) => self.clone(),
         }
     }
 
@@ -616,22 +658,49 @@ impl Instance {
         }
     }
 
-    fn subst(&mut self, subst: &[(Class, Instance)]) {
+    fn subst(&self, subst: &[(Class, Instance)]) -> Instance {
         match self {
             Instance::Local(c) => {
                 for (u, i) in subst {
                     if c == u {
-                        *self = i.clone();
-                        break;
+                        return i.clone();
                     }
                 }
+                self.clone()
             }
             Instance::Global(i) => {
-                for i in &mut Arc::make_mut(i).args {
-                    i.subst(subst);
+                let mut changed = false;
+                let args: Vec<Instance> = i
+                    .args
+                    .iter()
+                    .map(|arg| {
+                        let new_arg = arg.subst(subst);
+                        if !changed && !arg.ptr_eq(&new_arg) {
+                            changed = true;
+                        }
+                        new_arg
+                    })
+                    .collect();
+                if changed {
+                    Instance::Global(Arc::new(InstanceGlobal {
+                        name: i.name,
+                        ty_args: i.ty_args.clone(),
+                        args,
+                    }))
+                } else {
+                    self.clone()
                 }
             }
-            Instance::Hole(_) => {}
+            Instance::Hole(_) => self.clone(),
+        }
+    }
+
+    fn ptr_eq(&self, other: &Instance) -> bool {
+        match (self, other) {
+            (Instance::Local(a), Instance::Local(b)) => a == b,
+            (Instance::Global(a), Instance::Global(b)) => Arc::ptr_eq(a, b),
+            (Instance::Hole(a), Instance::Hole(b)) => a == b,
+            _ => false,
         }
     }
 
@@ -1358,11 +1427,12 @@ impl Term {
             }
             Term::Local(_) => {}
             Term::Const(inner) => {
-                for s in &mut Arc::make_mut(inner).ty_args {
+                let inner = Arc::make_mut(inner);
+                for s in &mut inner.ty_args {
                     *s = s.subst(subst);
                 }
-                for i in &mut Arc::make_mut(inner).instances {
-                    i.subst_type(subst);
+                for i in &mut inner.instances {
+                    *i = i.subst_type(subst);
                 }
             }
             Term::Hole(_) => {}
@@ -1515,8 +1585,9 @@ impl Term {
             }
             Term::Local(_) => {}
             Term::Const(inner) => {
-                for i in &mut Arc::make_mut(inner).instances {
-                    i.subst(subst);
+                let inner = Arc::make_mut(inner);
+                for instance in &mut inner.instances {
+                    *instance = instance.subst(subst);
                 }
             }
             Term::Hole(_) => {}
@@ -1733,13 +1804,10 @@ impl Env<'_> {
                     );
                 }
                 for (local_class, arg) in zip(local_classes, args) {
-                    let mut local_class = local_class.clone();
-                    local_class.subst(&type_subst);
+                    let local_class = local_class.subst(&type_subst);
                     self.check_class(local_env, arg, &local_class);
                 }
-                let mut target = target.clone();
-                target.subst(&type_subst);
-                target
+                target.subst(&type_subst)
             }
             Instance::Hole(_) => panic!("cannot infer class of a hole"),
         }
@@ -1823,8 +1891,7 @@ impl Env<'_> {
                     );
                 }
                 for (local_class, instance) in zip(local_classes, &m.instances) {
-                    let mut local_class = local_class.clone();
-                    local_class.subst(&type_subst);
+                    let local_class = local_class.subst(&type_subst);
                     self.check_wfc(local_env, &local_class);
                     self.check_class(local_env, instance, &local_class);
                 }
@@ -1871,8 +1938,7 @@ impl Env<'_> {
         }
         let mut instance_subst = vec![];
         for (local_class, instance) in zip(local_classes, &n.instances) {
-            let mut local_class = local_class.clone();
-            local_class.subst(&type_subst);
+            let local_class = local_class.subst(&type_subst);
             instance_subst.push((local_class, instance.clone()));
         }
         let mut target = target.clone();
@@ -1920,8 +1986,7 @@ impl Env<'_> {
         }
         let mut instance_subst = vec![];
         for (local_class, instance) in zip(local_classes, args) {
-            let mut local_class = local_class.clone();
-            local_class.subst(&type_subst);
+            let local_class = local_class.subst(&type_subst);
             instance_subst.push((local_class, instance.clone()));
         }
         let mut target = target.clone();
