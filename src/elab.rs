@@ -863,11 +863,16 @@ impl<'a> Elaborator<'a> {
 
     // TODO: rename to try_reduce_to_pattern or something.
     fn inst_arg_head(&self, m: &mut Term) {
-        for arg in &mut m.args_mut() {
-            arg.whnf();
+        for arg in m.args_mut() {
+            let new_arg = arg.whnf();
+            if let Some(new_arg) = new_arg {
+                *arg = new_arg;
+            }
             while self.inst_head(arg) {
-                if !arg.whnf() {
-                    break;
+                let new_arg = arg.whnf();
+                match new_arg {
+                    Some(reduced) => *arg = reduced,
+                    None => break,
                 }
             }
         }
@@ -1376,7 +1381,17 @@ impl<'a> Elaborator<'a> {
             self.push_term_constraint(local_env, left, right, error);
             return None;
         }
-        if left.whnf() || right.whnf() {
+        let new_left = left.whnf();
+        let left_changed = new_left.is_some();
+        if let Some(new_left) = new_left {
+            left = new_left;
+        }
+        let new_right = right.whnf();
+        let right_changed = new_right.is_some();
+        if let Some(new_right) = new_right {
+            right = new_right;
+        }
+        if left_changed || right_changed {
             self.push_term_constraint(local_env, left, right, error);
             return None;
         }

@@ -5,7 +5,7 @@ use std::iter::zip;
 use std::sync::LazyLock;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
-use std::{mem, vec};
+use std::vec;
 
 use crate::proof::mk_type_prop;
 
@@ -1057,21 +1057,6 @@ impl Term {
         }
     }
 
-    pub fn is_lclosed(&self) -> bool {
-        self.is_lclosed_at(0)
-    }
-
-    fn is_lclosed_at(&self, level: usize) -> bool {
-        match self {
-            Self::Local(_) => true,
-            Self::Var(inner) => inner.index < level,
-            Self::Abs(inner) => inner.body.is_lclosed_at(level + 1),
-            Self::App(inner) => inner.fun.is_lclosed_at(level) && inner.arg.is_lclosed_at(level),
-            Self::Const(_) => true,
-            Self::Hole(_) => true,
-        }
-    }
-
     pub fn contains_var(&self, i: usize) -> bool {
         match self {
             Term::Var(inner) => i == inner.index,
@@ -1354,43 +1339,19 @@ impl Term {
         }
     }
 
-    fn beta_reduce(&mut self) -> bool {
-        let Term::App(inner) = self else {
-            return false;
-        };
-        let TermApp { fun, arg } = Arc::make_mut(inner);
-        let Term::Abs(inner) = fun else {
-            return false;
-        };
-        let TermAbs {
-            binder_type: _,
-            binder_name: _,
-            body,
-        } = Arc::make_mut(inner);
-        let new_body = body.popen(&[arg.clone()], 0);
-        *body = new_body;
-        *self = mem::take(body);
-        assert!(self.is_lclosed());
-        true
-    }
-
-    pub fn whnf(&mut self) -> bool {
-        let mut changed = false;
-        loop {
-            match self {
-                Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) | Term::Abs(_) => {
-                    return changed;
+    /// Returns None if the term is already in whnf.
+    pub fn whnf(&self) -> Option<Term> {
+        match self {
+            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) | Term::Abs(_) => None,
+            Term::App(inner) => {
+                let fun = inner.fun.whnf();
+                if let Term::Abs(abs) = fun.as_ref().unwrap_or(&inner.fun) {
+                    let body = abs.body.popen(&[inner.arg.clone()], 0);
+                    return Some(body.whnf().unwrap_or(body));
                 }
-                Term::App(inner) => {
-                    let inner = Arc::make_mut(inner);
-                    if inner.fun.whnf() {
-                        changed = true;
-                    }
-                    if self.beta_reduce() {
-                        changed = true;
-                        continue;
-                    }
-                    return changed;
+                match fun {
+                    Some(fun) => Some(mk_app(fun, inner.arg.clone())),
+                    None => None,
                 }
             }
         }
@@ -1918,8 +1879,16 @@ impl Env<'_> {
             return self.equiv_help(&mut inner1.body, &mut inner2.body);
         }
 
-        let reduced1 = m1.whnf();
-        let reduced2 = m2.whnf();
+        let new_m1 = m1.whnf();
+        let reduced1 = new_m1.is_some();
+        if let Some(new_m1) = new_m1 {
+            *m1 = new_m1;
+        }
+        let new_m2 = m2.whnf();
+        let reduced2 = new_m2.is_some();
+        if let Some(new_m2) = new_m2 {
+            *m2 = new_m2;
+        }
         if reduced1 || reduced2 {
             if m1.alpha_eq(m2) {
                 return true;
