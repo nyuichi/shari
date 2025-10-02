@@ -7,6 +7,8 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::{mem, vec};
 
+// TODO: 再帰的に値を作っている場所で Arc::ptr_eq を使うようにする。
+
 // TODO: struct Path(Name) を用意して Const の中身を Path にする。
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
 pub struct Name(usize);
@@ -336,6 +338,39 @@ impl Type {
         }
     }
 
+    pub fn replace_hole(&self, f: &impl Fn(Name) -> Option<Type>) -> Type {
+        match self {
+            Type::Const(_) => self.clone(),
+            Type::Arrow(inner) => {
+                let dom = inner.dom.replace_hole(f);
+                let cod = inner.cod.replace_hole(f);
+                if inner.dom.ptr_eq(&dom) && inner.cod.ptr_eq(&cod) {
+                    self.clone()
+                } else {
+                    mk_type_arrow(dom, cod)
+                }
+            }
+            Type::App(inner) => {
+                let fun = inner.fun.replace_hole(f);
+                let arg = inner.arg.replace_hole(f);
+                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
+                    self.clone()
+                } else {
+                    mk_type_app(fun, arg)
+                }
+            }
+            Type::Local(_) => self.clone(),
+            Type::Hole(name) => {
+                let hole_name = name.name;
+                if let Some(replacement) = f(hole_name) {
+                    replacement.replace_hole(f)
+                } else {
+                    self.clone()
+                }
+            }
+        }
+    }
+
     pub fn target(&self) -> &Type {
         let mut t = self;
         while let Type::Arrow(inner) = t {
@@ -364,7 +399,7 @@ impl Type {
     }
 
     #[inline]
-    pub fn ptr_eq(&self, other: &Type) -> bool {
+    fn ptr_eq(&self, other: &Type) -> bool {
         match (self, other) {
             (Type::Const(a), Type::Const(b)) => Arc::ptr_eq(a, b),
             (Type::Arrow(a), Type::Arrow(b)) => Arc::ptr_eq(a, b),

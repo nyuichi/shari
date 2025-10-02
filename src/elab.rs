@@ -16,8 +16,7 @@ use crate::{
     tt::{
         self, Class, ClassInstance, ClassType, Const, Instance, InstanceGlobal, Kind, LocalEnv,
         Name, Parameter, Term, TermAbs, TermApp, TermConst, Type, TypeApp, TypeArrow, mk_const,
-        mk_fresh_type_hole, mk_hole, mk_instance_global, mk_local, mk_type_app, mk_type_arrow,
-        mk_type_prop,
+        mk_fresh_type_hole, mk_hole, mk_instance_global, mk_local, mk_type_arrow, mk_type_prop,
     },
 };
 
@@ -925,36 +924,11 @@ impl<'a> Elaborator<'a> {
     }
 
     fn fully_inst_type(&self, t: &Type) -> Type {
-        match t {
-            Type::Const(_) => t.clone(),
-            Type::Arrow(inner) => {
-                let dom = self.fully_inst_type(&inner.dom);
-                let cod = self.fully_inst_type(&inner.cod);
-                if inner.dom.ptr_eq(&dom) && inner.cod.ptr_eq(&cod) {
-                    t.clone()
-                } else {
-                    mk_type_arrow(dom, cod)
-                }
-            }
-            Type::App(inner) => {
-                let fun = self.fully_inst_type(&inner.fun);
-                let arg = self.fully_inst_type(&inner.arg);
-                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
-                    t.clone()
-                } else {
-                    mk_type_app(fun, arg)
-                }
-            }
-            Type::Local(_) => t.clone(),
-            Type::Hole(name) => {
-                let hole_name = name.name;
-                if let Some(a) = self.type_subst_map.get(&hole_name) {
-                    self.fully_inst_type(a)
-                } else {
-                    t.clone()
-                }
-            }
-        }
+        t.replace_hole(&|name| {
+            self.type_subst_map
+                .get(&name)
+                .map(|ty| self.fully_inst_type(ty))
+        })
     }
 
     fn fully_inst_class(&self, class: &Class) -> Class {
