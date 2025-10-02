@@ -1391,22 +1391,33 @@ impl Term {
         }
     }
 
-    pub fn replace_hole(&mut self, f: &impl Fn(Name) -> Option<Term>) {
+    pub fn replace_hole(&self, f: &impl Fn(Name) -> Option<Term>) -> Term {
         match self {
-            Term::Var(_) => {}
+            Term::Var(_) => self.clone(),
             Term::Abs(inner) => {
-                Arc::make_mut(inner).body.replace_hole(f);
+                let body = inner.body.replace_hole(f);
+                if inner.body.ptr_eq(&body) {
+                    self.clone()
+                } else {
+                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
+                }
             }
             Term::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.fun.replace_hole(f);
-                inner.arg.replace_hole(f);
+                let fun = inner.fun.replace_hole(f);
+                let arg = inner.arg.replace_hole(f);
+                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
+                    self.clone()
+                } else {
+                    mk_app(fun, arg)
+                }
             }
-            Term::Local(_) => {}
-            Term::Const(_) => {}
+            Term::Local(_) => self.clone(),
+            Term::Const(_) => self.clone(),
             Term::Hole(inner) => {
                 if let Some(m) = f(inner.name) {
-                    *self = m;
+                    m
+                } else {
+                    self.clone()
                 }
             }
         }
