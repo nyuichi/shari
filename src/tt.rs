@@ -777,12 +777,6 @@ pub struct TermHole {
     pub name: Name,
 }
 
-impl From<TermConst> for Term {
-    fn from(value: TermConst) -> Self {
-        mk_const(value.name, value.ty_args, value.instances)
-    }
-}
-
 impl TermConst {
     fn alpha_eq(&self, other: &TermConst) -> bool {
         if self.name != other.name || self.ty_args.len() != other.ty_args.len() {
