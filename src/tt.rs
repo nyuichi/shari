@@ -1866,170 +1866,6 @@ impl Env<'_> {
         self.delta_table.contains_key(&name)
     }
 
-    fn equiv_help(&self, m1: &mut Term, m2: &mut Term) -> bool {
-        if m1.alpha_eq(m2) {
-            return true;
-        }
-        if let (Term::Abs(inner1), Term::Abs(inner2)) = (&mut *m1, &mut *m2) {
-            let inner1 = Arc::make_mut(inner1);
-            let inner2 = Arc::make_mut(inner2);
-            let x = Name::fresh();
-            let local = mk_local(x);
-            let new_body1 = inner1.body.popen(&[local.clone()], 0);
-            inner1.body = new_body1;
-            let new_body2 = inner2.body.popen(&[local], 0);
-            inner2.body = new_body2;
-            return self.equiv_help(&mut inner1.body, &mut inner2.body);
-        }
-
-        let new_m1 = m1.whnf();
-        let reduced1 = new_m1.is_some();
-        if let Some(new_m1) = new_m1 {
-            *m1 = new_m1;
-        }
-        let new_m2 = m2.whnf();
-        let reduced2 = new_m2.is_some();
-        if let Some(new_m2) = new_m2 {
-            *m2 = new_m2;
-        }
-        if reduced1 || reduced2 {
-            if m1.alpha_eq(m2) {
-                return true;
-            }
-            if let (Term::Abs(inner1), Term::Abs(inner2)) = (&mut *m1, &mut *m2) {
-                let inner1 = Arc::make_mut(inner1);
-                let inner2 = Arc::make_mut(inner2);
-                let x = Name::fresh();
-                let local = mk_local(x);
-                let new_body1 = inner1.body.popen(&[local.clone()], 0);
-                inner1.body = new_body1;
-                let new_body2 = inner2.body.popen(&[local], 0);
-                inner2.body = new_body2;
-                // TODO: use loop
-                return self.equiv_help(&mut inner1.body, &mut inner2.body);
-            }
-        }
-
-        if matches!(m1, Term::Abs(_)) {
-            return self.equiv_help(m2, m1);
-        }
-        if matches!(m2, Term::Abs(_)) {
-            // m1 must be unfoldable
-            if let Some(new_m1) = self.unfold_head(m1) {
-                *m1 = new_m1;
-            } else {
-                return false;
-            }
-            return self.equiv_help(m1, m2);
-        }
-
-        let head1 = m1.head();
-        let head2 = m2.head();
-        if let (Term::Local(head1), Term::Local(head2)) = (head1, head2) {
-            if head1.name != head2.name {
-                return false;
-            }
-            let args1 = m1.args();
-            let args2 = m2.args();
-            if args1.len() != args2.len() {
-                return false;
-            }
-            for (a1, a2) in std::iter::zip(args1, args2) {
-                let mut a1 = a1.clone();
-                let mut a2 = a2.clone();
-                if !self.equiv_help(&mut a1, &mut a2) {
-                    return false;
-                }
-            }
-            return true;
-        }
-        if matches!(head1, Term::Local(_)) {
-            return self.equiv_help(m2, m1);
-        }
-        if matches!(head2, Term::Local(_)) {
-            // m1 must be unfoldable
-            if let Some(new_m1) = self.unfold_head(m1) {
-                *m1 = new_m1;
-            } else {
-                return false;
-            }
-            return self.equiv_help(m1, m2);
-        }
-
-        let (Term::Const(head1_inner), Term::Const(head2_inner)) = (head1, head2) else {
-            panic!("holes found");
-        };
-        // optimization
-        if head1_inner.alpha_eq(head2_inner) {
-            let args1 = m1.args();
-            let args2 = m2.args();
-            if args1.len() == args2.len() {
-                let mut all_equiv = true;
-                for (a1, a2) in std::iter::zip(args1, args2) {
-                    let mut a1 = a1.clone();
-                    let mut a2 = a2.clone();
-                    if !self.equiv_help(&mut a1, &mut a2) {
-                        all_equiv = false;
-                        break;
-                    }
-                }
-                if all_equiv {
-                    return true;
-                }
-            }
-        }
-
-        if self.has_kappa(head1_inner.name) || self.has_kappa(head2_inner.name) {
-            if let Some(new_m1) = self.unfold_head(m1) {
-                *m1 = new_m1;
-                return self.equiv_help(m1, m2);
-            }
-            if let Some(new_m2) = self.unfold_head(m2) {
-                *m2 = new_m2;
-                return self.equiv_help(m1, m2);
-            }
-            return false;
-        }
-
-        let height1 = self.delta_height(head1_inner.name);
-        let height2 = self.delta_height(head2_inner.name);
-        if height1 == 0 && height2 == 0 {
-            return false;
-        }
-
-        match height1.cmp(&height2) {
-            std::cmp::Ordering::Less => {
-                if let Some(new_m2) = self.unfold_head(m2) {
-                    *m2 = new_m2;
-                } else {
-                    return false;
-                }
-                self.equiv_help(m1, m2)
-            }
-            std::cmp::Ordering::Equal => {
-                if let Some(new_m1) = self.unfold_head(m1) {
-                    *m1 = new_m1;
-                } else {
-                    return false;
-                }
-                if let Some(new_m2) = self.unfold_head(m2) {
-                    *m2 = new_m2;
-                } else {
-                    return false;
-                }
-                self.equiv_help(m1, m2)
-            }
-            std::cmp::Ordering::Greater => {
-                if let Some(new_m1) = self.unfold_head(m1) {
-                    *m1 = new_m1;
-                } else {
-                    return false;
-                }
-                self.equiv_help(m1, m2)
-            }
-        }
-    }
-
     /// Judgmental equality for the definitional equality.
     /// The type inhabitation problem of `m₁ ≡ m₂` is decidable.
     ///
@@ -2070,9 +1906,187 @@ impl Env<'_> {
     ///
     /// Both terms must be ground
     pub fn equiv(&self, m1: &Term, m2: &Term) -> bool {
+        if m1.alpha_eq(m2) {
+            return true;
+        }
+
         let mut m1 = m1.clone();
         let mut m2 = m2.clone();
-        self.equiv_help(&mut m1, &mut m2)
+
+        loop {
+            if let (Term::Abs(inner1), Term::Abs(inner2)) = (&m1, &m2) {
+                let x = Name::fresh();
+                let local = mk_local(x);
+                m1 = inner1.body.popen(&[local.clone()], 0);
+                m2 = inner2.body.popen(&[local], 0);
+                if m1.alpha_eq(&m2) {
+                    return true;
+                }
+                continue;
+            }
+
+            let new_m1 = m1.whnf();
+            let reduced1 = new_m1.is_some();
+            if let Some(new_m1) = new_m1 {
+                m1 = new_m1;
+            }
+            let new_m2 = m2.whnf();
+            let reduced2 = new_m2.is_some();
+            if let Some(new_m2) = new_m2 {
+                m2 = new_m2;
+            }
+            if reduced1 || reduced2 {
+                if m1.alpha_eq(&m2) {
+                    return true;
+                }
+                if let (Term::Abs(inner1), Term::Abs(inner2)) = (&m1, &m2) {
+                    let x = Name::fresh();
+                    let local = mk_local(x);
+                    m1 = inner1.body.popen(&[local.clone()], 0);
+                    m2 = inner2.body.popen(&[local], 0);
+                    if m1.alpha_eq(&m2) {
+                        return true;
+                    }
+                    continue;
+                }
+            }
+
+            if m1.is_abs() {
+                std::mem::swap(&mut m1, &mut m2);
+                continue;
+            }
+            if m2.is_abs() {
+                if let Some(new_m1) = self.unfold_head(&m1) {
+                    m1 = new_m1;
+                    if m1.alpha_eq(&m2) {
+                        return true;
+                    }
+                    continue;
+                } else {
+                    return false;
+                }
+            }
+
+            let head1 = m1.head();
+            let head2 = m2.head();
+            if let (Term::Local(head1_inner), Term::Local(head2_inner)) = (head1, head2) {
+                if head1_inner.name != head2_inner.name {
+                    return false;
+                }
+                let args1 = m1.args();
+                let args2 = m2.args();
+                if args1.len() != args2.len() {
+                    return false;
+                }
+                for (a1, a2) in std::iter::zip(args1, args2) {
+                    if !self.equiv(a1, a2) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            if head1.is_local() {
+                std::mem::swap(&mut m1, &mut m2);
+                continue;
+            }
+            if head2.is_local() {
+                if let Some(new_m1) = self.unfold_head(&m1) {
+                    m1 = new_m1;
+                    if m1.alpha_eq(&m2) {
+                        return true;
+                    }
+                    continue;
+                } else {
+                    return false;
+                }
+            }
+
+            let (Term::Const(head1_inner), Term::Const(head2_inner)) = (head1, head2) else {
+                panic!("holes found");
+            };
+            // small optimization
+            if head1_inner.alpha_eq(head2_inner) {
+                let args1 = m1.args();
+                let args2 = m2.args();
+                if args1.len() == args2.len() {
+                    let mut all_equiv = true;
+                    for (a1, a2) in std::iter::zip(args1, args2) {
+                        if !self.equiv(a1, a2) {
+                            all_equiv = false;
+                            break;
+                        }
+                    }
+                    if all_equiv {
+                        return true;
+                    }
+                }
+            }
+
+            if self.has_kappa(head1_inner.name) || self.has_kappa(head2_inner.name) {
+                if let Some(new_m1) = self.unfold_head(&m1) {
+                    m1 = new_m1;
+                    if m1.alpha_eq(&m2) {
+                        return true;
+                    }
+                    continue;
+                }
+                if let Some(new_m2) = self.unfold_head(&m2) {
+                    m2 = new_m2;
+                    if m1.alpha_eq(&m2) {
+                        return true;
+                    }
+                    continue;
+                }
+                return false;
+            }
+
+            let height1 = self.delta_height(head1_inner.name);
+            let height2 = self.delta_height(head2_inner.name);
+            if height1 == 0 && height2 == 0 {
+                return false;
+            }
+
+            match height1.cmp(&height2) {
+                std::cmp::Ordering::Less => {
+                    if let Some(new_m2) = self.unfold_head(&m2) {
+                        m2 = new_m2;
+                        if m1.alpha_eq(&m2) {
+                            return true;
+                        }
+                        continue;
+                    } else {
+                        return false;
+                    }
+                }
+                std::cmp::Ordering::Equal => {
+                    if let Some(new_m1) = self.unfold_head(&m1) {
+                        m1 = new_m1;
+                    } else {
+                        return false;
+                    }
+                    if let Some(new_m2) = self.unfold_head(&m2) {
+                        m2 = new_m2;
+                    } else {
+                        return false;
+                    }
+                    if m1.alpha_eq(&m2) {
+                        return true;
+                    }
+                    continue;
+                }
+                std::cmp::Ordering::Greater => {
+                    if let Some(new_m1) = self.unfold_head(&m1) {
+                        m1 = new_m1;
+                        if m1.alpha_eq(&m2) {
+                            return true;
+                        }
+                        continue;
+                    } else {
+                        return false;
+                    }
+                }
+            }
+        }
     }
 }
 
