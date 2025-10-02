@@ -1101,7 +1101,7 @@ impl Eval {
                 a.apply(xs.iter().map(|x| mk_local(x.name)));
                 let mut h = mk_local(motive.name);
                 h.apply([a]);
-                generalize(&mut h, &xs);
+                h = generalize(&h, &xs);
                 ih_list.push(h);
             }
             // ∀ args, {IH} → P (C args)
@@ -1114,11 +1114,11 @@ impl Eval {
             a.apply(args.iter().map(|arg| mk_local(arg.name)));
             let mut target = mk_local(motive.name);
             target.apply([a]);
-            guard(&mut target, ih_list);
+            target = guard(&target, ih_list);
             for arg in &mut args {
                 arg.ty = arg.ty.subst(&subst);
             }
-            generalize(&mut target, &args);
+            target = generalize(&target, &args);
             guards.push(target);
         }
         // ∀ x P, {guards} → P x
@@ -1128,8 +1128,8 @@ impl Eval {
         };
         let mut target = mk_local(motive.name);
         target.apply([mk_local(x.name)]);
-        guard(&mut target, guards);
-        generalize(&mut target, &[x, motive]);
+        target = guard(&target, guards);
+        target = generalize(&target, &[x, motive]);
         self.add_axiom(ind_name, local_types.clone(), vec![], target);
 
         // generate the recursion principle
@@ -1248,7 +1248,7 @@ impl Eval {
 
             let mut spec = mk_const(Name::intern("eq"), vec![eq_ty], vec![]);
             spec.apply([lhs, rhs]);
-            generalize(&mut spec, &ctor_params);
+            spec = generalize(&spec, &ctor_params);
 
             let ctor_spec_name = Name::intern(&format!("{}.spec", ctor_name));
             self.add_axiom(ctor_spec_name, rec_local_types.clone(), vec![], spec);
@@ -1346,10 +1346,9 @@ impl Eval {
             }
             self.elaborate_term(&mut local_env, &mut ctor.target, &mk_type_prop())?;
 
-            let mut m = ctor.target.clone();
-            let ctor_params = ungeneralize(&mut m);
-            ctor_params_list.push(ctor_params);
-            let ctor_args = unguard(&mut m);
+            let (ctor_params, m) = ungeneralize(&ctor.target);
+            ctor_params_list.push(ctor_params.clone());
+            let (ctor_args, m) = unguard(&m);
             ctor_args_list.push(ctor_args.clone());
             if !m.head().alpha_eq(&mk_local(name)) {
                 bail!(
@@ -1361,22 +1360,23 @@ impl Eval {
                     bail!("invalid target");
                 }
             }
-            ctor_target_list.push(m);
+            ctor_target_list.push(m.clone());
             let mut ctor_ind_args = vec![];
             for ctor_arg in &ctor_args {
-                let mut m = ctor_arg.clone();
+                let mut current = ctor_arg.clone();
                 loop {
-                    let params = ungeneralize(&mut m);
-                    let args = unguard(&mut m);
+                    let (params, body) = ungeneralize(&current);
+                    let (args, next) = unguard(&body);
                     if params.is_empty() && args.is_empty() {
                         break;
                     }
+                    current = next;
                 }
-                if m.contains_local(name) {
-                    if !m.head().alpha_eq(&mk_local(name)) {
+                if current.contains_local(name) {
+                    if !current.head().alpha_eq(&mk_local(name)) {
                         bail!("invalid target");
                     }
-                    for a in m.args() {
+                    for a in current.args() {
                         if a.contains_local(name) {
                             bail!("invalid target");
                         }
@@ -1420,7 +1420,7 @@ impl Eval {
             stash.apply(params.iter().map(|param| mk_local(param.name)));
             let subst = [(name, stash)];
             target.subst(&subst);
-            generalize(&mut target, &params);
+            target = generalize(&target, &params);
             self.add_axiom(ctor_name, local_types.clone(), vec![], target);
         }
 
@@ -1461,7 +1461,7 @@ impl Eval {
             for ctor_ind_arg in &mut ctor_ind_args {
                 ctor_ind_arg.subst(&subst_with_motive);
             }
-            guard(&mut guard_term, ctor_ind_args);
+            guard_term = guard(&guard_term, ctor_ind_args);
 
             // P ↦ P.{u} x
             let mut stash = mk_const(
@@ -1479,14 +1479,14 @@ impl Eval {
             for ctor_arg in &mut ctor_args {
                 ctor_arg.subst(&subst);
             }
-            guard(&mut guard_term, ctor_args);
+            guard_term = guard(&guard_term, ctor_args);
 
             // ∀ y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
-            generalize(&mut guard_term, &ctor_params);
+            guard_term = generalize(&guard_term, &ctor_params);
 
             guards.push(guard_term);
         }
-        guard(&mut target, guards);
+        target = guard(&target, guards);
 
         let mut p = mk_const(
             name,
@@ -1498,11 +1498,11 @@ impl Eval {
         );
         p.apply(params.iter().map(|param| mk_local(param.name)));
         p.apply(indexes.iter().map(|index| mk_local(index.name)));
-        guard(&mut target, [p]);
+        target = guard(&target, [p]);
 
-        generalize(&mut target, &[motive]);
-        generalize(&mut target, &indexes);
-        generalize(&mut target, &params);
+        target = generalize(&target, &[motive]);
+        target = generalize(&target, &indexes);
+        target = generalize(&target, &params);
 
         self.add_axiom(ind_name, local_types, vec![], target);
         Ok(())
@@ -1665,7 +1665,7 @@ impl Eval {
                     let fullname = Name::intern(&format!("{}.{}", name, field.name));
                     let mut target = field.target.clone();
                     target.subst(&subst);
-                    generalize(&mut target, slice::from_ref(&this));
+                    target = generalize(&target, slice::from_ref(&this));
                     self.add_axiom(fullname, local_types.clone(), vec![], target);
                 }
             }
@@ -1725,8 +1725,8 @@ impl Eval {
             char.abs(slice::from_ref(&this));
             char
         }]);
-        guard(&mut abs, guards);
-        generalize(&mut abs, &params);
+        abs = guard(&abs, guards);
+        abs = generalize(&abs, &params);
         self.add_axiom(abs_name, local_types.clone(), vec![], abs);
 
         // generate extensionality
@@ -1759,8 +1759,8 @@ impl Eval {
         }
         let mut target = mk_const(Name::intern("eq"), vec![this.ty.clone()], vec![]);
         target.apply([mk_local(this1.name), mk_local(this2.name)]);
-        guard(&mut target, guards);
-        generalize(&mut target, &[this1, this2]);
+        target = guard(&target, guards);
+        target = generalize(&target, &[this1, this2]);
         self.add_axiom(ext_name, local_types.clone(), vec![], target);
         Ok(())
     }
@@ -1976,7 +1976,7 @@ impl Eval {
 
                     let fullname = Name::intern(&format!("{}.{}", name, field_name));
                     let mut target = target.clone();
-                    generalize(&mut target, &params);
+                    target = generalize(&target, &params);
                     self.add_axiom(fullname, local_types.clone(), local_classes.clone(), target);
                 }
             }
@@ -2041,7 +2041,7 @@ impl Eval {
             vec![],
         );
         target.apply([left, right]);
-        generalize(&mut target, &params);
+        target = generalize(&target, &params);
         let mut local_types = local_types.clone();
         local_types.push(ret_ty);
         self.add_axiom(spec_name, local_types, local_classes, target);

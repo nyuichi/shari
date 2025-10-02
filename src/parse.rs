@@ -1147,7 +1147,7 @@ impl<'a> Parser<'a> {
         self.locals.truncate(self.locals.len() - params.len());
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
-        generalize(&mut target, &params);
+        target = generalize(&target, &params);
         Ok(CmdAxiom {
             name,
             local_types,
@@ -1175,7 +1175,7 @@ impl<'a> Parser<'a> {
         self.locals.truncate(self.locals.len() - params.len());
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
-        generalize(&mut p, &params);
+        p = generalize(&p, &params);
         for param in params.into_iter().rev() {
             e = mk_expr_take(param.name, param.ty, e);
         }
@@ -1296,7 +1296,7 @@ impl<'a> Parser<'a> {
             self.expect_symbol(":")?;
             let mut target = self.term()?;
             self.locals.truncate(self.locals.len() - ctor_params.len());
-            generalize(&mut target, &ctor_params);
+            target = generalize(&target, &ctor_params);
             ctors.push(Constructor {
                 name: ctor_name,
                 target,
@@ -1357,7 +1357,7 @@ impl<'a> Parser<'a> {
                     self.expect_symbol(":")?;
                     let mut target = self.term()?;
                     self.locals.truncate(self.locals.len() - params.len());
-                    generalize(&mut target, &params);
+                    target = generalize(&target, &params);
                     fields.push(StructureField::Axiom(StructureAxiom {
                         name: field_name,
                         target,
@@ -1435,7 +1435,7 @@ impl<'a> Parser<'a> {
                     self.expect_symbol(":=")?;
                     let mut expr = self.expr()?;
                     self.locals.truncate(self.locals.len() - field_params.len());
-                    generalize(&mut field_target, &field_params);
+                    field_target = generalize(&field_target, &field_params);
                     for field_param in field_params.into_iter().rev() {
                         expr = mk_expr_take(field_param.name, field_param.ty, expr);
                     }
@@ -1506,7 +1506,7 @@ impl<'a> Parser<'a> {
                     self.expect_symbol(":")?;
                     let mut target = self.term()?;
                     self.locals.truncate(self.locals.len() - params.len());
-                    generalize(&mut target, &params);
+                    target = generalize(&target, &params);
                     fields.push(ClassStructureField::Axiom(ClassStructureAxiom {
                         name: field_name,
                         target,
@@ -1576,7 +1576,7 @@ impl<'a> Parser<'a> {
                     self.expect_symbol(":=")?;
                     let mut expr = self.expr()?;
                     self.locals.truncate(self.locals.len() - field_params.len());
-                    generalize(&mut field_target, &field_params);
+                    field_target = generalize(&field_target, &field_params);
                     for field_param in field_params.into_iter().rev() {
                         expr = mk_expr_take(field_param.name, field_param.ty, expr);
                     }

@@ -434,7 +434,7 @@ impl<'a> Elaborator<'a> {
                 self.local_axioms.push(local_axiom.clone());
                 let mut target = self.visit_expr(expr)?;
                 let p = self.local_axioms.pop().unwrap();
-                guard(&mut target, [p]);
+                target = guard(&target, [p]);
 
                 Ok(target)
             }
@@ -459,7 +459,7 @@ impl<'a> Elaborator<'a> {
                 let ret = self.mk_term_hole(mk_type_prop());
 
                 let mut target = ret.clone();
-                guard(&mut target, [arg]);
+                target = guard(&target, [arg]);
                 self.push_term_constraint(
                     self.tt_local_env.clone(),
                     fun,
@@ -491,7 +491,7 @@ impl<'a> Elaborator<'a> {
                 let mut target = self.visit_expr(expr)?;
                 let x = self.tt_local_env.locals.pop().unwrap();
 
-                generalize(&mut target, &[x]);
+                target = generalize(&target, &[x]);
 
                 Ok(target)
             }
