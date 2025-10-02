@@ -1095,6 +1095,35 @@ impl Term {
         args
     }
 
+    pub fn replace_head(&self, f: &impl Fn(&Term) -> Option<Term>) -> Option<Term> {
+        match self {
+            Term::Var(_) | Term::Abs(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) => {
+                f(self)
+            }
+            Term::App(inner) => {
+                let fun = inner.fun.replace_head(f)?;
+                Some(mk_app(fun, inner.arg.clone()))
+            }
+        }
+    }
+
+    pub fn replace_args(&self, f: &impl Fn(&Term) -> Term) -> Term {
+        match self {
+            Term::Var(_) | Term::Abs(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) => {
+                self.clone()
+            }
+            Term::App(inner) => {
+                let fun = inner.fun.replace_args(f);
+                let arg = f(&inner.arg);
+                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
+                    self.clone()
+                } else {
+                    mk_app(fun, arg)
+                }
+            }
+        }
+    }
+
     pub fn is_abs(&self) -> bool {
         matches!(self, Term::Abs(_))
     }
@@ -1726,9 +1755,9 @@ impl Env<'_> {
     // assert_eq!(m, c.{u₁, ⋯, uₙ})
     // self.delta_reduce(m);
     // assert_eq!(m, n)
-    fn delta_reduce(&self, m: &mut Term) -> bool {
+    fn delta_reduce(&self, m: &Term) -> Option<Term> {
         let Term::Const(n) = m else {
-            return false;
+            return None;
         };
         let Some(Delta {
             local_types,
@@ -1737,42 +1766,36 @@ impl Env<'_> {
             height: _,
         }) = self.delta_table.get(&n.name)
         else {
-            return false;
+            return None;
         };
-        let mut type_subst = vec![];
+        let mut type_subst = Vec::with_capacity(local_types.len());
         for (&x, t) in zip(local_types, &n.ty_args) {
             type_subst.push((x, t.clone()));
         }
-        let mut instance_subst = vec![];
+        let mut instance_subst = Vec::with_capacity(local_classes.len());
         for (local_class, instance) in zip(local_classes, &n.instances) {
             let local_class = local_class.subst(&type_subst);
             instance_subst.push((local_class, instance.clone()));
         }
-        let mut reduced_target = target.clone();
-        let new_target = reduced_target.subst_type(&type_subst);
-        if !reduced_target.ptr_eq(&new_target) {
-            reduced_target = new_target;
-        }
-        let new_target = reduced_target.subst_instance(&instance_subst);
-        if !reduced_target.ptr_eq(&new_target) {
-            reduced_target = new_target;
-        }
-        *m = reduced_target;
-        true
+        Some(
+            target
+                .subst_type(&type_subst)
+                .subst_instance(&instance_subst),
+        )
     }
 
-    fn kappa_reduce(&self, m: &mut Term) -> bool {
+    fn kappa_reduce(&self, m: &Term) -> Option<Term> {
         let Term::Const(n) = m else {
-            return false;
+            return None;
         };
         if self.kappa_table.get(&n.name).is_none() {
-            return false;
+            return None;
         }
         if n.instances.is_empty() {
-            return false;
+            return None;
         }
         let Instance::Global(recv) = &n.instances[0] else {
-            return false;
+            return None;
         };
         let InstanceGlobal {
             name,
@@ -1788,37 +1811,41 @@ impl Env<'_> {
             method_table,
         }) = self.class_instance_table.get(name)
         else {
-            return false;
+            return None;
         };
         let Some(target) = method_table.get(&n.name) else {
-            return false;
+            return None;
         };
-        let mut type_subst = vec![];
+        let mut type_subst = Vec::with_capacity(local_types.len());
         for (&x, t) in zip(local_types, ty_args) {
             type_subst.push((x, t.clone()));
         }
-        let mut instance_subst = vec![];
+        let mut instance_subst = Vec::with_capacity(local_classes.len());
         for (local_class, instance) in zip(local_classes, args) {
             let local_class = local_class.subst(&type_subst);
             instance_subst.push((local_class, instance.clone()));
         }
-        let mut new_target = target.clone();
-        let target_with_types = new_target.subst_type(&type_subst);
-        if !new_target.ptr_eq(&target_with_types) {
-            new_target = target_with_types;
-        }
-        let target_with_instances = new_target.subst_instance(&instance_subst);
-        if !new_target.ptr_eq(&target_with_instances) {
-            new_target = target_with_instances;
-        }
-        *m = new_target;
-        true
+        Some(
+            target
+                .subst_type(&type_subst)
+                .subst_instance(&instance_subst),
+        )
     }
 
     pub fn unfold_head(&self, m: &mut Term) -> bool {
         match m {
             Term::Var(_) | Term::Local(_) | Term::Abs(_) | Term::Hole(_) => false,
-            Term::Const(_) => self.delta_reduce(m) || self.kappa_reduce(m),
+            Term::Const(_) => {
+                if let Some(new_m) = self.delta_reduce(m) {
+                    *m = new_m;
+                    return true;
+                }
+                if let Some(new_m) = self.kappa_reduce(m) {
+                    *m = new_m;
+                    return true;
+                }
+                false
+            }
             Term::App(m) => {
                 let TermApp { fun, arg: _arg } = Arc::make_mut(m);
                 self.unfold_head(fun)

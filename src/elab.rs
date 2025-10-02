@@ -834,13 +834,15 @@ impl<'a> Elaborator<'a> {
     // Performs instantiation one step.
     // Note that the result term may contain redex in head
     fn inst_head(&self, m: &Term) -> Option<Term> {
-        let Term::Hole(m_head) = m.head() else {
-            return None;
-        };
-        let Some(target) = self.subst_map.get(&m_head.name) else {
-            return None;
-        };
-        Some(target.clone().apply(m.args().into_iter().cloned()))
+        m.replace_head(&|head| {
+            let Term::Hole(head) = head else {
+                return None;
+            };
+            let Some(target) = self.subst_map.get(&head.name) else {
+                return None;
+            };
+            Some(target.clone())
+        })
     }
 
     fn inst_type_head(&self, ty: &Type) -> Option<Type> {
@@ -863,38 +865,20 @@ impl<'a> Elaborator<'a> {
 
     // TODO: rename to try_reduce_to_pattern or something.
     fn inst_arg_head(&self, m: &Term) -> Term {
-        let args = m.args();
-        if args.is_empty() {
-            return m.clone();
-        }
-        let mut changed = false;
-        let mut new_args = Vec::with_capacity(args.len());
-        for arg in args {
-            let mut current = arg.clone();
-            if let Some(reduced) = current.whnf() {
-                current = reduced;
-                changed = true;
-            }
+        m.replace_args(&|arg| {
+            let mut new_arg = arg.whnf().unwrap_or_else(|| arg.clone());
             loop {
-                match self.inst_head(&current) {
-                    Some(instantiated) => {
-                        current = instantiated;
-                        changed = true;
-                        if let Some(reduced) = current.whnf() {
-                            current = reduced;
-                        } else {
-                            break;
-                        }
-                    }
-                    None => break,
-                }
+                let Some(inst) = self.inst_head(&new_arg) else {
+                    break;
+                };
+                new_arg = inst;
+                let Some(red) = new_arg.whnf() else {
+                    break;
+                };
+                new_arg = red;
             }
-            new_args.push(current);
-        }
-        if !changed {
-            return m.clone();
-        }
-        m.head().clone().apply(new_args)
+            new_arg
+        })
     }
 
     fn fully_inst(&self, m: &mut Term) {
