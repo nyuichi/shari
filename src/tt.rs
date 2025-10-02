@@ -7,6 +7,8 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::{mem, vec};
 
+use crate::proof::mk_type_prop;
+
 // TODO: 再帰的に値を作っている場所で Arc::ptr_eq を使うようにする。
 
 // TODO: struct Path(Name) を用意して Const の中身を Path にする。
@@ -214,17 +216,12 @@ pub fn mk_type_app(fun: Type, arg: Type) -> Type {
     Type::App(Arc::new(TypeApp { fun, arg }))
 }
 
-pub fn mk_type_prop() -> Type {
-    static T_PROP: LazyLock<Type> = LazyLock::new(|| mk_type_const(Name::intern("Prop")));
-    T_PROP.clone()
-}
-
 /// See [Barendregt+, 06](https://ftp.science.ru.nl/CSI/CompMath.Found/I.pdf).
 impl Type {
     /// t.arrow([t1, t2]) // => t1 → t2 → t
     pub fn arrow(&self, cs: impl IntoIterator<Item = Type>) -> Type {
         let mut cod = self.clone();
-        let domains: Vec<Type> = cs.into_iter().collect();
+        let domains: Vec<Type> = cs.into_iter().collect(); // TODO: avoid calling collect
         for dom in domains.into_iter().rev() {
             cod = mk_type_arrow(dom, cod);
         }
@@ -963,6 +960,18 @@ pub struct Parameter {
 }
 
 impl Term {
+    fn ptr_eq(&self, other: &Term) -> bool {
+        match (self, other) {
+            (Term::Var(a), Term::Var(b)) => Arc::ptr_eq(a, b),
+            (Term::Abs(a), Term::Abs(b)) => Arc::ptr_eq(a, b),
+            (Term::App(a), Term::App(b)) => Arc::ptr_eq(a, b),
+            (Term::Local(a), Term::Local(b)) => Arc::ptr_eq(a, b),
+            (Term::Const(a), Term::Const(b)) => Arc::ptr_eq(a, b),
+            (Term::Hole(a), Term::Hole(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+
     /// self.open(x) == [x/0]self
     /// TODO:
     /// - open をもっと軽くする。Term の全ての variant に bound を持たせて、その値を見て不必要な clone を行わないようにする。
@@ -992,33 +1001,38 @@ impl Term {
         }
     }
 
-    /// self.close(x) == [0/x]self
-    /// TODO: close も　is_closed というフィールドを Term に持たせてそれを使うようにする。そもそも今関数は pub じゃなくてよくなるはず。
-    #[allow(unused)]
-    #[deprecated(note = "left for future use")]
-    pub fn close(&mut self, name: Name) {
-        assert!(self.is_lclosed());
-        self.close_at(name, 0)
-    }
-
-    fn close_at(&mut self, name: Name, level: usize) {
+    /// self.close([x, y], k) == [k+1/x, k/y]self
+    pub fn pclose(&self, xs: &[Name], level: usize) -> Term {
         match self {
             Self::Local(inner) => {
-                if inner.name == name {
-                    *self = mk_var(level);
+                let name = inner.name;
+                for (i, &x) in xs.iter().rev().enumerate() {
+                    if name == x {
+                        return mk_var(level + i);
+                    }
+                }
+                self.clone()
+            }
+            Self::Var(_) => self.clone(),
+            Self::Abs(inner) => {
+                let body = inner.body.pclose(xs, level + 1);
+                if inner.body.ptr_eq(&body) {
+                    self.clone()
+                } else {
+                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
                 }
             }
-            Self::Var(_) => {}
-            Self::Abs(inner) => {
-                Arc::make_mut(inner).body.close_at(name, level + 1);
-            }
             Self::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.fun.close_at(name, level);
-                inner.arg.close_at(name, level);
+                let fun = inner.fun.pclose(xs, level);
+                let arg = inner.arg.pclose(xs, level);
+                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
+                    self.clone()
+                } else {
+                    mk_app(fun, arg)
+                }
             }
-            Self::Const(_) => {}
-            Self::Hole(_) => {}
+            Self::Const(_) => self.clone(),
+            Self::Hole(_) => self.clone(),
         }
     }
 
@@ -1278,173 +1292,15 @@ impl Term {
     }
 
     // assert_eq!(self, "m");
-    // self.abs(&[x1, x2]);
-    // assert_eq!(self, "λ x1 x2, m");
-    //
-    // If allow_free is true, this function always succeeds and returns true.
-    // If allow_free is false and self contains extra free variables, abs returns false and the state of self is restored.
+    // self.abs(&[x, y]);
+    // assert_eq!(self, "λ x y, m");
     pub fn abs(&mut self, xs: &[Parameter]) {
-        self.abs_help(xs, 0);
-        let mut m = mem::take(self);
+        let locals = xs.iter().map(|x| x.name).collect::<Vec<_>>();
+        let mut m = self.pclose(&locals, 0);
         for x in xs.iter().rev() {
             m = mk_abs(x.name, x.ty.clone(), m);
         }
         *self = m;
-    }
-
-    fn abs_help(&mut self, xs: &[Parameter], level: usize) {
-        match self {
-            Self::Local(inner) => {
-                let name = inner.name;
-                for (i, x) in xs.iter().rev().enumerate() {
-                    if name == x.name {
-                        *self = mk_var(level + i);
-                        return;
-                    }
-                }
-            }
-            Self::Var(_) => {}
-            Self::Abs(inner) => Arc::make_mut(inner).body.abs_help(xs, level + 1),
-            Self::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.fun.abs_help(xs, level);
-                inner.arg.abs_help(xs, level);
-            }
-            Self::Const(_) => {}
-            Self::Hole(_) => {}
-        }
-    }
-
-    pub fn count_forall(&self) -> usize {
-        static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall"));
-
-        let mut count = 0;
-        let mut m = self;
-        loop {
-            let Term::App(app) = m else {
-                break;
-            };
-            let app = app.as_ref();
-            let Term::Const(head) = &app.fun else {
-                break;
-            };
-            if head.name != *FORALL {
-                break;
-            }
-            let Term::Abs(abs) = &app.arg else {
-                break;
-            };
-            let body = &abs.as_ref().body;
-            count += 1;
-            m = body;
-        }
-
-        count
-    }
-
-    // TODO: proof.rsにstruct Prop { inner: Term }を用意して、Propにgeneralizeとかguardとかcount_forallとかを実装したい。
-    pub fn generalize(&mut self, xs: &[Parameter]) {
-        static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall"));
-
-        self.abs_help(xs, 0);
-
-        let mut m = mem::take(self);
-        for x in xs.iter().rev() {
-            m = mk_abs(x.name, x.ty.clone(), m);
-            let mut c = mk_const(*FORALL, vec![x.ty.clone()], vec![]);
-            c.apply([m]);
-            m = c;
-        }
-        *self = m;
-    }
-
-    // ∀ x₁ ⋯ xₙ, m ↦ [x₁, ⋯ , xₙ]
-    // Fresh names are generated on the fly.
-    // Does not check ty_args of forall.
-    pub fn ungeneralize(&mut self) -> Vec<Parameter> {
-        let mut target = mem::take(self);
-        let mut acc = vec![];
-        while let Some((binder, body)) = target.ungeneralize1() {
-            acc.push(binder);
-            target = body;
-        }
-        *self = target;
-        acc
-    }
-
-    pub fn ungeneralize1(&self) -> Option<(Parameter, Term)> {
-        static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall"));
-
-        let Term::App(m) = self else {
-            return None;
-        };
-        let Term::Const(head) = &m.fun else {
-            return None;
-        };
-        if head.name != *FORALL {
-            return None;
-        }
-        let Term::Abs(abs) = &m.arg else {
-            return None;
-        };
-        let TermAbs {
-            binder_type,
-            binder_name,
-            body,
-        } = &**abs;
-        let name = Name::fresh_from(*binder_name);
-        let mut body = body.clone();
-        body.open(&mk_local(name));
-        let binder = Parameter {
-            name,
-            ty: binder_type.clone(),
-        };
-        Some((binder, body))
-    }
-
-    pub fn guard(&mut self, guards: impl IntoIterator<Item = Term>) {
-        self.guard_help(guards.into_iter())
-    }
-
-    fn guard_help(&mut self, mut guards: impl Iterator<Item = Term>) {
-        static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp"));
-
-        if let Some(guard) = guards.next() {
-            self.guard_help(guards);
-            let target = mem::take(self);
-            let mut m = mk_const(*IMP, vec![], vec![]);
-            m.apply([guard, target]);
-            *self = m;
-        }
-    }
-
-    pub fn unguard(&mut self) -> Vec<Term> {
-        let mut target = mem::take(self);
-        let mut acc = vec![];
-        while let Some((lhs, rhs)) = target.unguard1() {
-            acc.push(lhs);
-            target = rhs;
-        }
-        *self = target;
-        acc
-    }
-
-    pub fn unguard1(&self) -> Option<(Term, Term)> {
-        static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp"));
-
-        let Term::App(m) = self else {
-            return None;
-        };
-        let Term::App(n) = &m.fun else {
-            return None;
-        };
-        let Term::Const(head) = &n.fun else {
-            return None;
-        };
-        if head.name != *IMP {
-            return None;
-        }
-        Some((n.arg.clone(), m.arg.clone()))
     }
 
     pub fn subst_type(&mut self, subst: &[(Name, Type)]) {

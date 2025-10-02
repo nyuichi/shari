@@ -1,9 +1,143 @@
 //! Prove by type synthesis.
 
 use std::sync::LazyLock;
-use std::{collections::HashMap, iter::zip, sync::Arc};
+use std::{collections::HashMap, iter::zip, mem, sync::Arc};
 
-use crate::tt::{self, Class, Instance, Name, Parameter, Term, Type};
+use crate::tt::{
+    self, Class, Instance, Name, Parameter, Term, Type, mk_abs, mk_const, mk_local, mk_type_const,
+};
+
+pub fn mk_type_prop() -> Type {
+    static T_PROP: LazyLock<Type> = LazyLock::new(|| mk_type_const(Name::intern("Prop")));
+    T_PROP.clone()
+}
+
+pub fn count_forall(term: &Term) -> usize {
+    static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall"));
+
+    let mut count = 0;
+    let mut current = term;
+    loop {
+        let Term::App(app) = current else {
+            break;
+        };
+        let app = app.as_ref();
+        let Term::Const(head) = &app.fun else {
+            break;
+        };
+        if head.name != *FORALL {
+            break;
+        }
+        let Term::Abs(abs) = &app.arg else {
+            break;
+        };
+        let body = &abs.as_ref().body;
+        count += 1;
+        current = body;
+    }
+
+    count
+}
+
+pub fn generalize(term: &mut Term, xs: &[Parameter]) {
+    static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall"));
+
+    let locals = xs.iter().map(|x| x.name).collect::<Vec<_>>();
+    let mut result = term.pclose(&locals, 0);
+    for x in xs.iter().rev() {
+        result = mk_abs(x.name, x.ty.clone(), result);
+        let mut c = mk_const(*FORALL, vec![x.ty.clone()], vec![]);
+        c.apply([result]);
+        result = c;
+    }
+    *term = result;
+}
+
+pub fn ungeneralize(term: &mut Term) -> Vec<Parameter> {
+    let mut target = mem::take(term);
+    let mut acc = vec![];
+    while let Some((binder, body)) = ungeneralize1(&target) {
+        acc.push(binder);
+        target = body;
+    }
+    *term = target;
+    acc
+}
+
+pub fn ungeneralize1(term: &Term) -> Option<(Parameter, Term)> {
+    static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall"));
+
+    let Term::App(m) = term else {
+        return None;
+    };
+    let Term::Const(head) = &m.fun else {
+        return None;
+    };
+    if head.name != *FORALL {
+        return None;
+    }
+    let Term::Abs(abs) = &m.arg else {
+        return None;
+    };
+    let tt::TermAbs {
+        binder_type,
+        binder_name,
+        body,
+    } = &**abs;
+    let name = Name::fresh_from(*binder_name);
+    let mut body = body.clone();
+    body.open(&mk_local(name));
+    let binder = Parameter {
+        name,
+        ty: binder_type.clone(),
+    };
+    Some((binder, body))
+}
+
+pub fn guard(term: &mut Term, guards: impl IntoIterator<Item = Term>) {
+    guard_help(term, guards.into_iter());
+}
+
+fn guard_help(target: &mut Term, mut guards: impl Iterator<Item = Term>) {
+    static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp"));
+
+    if let Some(guard_term) = guards.next() {
+        guard_help(target, guards);
+        let inner = mem::take(target);
+        let mut m = mk_const(*IMP, vec![], vec![]);
+        m.apply([guard_term, inner]);
+        *target = m;
+    }
+}
+
+pub fn unguard(term: &mut Term) -> Vec<Term> {
+    let mut target = mem::take(term);
+    let mut acc = vec![];
+    while let Some((lhs, rhs)) = unguard1(&target) {
+        acc.push(lhs);
+        target = rhs;
+    }
+    *term = target;
+    acc
+}
+
+pub fn unguard1(term: &Term) -> Option<(Term, Term)> {
+    static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp"));
+
+    let Term::App(m) = term else {
+        return None;
+    };
+    let Term::App(n) = &m.fun else {
+        return None;
+    };
+    let Term::Const(head) = &n.fun else {
+        return None;
+    };
+    if head.name != *IMP {
+        return None;
+    }
+    Some((n.arg.clone(), m.arg.clone()))
+}
 
 /// p ::= «φ»
 ///     | assume φ, p
@@ -443,13 +577,13 @@ impl Env<'_> {
                 local_env.local_axioms.push(local_axiom.clone());
                 let mut target = self.infer_prop(tt_local_env, local_env, expr);
                 let p = local_env.local_axioms.pop().unwrap();
-                target.guard([p]);
+                guard(&mut target, [p]);
                 target
             }
             Expr::App(e) => {
                 let ExprApp { expr1, expr2 } = &**e;
                 let target = self.infer_prop(tt_local_env, local_env, expr1);
-                let Some((lhs, rhs)) = target.unguard1() else {
+                let Some((lhs, rhs)) = unguard1(&target) else {
                     panic!("implication expected, got {}", target);
                 };
                 self.check_prop(tt_local_env, local_env, expr2, &lhs);
@@ -471,13 +605,13 @@ impl Env<'_> {
                 tt_local_env.locals.push(param);
                 let mut target = self.infer_prop(tt_local_env, local_env, expr);
                 let x = tt_local_env.locals.pop().unwrap();
-                target.generalize(&[x]);
+                generalize(&mut target, &[x]);
                 target
             }
             Expr::Inst(e) => {
                 let ExprInst { expr, arg } = &**e;
                 let target = self.infer_prop(tt_local_env, local_env, expr);
-                let Some((Parameter { name, ty }, mut body)) = target.ungeneralize1() else {
+                let Some((Parameter { name, ty }, mut body)) = ungeneralize1(&target) else {
                     panic!("∀ expected, got {}", target);
                 };
                 self.tt_env.check_type(tt_local_env, arg, &ty);

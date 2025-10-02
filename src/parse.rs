@@ -7,12 +7,12 @@ use crate::cmd::{
     StructureAxiom, StructureConst, StructureField,
 };
 use crate::proof::{
-    Axiom, Expr, mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_change, mk_expr_const,
-    mk_expr_inst, mk_expr_take,
+    Axiom, Expr, count_forall, generalize, mk_expr_app, mk_expr_assume, mk_expr_assump,
+    mk_expr_change, mk_expr_const, mk_expr_inst, mk_expr_take, mk_type_prop,
 };
 use crate::tt::{
     Class, ClassType, Const, Instance, Kind, Name, Parameter, Term, Type, mk_const, mk_fresh_hole,
-    mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const, mk_type_local, mk_type_prop,
+    mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
 };
 
 use crate::lex::{Lex, LexError, SourceInfo, Token, TokenKind};
@@ -673,7 +673,7 @@ impl<'a> Parser<'a> {
         }
         let mut expr = mk_expr_const(name, ty_args, instances);
         if auto_inst {
-            for _ in 0..axiom_info.target.count_forall() {
+            for _ in 0..count_forall(&axiom_info.target) {
                 expr = mk_expr_inst(expr, self.mk_term_hole());
             }
         }
@@ -1147,7 +1147,7 @@ impl<'a> Parser<'a> {
         self.locals.truncate(self.locals.len() - params.len());
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
-        target.generalize(&params);
+        generalize(&mut target, &params);
         Ok(CmdAxiom {
             name,
             local_types,
@@ -1175,7 +1175,7 @@ impl<'a> Parser<'a> {
         self.locals.truncate(self.locals.len() - params.len());
         self.type_locals
             .truncate(self.type_locals.len() - local_types.len());
-        p.generalize(&params);
+        generalize(&mut p, &params);
         for param in params.into_iter().rev() {
             e = mk_expr_take(param.name, param.ty, e);
         }
@@ -1296,7 +1296,7 @@ impl<'a> Parser<'a> {
             self.expect_symbol(":")?;
             let mut target = self.term()?;
             self.locals.truncate(self.locals.len() - ctor_params.len());
-            target.generalize(&ctor_params);
+            generalize(&mut target, &ctor_params);
             ctors.push(Constructor {
                 name: ctor_name,
                 target,
@@ -1357,7 +1357,7 @@ impl<'a> Parser<'a> {
                     self.expect_symbol(":")?;
                     let mut target = self.term()?;
                     self.locals.truncate(self.locals.len() - params.len());
-                    target.generalize(&params);
+                    generalize(&mut target, &params);
                     fields.push(StructureField::Axiom(StructureAxiom {
                         name: field_name,
                         target,
@@ -1435,7 +1435,7 @@ impl<'a> Parser<'a> {
                     self.expect_symbol(":=")?;
                     let mut expr = self.expr()?;
                     self.locals.truncate(self.locals.len() - field_params.len());
-                    field_target.generalize(&field_params);
+                    generalize(&mut field_target, &field_params);
                     for field_param in field_params.into_iter().rev() {
                         expr = mk_expr_take(field_param.name, field_param.ty, expr);
                     }
@@ -1506,7 +1506,7 @@ impl<'a> Parser<'a> {
                     self.expect_symbol(":")?;
                     let mut target = self.term()?;
                     self.locals.truncate(self.locals.len() - params.len());
-                    target.generalize(&params);
+                    generalize(&mut target, &params);
                     fields.push(ClassStructureField::Axiom(ClassStructureAxiom {
                         name: field_name,
                         target,
@@ -1576,7 +1576,7 @@ impl<'a> Parser<'a> {
                     self.expect_symbol(":=")?;
                     let mut expr = self.expr()?;
                     self.locals.truncate(self.locals.len() - field_params.len());
-                    field_target.generalize(&field_params);
+                    generalize(&mut field_target, &field_params);
                     for field_param in field_params.into_iter().rev() {
                         expr = mk_expr_take(field_param.name, field_param.ty, expr);
                     }

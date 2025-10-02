@@ -11,12 +11,12 @@ use anyhow::{bail, ensure};
 use crate::{
     proof::{
         self, Axiom, Expr, ExprApp, ExprAssume, ExprAssump, ExprChange, ExprConst, ExprInst,
-        ExprTake, mk_expr_change,
+        ExprTake, generalize, guard, mk_expr_change, mk_type_prop, ungeneralize1, unguard1,
     },
     tt::{
         self, Class, ClassInstance, ClassType, Const, Instance, InstanceGlobal, Kind, LocalEnv,
         Name, Parameter, Term, TermAbs, TermApp, TermConst, Type, TypeApp, TypeArrow, mk_const,
-        mk_fresh_type_hole, mk_hole, mk_instance_global, mk_local, mk_type_arrow, mk_type_prop,
+        mk_fresh_type_hole, mk_hole, mk_instance_global, mk_local, mk_type_arrow,
     },
 };
 
@@ -434,7 +434,7 @@ impl<'a> Elaborator<'a> {
                 self.local_axioms.push(local_axiom.clone());
                 let mut target = self.visit_expr(expr)?;
                 let p = self.local_axioms.pop().unwrap();
-                target.guard([p]);
+                guard(&mut target, [p]);
 
                 Ok(target)
             }
@@ -444,7 +444,7 @@ impl<'a> Elaborator<'a> {
                 let fun = self.visit_expr(expr1)?;
                 let arg = self.visit_expr(expr2)?;
 
-                if let Some((lhs, rhs)) = fun.unguard1() {
+                if let Some((lhs, rhs)) = unguard1(&fun) {
                     let error = Error::Visit(format!(
                         "argument proposition mismatch: expected {}, but got {}",
                         lhs, arg
@@ -459,7 +459,7 @@ impl<'a> Elaborator<'a> {
                 let ret = self.mk_term_hole(mk_type_prop());
 
                 let mut target = ret.clone();
-                target.guard([arg]);
+                guard(&mut target, [arg]);
                 self.push_term_constraint(
                     self.tt_local_env.clone(),
                     fun,
@@ -491,7 +491,7 @@ impl<'a> Elaborator<'a> {
                 let mut target = self.visit_expr(expr)?;
                 let x = self.tt_local_env.locals.pop().unwrap();
 
-                target.generalize(&[x]);
+                generalize(&mut target, &[x]);
 
                 Ok(target)
             }
@@ -501,7 +501,7 @@ impl<'a> Elaborator<'a> {
                 let forall = self.visit_expr(expr)?;
                 let arg_ty = self.visit_term(arg)?;
 
-                if let Some((binder, mut body)) = forall.ungeneralize1() {
+                if let Some((binder, mut body)) = ungeneralize1(&forall) {
                     let error = Error::Visit(format!(
                         "type argument mismatch: expected {}, but got {}",
                         binder.ty, arg_ty
@@ -2353,10 +2353,11 @@ mod tests {
     use super::*;
     use crate::{
         proof,
+        proof::mk_type_prop,
         tt::{
             self, ClassInstance, ClassType, Const, Delta, Kappa, Kind, Name, Parameter, mk_abs,
             mk_app, mk_const, mk_hole, mk_local, mk_type_app, mk_type_arrow, mk_type_const,
-            mk_type_local, mk_type_prop, mk_var,
+            mk_type_local, mk_var,
         },
     };
     use std::collections::HashMap;
