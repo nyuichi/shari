@@ -833,14 +833,14 @@ impl<'a> Elaborator<'a> {
 
     // Performs instantiation one step.
     // Note that the result term may contain redex in head
-    fn inst_head(&self, m: &mut Term) -> bool {
-        if let Term::Hole(m_head) = m.head() {
-            if let Some(target) = self.subst_map.get(&m_head.name) {
-                *m.head_mut() = target.clone();
-                return true;
-            }
-        }
-        false
+    fn inst_head(&self, m: &Term) -> Option<Term> {
+        let Term::Hole(m_head) = m.head() else {
+            return None;
+        };
+        let Some(target) = self.subst_map.get(&m_head.name) else {
+            return None;
+        };
+        Some(target.clone().apply(m.args().into_iter().cloned()))
     }
 
     fn inst_type_head(&self, ty: &Type) -> Option<Type> {
@@ -862,20 +862,39 @@ impl<'a> Elaborator<'a> {
     }
 
     // TODO: rename to try_reduce_to_pattern or something.
-    fn inst_arg_head(&self, m: &mut Term) {
-        for arg in m.args_mut() {
-            let new_arg = arg.whnf();
-            if let Some(new_arg) = new_arg {
-                *arg = new_arg;
+    fn inst_arg_head(&self, m: &Term) -> Term {
+        let args = m.args();
+        if args.is_empty() {
+            return m.clone();
+        }
+        let mut changed = false;
+        let mut new_args = Vec::with_capacity(args.len());
+        for arg in args {
+            let mut current = arg.clone();
+            if let Some(reduced) = current.whnf() {
+                current = reduced;
+                changed = true;
             }
-            while self.inst_head(arg) {
-                let new_arg = arg.whnf();
-                match new_arg {
-                    Some(reduced) => *arg = reduced,
+            loop {
+                match self.inst_head(&current) {
+                    Some(instantiated) => {
+                        current = instantiated;
+                        changed = true;
+                        if let Some(reduced) = current.whnf() {
+                            current = reduced;
+                        } else {
+                            break;
+                        }
+                    }
                     None => break,
                 }
             }
+            new_args.push(current);
         }
+        if !changed {
+            return m.clone();
+        }
+        m.head().clone().apply(new_args)
     }
 
     fn fully_inst(&self, m: &mut Term) {
@@ -1082,8 +1101,8 @@ impl<'a> Elaborator<'a> {
         mut right: Term,
         error: Error,
     ) {
-        self.inst_arg_head(&mut left);
-        self.inst_arg_head(&mut right);
+        left = self.inst_arg_head(&left);
+        right = self.inst_arg_head(&right);
         let kind;
         if left.is_quasi_pattern() {
             kind = ConstraintKind::QuasiPattern;
@@ -1395,7 +1414,15 @@ impl<'a> Elaborator<'a> {
             self.push_term_constraint(local_env, left, right, error);
             return None;
         }
-        if self.inst_head(&mut left) || self.inst_head(&mut right) {
+        let new_left = self.inst_head(&left);
+        let new_right = self.inst_head(&right);
+        if new_left.is_some() || new_right.is_some() {
+            if let Some(term) = new_left {
+                left = term;
+            }
+            if let Some(term) = new_right {
+                right = term;
+            }
             self.push_term_constraint(local_env, left, right, error);
             return None;
         }
@@ -1461,7 +1488,7 @@ impl<'a> Elaborator<'a> {
         // then each of the heads can be a local, a const, or a hole
         if let Term::Hole(right_head) = right.head() {
             let right_head = right_head.name;
-            self.inst_arg_head(&mut right);
+            right = self.inst_arg_head(&right);
             if let Some(args) = right.is_pattern() {
                 if self.occur_check(&left, right_head) && left.is_supported_by(&args) {
                     let binders = args
@@ -1479,7 +1506,7 @@ impl<'a> Elaborator<'a> {
         }
         if let Term::Hole(left_head) = left.head() {
             let left_head = left_head.name;
-            self.inst_arg_head(&mut left);
+            left = self.inst_arg_head(&left);
             if let Some(args) = left.is_pattern() {
                 if self.occur_check(&right, left_head) && right.is_supported_by(&args) {
                     let binders = args

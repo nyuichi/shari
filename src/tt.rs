@@ -1095,21 +1095,6 @@ impl Term {
         args
     }
 
-    pub fn args_mut(&mut self) -> Vec<&mut Term> {
-        if self.is_abs() {
-            return vec![];
-        }
-        let mut m = self;
-        let mut args = vec![];
-        while let Self::App(inner) = m {
-            let TermApp { fun, arg } = Arc::make_mut(inner);
-            m = fun;
-            args.push(arg);
-        }
-        args.reverse();
-        args
-    }
-
     pub fn is_abs(&self) -> bool {
         matches!(self, Term::Abs(_))
     }
