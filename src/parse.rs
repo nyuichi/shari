@@ -481,7 +481,7 @@ impl<'a> Parser<'a> {
         }
         let mut m = self.subterm(0)?;
         self.locals.truncate(self.locals.len() - binders.len());
-        m.abs(&binders);
+        m = m.abs(&binders);
         Ok(m)
     }
 
@@ -505,7 +505,7 @@ impl<'a> Parser<'a> {
         let mut m = self.subterm(0)?;
         self.locals.truncate(self.locals.len() - binders.len());
         for x in binders.into_iter().rev() {
-            m.abs(slice::from_ref(&x));
+            m = m.abs(slice::from_ref(&x));
             let f = mem::take(&mut m);
             m = mk_const(Name::intern(binder), vec![x.ty], vec![]);
             m = m.apply(vec![f]);
@@ -526,7 +526,7 @@ impl<'a> Parser<'a> {
         self.locals.push(x.name);
         let mut m = self.subterm(0)?;
         self.locals.pop();
-        m.abs(&[x]);
+        m = m.abs(&[x]);
         self.expect_symbol("}")?;
         Ok(m)
     }
@@ -1119,7 +1119,7 @@ impl<'a> Parser<'a> {
             .truncate(self.type_locals.len() - local_types.len());
         for param in params.into_iter().rev() {
             t = t.arrow([param.ty.clone()]);
-            m.abs(&[param]);
+            m = m.abs(&[param]);
         }
         Ok(CmdDef {
             name,
@@ -1412,7 +1412,7 @@ impl<'a> Parser<'a> {
                     self.locals.truncate(self.locals.len() - field_params.len());
                     for field_param in field_params.into_iter().rev() {
                         field_ty = field_ty.arrow([field_param.ty.clone()]);
-                        field_target.abs(&[field_param]);
+                        field_target = field_target.abs(&[field_param]);
                     }
                     fields.push(InstanceField::Def(InstanceDef {
                         name: field_name,
@@ -1556,7 +1556,7 @@ impl<'a> Parser<'a> {
                     self.locals.truncate(self.locals.len() - field_params.len());
                     for field_param in field_params.into_iter().rev() {
                         field_ty = field_ty.arrow([field_param.ty.clone()]);
-                        field_target.abs(&[field_param]);
+                        field_target = field_target.abs(&[field_param]);
                     }
                     fields.push(ClassInstanceField::Def(ClassInstanceDef {
                         name: field_name,

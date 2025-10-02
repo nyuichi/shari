@@ -1198,16 +1198,14 @@ impl Term {
         fun
     }
 
-    // assert_eq!(self, "m");
-    // self.abs(&[x, y]);
-    // assert_eq!(self, "λ x y, m");
-    pub fn abs(&mut self, xs: &[Parameter]) {
+    /// Returns the abstraction `λ xs, self`.
+    pub fn abs(&self, xs: &[Parameter]) -> Term {
         let locals = xs.iter().map(|x| x.name).collect::<Vec<_>>();
         let mut m = self.pclose(&locals, 0);
         for x in xs.iter().rev() {
             m = mk_abs(x.name, x.ty.clone(), m);
         }
-        *self = m;
+        m
     }
 
     pub fn subst_type(&self, subst: &[(Name, Type)]) -> Term {

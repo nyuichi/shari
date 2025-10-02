@@ -518,7 +518,7 @@ impl<'a> Elaborator<'a> {
                 };
                 let mut pred = hole.clone();
                 pred = pred.apply([mk_local(x.name)]);
-                pred.abs(&[x]);
+                pred = pred.abs(&[x]);
 
                 let mut target = mk_const(Name::intern("forall"), vec![arg_ty.clone()], vec![]);
                 target = target.apply([pred]);
@@ -1456,7 +1456,7 @@ impl<'a> Elaborator<'a> {
                             ty: local_env.get_local(arg).unwrap().clone(),
                         })
                         .collect::<Vec<_>>();
-                    left.abs(&binders);
+                    left = left.abs(&binders);
                     self.add_subst(right_head, left, error);
                     return None;
                 }
@@ -1474,7 +1474,7 @@ impl<'a> Elaborator<'a> {
                             ty: local_env.get_local(arg).unwrap().clone(),
                         })
                         .collect::<Vec<_>>();
-                    right.abs(&binders);
+                    right = right.abs(&binders);
                     self.add_subst(left_head, right, error);
                     return None;
                 }
@@ -1990,7 +1990,7 @@ impl<'a> Elaborator<'a> {
             // TODO: try eta equal condidates when the hole ?M is used twice or more among the whole set of constraints.
             let mut target = mk_local(z.name);
             target = target.apply(new_args);
-            target.abs(&new_binders);
+            target = target.abs(&new_binders);
             nodes.push(Node {
                 subst: vec![(left_head, target, c.error.clone())],
                 type_constraints: vec![(t, left_ty.clone(), c.error.clone())],
@@ -2060,7 +2060,7 @@ impl<'a> Elaborator<'a> {
             // TODO: try eta equal condidates when the hole ?M is used twice or more among the whole set of constraints.
             let mut target = right_head.clone();
             target = target.apply(new_args);
-            target.abs(&new_binders);
+            target = target.abs(&new_binders);
             nodes.push(Node {
                 subst: vec![(left_head, target, c.error.clone())],
                 type_constraints: vec![],
@@ -2206,7 +2206,7 @@ impl<'a> Elaborator<'a> {
                 vec![goal.clone()],
                 vec![instance],
             );
-            m.abs(&binders);
+            m = m.abs(&binders);
             return Some(m);
         }
         for (name, fact) in &facts {
@@ -2223,7 +2223,7 @@ impl<'a> Elaborator<'a> {
                 if args.len() == xs.len() {
                     let mut m = mk_local(*name);
                     m = m.apply(args);
-                    m.abs(&binders);
+                    m = m.abs(&binders);
                     return Some(m);
                 }
             }

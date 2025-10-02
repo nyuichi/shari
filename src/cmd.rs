@@ -1205,7 +1205,7 @@ impl Eval {
                 a = a.apply(binders.iter().map(|x| mk_local(x.name)));
                 m = m.apply([a]);
                 m = m.apply(cont_params.iter().map(|&k| mk_local(k)));
-                m.abs(&binders);
+                m = m.abs(&binders);
                 target = target.apply([m]);
             }
 
@@ -1242,7 +1242,7 @@ impl Eval {
             lhs = lhs.apply([lhs_arg]);
 
             let mut rhs = rhs_body;
-            rhs.abs(&rhs_binders);
+            rhs = rhs.abs(&rhs_binders);
 
             let eq_ty = mk_type_local(rec_ty_var).arrow(cont_param_tys.clone());
 
@@ -1650,10 +1650,10 @@ impl Eval {
                     );
                     target = target.apply([mk_local(this.name), {
                         let mut target = mk_local(field.name);
-                        target.abs(&const_fields);
+                        target = target.abs(&const_fields);
                         target
                     }]);
-                    target.abs(slice::from_ref(&this));
+                    target = target.abs(slice::from_ref(&this));
                     self.add_delta(fullname, target);
 
                     // rep ↦ inhab.rep.{u} this
@@ -1727,7 +1727,7 @@ impl Eval {
                     conj
                 })
                 .unwrap_or_else(|| mk_const(Name::intern("true"), vec![], vec![]));
-            char.abs(slice::from_ref(&this));
+            char = char.abs(slice::from_ref(&this));
             char
         }]);
         abs = guard(&abs, guards);
@@ -1946,7 +1946,7 @@ impl Eval {
                     );
                     let target = {
                         let mut m = target.clone();
-                        m.abs(&params);
+                        m = m.abs(&params);
                         m
                     };
                     self.add_delta(fullname, target);
@@ -2042,7 +2042,7 @@ impl Eval {
             }
             InstanceField::Lemma(_) => None,
         }));
-        right.abs(slice::from_ref(&f));
+        right = right.abs(slice::from_ref(&f));
         let mut target = mk_const(
             Name::intern("eq"),
             vec![{ mk_type_local(ret_ty).arrow([f.ty.clone()]) }],
