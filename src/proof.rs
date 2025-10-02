@@ -47,7 +47,7 @@ pub fn generalize(term: &Term, xs: &[Parameter]) -> Term {
     for x in xs.iter().rev() {
         result = mk_abs(x.name, x.ty.clone(), result);
         let mut c = mk_const(*FORALL, vec![x.ty.clone()], vec![]);
-        c.apply([result]);
+        c = c.apply([result]);
         result = c;
     }
     result
@@ -102,7 +102,7 @@ fn guard_help(target: Term, mut guards: impl Iterator<Item = Term>) -> Term {
     if let Some(guard_term) = guards.next() {
         let inner = guard_help(target, guards);
         let mut m = mk_const(*IMP, vec![], vec![]);
-        m.apply([guard_term, inner]);
+        m = m.apply([guard_term, inner]);
         m
     } else {
         target

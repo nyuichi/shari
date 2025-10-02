@@ -1098,9 +1098,9 @@ impl Eval {
                 }
                 // ∀ xs, P (a xs)
                 let mut a = mk_local(arg.name);
-                a.apply(xs.iter().map(|x| mk_local(x.name)));
+                a = a.apply(xs.iter().map(|x| mk_local(x.name)));
                 let mut h = mk_local(motive.name);
-                h.apply([a]);
+                h = h.apply([a]);
                 h = generalize(&h, &xs);
                 ih_list.push(h);
             }
@@ -1111,9 +1111,9 @@ impl Eval {
                 local_types.iter().map(|t| mk_type_local(*t)).collect(),
                 vec![],
             );
-            a.apply(args.iter().map(|arg| mk_local(arg.name)));
+            a = a.apply(args.iter().map(|arg| mk_local(arg.name)));
             let mut target = mk_local(motive.name);
-            target.apply([a]);
+            target = target.apply([a]);
             target = guard(&target, ih_list);
             for arg in &mut args {
                 arg.ty = arg.ty.subst(&subst);
@@ -1127,7 +1127,7 @@ impl Eval {
             ty: target_ty.clone(),
         };
         let mut target = mk_local(motive.name);
-        target.apply([mk_local(x.name)]);
+        target = target.apply([mk_local(x.name)]);
         target = guard(&target, guards);
         target = generalize(&target, &[x, motive]);
         self.add_axiom(ind_name, local_types.clone(), vec![], target);
@@ -1177,7 +1177,7 @@ impl Eval {
             // pass the constructor arguments through
             for param in ctor_params {
                 cont_arg_tys.push(param.ty.clone());
-                target.apply([mk_local(param.name)]);
+                target = target.apply([mk_local(param.name)]);
             }
             // stepping
             let (ctor_arg_tys, _) = ctor.ty.unarrow();
@@ -1202,11 +1202,11 @@ impl Eval {
                     vec![],
                 );
                 let mut a = mk_local(param.name);
-                a.apply(binders.iter().map(|x| mk_local(x.name)));
-                m.apply([a]);
-                m.apply(cont_params.iter().map(|&k| mk_local(k)));
+                a = a.apply(binders.iter().map(|x| mk_local(x.name)));
+                m = m.apply([a]);
+                m = m.apply(cont_params.iter().map(|&k| mk_local(k)));
                 m.abs(&binders);
-                target.apply([m]);
+                target = target.apply([m]);
             }
 
             let cont_param_ty = mk_type_local(rec_ty_var).arrow(cont_arg_tys);
@@ -1238,8 +1238,8 @@ impl Eval {
                 local_types.iter().map(|t| mk_type_local(*t)).collect(),
                 vec![],
             );
-            lhs_arg.apply(ctor_params.iter().map(|x| mk_local(x.name)));
-            lhs.apply([lhs_arg]);
+            lhs_arg = lhs_arg.apply(ctor_params.iter().map(|x| mk_local(x.name)));
+            lhs = lhs.apply([lhs_arg]);
 
             let mut rhs = rhs_body;
             rhs.abs(&rhs_binders);
@@ -1247,7 +1247,7 @@ impl Eval {
             let eq_ty = mk_type_local(rec_ty_var).arrow(cont_param_tys.clone());
 
             let mut spec = mk_const(Name::intern("eq"), vec![eq_ty], vec![]);
-            spec.apply([lhs, rhs]);
+            spec = spec.apply([lhs, rhs]);
             spec = generalize(&spec, &ctor_params);
 
             let ctor_spec_name = Name::intern(&format!("{}.spec", ctor_name));
@@ -1417,7 +1417,7 @@ impl Eval {
                     .collect(),
                 vec![],
             );
-            stash.apply(params.iter().map(|param| mk_local(param.name)));
+            stash = stash.apply(params.iter().map(|param| mk_local(param.name)));
             let subst = [(name, stash)];
             let new_target = target.subst(&subst);
             target = new_target;
@@ -1443,7 +1443,7 @@ impl Eval {
         };
         // C w
         let mut target = mk_local(motive.name);
-        target.apply(indexes.iter().map(|index| mk_local(index.name)));
+        target = target.apply(indexes.iter().map(|index| mk_local(index.name)));
         let mut guards = vec![];
         // (∀ y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N) → C w
         for (ctor_params, (mut ctor_args, (ctor_target, mut ctor_ind_args))) in zip(
@@ -1475,7 +1475,7 @@ impl Eval {
                     .collect(),
                 vec![],
             );
-            stash.apply(params.iter().map(|param| mk_local(param.name)));
+            stash = stash.apply(params.iter().map(|param| mk_local(param.name)));
             let subst = [(name, stash)];
 
             // φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
@@ -1500,8 +1500,8 @@ impl Eval {
                 .collect(),
             vec![],
         );
-        p.apply(params.iter().map(|param| mk_local(param.name)));
-        p.apply(indexes.iter().map(|index| mk_local(index.name)));
+        p = p.apply(params.iter().map(|param| mk_local(param.name)));
+        p = p.apply(indexes.iter().map(|index| mk_local(index.name)));
         target = guard(&target, [p]);
 
         target = generalize(&target, &[motive]);
@@ -1648,7 +1648,7 @@ impl Eval {
                             .collect(),
                         vec![],
                     );
-                    target.apply([mk_local(this.name), {
+                    target = target.apply([mk_local(this.name), {
                         let mut target = mk_local(field.name);
                         target.abs(&const_fields);
                         target
@@ -1662,7 +1662,7 @@ impl Eval {
                         local_types.iter().map(|&x| mk_type_local(x)).collect(),
                         vec![],
                     );
-                    target.apply([mk_local(this.name)]);
+                    target = target.apply([mk_local(this.name)]);
                     subst.push((field.name, target));
                 }
                 StructureField::Axiom(field) => {
@@ -1697,11 +1697,11 @@ impl Eval {
                         local_types.iter().map(|x| mk_type_local(*x)).collect(),
                         vec![],
                     );
-                    rhs.apply([mk_local(this.name)]);
+                    rhs = rhs.apply([mk_local(this.name)]);
 
                     // s = inhab.rep this
                     let mut char = mk_const(Name::intern("eq"), vec![field.ty.clone()], vec![]);
-                    char.apply([mk_local(param.name), rhs]);
+                    char = char.apply([mk_local(param.name), rhs]);
                     chars.push(char);
 
                     // rep ↦ s
@@ -1718,12 +1718,12 @@ impl Eval {
             }
         }
         let mut abs = mk_const(Name::intern("exists"), vec![this.ty.clone()], vec![]);
-        abs.apply([{
+        abs = abs.apply([{
             let mut char = chars
                 .into_iter()
                 .reduce(|left, right| {
                     let mut conj = mk_const(Name::intern("and"), vec![], vec![]);
-                    conj.apply([left, right]);
+                    conj = conj.apply([left, right]);
                     conj
                 })
                 .unwrap_or_else(|| mk_const(Name::intern("true"), vec![], vec![]));
@@ -1754,16 +1754,16 @@ impl Eval {
             );
 
             let mut lhs = proj.clone();
-            lhs.apply([mk_local(this1.name)]);
+            lhs = lhs.apply([mk_local(this1.name)]);
             let mut rhs = proj;
-            rhs.apply([mk_local(this2.name)]);
+            rhs = rhs.apply([mk_local(this2.name)]);
 
             let mut guard = mk_const(Name::intern("eq"), vec![field.ty.clone()], vec![]);
-            guard.apply([lhs, rhs]);
+            guard = guard.apply([lhs, rhs]);
             guards.push(guard);
         }
         let mut target = mk_const(Name::intern("eq"), vec![this.ty.clone()], vec![]);
-        target.apply([mk_local(this1.name), mk_local(this2.name)]);
+        target = target.apply([mk_local(this1.name), mk_local(this2.name)]);
         target = guard(&target, guards);
         target = generalize(&target, &[this1, this2]);
         self.add_axiom(ext_name, local_types.clone(), vec![], target);
@@ -1960,7 +1960,7 @@ impl Eval {
                             .map(|c| mk_instance_local(c.clone()))
                             .collect(),
                     );
-                    target.apply(params.iter().map(|param| mk_local(param.name)));
+                    target = target.apply(params.iter().map(|param| mk_local(param.name)));
                     subst.push((field_name, target));
                 }
                 InstanceField::Lemma(field) => {
@@ -2010,7 +2010,7 @@ impl Eval {
                 .collect(),
             vec![],
         );
-        left.apply([{
+        left = left.apply([{
             let mut target = mk_const(
                 name,
                 local_types.iter().map(|&x| mk_type_local(x)).collect(),
@@ -2019,7 +2019,7 @@ impl Eval {
                     .map(|c| mk_instance_local(c.clone()))
                     .collect(),
             );
-            target.apply(params.iter().map(|param| mk_local(param.name)));
+            target = target.apply(params.iter().map(|param| mk_local(param.name)));
             target
         }]);
         let f = Parameter {
@@ -2030,14 +2030,14 @@ impl Eval {
             })),
         };
         let mut right = mk_local(f.name);
-        right.apply(fields.iter().filter_map(|field| match field {
+        right = right.apply(fields.iter().filter_map(|field| match field {
             InstanceField::Def(field) => {
                 let mut target = mk_const(
                     Name::intern(&format!("{}.{}", name, field.name)),
                     local_types.iter().map(|&x| mk_type_local(x)).collect(),
                     vec![],
                 );
-                target.apply(params.iter().map(|param| mk_local(param.name)));
+                target = target.apply(params.iter().map(|param| mk_local(param.name)));
                 Some(target)
             }
             InstanceField::Lemma(_) => None,
@@ -2048,7 +2048,7 @@ impl Eval {
             vec![{ mk_type_local(ret_ty).arrow([f.ty.clone()]) }],
             vec![],
         );
-        target.apply([left, right]);
+        target = target.apply([left, right]);
         target = generalize(&target, &params);
         let mut local_types = local_types.clone();
         local_types.push(ret_ty);

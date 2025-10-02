@@ -508,7 +508,7 @@ impl<'a> Parser<'a> {
             m.abs(slice::from_ref(&x));
             let f = mem::take(&mut m);
             m = mk_const(Name::intern(binder), vec![x.ty], vec![]);
-            m.apply(vec![f]);
+            m = m.apply(vec![f]);
         }
         Ok(m)
     }
@@ -590,7 +590,7 @@ impl<'a> Parser<'a> {
                 Fixity::Prefix => {
                     let mut fun = self.term_var(token, Some(op.entity))?;
                     let arg = self.subterm(op.prec)?;
-                    fun.apply(vec![arg]);
+                    fun = fun.apply(vec![arg]);
                     fun
                 }
                 Fixity::Infix | Fixity::Infixl | Fixity::Infixr => unreachable!(),
@@ -611,7 +611,7 @@ impl<'a> Parser<'a> {
             match led {
                 Led::App => {
                     let right = self.subterm(led.prec())?;
-                    left.apply(vec![right]);
+                    left = left.apply(vec![right]);
                 }
                 Led::User(op) => {
                     let prec = match op.fixity {
@@ -622,7 +622,7 @@ impl<'a> Parser<'a> {
                     self.advance();
                     let mut fun = self.term_var(token, Some(op.entity))?;
                     let right = self.subterm(prec)?;
-                    fun.apply(vec![left, right]);
+                    fun = fun.apply(vec![left, right]);
                     left = fun;
                 }
             }
@@ -637,7 +637,7 @@ impl<'a> Parser<'a> {
             unreachable!()
         };
         self.holes.push((inner.name, mk_fresh_type_hole()));
-        hole.apply(self.locals.iter().map(|name| mk_local(*name)));
+        hole = hole.apply(self.locals.iter().map(|name| mk_local(*name)));
 
         hole
     }
@@ -686,7 +686,7 @@ impl<'a> Parser<'a> {
 
     fn mk_eq(lhs: Term, rhs: Term) -> Term {
         let mut eq = mk_const(Name::intern("eq"), vec![mk_fresh_type_hole()], vec![]);
-        eq.apply([lhs, rhs]);
+        eq = eq.apply([lhs, rhs]);
         eq
     }
 

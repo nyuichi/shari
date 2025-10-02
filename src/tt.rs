@@ -257,19 +257,6 @@ impl Type {
         fun
     }
 
-    #[allow(unused)]
-    #[deprecated(note = "left for future use")]
-    pub fn unapply(&self) -> (Type, Vec<Type>) {
-        let mut args = vec![];
-        let mut current = self;
-        while let Type::App(inner) = current {
-            args.push(inner.arg.clone());
-            current = &inner.fun;
-        }
-        args.reverse();
-        (current.clone(), args)
-    }
-
     /// Simultaneously substitute `t₁ ⋯ tₙ` for locals with names `x₁ ⋯ xₙ`.
     pub fn subst(&self, subst: &[(Name, Type)]) -> Type {
         match self {
@@ -1119,9 +1106,6 @@ impl Term {
     }
 
     pub fn args(&self) -> Vec<&Term> {
-        if self.is_abs() {
-            return vec![];
-        }
         let mut m = self;
         let mut args = vec![];
         while let Self::App(inner) = m {
@@ -1205,30 +1189,13 @@ impl Term {
         }
     }
 
-    /// m.apply([l₁ ⋯ lₙ])
-    /// assert(self = m l₁ ⋯ lₙ)
-    pub fn apply(&mut self, args: impl IntoIterator<Item = Term>) {
-        let mut m = mem::take(self);
+    /// Returns the application `self l₁ ⋯ lₙ`.
+    pub fn apply(&self, args: impl IntoIterator<Item = Term>) -> Term {
+        let mut fun = self.clone();
         for arg in args {
-            m = mk_app(m, arg);
+            fun = mk_app(fun, arg);
         }
-        *self = m;
-    }
-
-    /// m = n l*
-    /// m.unapply() // => l*
-    /// assert(m = n)
-    pub fn unapply(&mut self) -> Vec<Term> {
-        let mut args = vec![];
-        let mut m = &mut *self;
-        while let Self::App(inner) = m {
-            let inner = Arc::make_mut(inner);
-            args.push(mem::take(&mut inner.arg));
-            m = &mut inner.fun;
-        }
-        *self = mem::take(m);
-        args.reverse();
-        args
+        fun
     }
 
     // assert_eq!(self, "m");

@@ -222,7 +222,7 @@ impl<'a> Elaborator<'a> {
         let hole = Name::fresh();
         self.term_holes.push((hole, hole_ty));
         let mut target = mk_hole(hole);
-        target.apply(
+        target = target.apply(
             self.tt_local_env
                 .locals
                 .iter()
@@ -517,11 +517,11 @@ impl<'a> Elaborator<'a> {
                     ty: arg_ty.clone(),
                 };
                 let mut pred = hole.clone();
-                pred.apply([mk_local(x.name)]);
+                pred = pred.apply([mk_local(x.name)]);
                 pred.abs(&[x]);
 
                 let mut target = mk_const(Name::intern("forall"), vec![arg_ty.clone()], vec![]);
-                target.apply([pred]);
+                target = target.apply([pred]);
                 self.push_term_constraint(
                     self.tt_local_env.clone(),
                     forall,
@@ -532,7 +532,7 @@ impl<'a> Elaborator<'a> {
                 *expr = mk_expr_change(target, mem::take(expr));
 
                 let mut ret = hole;
-                ret.apply([arg.clone()]);
+                ret = ret.apply([arg.clone()]);
                 Ok(ret)
             }
             Expr::Const(e) => {
@@ -1435,7 +1435,7 @@ impl<'a> Elaborator<'a> {
                     ty: right_binder_type,
                 };
                 let right = right_body.popen(&[mk_local(x.name)], 0);
-                left.apply([mk_local(x.name)]);
+                left = left.apply([mk_local(x.name)]);
                 local_env.locals.push(x);
                 self.push_term_constraint(local_env, left, right, error);
                 return None;
@@ -1489,13 +1489,18 @@ impl<'a> Elaborator<'a> {
             if left_head.name != right_head.name {
                 return Some(error);
             }
-            let left_args = left.unapply();
-            let right_args = right.unapply();
+            let left_args = left.args();
+            let right_args = right.args();
             if left_args.len() != right_args.len() {
                 return Some(error);
             }
             for (left_arg, right_arg) in left_args.into_iter().zip(right_args.into_iter()).rev() {
-                self.push_term_constraint(local_env.clone(), left_arg, right_arg, error.clone());
+                self.push_term_constraint(
+                    local_env.clone(),
+                    left_arg.clone(),
+                    right_arg.clone(),
+                    error.clone(),
+                );
             }
             return None;
         }
@@ -1558,13 +1563,18 @@ impl<'a> Elaborator<'a> {
             for (t1, t2) in left_head.ty_args.iter().zip(right_head.ty_args.iter()) {
                 self.push_type_constraint(t1.clone(), t2.clone(), error.clone());
             }
-            let left_args = left.unapply();
-            let right_args = right.unapply();
+            let left_args = left.args();
+            let right_args = right.args();
             if left_args.len() != right_args.len() {
                 return Some(error);
             }
             for (left_arg, right_arg) in left_args.into_iter().zip(right_args.into_iter()).rev() {
-                self.push_term_constraint(local_env.clone(), left_arg, right_arg, error.clone());
+                self.push_term_constraint(
+                    local_env.clone(),
+                    left_arg.clone(),
+                    right_arg.clone(),
+                    error.clone(),
+                );
             }
             return None;
         }
@@ -1972,14 +1982,14 @@ impl<'a> Elaborator<'a> {
                 .iter()
                 .map(|&(hole, _)| {
                     let mut arg = mk_hole(hole);
-                    arg.apply(new_binders.iter().map(|z| mk_local(z.name)));
+                    arg = arg.apply(new_binders.iter().map(|z| mk_local(z.name)));
                     arg
                 })
                 .collect::<Vec<_>>();
 
             // TODO: try eta equal condidates when the hole ?M is used twice or more among the whole set of constraints.
             let mut target = mk_local(z.name);
-            target.apply(new_args);
+            target = target.apply(new_args);
             target.abs(&new_binders);
             nodes.push(Node {
                 subst: vec![(left_head, target, c.error.clone())],
@@ -2042,14 +2052,14 @@ impl<'a> Elaborator<'a> {
                 .iter()
                 .map(|&(hole, _)| {
                     let mut arg = mk_hole(hole);
-                    arg.apply(new_binders.iter().map(|z| mk_local(z.name)));
+                    arg = arg.apply(new_binders.iter().map(|z| mk_local(z.name)));
                     arg
                 })
                 .collect::<Vec<_>>();
 
             // TODO: try eta equal condidates when the hole ?M is used twice or more among the whole set of constraints.
             let mut target = right_head.clone();
-            target.apply(new_args);
+            target = target.apply(new_args);
             target.abs(&new_binders);
             nodes.push(Node {
                 subst: vec![(left_head, target, c.error.clone())],
@@ -2212,7 +2222,7 @@ impl<'a> Elaborator<'a> {
                 }
                 if args.len() == xs.len() {
                     let mut m = mk_local(*name);
-                    m.apply(args);
+                    m = m.apply(args);
                     m.abs(&binders);
                     return Some(m);
                 }
