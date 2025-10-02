@@ -1425,7 +1425,8 @@ impl<'a> Elaborator<'a> {
                         return None;
                     }
                 }
-                if self.proof_env.tt_env.unfold_head(&mut left) {
+                if let Some(new_left) = self.proof_env.tt_env.unfold_head(&left) {
+                    left = new_left;
                     self.push_term_constraint(local_env, left, right, error);
                     return None;
                 } else {
@@ -1544,7 +1545,8 @@ impl<'a> Elaborator<'a> {
             if !right.contains_local(left_head.name) {
                 return Some(error);
             }
-            if self.proof_env.tt_env.unfold_head(&mut right) {
+            if let Some(new_right) = self.proof_env.tt_env.unfold_head(&right) {
+                right = new_right;
                 self.push_term_constraint(local_env, left, right, error);
                 return None;
             }
@@ -1560,7 +1562,8 @@ impl<'a> Elaborator<'a> {
                 self.add_postponed_constraint(local_env, left, right, error);
                 return None;
             }
-            if self.proof_env.tt_env.unfold_head(&mut left) {
+            if let Some(new_left) = self.proof_env.tt_env.unfold_head(&left) {
+                left = new_left;
                 self.push_term_constraint(local_env.clone(), left, right, error);
                 return None;
             }
@@ -1571,7 +1574,8 @@ impl<'a> Elaborator<'a> {
                 self.add_postponed_constraint(local_env, left, right, error);
                 return None;
             }
-            if self.proof_env.tt_env.unfold_head(&mut right) {
+            if let Some(new_right) = self.proof_env.tt_env.unfold_head(&right) {
+                right = new_right;
                 self.push_term_constraint(local_env.clone(), left, right, error);
                 return None;
             }
@@ -1612,14 +1616,22 @@ impl<'a> Elaborator<'a> {
         }
         match left_height.cmp(&right_height) {
             std::cmp::Ordering::Greater => {
-                self.proof_env.tt_env.unfold_head(&mut left);
+                if let Some(new_left) = self.proof_env.tt_env.unfold_head(&left) {
+                    left = new_left;
+                }
             }
             std::cmp::Ordering::Less => {
-                self.proof_env.tt_env.unfold_head(&mut right);
+                if let Some(new_right) = self.proof_env.tt_env.unfold_head(&right) {
+                    right = new_right;
+                }
             }
             std::cmp::Ordering::Equal => {
-                self.proof_env.tt_env.unfold_head(&mut left);
-                self.proof_env.tt_env.unfold_head(&mut right);
+                if let Some(new_left) = self.proof_env.tt_env.unfold_head(&left) {
+                    left = new_left;
+                }
+                if let Some(new_right) = self.proof_env.tt_env.unfold_head(&right) {
+                    right = new_right;
+                }
             }
         }
         self.push_term_constraint(local_env, left, right, error);
@@ -1891,8 +1903,12 @@ impl<'a> Elaborator<'a> {
             let mut node = Node::default();
             let mut left = c.left.clone();
             let mut right = c.right.clone();
-            self.proof_env.tt_env.unfold_head(&mut left);
-            self.proof_env.tt_env.unfold_head(&mut right);
+            if let Some(new_left) = self.proof_env.tt_env.unfold_head(&left) {
+                left = new_left;
+            }
+            if let Some(new_right) = self.proof_env.tt_env.unfold_head(&right) {
+                right = new_right;
+            }
             node.term_constraints
                 .push((c.local_env.clone(), left, right, c.error.clone()));
             node

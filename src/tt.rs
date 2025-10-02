@@ -1832,25 +1832,11 @@ impl Env<'_> {
         )
     }
 
-    pub fn unfold_head(&self, m: &mut Term) -> bool {
-        match m {
-            Term::Var(_) | Term::Local(_) | Term::Abs(_) | Term::Hole(_) => false,
-            Term::Const(_) => {
-                if let Some(new_m) = self.delta_reduce(m) {
-                    *m = new_m;
-                    return true;
-                }
-                if let Some(new_m) = self.kappa_reduce(m) {
-                    *m = new_m;
-                    return true;
-                }
-                false
-            }
-            Term::App(m) => {
-                let TermApp { fun, arg: _arg } = Arc::make_mut(m);
-                self.unfold_head(fun)
-            }
-        }
+    pub fn unfold_head(&self, m: &Term) -> Option<Term> {
+        m.replace_head(&|head| match head {
+            Term::Const(_) => self.delta_reduce(head).or_else(|| self.kappa_reduce(head)),
+            _ => None,
+        })
     }
 
     pub fn delta_height(&self, name: Name) -> usize {
@@ -1929,7 +1915,9 @@ impl Env<'_> {
         }
         if matches!(m2, Term::Abs(_)) {
             // m1 must be unfoldable
-            if !self.unfold_head(m1) {
+            if let Some(new_m1) = self.unfold_head(m1) {
+                *m1 = new_m1;
+            } else {
                 return false;
             }
             return self.equiv_help(m1, m2);
@@ -1960,7 +1948,9 @@ impl Env<'_> {
         }
         if matches!(head2, Term::Local(_)) {
             // m1 must be unfoldable
-            if !self.unfold_head(m1) {
+            if let Some(new_m1) = self.unfold_head(m1) {
+                *m1 = new_m1;
+            } else {
                 return false;
             }
             return self.equiv_help(m1, m2);
@@ -1990,10 +1980,12 @@ impl Env<'_> {
         }
 
         if self.has_kappa(head1_inner.name) || self.has_kappa(head2_inner.name) {
-            if self.unfold_head(m1) {
+            if let Some(new_m1) = self.unfold_head(m1) {
+                *m1 = new_m1;
                 return self.equiv_help(m1, m2);
             }
-            if self.unfold_head(m2) {
+            if let Some(new_m2) = self.unfold_head(m2) {
+                *m2 = new_m2;
                 return self.equiv_help(m1, m2);
             }
             return false;
@@ -2007,22 +1999,30 @@ impl Env<'_> {
 
         match height1.cmp(&height2) {
             std::cmp::Ordering::Less => {
-                if !self.unfold_head(m2) {
+                if let Some(new_m2) = self.unfold_head(m2) {
+                    *m2 = new_m2;
+                } else {
                     return false;
                 }
                 self.equiv_help(m1, m2)
             }
             std::cmp::Ordering::Equal => {
-                if !self.unfold_head(m1) {
+                if let Some(new_m1) = self.unfold_head(m1) {
+                    *m1 = new_m1;
+                } else {
                     return false;
                 }
-                if !self.unfold_head(m2) {
+                if let Some(new_m2) = self.unfold_head(m2) {
+                    *m2 = new_m2;
+                } else {
                     return false;
                 }
                 self.equiv_help(m1, m2)
             }
             std::cmp::Ordering::Greater => {
-                if !self.unfold_head(m1) {
+                if let Some(new_m1) = self.unfold_head(m1) {
+                    *m1 = new_m1;
+                } else {
                     return false;
                 }
                 self.equiv_help(m1, m2)
