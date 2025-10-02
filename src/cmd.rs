@@ -1419,7 +1419,8 @@ impl Eval {
             );
             stash.apply(params.iter().map(|param| mk_local(param.name)));
             let subst = [(name, stash)];
-            target.subst(&subst);
+            let new_target = target.subst(&subst);
+            target = new_target;
             target = generalize(&target, &params);
             self.add_axiom(ctor_name, local_types.clone(), vec![], target);
         }
@@ -1455,11 +1456,13 @@ impl Eval {
             let mut guard_term = ctor_target;
 
             // C N
-            guard_term.subst(&subst_with_motive);
+            let new_guard = guard_term.subst(&subst_with_motive);
+            guard_term = new_guard;
 
             // (∀ z, ψ → C M) → C N
             for ctor_ind_arg in &mut ctor_ind_args {
-                ctor_ind_arg.subst(&subst_with_motive);
+                let new_arg = ctor_ind_arg.subst(&subst_with_motive);
+                *ctor_ind_arg = new_arg;
             }
             guard_term = guard(&guard_term, ctor_ind_args);
 
@@ -1477,7 +1480,8 @@ impl Eval {
 
             // φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
             for ctor_arg in &mut ctor_args {
-                ctor_arg.subst(&subst);
+                let new_arg = ctor_arg.subst(&subst);
+                *ctor_arg = new_arg;
             }
             guard_term = guard(&guard_term, ctor_args);
 
@@ -1664,7 +1668,8 @@ impl Eval {
                 StructureField::Axiom(field) => {
                     let fullname = Name::intern(&format!("{}.{}", name, field.name));
                     let mut target = field.target.clone();
-                    target.subst(&subst);
+                    let new_target = target.subst(&subst);
+                    target = new_target;
                     target = generalize(&target, slice::from_ref(&this));
                     self.add_axiom(fullname, local_types.clone(), vec![], target);
                 }
@@ -1706,8 +1711,8 @@ impl Eval {
                 }
                 StructureField::Axiom(field) => {
                     let mut target = field.target.clone();
-                    target.subst(&subst);
-
+                    let new_target = target.subst(&subst);
+                    target = new_target;
                     guards.push(target);
                 }
             }
@@ -1899,7 +1904,8 @@ impl Eval {
                     }
                     self.elaborate_term(&mut local_env, target, &mk_type_prop())?;
                     let mut structure_field_target = structure_field.target.clone();
-                    structure_field_target.subst_type(&type_subst);
+                    let new_target = structure_field_target.subst_type(&type_subst);
+                    structure_field_target = new_target;
                     if !structure_field_target.alpha_eq(target) {
                         bail!("target mismatch");
                     }
@@ -1926,7 +1932,8 @@ impl Eval {
                         ref mut target,
                     } = *field;
                     // e.g. def power.inhab.rep.{u} (A : set u) : set (set u) := power A
-                    target.subst(&subst);
+                    let new_target = target.subst(&subst);
+                    *target = new_target;
                     self.elaborate_term(&mut local_env, target, ty)?;
 
                     let fullname = Name::intern(&format!("{}.{}", name, field_name));
@@ -1964,7 +1971,8 @@ impl Eval {
                         ref mut expr,
                     } = *field;
                     // e.g. lemma power.inhab.inhabited.{u} : ∃ a, a ∈ rep := (..)
-                    target.subst(&subst);
+                    let new_target = target.subst(&subst);
+                    *target = new_target;
                     expr.subst(&subst);
                     self.elaborate_expr(&mut local_env, holes.clone(), expr, target)?;
                     self.proof_env().check_prop(
@@ -2152,7 +2160,8 @@ impl Eval {
                 ClassStructureField::Axiom(field) => {
                     let fullname = Name::intern(&format!("{}.{}", name, field.name));
                     let mut target = field.target.clone();
-                    target.subst(&subst);
+                    let new_target = target.subst(&subst);
+                    target = new_target;
                     self.add_axiom(
                         fullname,
                         local_types.clone(),
@@ -2252,8 +2261,10 @@ impl Eval {
                     }
                     self.elaborate_term(&mut local_env, target, &mk_type_prop())?;
                     let mut structure_field_target = structure_field.target.clone();
-                    structure_field_target.subst_type(&type_subst);
-                    structure_field_target.subst(&subst);
+                    let new_target = structure_field_target.subst_type(&type_subst);
+                    structure_field_target = new_target;
+                    let new_target = structure_field_target.subst(&subst);
+                    structure_field_target = new_target;
                     if !structure_field_target.alpha_eq(target) {
                         bail!("target mismatch");
                     }

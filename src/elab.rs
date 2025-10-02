@@ -506,7 +506,7 @@ impl<'a> Elaborator<'a> {
                         binder.ty, arg_ty
                     ));
                     self.push_type_constraint(binder.ty, arg_ty, error);
-                    body.subst(&[(binder.name, arg.clone())]);
+                    body = body.subst(&[(binder.name, arg.clone())]);
                     return Ok(body);
                 }
 
@@ -567,8 +567,8 @@ impl<'a> Elaborator<'a> {
                     instance_subst.push((local_class, instance.clone()));
                 }
                 let mut target = target.clone();
-                target.subst_type(&type_subst);
-                target.subst_instance(&instance_subst);
+                target = target.subst_type(&type_subst);
+                target = target.subst_instance(&instance_subst);
                 Ok(target)
             }
             Expr::Change(expr) => {

@@ -1231,55 +1231,6 @@ impl Term {
         args
     }
 
-    // λ x₁ ⋯ xₙ, m ↦ [x₁, ⋯ , xₙ]
-    // Fresh names are generated on the fly.
-    #[allow(unused)]
-    #[deprecated(note = "left for future use")]
-    pub fn unabs(&mut self) -> Vec<Parameter> {
-        let mut xs = vec![];
-        while let Term::Abs(inner) = self {
-            let &mut TermAbs {
-                ref mut binder_type,
-                binder_name,
-                ref mut body,
-            } = Arc::make_mut(inner);
-            xs.push(Parameter {
-                name: Name::fresh_from(binder_name),
-                ty: mem::take(binder_type),
-            });
-            *self = mem::take(body);
-        }
-        self.unabs_help(&xs, 0);
-        assert!(self.is_lclosed());
-        xs
-    }
-
-    fn unabs_help(&mut self, xs: &[Parameter], level: usize) {
-        match self {
-            Self::Local(_) => {}
-            Self::Var(inner) => {
-                let index = inner.index;
-                if index < level {
-                    return;
-                }
-                let offset = index - level;
-                if offset < xs.len() {
-                    *self = mk_local(xs[xs.len() - 1 - offset].name);
-                }
-            }
-            Self::Abs(inner) => {
-                Arc::make_mut(inner).body.unabs_help(xs, level + 1);
-            }
-            Self::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.fun.unabs_help(xs, level);
-                inner.arg.unabs_help(xs, level);
-            }
-            Self::Const(_) => {}
-            Self::Hole(_) => {}
-        }
-    }
-
     // assert_eq!(self, "m");
     // self.abs(&[x, y]);
     // assert_eq!(self, "λ x y, m");
@@ -1292,55 +1243,93 @@ impl Term {
         *self = m;
     }
 
-    pub fn subst_type(&mut self, subst: &[(Name, Type)]) {
+    pub fn subst_type(&self, subst: &[(Name, Type)]) -> Term {
         match self {
-            Term::Var(_) => {}
+            Term::Var(_) => self.clone(),
             Term::Abs(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.binder_type = inner.binder_type.subst(subst);
-                inner.body.subst_type(subst);
+                let binder_type = inner.binder_type.subst(subst);
+                let body = inner.body.subst_type(subst);
+                if inner.binder_type.ptr_eq(&binder_type) && inner.body.ptr_eq(&body) {
+                    self.clone()
+                } else {
+                    mk_abs(inner.binder_name, binder_type, body)
+                }
             }
             Term::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.fun.subst_type(subst);
-                inner.arg.subst_type(subst);
+                let fun = inner.fun.subst_type(subst);
+                let arg = inner.arg.subst_type(subst);
+                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
+                    self.clone()
+                } else {
+                    mk_app(fun, arg)
+                }
             }
-            Term::Local(_) => {}
+            Term::Local(_) => self.clone(),
             Term::Const(inner) => {
-                let inner = Arc::make_mut(inner);
-                for s in &mut inner.ty_args {
-                    *s = s.subst(subst);
-                }
-                for i in &mut inner.instances {
-                    *i = i.subst_type(subst);
+                let mut changed = false;
+                let ty_args: Vec<Type> = inner
+                    .ty_args
+                    .iter()
+                    .map(|t| {
+                        let new_t = t.subst(subst);
+                        if !changed && !t.ptr_eq(&new_t) {
+                            changed = true;
+                        }
+                        new_t
+                    })
+                    .collect();
+                let instances: Vec<Instance> = inner
+                    .instances
+                    .iter()
+                    .map(|instance| {
+                        let new_instance = instance.subst_type(subst);
+                        if !changed && !instance.ptr_eq(&new_instance) {
+                            changed = true;
+                        }
+                        new_instance
+                    })
+                    .collect();
+                if changed {
+                    mk_const(inner.name, ty_args, instances)
+                } else {
+                    self.clone()
                 }
             }
-            Term::Hole(_) => {}
+            Term::Hole(_) => self.clone(),
         }
     }
 
-    pub fn subst(&mut self, subst: &[(Name, Term)]) {
+    /// subst must not have duplicated names.
+    pub fn subst(&self, subst: &[(Name, Term)]) -> Term {
         match self {
-            Term::Var(_) => {}
+            Term::Var(_) => self.clone(),
             Term::Abs(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.body.subst(subst);
+                let body = inner.body.subst(subst);
+                if inner.body.ptr_eq(&body) {
+                    self.clone()
+                } else {
+                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
+                }
             }
             Term::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.fun.subst(subst);
-                inner.arg.subst(subst);
+                let fun = inner.fun.subst(subst);
+                let arg = inner.arg.subst(subst);
+                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
+                    self.clone()
+                } else {
+                    mk_app(fun, arg)
+                }
             }
             Term::Local(inner) => {
                 for (x, m) in subst {
                     if inner.name == *x {
-                        *self = m.clone();
-                        break;
+                        return m.clone();
                     }
                 }
+                self.clone()
             }
-            Term::Const(_) => {}
-            Term::Hole(_) => {}
+            Term::Const(_) => self.clone(),
+            Term::Hole(_) => self.clone(),
         }
     }
 
@@ -1453,25 +1442,47 @@ impl Term {
         }
     }
 
-    pub fn subst_instance(&mut self, subst: &[(Class, Instance)]) {
+    pub fn subst_instance(&self, subst: &[(Class, Instance)]) -> Term {
         match self {
-            Term::Var(_) => {}
+            Term::Var(_) => self.clone(),
             Term::Abs(inner) => {
-                Arc::make_mut(inner).body.subst_instance(subst);
-            }
-            Term::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.fun.subst_instance(subst);
-                inner.arg.subst_instance(subst);
-            }
-            Term::Local(_) => {}
-            Term::Const(inner) => {
-                let inner = Arc::make_mut(inner);
-                for instance in &mut inner.instances {
-                    *instance = instance.subst(subst);
+                let body = inner.body.subst_instance(subst);
+                if inner.body.ptr_eq(&body) {
+                    self.clone()
+                } else {
+                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
                 }
             }
-            Term::Hole(_) => {}
+            Term::App(inner) => {
+                let fun = inner.fun.subst_instance(subst);
+                let arg = inner.arg.subst_instance(subst);
+                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
+                    self.clone()
+                } else {
+                    mk_app(fun, arg)
+                }
+            }
+            Term::Local(_) => self.clone(),
+            Term::Const(inner) => {
+                let mut changed = false;
+                let instances: Vec<Instance> = inner
+                    .instances
+                    .iter()
+                    .map(|instance| {
+                        let new_instance = instance.subst(subst);
+                        if !changed && !instance.ptr_eq(&new_instance) {
+                            changed = true;
+                        }
+                        new_instance
+                    })
+                    .collect();
+                if changed {
+                    mk_const(inner.name, inner.ty_args.clone(), instances)
+                } else {
+                    self.clone()
+                }
+            }
+            Term::Hole(_) => self.clone(),
         }
     }
 
@@ -1821,10 +1832,16 @@ impl Env<'_> {
             let local_class = local_class.subst(&type_subst);
             instance_subst.push((local_class, instance.clone()));
         }
-        let mut target = target.clone();
-        target.subst_type(&type_subst);
-        target.subst_instance(&instance_subst);
-        *m = target;
+        let mut reduced_target = target.clone();
+        let new_target = reduced_target.subst_type(&type_subst);
+        if !reduced_target.ptr_eq(&new_target) {
+            reduced_target = new_target;
+        }
+        let new_target = reduced_target.subst_instance(&instance_subst);
+        if !reduced_target.ptr_eq(&new_target) {
+            reduced_target = new_target;
+        }
+        *m = reduced_target;
         true
     }
 
@@ -1869,10 +1886,16 @@ impl Env<'_> {
             let local_class = local_class.subst(&type_subst);
             instance_subst.push((local_class, instance.clone()));
         }
-        let mut target = target.clone();
-        target.subst_type(&type_subst);
-        target.subst_instance(&instance_subst);
-        *m = target;
+        let mut new_target = target.clone();
+        let target_with_types = new_target.subst_type(&type_subst);
+        if !new_target.ptr_eq(&target_with_types) {
+            new_target = target_with_types;
+        }
+        let target_with_instances = new_target.subst_instance(&instance_subst);
+        if !new_target.ptr_eq(&target_with_instances) {
+            new_target = target_with_instances;
+        }
+        *m = new_target;
         true
     }
 

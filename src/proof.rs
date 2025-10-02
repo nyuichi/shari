@@ -451,11 +451,13 @@ impl Expr {
         match self {
             Expr::Assump(e) => {
                 let ExprAssump { target } = Arc::make_mut(e);
-                target.subst(subst);
+                let new_target = target.subst(subst);
+                *target = new_target;
             }
             Expr::Assume(e) => {
                 let ExprAssume { local_axiom, expr } = Arc::make_mut(e);
-                local_axiom.subst(subst);
+                let new_local_axiom = local_axiom.subst(subst);
+                *local_axiom = new_local_axiom;
                 expr.subst(subst);
             }
             Expr::App(e) => {
@@ -470,12 +472,14 @@ impl Expr {
             Expr::Inst(e) => {
                 let ExprInst { expr, arg } = Arc::make_mut(e);
                 expr.subst(subst);
-                arg.subst(subst);
+                let new_arg = arg.subst(subst);
+                *arg = new_arg;
             }
             Expr::Const(_) => {}
             Expr::Change(e) => {
                 let ExprChange { target, expr } = Arc::make_mut(e);
-                target.subst(subst);
+                let new_target = target.subst(subst);
+                *target = new_target;
                 expr.subst(subst);
             }
         }
@@ -611,7 +615,7 @@ impl Env<'_> {
                     panic!("∀ expected, got {}", target);
                 };
                 self.tt_env.check_type(tt_local_env, arg, &ty);
-                body.subst(&[(name, arg.clone())]);
+                body = body.subst(&[(name, arg.clone())]);
                 body
             }
             Expr::Const(e) => {
@@ -651,13 +655,16 @@ impl Env<'_> {
                         instances.len()
                     );
                 }
+                let mut instance_subst = vec![];
                 for (local_class, instance) in zip(local_classes, instances) {
                     let local_class = local_class.subst(&type_subst);
                     self.tt_env
                         .check_class(tt_local_env, instance, &local_class);
+                    instance_subst.push((local_class, instance.clone()));
                 }
                 let mut target = target.clone();
-                target.subst_type(&type_subst);
+                target = target.subst_type(&type_subst);
+                target = target.subst_instance(&instance_subst);
                 target
             }
             Expr::Change(e) => {
