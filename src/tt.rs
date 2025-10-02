@@ -972,36 +972,43 @@ impl Term {
         }
     }
 
-    /// self.open(x) == [x/0]self
-    /// TODO:
-    /// - open をもっと軽くする。Term の全ての variant に bound を持たせて、その値を見て不必要な clone を行わないようにする。
-    /// - 結果的に &mut Term を mod の外で触らなくて良くなるはずなので、crate 全体では Term を clone しまくる実装になるはず。(全部 pass by value になる。) なので大工事になる。
-    pub fn open(&mut self, x: &Term) {
-        self.open_at(x, 0)
-    }
-
-    fn open_at(&mut self, x: &Term, level: usize) {
+    /// self.popen([x, y], k) == [x/k+1,y/k]self
+    /// TODO: popen をもっと軽くする。Term の全ての variant に bound を持たせて、その値を見て不必要な clone を行わないようにする。
+    pub fn popen(&self, xs: &[Term], level: usize) -> Term {
         match self {
-            Self::Local(_) => {}
+            Self::Local(_) => self.clone(),
             Self::Var(inner) => {
-                if inner.index == level {
-                    *self = x.clone();
+                if inner.index >= level {
+                    let i = inner.index - level;
+                    if i < xs.len() {
+                        return xs[xs.len() - i - 1].clone();
+                    }
                 }
+                self.clone()
             }
             Self::Abs(inner) => {
-                Arc::make_mut(inner).body.open_at(x, level + 1);
+                let body = inner.body.popen(xs, level + 1);
+                if inner.body.ptr_eq(&body) {
+                    self.clone()
+                } else {
+                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
+                }
             }
             Self::App(inner) => {
-                let inner = Arc::make_mut(inner);
-                inner.fun.open_at(x, level);
-                inner.arg.open_at(x, level);
+                let fun = inner.fun.popen(xs, level);
+                let arg = inner.arg.popen(xs, level);
+                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
+                    self.clone()
+                } else {
+                    mk_app(fun, arg)
+                }
             }
-            Self::Const(_) => {}
-            Self::Hole(_) => {}
+            Self::Const(_) => self.clone(),
+            Self::Hole(_) => self.clone(),
         }
     }
 
-    /// self.close([x, y], k) == [k+1/x, k/y]self
+    /// self.pclose([x, y], k) == [k+1/x, k/y]self
     pub fn pclose(&self, xs: &[Name], level: usize) -> Term {
         match self {
             Self::Local(inner) => {
@@ -1063,12 +1070,6 @@ impl Term {
         }
     }
 
-    #[allow(unused)]
-    #[deprecated(note = "left for future use")]
-    pub fn is_closed(&self) -> bool {
-        self.is_supported_by(&[])
-    }
-
     pub fn is_lclosed(&self) -> bool {
         self.is_lclosed_at(0)
     }
@@ -1082,12 +1083,6 @@ impl Term {
             Self::Const(_) => true,
             Self::Hole(_) => true,
         }
-    }
-
-    #[allow(unused)]
-    #[deprecated(note = "left for future use")]
-    pub fn is_body(&self) -> bool {
-        self.is_lclosed_at(1)
     }
 
     pub fn contains_var(&self, i: usize) -> bool {
@@ -1158,12 +1153,6 @@ impl Term {
 
     pub fn is_hole(&self) -> bool {
         matches!(self, Term::Hole(_))
-    }
-
-    #[allow(unused)]
-    #[deprecated(note = "left for future use")]
-    pub fn is_const(&self) -> bool {
-        matches!(self, Term::Const(_))
     }
 
     pub fn is_local(&self) -> bool {
@@ -1424,7 +1413,8 @@ impl Term {
             binder_name: _,
             body,
         } = Arc::make_mut(inner);
-        body.open(arg);
+        let new_body = body.popen(&[arg.clone()], 0);
+        *body = new_body;
         *self = mem::take(body);
         assert!(self.is_lclosed());
         true
@@ -1721,8 +1711,7 @@ impl Env<'_> {
                     name: Name::fresh_from(m.binder_name),
                     ty: m.binder_type.clone(),
                 };
-                let mut n = m.body.clone();
-                n.open(&mk_local(x.name));
+                let n = m.body.popen(&[mk_local(x.name)], 0);
                 local_env.locals.push(x);
                 let target = self.infer_type(local_env, &n);
                 let x = local_env.locals.pop().unwrap();
@@ -1934,8 +1923,10 @@ impl Env<'_> {
             let inner2 = Arc::make_mut(inner2);
             let x = Name::fresh();
             let local = mk_local(x);
-            inner1.body.open(&local);
-            inner2.body.open(&local);
+            let new_body1 = inner1.body.popen(&[local.clone()], 0);
+            inner1.body = new_body1;
+            let new_body2 = inner2.body.popen(&[local], 0);
+            inner2.body = new_body2;
             return self.equiv_help(&mut inner1.body, &mut inner2.body);
         }
 
@@ -1950,8 +1941,10 @@ impl Env<'_> {
                 let inner2 = Arc::make_mut(inner2);
                 let x = Name::fresh();
                 let local = mk_local(x);
-                inner1.body.open(&local);
-                inner2.body.open(&local);
+                let new_body1 = inner1.body.popen(&[local.clone()], 0);
+                inner1.body = new_body1;
+                let new_body2 = inner2.body.popen(&[local], 0);
+                inner2.body = new_body2;
                 // TODO: use loop
                 return self.equiv_help(&mut inner1.body, &mut inner2.body);
             }

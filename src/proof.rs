@@ -84,8 +84,7 @@ pub fn ungeneralize1(term: &Term) -> Option<(Parameter, Term)> {
         body,
     } = &**abs;
     let name = Name::fresh_from(*binder_name);
-    let mut body = body.clone();
-    body.open(&mk_local(name));
+    let body = body.popen(&[mk_local(name)], 0);
     let binder = Parameter {
         name,
         ty: binder_type.clone(),
