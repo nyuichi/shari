@@ -852,15 +852,31 @@ impl<'a> Elaborator<'a> {
         self.type_subst_map.get(&name.name).cloned()
     }
 
-    fn inst_recv(&self, m: &mut TermConst) {
-        assert!(self.proof_env.tt_env.has_kappa(m.name));
-        let Instance::Hole(hole) = &mut m.instances[0] else {
-            return;
-        };
-        let Some(instance) = self.instance_subst_map.get(hole).cloned() else {
-            return;
-        };
-        m.instances[0] = instance;
+    fn inst_recv(&self, m: &Term) -> Option<Term> {
+        m.replace_head(&|head| {
+            let Term::Const(head_const) = head else {
+                return None;
+            };
+            if !self.proof_env.tt_env.has_kappa(head_const.name) {
+                return None;
+            }
+            if head_const.instances.is_empty() {
+                return None;
+            }
+            let Instance::Hole(hole) = &head_const.instances[0] else {
+                return None;
+            };
+            let Some(instance) = self.instance_subst_map.get(hole).cloned() else {
+                return None;
+            };
+            let mut instances = head_const.instances.clone();
+            instances[0] = instance;
+            Some(mk_const(
+                head_const.name,
+                head_const.ty_args.clone(),
+                instances,
+            ))
+        })
     }
 
     // TODO: rename to try_reduce_to_pattern or something.
@@ -1417,10 +1433,15 @@ impl<'a> Elaborator<'a> {
             // solvable only when
             // 1. L is stuck by an unfoldable constant
             // 2. L is stuck by an unassigned hole
-            if let Term::Const(left_head) = left.head_mut() {
+            if let Term::Const(left_head) = left.head().clone() {
                 if self.proof_env.tt_env.has_kappa(left_head.name) {
-                    self.inst_recv(Arc::make_mut(left_head));
-                    if left_head.instances[0].is_hole() {
+                    if let Some(new_left) = self.inst_recv(&left) {
+                        left = new_left;
+                    }
+                    let Term::Const(updated_left_head) = left.head().clone() else {
+                        unreachable!();
+                    };
+                    if updated_left_head.instances[0].is_hole() {
                         self.add_postponed_constraint(local_env, left, right, error);
                         return None;
                     }
@@ -1534,30 +1555,47 @@ impl<'a> Elaborator<'a> {
         if right.head().is_local() {
             mem::swap(&mut left, &mut right);
         }
-        if let (Term::Local(left_head), Term::Const(right_head)) = (left.head(), right.head_mut()) {
-            if self.proof_env.tt_env.has_kappa(right_head.name) {
-                self.inst_recv(Arc::make_mut(right_head));
-                if right_head.instances[0].is_hole() {
-                    self.add_postponed_constraint(local_env, left, right, error);
+        if let Term::Local(left_head) = left.head() {
+            if let Term::Const(right_head) = right.head().clone() {
+                if self.proof_env.tt_env.has_kappa(right_head.name) {
+                    if let Some(new_right) = self.inst_recv(&right) {
+                        right = new_right;
+                    }
+                    let Term::Const(updated_right_head) = right.head().clone() else {
+                        unreachable!();
+                    };
+                    if updated_right_head.instances[0].is_hole() {
+                        self.add_postponed_constraint(local_env, left, right, error);
+                        return None;
+                    }
+                }
+                if !right.contains_local(left_head.name) {
+                    return Some(error);
+                }
+                if let Some(new_right) = self.proof_env.tt_env.unfold_head(&right) {
+                    right = new_right;
+                    self.push_term_constraint(local_env, left, right, error);
                     return None;
                 }
-            }
-            if !right.contains_local(left_head.name) {
                 return Some(error);
             }
-            if let Some(new_right) = self.proof_env.tt_env.unfold_head(&right) {
-                right = new_right;
-                self.push_term_constraint(local_env, left, right, error);
-                return None;
-            }
-            return Some(error);
         }
-        let (Term::Const(left_head), Term::Const(right_head)) = (left.head_mut(), right.head_mut())
-        else {
-            unreachable!()
+        let mut left_head = match left.head().clone() {
+            Term::Const(head) => head,
+            _ => unreachable!(),
+        };
+        let mut right_head = match right.head().clone() {
+            Term::Const(head) => head,
+            _ => unreachable!(),
         };
         if self.proof_env.tt_env.has_kappa(left_head.name) {
-            self.inst_recv(Arc::make_mut(left_head));
+            if let Some(new_left) = self.inst_recv(&left) {
+                left = new_left;
+                left_head = match left.head().clone() {
+                    Term::Const(head) => head,
+                    _ => unreachable!(),
+                };
+            }
             if left_head.instances[0].is_hole() {
                 self.add_postponed_constraint(local_env, left, right, error);
                 return None;
@@ -1569,7 +1607,13 @@ impl<'a> Elaborator<'a> {
             }
         }
         if self.proof_env.tt_env.has_kappa(right_head.name) {
-            self.inst_recv(Arc::make_mut(right_head));
+            if let Some(new_right) = self.inst_recv(&right) {
+                right = new_right;
+                right_head = match right.head().clone() {
+                    Term::Const(head) => head,
+                    _ => unreachable!(),
+                };
+            }
             if right_head.instances[0].is_hole() {
                 self.add_postponed_constraint(local_env, left, right, error);
                 return None;
@@ -1580,8 +1624,9 @@ impl<'a> Elaborator<'a> {
                 return None;
             }
         }
-        let (Term::Const(left_head), Term::Const(right_head)) = (left.head(), right.head()) else {
-            unreachable!()
+        let (left_head, right_head) = match (left.head().clone(), right.head().clone()) {
+            (Term::Const(left_head), Term::Const(right_head)) => (left_head, right_head),
+            _ => unreachable!(),
         };
         if left_head.name == right_head.name {
             if self.proof_env.tt_env.has_delta(left_head.name) {

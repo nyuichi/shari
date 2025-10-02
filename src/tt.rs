@@ -730,7 +730,6 @@ impl Instance {
 
 /// Locally nameless representation. See [Charguéraud, 2012].
 /// Use syn's convention [https://docs.rs/syn/latest/syn/enum.Expr.html#syntax-tree-enums].
-/// TODO: Term のメソッドは基本的に &mut self を取らずに &self をとって Term を返すようにする。全部 immutable にする。
 #[derive(Clone, Debug)]
 pub enum Term {
     Var(Arc<TermVar>),
@@ -1069,17 +1068,6 @@ impl Term {
         let mut m = self;
         while let Self::App(inner) = m {
             m = &inner.fun;
-        }
-        m
-    }
-
-    pub fn head_mut(&mut self) -> &mut Term {
-        if self.is_abs() {
-            return self;
-        }
-        let mut m = self;
-        while let Self::App(inner) = m {
-            m = &mut Arc::make_mut(inner).fun;
         }
         m
     }
