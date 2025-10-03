@@ -43,7 +43,7 @@ pub fn generalize(term: &Term, xs: &[Parameter]) -> Term {
     static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall"));
 
     let locals = xs.iter().map(|x| x.name).collect::<Vec<_>>();
-    let mut result = term.pclose(&locals, 0);
+    let mut result = term.close(&locals, 0);
     for x in xs.iter().rev() {
         result = mk_abs(x.name, x.ty.clone(), result);
         let mut c = mk_const(*FORALL, vec![x.ty.clone()], vec![]);
@@ -84,7 +84,7 @@ pub fn ungeneralize1(term: &Term) -> Option<(Parameter, Term)> {
         body,
     } = &**abs;
     let name = Name::fresh_from(*binder_name);
-    let body = body.popen(&[mk_local(name)], 0);
+    let body = body.open(&[mk_local(name)], 0);
     let binder = Parameter {
         name,
         ty: binder_type.clone(),

@@ -269,7 +269,7 @@ impl<'a> Elaborator<'a> {
                     name: Name::fresh_from(*binder_name),
                     ty: binder_type.clone(),
                 };
-                let mut body = body.popen(&[mk_local(x.name)], 0);
+                let mut body = body.open(&[mk_local(x.name)], 0);
                 self.tt_local_env.locals.push(x);
                 let body_ty = self.visit_term(&mut body)?;
                 self.tt_local_env.locals.pop();
@@ -1386,12 +1386,12 @@ impl<'a> Elaborator<'a> {
             let local = mk_local(x.name);
             {
                 let l_mut = Arc::make_mut(l);
-                let new_body = l_mut.body.popen(&[local.clone()], 0);
+                let new_body = l_mut.body.open(&[local.clone()], 0);
                 l_mut.body = new_body;
             }
             {
                 let r_mut = Arc::make_mut(r);
-                let new_body = r_mut.body.popen(&[local], 0);
+                let new_body = r_mut.body.open(&[local], 0);
                 r_mut.body = new_body;
             }
             local_env.locals.push(x);
@@ -1482,7 +1482,7 @@ impl<'a> Elaborator<'a> {
                     name: Name::fresh_from(right_binder_name),
                     ty: right_binder_type,
                 };
-                let right = right_body.popen(&[mk_local(x.name)], 0);
+                let right = right_body.open(&[mk_local(x.name)], 0);
                 left = left.apply([mk_local(x.name)]);
                 local_env.locals.push(x);
                 self.push_term_constraint(local_env, left, right, error);

@@ -9,7 +9,7 @@ use std::vec;
 
 use crate::proof::mk_type_prop;
 
-// TODO: 再帰的に値を作っている場所で Arc::ptr_eq を使うようにする。
+// TODO: subst系はFnを取るようにする。
 
 // TODO: struct Path(Name) を用意して Const の中身を Path にする。
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
@@ -952,9 +952,9 @@ impl Term {
         }
     }
 
-    /// self.popen([x, y], k) == [x/k+1,y/k]self
-    /// TODO: popen をもっと軽くする。Term の全ての variant に bound を持たせて、その値を見て不必要な clone を行わないようにする。
-    pub fn popen(&self, xs: &[Term], level: usize) -> Term {
+    /// self.open([x, y], k) == [x/k+1,y/k]self
+    /// TODO: open をもっと軽くする。Term の全ての variant に bound を持たせて、その値を見て不必要な clone を行わないようにする。
+    pub fn open(&self, xs: &[Term], level: usize) -> Term {
         match self {
             Self::Local(_) => self.clone(),
             Self::Var(inner) => {
@@ -967,7 +967,7 @@ impl Term {
                 self.clone()
             }
             Self::Abs(inner) => {
-                let body = inner.body.popen(xs, level + 1);
+                let body = inner.body.open(xs, level + 1);
                 if inner.body.ptr_eq(&body) {
                     self.clone()
                 } else {
@@ -975,8 +975,8 @@ impl Term {
                 }
             }
             Self::App(inner) => {
-                let fun = inner.fun.popen(xs, level);
-                let arg = inner.arg.popen(xs, level);
+                let fun = inner.fun.open(xs, level);
+                let arg = inner.arg.open(xs, level);
                 if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
                     self.clone()
                 } else {
@@ -988,8 +988,8 @@ impl Term {
         }
     }
 
-    /// self.pclose([x, y], k) == [k+1/x, k/y]self
-    pub fn pclose(&self, xs: &[Name], level: usize) -> Term {
+    /// self.close([x, y], k) == [k+1/x, k/y]self
+    pub fn close(&self, xs: &[Name], level: usize) -> Term {
         match self {
             Self::Local(inner) => {
                 let name = inner.name;
@@ -1002,7 +1002,7 @@ impl Term {
             }
             Self::Var(_) => self.clone(),
             Self::Abs(inner) => {
-                let body = inner.body.pclose(xs, level + 1);
+                let body = inner.body.close(xs, level + 1);
                 if inner.body.ptr_eq(&body) {
                     self.clone()
                 } else {
@@ -1010,8 +1010,8 @@ impl Term {
                 }
             }
             Self::App(inner) => {
-                let fun = inner.fun.pclose(xs, level);
-                let arg = inner.arg.pclose(xs, level);
+                let fun = inner.fun.close(xs, level);
+                let arg = inner.arg.close(xs, level);
                 if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
                     self.clone()
                 } else {
@@ -1020,6 +1020,172 @@ impl Term {
             }
             Self::Const(_) => self.clone(),
             Self::Hole(_) => self.clone(),
+        }
+    }
+
+    pub fn subst_instance(&self, subst: &[(Class, Instance)]) -> Term {
+        match self {
+            Term::Var(_) => self.clone(),
+            Term::Abs(inner) => {
+                let body = inner.body.subst_instance(subst);
+                if inner.body.ptr_eq(&body) {
+                    self.clone()
+                } else {
+                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
+                }
+            }
+            Term::App(inner) => {
+                let fun = inner.fun.subst_instance(subst);
+                let arg = inner.arg.subst_instance(subst);
+                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
+                    self.clone()
+                } else {
+                    mk_app(fun, arg)
+                }
+            }
+            Term::Local(_) => self.clone(),
+            Term::Const(inner) => {
+                let mut changed = false;
+                let instances: Vec<Instance> = inner
+                    .instances
+                    .iter()
+                    .map(|instance| {
+                        let new_instance = instance.subst(subst);
+                        if !changed && !instance.ptr_eq(&new_instance) {
+                            changed = true;
+                        }
+                        new_instance
+                    })
+                    .collect();
+                if changed {
+                    mk_const(inner.name, inner.ty_args.clone(), instances)
+                } else {
+                    self.clone()
+                }
+            }
+            Term::Hole(_) => self.clone(),
+        }
+    }
+
+    pub fn replace_hole(&self, f: &impl Fn(Name) -> Option<Term>) -> Term {
+        match self {
+            Term::Var(_) => self.clone(),
+            Term::Abs(inner) => {
+                let body = inner.body.replace_hole(f);
+                if inner.body.ptr_eq(&body) {
+                    self.clone()
+                } else {
+                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
+                }
+            }
+            Term::App(inner) => {
+                let fun = inner.fun.replace_hole(f);
+                let arg = inner.arg.replace_hole(f);
+                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
+                    self.clone()
+                } else {
+                    mk_app(fun, arg)
+                }
+            }
+            Term::Local(_) => self.clone(),
+            Term::Const(_) => self.clone(),
+            Term::Hole(inner) => {
+                if let Some(m) = f(inner.name) {
+                    m
+                } else {
+                    self.clone()
+                }
+            }
+        }
+    }
+
+    pub fn subst_type(&self, subst: &[(Name, Type)]) -> Term {
+        match self {
+            Term::Var(_) => self.clone(),
+            Term::Abs(inner) => {
+                let binder_type = inner.binder_type.subst(subst);
+                let body = inner.body.subst_type(subst);
+                if inner.binder_type.ptr_eq(&binder_type) && inner.body.ptr_eq(&body) {
+                    self.clone()
+                } else {
+                    mk_abs(inner.binder_name, binder_type, body)
+                }
+            }
+            Term::App(inner) => {
+                let fun = inner.fun.subst_type(subst);
+                let arg = inner.arg.subst_type(subst);
+                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
+                    self.clone()
+                } else {
+                    mk_app(fun, arg)
+                }
+            }
+            Term::Local(_) => self.clone(),
+            Term::Const(inner) => {
+                let mut changed = false;
+                let ty_args: Vec<Type> = inner
+                    .ty_args
+                    .iter()
+                    .map(|t| {
+                        let new_t = t.subst(subst);
+                        if !changed && !t.ptr_eq(&new_t) {
+                            changed = true;
+                        }
+                        new_t
+                    })
+                    .collect();
+                let instances: Vec<Instance> = inner
+                    .instances
+                    .iter()
+                    .map(|instance| {
+                        let new_instance = instance.subst_type(subst);
+                        if !changed && !instance.ptr_eq(&new_instance) {
+                            changed = true;
+                        }
+                        new_instance
+                    })
+                    .collect();
+                if changed {
+                    mk_const(inner.name, ty_args, instances)
+                } else {
+                    self.clone()
+                }
+            }
+            Term::Hole(_) => self.clone(),
+        }
+    }
+
+    /// subst must not have duplicated names.
+    pub fn subst(&self, subst: &[(Name, Term)]) -> Term {
+        match self {
+            Term::Var(_) => self.clone(),
+            Term::Abs(inner) => {
+                let body = inner.body.subst(subst);
+                if inner.body.ptr_eq(&body) {
+                    self.clone()
+                } else {
+                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
+                }
+            }
+            Term::App(inner) => {
+                let fun = inner.fun.subst(subst);
+                let arg = inner.arg.subst(subst);
+                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
+                    self.clone()
+                } else {
+                    mk_app(fun, arg)
+                }
+            }
+            Term::Local(inner) => {
+                for (x, m) in subst {
+                    if inner.name == *x {
+                        return m.clone();
+                    }
+                }
+                self.clone()
+            }
+            Term::Const(_) => self.clone(),
+            Term::Hole(_) => self.clone(),
         }
     }
 
@@ -1182,101 +1348,11 @@ impl Term {
     /// Returns the abstraction `λ xs, self`.
     pub fn abs(&self, xs: &[Parameter]) -> Term {
         let locals = xs.iter().map(|x| x.name).collect::<Vec<_>>();
-        let mut m = self.pclose(&locals, 0);
+        let mut m = self.close(&locals, 0);
         for x in xs.iter().rev() {
             m = mk_abs(x.name, x.ty.clone(), m);
         }
         m
-    }
-
-    pub fn subst_type(&self, subst: &[(Name, Type)]) -> Term {
-        match self {
-            Term::Var(_) => self.clone(),
-            Term::Abs(inner) => {
-                let binder_type = inner.binder_type.subst(subst);
-                let body = inner.body.subst_type(subst);
-                if inner.binder_type.ptr_eq(&binder_type) && inner.body.ptr_eq(&body) {
-                    self.clone()
-                } else {
-                    mk_abs(inner.binder_name, binder_type, body)
-                }
-            }
-            Term::App(inner) => {
-                let fun = inner.fun.subst_type(subst);
-                let arg = inner.arg.subst_type(subst);
-                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
-                    self.clone()
-                } else {
-                    mk_app(fun, arg)
-                }
-            }
-            Term::Local(_) => self.clone(),
-            Term::Const(inner) => {
-                let mut changed = false;
-                let ty_args: Vec<Type> = inner
-                    .ty_args
-                    .iter()
-                    .map(|t| {
-                        let new_t = t.subst(subst);
-                        if !changed && !t.ptr_eq(&new_t) {
-                            changed = true;
-                        }
-                        new_t
-                    })
-                    .collect();
-                let instances: Vec<Instance> = inner
-                    .instances
-                    .iter()
-                    .map(|instance| {
-                        let new_instance = instance.subst_type(subst);
-                        if !changed && !instance.ptr_eq(&new_instance) {
-                            changed = true;
-                        }
-                        new_instance
-                    })
-                    .collect();
-                if changed {
-                    mk_const(inner.name, ty_args, instances)
-                } else {
-                    self.clone()
-                }
-            }
-            Term::Hole(_) => self.clone(),
-        }
-    }
-
-    /// subst must not have duplicated names.
-    pub fn subst(&self, subst: &[(Name, Term)]) -> Term {
-        match self {
-            Term::Var(_) => self.clone(),
-            Term::Abs(inner) => {
-                let body = inner.body.subst(subst);
-                if inner.body.ptr_eq(&body) {
-                    self.clone()
-                } else {
-                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
-                }
-            }
-            Term::App(inner) => {
-                let fun = inner.fun.subst(subst);
-                let arg = inner.arg.subst(subst);
-                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
-                    self.clone()
-                } else {
-                    mk_app(fun, arg)
-                }
-            }
-            Term::Local(inner) => {
-                for (x, m) in subst {
-                    if inner.name == *x {
-                        return m.clone();
-                    }
-                }
-                self.clone()
-            }
-            Term::Const(_) => self.clone(),
-            Term::Hole(_) => self.clone(),
-        }
     }
 
     // checks if self has any (term-level) meta variable.
@@ -1342,7 +1418,7 @@ impl Term {
             Term::App(inner) => {
                 let fun = inner.fun.whnf();
                 if let Term::Abs(abs) = fun.as_ref().unwrap_or(&inner.fun) {
-                    let body = abs.body.popen(&[inner.arg.clone()], 0);
+                    let body = abs.body.open(&[inner.arg.clone()], 0);
                     return Some(body.whnf().unwrap_or(body));
                 }
                 match fun {
@@ -1361,82 +1437,6 @@ impl Term {
             Term::Local(inner) => inner.name == name,
             Term::Const(_) => false,
             Term::Hole(_) => false,
-        }
-    }
-
-    pub fn subst_instance(&self, subst: &[(Class, Instance)]) -> Term {
-        match self {
-            Term::Var(_) => self.clone(),
-            Term::Abs(inner) => {
-                let body = inner.body.subst_instance(subst);
-                if inner.body.ptr_eq(&body) {
-                    self.clone()
-                } else {
-                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
-                }
-            }
-            Term::App(inner) => {
-                let fun = inner.fun.subst_instance(subst);
-                let arg = inner.arg.subst_instance(subst);
-                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
-                    self.clone()
-                } else {
-                    mk_app(fun, arg)
-                }
-            }
-            Term::Local(_) => self.clone(),
-            Term::Const(inner) => {
-                let mut changed = false;
-                let instances: Vec<Instance> = inner
-                    .instances
-                    .iter()
-                    .map(|instance| {
-                        let new_instance = instance.subst(subst);
-                        if !changed && !instance.ptr_eq(&new_instance) {
-                            changed = true;
-                        }
-                        new_instance
-                    })
-                    .collect();
-                if changed {
-                    mk_const(inner.name, inner.ty_args.clone(), instances)
-                } else {
-                    self.clone()
-                }
-            }
-            Term::Hole(_) => self.clone(),
-        }
-    }
-
-    pub fn replace_hole(&self, f: &impl Fn(Name) -> Option<Term>) -> Term {
-        match self {
-            Term::Var(_) => self.clone(),
-            Term::Abs(inner) => {
-                let body = inner.body.replace_hole(f);
-                if inner.body.ptr_eq(&body) {
-                    self.clone()
-                } else {
-                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
-                }
-            }
-            Term::App(inner) => {
-                let fun = inner.fun.replace_hole(f);
-                let arg = inner.arg.replace_hole(f);
-                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
-                    self.clone()
-                } else {
-                    mk_app(fun, arg)
-                }
-            }
-            Term::Local(_) => self.clone(),
-            Term::Const(_) => self.clone(),
-            Term::Hole(inner) => {
-                if let Some(m) = f(inner.name) {
-                    m
-                } else {
-                    self.clone()
-                }
-            }
         }
     }
 }
@@ -1655,7 +1655,7 @@ impl Env<'_> {
                     name: Name::fresh_from(m.binder_name),
                     ty: m.binder_type.clone(),
                 };
-                let n = m.body.popen(&[mk_local(x.name)], 0);
+                let n = m.body.open(&[mk_local(x.name)], 0);
                 local_env.locals.push(x);
                 let target = self.infer_type(local_env, &n);
                 let x = local_env.locals.pop().unwrap();
@@ -1905,8 +1905,8 @@ impl Env<'_> {
             if let (Term::Abs(inner1), Term::Abs(inner2)) = (&m1, &m2) {
                 let x = Name::fresh();
                 let local = mk_local(x);
-                m1 = inner1.body.popen(&[local.clone()], 0);
-                m2 = inner2.body.popen(&[local], 0);
+                m1 = inner1.body.open(&[local.clone()], 0);
+                m2 = inner2.body.open(&[local], 0);
                 if m1.alpha_eq(&m2) {
                     return true;
                 }
@@ -1930,8 +1930,8 @@ impl Env<'_> {
                 if let (Term::Abs(inner1), Term::Abs(inner2)) = (&m1, &m2) {
                     let x = Name::fresh();
                     let local = mk_local(x);
-                    m1 = inner1.body.popen(&[local.clone()], 0);
-                    m2 = inner2.body.popen(&[local], 0);
+                    m1 = inner1.body.open(&[local.clone()], 0);
+                    m2 = inner2.body.open(&[local], 0);
                     if m1.alpha_eq(&m2) {
                         return true;
                     }
