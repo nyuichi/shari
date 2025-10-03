@@ -615,45 +615,27 @@ pub fn mk_instance_global(name: Name, ty_args: Vec<Type>, args: Vec<Instance>) -
 }
 
 impl Instance {
-    fn contains_local_type(&self, name: Name) -> bool {
+    fn replace_type(&self, f: &impl Fn(&Type) -> Type) -> Instance {
         match self {
-            Instance::Local(c) => c.contains_local(name),
-            Instance::Global(i) => {
-                i.ty_args.iter().any(|t| t.contains_local(name))
-                    || i.args.iter().any(|i| i.contains_local_type(name))
-            }
-            Instance::Hole(_) => false,
-        }
-    }
-
-    fn subst_type(&self, subst: &[(Name, Type)]) -> Instance {
-        match self {
-            Instance::Local(c) => Instance::Local(c.subst(subst)),
+            Instance::Local(c) => Instance::Local(Class {
+                name: c.name,
+                args: c.args.iter().map(|t| f(t)).collect(),
+            }),
             Instance::Global(i) => {
                 let mut changed = false;
                 let ty_args: Vec<Type> = i
                     .ty_args
                     .iter()
                     .map(|t| {
-                        let new_t = t.subst(subst);
+                        let new_t = f(t);
                         if !changed && !t.ptr_eq(&new_t) {
                             changed = true;
                         }
                         new_t
                     })
                     .collect();
-                let args: Vec<Instance> = i
-                    .args
-                    .iter()
-                    .map(|arg| {
-                        let new_arg = arg.subst_type(subst);
-                        if !changed && !arg.ptr_eq(&new_arg) {
-                            changed = true;
-                        }
-                        new_arg
-                    })
-                    .collect();
-                if changed {
+                let args: Vec<Instance> = i.args.iter().map(|arg| arg.replace_type(f)).collect();
+                if changed || args.iter().zip(&i.args).any(|(a, b)| !a.ptr_eq(b)) {
                     Instance::Global(Arc::new(InstanceGlobal {
                         name: i.name,
                         ty_args,
@@ -664,6 +646,17 @@ impl Instance {
                 }
             }
             Instance::Hole(_) => self.clone(),
+        }
+    }
+
+    fn contains_local_type(&self, name: Name) -> bool {
+        match self {
+            Instance::Local(c) => c.contains_local(name),
+            Instance::Global(i) => {
+                i.ty_args.iter().any(|t| t.contains_local(name))
+                    || i.args.iter().any(|i| i.contains_local_type(name))
+            }
+            Instance::Hole(_) => false,
         }
     }
 
@@ -1023,50 +1016,6 @@ impl Term {
         }
     }
 
-    pub fn subst_instance(&self, subst: &[(Class, Instance)]) -> Term {
-        match self {
-            Term::Var(_) => self.clone(),
-            Term::Abs(inner) => {
-                let body = inner.body.subst_instance(subst);
-                if inner.body.ptr_eq(&body) {
-                    self.clone()
-                } else {
-                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
-                }
-            }
-            Term::App(inner) => {
-                let fun = inner.fun.subst_instance(subst);
-                let arg = inner.arg.subst_instance(subst);
-                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
-                    self.clone()
-                } else {
-                    mk_app(fun, arg)
-                }
-            }
-            Term::Local(_) => self.clone(),
-            Term::Const(inner) => {
-                let mut changed = false;
-                let instances: Vec<Instance> = inner
-                    .instances
-                    .iter()
-                    .map(|instance| {
-                        let new_instance = instance.subst(subst);
-                        if !changed && !instance.ptr_eq(&new_instance) {
-                            changed = true;
-                        }
-                        new_instance
-                    })
-                    .collect();
-                if changed {
-                    mk_const(inner.name, inner.ty_args.clone(), instances)
-                } else {
-                    self.clone()
-                }
-            }
-            Term::Hole(_) => self.clone(),
-        }
-    }
-
     pub fn replace_hole(&self, f: &impl Fn(Name) -> Option<Term>) -> Term {
         match self {
             Term::Var(_) => self.clone(),
@@ -1099,12 +1048,56 @@ impl Term {
         }
     }
 
-    pub fn subst_type(&self, subst: &[(Name, Type)]) -> Term {
+    pub fn replace_instance(&self, f: &impl Fn(&Instance) -> Instance) -> Term {
         match self {
             Term::Var(_) => self.clone(),
             Term::Abs(inner) => {
-                let binder_type = inner.binder_type.subst(subst);
-                let body = inner.body.subst_type(subst);
+                let body = inner.body.replace_instance(f);
+                if inner.body.ptr_eq(&body) {
+                    self.clone()
+                } else {
+                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
+                }
+            }
+            Term::App(inner) => {
+                let fun = inner.fun.replace_instance(f);
+                let arg = inner.arg.replace_instance(f);
+                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
+                    self.clone()
+                } else {
+                    mk_app(fun, arg)
+                }
+            }
+            Term::Local(_) => self.clone(),
+            Term::Const(inner) => {
+                let mut changed = false;
+                let instances: Vec<Instance> = inner
+                    .instances
+                    .iter()
+                    .map(|instance| {
+                        let new_instance = f(instance);
+                        if !changed && !instance.ptr_eq(&new_instance) {
+                            changed = true;
+                        }
+                        new_instance
+                    })
+                    .collect();
+                if changed {
+                    mk_const(inner.name, inner.ty_args.clone(), instances)
+                } else {
+                    self.clone()
+                }
+            }
+            Term::Hole(_) => self.clone(),
+        }
+    }
+
+    pub fn replace_type(&self, f: &impl Fn(&Type) -> Type) -> Term {
+        match self {
+            Term::Var(_) => self.clone(),
+            Term::Abs(inner) => {
+                let binder_type = f(&inner.binder_type);
+                let body = inner.body.replace_type(f);
                 if inner.binder_type.ptr_eq(&binder_type) && inner.body.ptr_eq(&body) {
                     self.clone()
                 } else {
@@ -1112,8 +1105,8 @@ impl Term {
                 }
             }
             Term::App(inner) => {
-                let fun = inner.fun.subst_type(subst);
-                let arg = inner.arg.subst_type(subst);
+                let fun = inner.fun.replace_type(f);
+                let arg = inner.arg.replace_type(f);
                 if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
                     self.clone()
                 } else {
@@ -1127,7 +1120,7 @@ impl Term {
                     .ty_args
                     .iter()
                     .map(|t| {
-                        let new_t = t.subst(subst);
+                        let new_t = f(t);
                         if !changed && !t.ptr_eq(&new_t) {
                             changed = true;
                         }
@@ -1138,7 +1131,7 @@ impl Term {
                     .instances
                     .iter()
                     .map(|instance| {
-                        let new_instance = instance.subst_type(subst);
+                        let new_instance = instance.replace_type(f);
                         if !changed && !instance.ptr_eq(&new_instance) {
                             changed = true;
                         }
@@ -1153,6 +1146,14 @@ impl Term {
             }
             Term::Hole(_) => self.clone(),
         }
+    }
+
+    pub fn subst_instance(&self, subst: &[(Class, Instance)]) -> Term {
+        self.replace_instance(&|i| i.subst(subst))
+    }
+
+    pub fn subst_type(&self, subst: &[(Name, Type)]) -> Term {
+        self.replace_type(&|t| t.subst(subst))
     }
 
     /// subst must not have duplicated names.

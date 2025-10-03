@@ -15,7 +15,7 @@ use crate::{
     },
     tt::{
         self, Class, ClassInstance, ClassType, Const, Instance, InstanceGlobal, Kind, LocalEnv,
-        Name, Parameter, Term, TermAbs, TermApp, TermConst, Type, TypeApp, TypeArrow, mk_const,
+        Name, Parameter, Term, TermAbs, TermApp, Type, TypeApp, TypeArrow, mk_const,
         mk_fresh_type_hole, mk_hole, mk_instance_global, mk_local, mk_type_arrow,
     },
 };
@@ -600,10 +600,8 @@ impl<'a> Elaborator<'a> {
         if !self.term_constraints.is_empty() {
             println!("{sp}| term_constraints:");
             for (_, left, right, _) in &self.term_constraints {
-                let mut left = left.clone();
-                self.fully_inst(&mut left);
-                let mut right = right.clone();
-                self.fully_inst(&mut right);
+                let left = self.fully_inst(left);
+                let right = self.fully_inst(right);
                 println!("{sp}| - {}\n{sp}|   {}", left, right);
             }
             println!();
@@ -611,10 +609,8 @@ impl<'a> Elaborator<'a> {
         if !self.queue_delta.is_empty() {
             println!("{sp}| delta ({}):", self.queue_delta.len());
             for c in &self.queue_delta {
-                let mut left = c.left.clone();
-                self.fully_inst(&mut left);
-                let mut right = c.right.clone();
-                self.fully_inst(&mut right);
+                let left = self.fully_inst(&c.left);
+                let right = self.fully_inst(&c.right);
                 println!("{sp}| - {}\n{sp}|   {}", left, right);
             }
             println!();
@@ -629,10 +625,8 @@ impl<'a> Elaborator<'a> {
         if !queue_qp.is_empty() {
             println!("{sp}| qp:");
             for c in &queue_qp {
-                let mut left = c.left.clone();
-                self.fully_inst(&mut left);
-                let mut right = c.right.clone();
-                self.fully_inst(&mut right);
+                let left = self.fully_inst(&c.left);
+                let right = self.fully_inst(&c.right);
                 println!("{sp}| - {}\n{sp}|   {}", left, right);
             }
             println!();
@@ -647,10 +641,8 @@ impl<'a> Elaborator<'a> {
         if !queue_fr.is_empty() {
             println!("{sp}| fr:");
             for c in &queue_fr {
-                let mut left = c.left.clone();
-                self.fully_inst(&mut left);
-                let mut right = c.right.clone();
-                self.fully_inst(&mut right);
+                let left = self.fully_inst(&c.left);
+                let right = self.fully_inst(&c.right);
                 println!("{sp}| - {}\n{sp}|   {}", left, right);
             }
             println!();
@@ -665,10 +657,8 @@ impl<'a> Elaborator<'a> {
         if !queue_ff.is_empty() {
             println!("{sp}| qp:");
             for c in &queue_ff {
-                let mut left = c.left.clone();
-                self.fully_inst(&mut left);
-                let mut right = c.right.clone();
-                self.fully_inst(&mut right);
+                let left = self.fully_inst(&c.left);
+                let right = self.fully_inst(&c.right);
                 println!("{sp}| - {}\n{sp}|   {}", left, right);
             }
             println!();
@@ -897,53 +887,10 @@ impl<'a> Elaborator<'a> {
         })
     }
 
-    fn fully_inst(&self, m: &mut Term) {
-        match m {
-            Term::Var(_) => {}
-            Term::Abs(m) => {
-                let TermAbs {
-                    binder_name: _,
-                    binder_type,
-                    body,
-                } = Arc::make_mut(m);
-                *binder_type = self.fully_inst_type(binder_type);
-                self.fully_inst(body);
-            }
-            Term::App(m) => {
-                let TermApp { fun, arg } = Arc::make_mut(m);
-                self.fully_inst(fun);
-                self.fully_inst(arg);
-            }
-            Term::Local(_) => {}
-            Term::Const(m) => {
-                let TermConst {
-                    name: _,
-                    ty_args,
-                    instances,
-                } = Arc::make_mut(m);
-                for ty in ty_args {
-                    *ty = self.fully_inst_type(ty);
-                }
-                let new_instances = instances
-                    .iter()
-                    .map(|instance| self.fully_inst_instance(instance))
-                    .collect::<Vec<_>>();
-                if instances
-                    .iter()
-                    .zip(&new_instances)
-                    .any(|(lhs, rhs)| lhs != rhs)
-                {
-                    *instances = new_instances;
-                }
-            }
-            Term::Hole(inner) => {
-                let Some(target) = self.subst_map.get(&inner.name) else {
-                    return;
-                };
-                *m = target.clone();
-                self.fully_inst(m);
-            }
-        }
+    fn fully_inst(&self, m: &Term) -> Term {
+        m.replace_hole(&|name| self.subst_map.get(&name).map(|m| self.fully_inst(m)))
+            .replace_type(&|ty| self.fully_inst_type(ty))
+            .replace_instance(&|instance| self.fully_inst_instance(instance))
     }
 
     fn fully_inst_type(&self, t: &Type) -> Type {
@@ -1022,11 +969,11 @@ impl<'a> Elaborator<'a> {
         match expr {
             Expr::Assump(expr) => {
                 let ExprAssump { target } = Arc::make_mut(expr);
-                self.fully_inst(target);
+                *target = self.fully_inst(target);
             }
             Expr::Assume(expr) => {
                 let ExprAssume { local_axiom, expr } = Arc::make_mut(expr);
-                self.fully_inst(local_axiom);
+                *local_axiom = self.fully_inst(local_axiom);
                 self.fully_inst_expr(expr);
             }
             Expr::App(expr) => {
@@ -1042,7 +989,7 @@ impl<'a> Elaborator<'a> {
             Expr::Inst(expr) => {
                 let ExprInst { expr, arg } = Arc::make_mut(expr);
                 self.fully_inst_expr(expr);
-                self.fully_inst(arg);
+                *arg = self.fully_inst(arg);
             }
             Expr::Const(expr) => {
                 let ExprConst {
@@ -1067,7 +1014,7 @@ impl<'a> Elaborator<'a> {
             }
             Expr::Change(expr) => {
                 let ExprChange { target, expr } = Arc::make_mut(expr);
-                self.fully_inst(target);
+                *target = self.fully_inst(target);
                 self.fully_inst_expr(expr);
             }
         }
@@ -1377,26 +1324,16 @@ impl<'a> Elaborator<'a> {
         if left.alpha_eq(&right) {
             return None;
         }
-        if let (Term::Abs(l), Term::Abs(r)) = (&mut left, &mut right) {
+        if let (Term::Abs(l), Term::Abs(r)) = (&left, &right) {
             self.push_type_constraint(l.binder_type.clone(), r.binder_type.clone(), error.clone());
             let x = Parameter {
                 name: Name::fresh(),
-                ty: mem::take(&mut Arc::make_mut(l).binder_type),
+                ty: l.binder_type.clone(),
             };
             let local = mk_local(x.name);
-            {
-                let l_mut = Arc::make_mut(l);
-                let new_body = l_mut.body.open(&[local.clone()], 0);
-                l_mut.body = new_body;
-            }
-            {
-                let r_mut = Arc::make_mut(r);
-                let new_body = r_mut.body.open(&[local], 0);
-                r_mut.body = new_body;
-            }
+            let left = l.body.open(&[local.clone()], 0);
+            let right = r.body.open(&[local], 0);
             local_env.locals.push(x);
-            let left = mem::take(&mut Arc::make_mut(l).body);
-            let right = mem::take(&mut Arc::make_mut(r).body);
             self.push_term_constraint(local_env, left, right, error);
             return None;
         }
@@ -1782,10 +1719,8 @@ impl<'a> Elaborator<'a> {
                 #[cfg(debug_assertions)]
                 {
                     let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
-                    let mut m1 = m1.clone();
-                    self.fully_inst(&mut m1);
-                    let mut m2 = m2.clone();
-                    self.fully_inst(&mut m2);
+                    let m1 = self.fully_inst(&m1);
+                    let m2 = self.fully_inst(&m2);
                     println!("{sp}find conflict in {m1} =?= {m2}");
                 }
                 if let Some(error) = self.find_conflict_in_terms(local_env, m1, m2, error) {
@@ -2354,7 +2289,7 @@ pub fn elaborate_term(
         bail!("unification failed: {error}");
     }
 
-    elab.fully_inst(target);
+    *target = elab.fully_inst(target);
 
     ensure!(target.is_ground());
     ensure!(target.is_type_ground());
