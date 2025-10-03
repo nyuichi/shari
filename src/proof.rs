@@ -79,6 +79,7 @@ pub fn ungeneralize1(term: &Term) -> Option<(Parameter, Term)> {
         return None;
     };
     let tt::TermAbs {
+        metadata: _,
         binder_type,
         binder_name,
         body,

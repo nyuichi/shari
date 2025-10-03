@@ -255,6 +255,7 @@ impl<'a> Elaborator<'a> {
             }
             Term::Abs(m) => {
                 let TermAbs {
+                    metadata: _,
                     binder_type,
                     binder_name,
                     body,
@@ -277,7 +278,11 @@ impl<'a> Elaborator<'a> {
                 Ok(mk_type_arrow(binder_type.clone(), body_ty))
             }
             Term::App(m) => {
-                let TermApp { fun, arg } = &**m;
+                let TermApp {
+                    metadata: _,
+                    fun,
+                    arg,
+                } = &**m;
 
                 let fun_ty = self.visit_term(fun)?;
                 let arg_ty = self.visit_term(arg)?;
@@ -1406,6 +1411,7 @@ impl<'a> Elaborator<'a> {
                 // but in our implementation (1) is solved by choice_fr which always solves it
                 // by assigning ?M := λ x, f x, so we don't need to worry about that.
                 let TermAbs {
+                    metadata: _,
                     binder_type: right_binder_type,
                     binder_name: right_binder_name,
                     body: right_body,

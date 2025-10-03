@@ -9,8 +9,6 @@ use std::vec;
 
 use crate::proof::mk_type_prop;
 
-// TODO: subst系はFnを取るようにする。
-
 // TODO: struct Path(Name) を用意して Const の中身を Path にする。
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
 pub struct Name(usize);
@@ -721,6 +719,25 @@ impl Instance {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TermMetadata {
+    pub is_closed: bool,
+    pub bound: usize,
+    pub has_const: bool,
+    pub has_hole: bool,
+}
+
+impl Default for TermMetadata {
+    fn default() -> Self {
+        TermMetadata {
+            is_closed: true,
+            bound: 0,
+            has_const: false,
+            has_hole: false,
+        }
+    }
+}
+
 /// Locally nameless representation. See [Charguéraud, 2012].
 /// Use syn's convention [https://docs.rs/syn/latest/syn/enum.Expr.html#syntax-tree-enums].
 #[derive(Clone, Debug)]
@@ -735,11 +752,13 @@ pub enum Term {
 
 #[derive(Clone, Debug)]
 pub struct TermVar {
+    pub metadata: TermMetadata,
     pub index: usize,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct TermAbs {
+    pub metadata: TermMetadata,
     pub binder_type: Type,
     // for pretty-printing
     pub binder_name: Name,
@@ -748,17 +767,20 @@ pub struct TermAbs {
 
 #[derive(Clone, Debug)]
 pub struct TermApp {
+    pub metadata: TermMetadata,
     pub fun: Term,
     pub arg: Term,
 }
 
 #[derive(Clone, Debug)]
 pub struct TermLocal {
+    pub metadata: TermMetadata,
     pub name: Name,
 }
 
 #[derive(Clone, Debug)]
 pub struct TermConst {
+    pub metadata: TermMetadata,
     pub name: Name,
     pub ty_args: Vec<Type>,
     pub instances: Vec<Instance>,
@@ -766,6 +788,7 @@ pub struct TermConst {
 
 #[derive(Clone, Debug)]
 pub struct TermHole {
+    pub metadata: TermMetadata,
     pub name: Name,
 }
 
@@ -857,47 +880,75 @@ impl Display for Term {
     }
 }
 
-#[inline]
 pub fn mk_abs(binder_name: Name, binder_type: Type, body: Term) -> Term {
+    let body_meta = *body.metadata();
     Term::Abs(Arc::new(TermAbs {
+        metadata: body_meta,
         binder_type,
         binder_name,
         body,
     }))
 }
 
-#[inline]
 pub fn mk_app(fun: Term, arg: Term) -> Term {
-    Term::App(Arc::new(TermApp { fun, arg }))
+    let lhs = *fun.metadata();
+    let rhs = *arg.metadata();
+    let metadata = TermMetadata {
+        is_closed: lhs.is_closed && rhs.is_closed,
+        bound: lhs.bound.max(rhs.bound),
+        has_const: lhs.has_const || rhs.has_const,
+        has_hole: lhs.has_hole || rhs.has_hole,
+    };
+    Term::App(Arc::new(TermApp { metadata, fun, arg }))
 }
 
-#[inline]
 pub fn mk_var(index: usize) -> Term {
-    Term::Var(Arc::new(TermVar { index }))
+    let metadata = TermMetadata {
+        is_closed: true,
+        bound: index + 1,
+        has_const: false,
+        has_hole: false,
+    };
+    Term::Var(Arc::new(TermVar { metadata, index }))
 }
 
-#[inline]
 pub fn mk_const(name: Name, ty_args: Vec<Type>, instances: Vec<Instance>) -> Term {
+    let metadata = TermMetadata {
+        is_closed: true,
+        bound: 0,
+        has_const: true,
+        has_hole: false,
+    };
     Term::Const(Arc::new(TermConst {
+        metadata,
         name,
         ty_args,
         instances,
     }))
 }
 
-#[inline]
 pub fn mk_local(name: Name) -> Term {
-    Term::Local(Arc::new(TermLocal { name }))
+    let metadata = TermMetadata {
+        is_closed: false,
+        bound: 0,
+        has_const: false,
+        has_hole: false,
+    };
+    Term::Local(Arc::new(TermLocal { metadata, name }))
 }
 
-#[inline]
 pub fn mk_fresh_hole() -> Term {
     mk_hole(Name::fresh())
 }
 
-#[inline]
 pub fn mk_hole(name: Name) -> Term {
-    Term::Hole(Arc::new(TermHole { name }))
+    let metadata = TermMetadata {
+        is_closed: true,
+        bound: 0,
+        has_const: false,
+        has_hole: true,
+    };
+    Term::Hole(Arc::new(TermHole { metadata, name }))
 }
 
 #[derive(Debug, Clone)]
@@ -933,6 +984,18 @@ pub struct Parameter {
 }
 
 impl Term {
+    #[inline]
+    pub fn metadata(&self) -> &TermMetadata {
+        match self {
+            Term::Var(inner) => &inner.metadata,
+            Term::Abs(inner) => &inner.metadata,
+            Term::App(inner) => &inner.metadata,
+            Term::Local(inner) => &inner.metadata,
+            Term::Const(inner) => &inner.metadata,
+            Term::Hole(inner) => &inner.metadata,
+        }
+    }
+
     fn ptr_eq(&self, other: &Term) -> bool {
         match (self, other) {
             (Term::Var(a), Term::Var(b)) => Arc::ptr_eq(a, b),
@@ -946,8 +1009,10 @@ impl Term {
     }
 
     /// self.open([x, y], k) == [x/k+1,y/k]self
-    /// TODO: open をもっと軽くする。Term の全ての variant に bound を持たせて、その値を見て不必要な clone を行わないようにする。
     pub fn open(&self, xs: &[Term], level: usize) -> Term {
+        if self.metadata().bound <= level {
+            return self.clone();
+        }
         match self {
             Self::Local(_) => self.clone(),
             Self::Var(inner) => {
@@ -983,6 +1048,9 @@ impl Term {
 
     /// self.close([x, y], k) == [k+1/x, k/y]self
     pub fn close(&self, xs: &[Name], level: usize) -> Term {
+        if self.metadata().is_closed {
+            return self.clone();
+        }
         match self {
             Self::Local(inner) => {
                 let name = inner.name;
@@ -1013,6 +1081,41 @@ impl Term {
             }
             Self::Const(_) => self.clone(),
             Self::Hole(_) => self.clone(),
+        }
+    }
+
+    pub fn replace_local(&self, f: &impl Fn(Name) -> Option<Term>) -> Term {
+        if self.metadata().is_closed {
+            return self.clone();
+        }
+        match self {
+            Term::Var(_) => self.clone(),
+            Term::Abs(inner) => {
+                let body = inner.body.replace_local(f);
+                if inner.body.ptr_eq(&body) {
+                    self.clone()
+                } else {
+                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
+                }
+            }
+            Term::App(inner) => {
+                let fun = inner.fun.replace_local(f);
+                let arg = inner.arg.replace_local(f);
+                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
+                    self.clone()
+                } else {
+                    mk_app(fun, arg)
+                }
+            }
+            Term::Local(inner) => {
+                if let Some(m) = f(inner.name) {
+                    m
+                } else {
+                    self.clone()
+                }
+            }
+            Term::Const(_) => self.clone(),
+            Term::Hole(_) => self.clone(),
         }
     }
 
@@ -1049,6 +1152,9 @@ impl Term {
     }
 
     pub fn replace_instance(&self, f: &impl Fn(&Instance) -> Instance) -> Term {
+        if !self.metadata().has_const {
+            return self.clone();
+        }
         match self {
             Term::Var(_) => self.clone(),
             Term::Abs(inner) => {
@@ -1156,38 +1262,15 @@ impl Term {
         self.replace_type(&|t| t.subst(subst))
     }
 
-    /// subst must not have duplicated names.
     pub fn subst(&self, subst: &[(Name, Term)]) -> Term {
-        match self {
-            Term::Var(_) => self.clone(),
-            Term::Abs(inner) => {
-                let body = inner.body.subst(subst);
-                if inner.body.ptr_eq(&body) {
-                    self.clone()
-                } else {
-                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
+        self.replace_local(&|x| {
+            for (y, m) in subst {
+                if *y == x {
+                    return Some(m.clone());
                 }
             }
-            Term::App(inner) => {
-                let fun = inner.fun.subst(subst);
-                let arg = inner.arg.subst(subst);
-                if inner.fun.ptr_eq(&fun) && inner.arg.ptr_eq(&arg) {
-                    self.clone()
-                } else {
-                    mk_app(fun, arg)
-                }
-            }
-            Term::Local(inner) => {
-                for (x, m) in subst {
-                    if inner.name == *x {
-                        return m.clone();
-                    }
-                }
-                self.clone()
-            }
-            Term::Const(_) => self.clone(),
-            Term::Hole(_) => self.clone(),
-        }
+            None
+        })
     }
 
     /// {x₁, ⋯, xₙ} # self <==> ∀ i, xᵢ ∉ FV(self)
