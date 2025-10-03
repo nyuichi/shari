@@ -10,6 +10,10 @@
  - [ ] improved error reporting
  - [ ] coercion
  - [ ] namespace
+ - [ ] let expr
+ - [ ] local typedef
+ - [ ] more tests
+ - [ ] kernel support for eta equality of lambdas
  -/
 
 /-
@@ -43,9 +47,9 @@ Their consistency is established from semantic arguments.
 | logic                                              | models                                |
 |----------------------------------------------------|---------------------------------------|
 | intuitionistic higher-order logic (the base logic) | any model of PTS λHOL                 |
-| + fun_ext + prop_ext + auc                         | any topos                             |
-|   + choice                                         |   satisfying internal axiom of choice |
-|   + epsilon                                        |   in which supports split             |
+| + fun_ext + prop_ext + auc + definite_description  | any topos                             |
+|   + ac                                             |   satisfying internal axiom of choice |
+|   + indefinite_description                         |   in which supports split             |
 |   + inductive types                                |   with NNO                            |
 
 (For those who are familiar with topos theory:
@@ -111,15 +115,15 @@ infix > : 50 := has_le.gt
 -- (a) is taken by most languages supporting dependent types including Coq, Agda, Lean, and Scala.
 -- Others such as Haskell and Isabelle use (b). Our choice is (b), because we do not have dependency thus
 -- implicit arguments are not necessary in typing, and using (b) makes it easier to force the coherency of instances.
--- (While languages using (a) allows overlapping instances and non-deterministic elaboration, coherency is still
+-- (While languages using (a) allow overlapping instances and non-deterministic elaboration, coherency is still
 -- important to avoid unintentional behaviours. In fact, in Lean, programmers must be careful not to introduce
 -- _morally incoherent_ instances.)
 --
--- Because our kernel (nor the unifier) do not implement ι-reduction, we implement class method instantiation by a special
--- equality rule called κ-reduction. When the elaborator encounters κ-redex it eagerly reduces. So we recommend users to
--- use as small terms in instance method definitions as possible so that terms may not exponentially blow up.
+-- Because neither our kernel nor the unifier implements ι-reduction, we implement class method instantiation by a special
+-- equality rule called κ-reduction. When the elaborator encounters a κ-redex, it eagerly reduces, so we recommend using
+-- as small terms as possible in instance method definitions to avoid exponential blow-up.
 --
--- While use of class instantiations are not lowered to terms representing structure objects, the kernel implicitly generates
+-- Although class instantiations are not lowered to terms representing structure objects, the kernel implicitly generates
 -- instance objects that are invisible in the language surface. This design allows us to easily prove the consistency of the logic,
 -- otherwise it is very error-prone [Kunˇcar & Popescu, '19].
 
@@ -169,6 +173,11 @@ class structure has u := {
 
 def summon.{u} [has u] : u := has.summon
 
+-- The unifier uses this class to resolve unconstrained metavariables.
+class structure default u := {
+  const value : u
+}
+
 -- A predicative version of Leibniz equality (attributed to Paulin).
 -- The following set of declarations are generated.
 -- (Notice that the order of arguments in eq.ind is slightly modified from [Dybjer, '97].)
@@ -181,7 +190,7 @@ def summon.{u} [has u] : u := has.summon
 -- least reflexive relation à la Martin-Löf because this induces a much simpler elimination rule.
 --
 -- The existence of inductive (predicate) families follows from the fact that every topos
--- validates the Knaster-Tarski fixedpoint theorem. [_citation needed_]
+-- validates the Knaster-Tarski fixedpoint theorem. See e.g. [Some flavours of topos theory, F. Borceux, '22].
 inductive eq.{u} (x : u) : u → Prop
 | refl : eq x
 
@@ -222,6 +231,10 @@ class instance Prop.has_neg : has_neg Prop := {
   def neg : Prop → Prop := not
 }
 
+class instance Prop.default : default Prop := {
+  def value : Prop := ⊤
+}
+
 def iff (φ : Prop) (ψ : Prop) : Prop := (φ → ψ) ∧ (ψ → φ)
 def uexists.{u} (P : u → Prop) : Prop := ∃ x, P x ∧ (∀ y, P y → x = y)
 def ne.{u} (x : u) (y : u) : Prop := ¬x = y
@@ -232,8 +245,10 @@ def has_le.gt.{u} [has_le u] (x y : u) : Prop := y < x
 
 -- Three axioms of topos (cf. [Introduction to CATEGORY THEORY and CATEGORICAL LOGIC, T. Streicher, '03])
 axiom prop_ext (φ ψ : Prop) : (φ ↔ ψ) → φ = ψ
+
 -- The fact that this axiom holds means every topos is always internally well-pointed.
 axiom fun_ext.{u, v} (f₁ f₂ : u → v) : (∀ x, f₁ x = f₂ x) → f₁ = f₂
+
 axiom auc.{u, v} (R : u → v → Prop) : (∀ x, ∃! y, R x y) → ∃! f, ∀ x, R x (f x)
 
 lemma eq.transport.{u} (m₁ m₂ : u) (P : u → Prop) : m₁ = m₂ → P m₁ → P m₂ := eq.ind
@@ -304,8 +319,12 @@ def unique.{u} (P : u → Prop) : Prop := ∀ (x₁ x₂ : u), P x₁ → P x₂
 lemma uexists.intro.{u} (P : u → Prop) : exists P → unique P → uexists P :=
 assume exists P,
 assume unique P,
-obtain (x : u), P x := «exists P»,
+-- TODO: fix this bug or make the kernel to recognize eta equality of lambdas.
+-- obtain (x : u), P x := «exists P»,
+-- exists.intro (and.intro «P x» (take (y : u), assume P y, «unique P»[x, y] «P x» «P y»))
+@exists.ind[P, _] «exists P» (take (x : u), assume P x,
 exists.intro (and.intro «P x» (take (y : u), assume P y, «unique P»[x, y] «P x» «P y»))
+)
 
 lemma uexists.exists.{u} (P : u → Prop) : uexists P → exists P :=
 assume uexists P,
@@ -373,6 +392,67 @@ iff.intro
       (exists.map «∀ x, Q x → P x» (uexists.exists «∃! x, Q x»))
       (unique.map «∀ x, P x → Q x» (uexists.unique «∃! x, Q x»)))
 
+structure is_singleton u := {
+  axiom singleton : ∃! (a : u), ⊤
+}
+
+-- Definite description
+--
+-- This construct exists in any topos.
+-- Proof:
+--   Let U := { * : 1 | ∃! (x : A), ⊤ }.
+--   We prove that there uniquely exists a morphism s : U → A.
+--   By definition U ⊩ ∃! (x : A), ⊤.
+--   By existence, there exist an epi z : V ->> U and a morphism a : V -> A.
+--   Since z is regular, we have a pair p₁,p₂ : V ×[U] V → V such that z = coeq(p₁,p₂).
+--   By uniqueness, a p₁ = a p₂. By the universality of coeuqlizers, we obtain s : U → A.
+--
+-- For a unary predicate φ(x), we can extract the unique element satisfying φ by first passing through the
+-- comprehension type t := { x | φ(x) }.
+const definite_description.{u} : is_singleton u → u
+
+-- The followings are boilerplate.
+-- To obtain an object `x` from a proposition `∃! x, ...`, we first define a structure and then
+-- prove its unique inhabitedness and finally get the term applying definite description.
+
+structure is_empty u := {
+  axiom empty : ¬∃ (x : u), ⊤
+}
+
+lemma empty_function.uexists.{u, v} [has (is_empty u)] : ∃! (f : u → v), ⊤ :=
+have ∀ (x : u), ∃! (y : v), ⊤ := {
+  take (x : u),
+  have ¬∃ (x : u), ⊤ := @is_empty.empty[summon],
+  have ∃ (x : u), ⊤ := @exists.intro[_, x] true.intro,
+  absurd (contradiction «∃ (x : u), ⊤» «¬∃ (x : u), ⊤»)
+},
+have ∃! (f : u → v), ∀ (x : u), ⊤ := auc «∀ (x : u), ∃! (y : v), ⊤»,
+have ∀ (f : u → v), (∀ (x : u), ⊤) ↔ ⊤ := {
+  take (f : u → v),
+  have (∀ (x : u), ⊤) → ⊤ := {
+    assume ∀ x, ⊤,
+    true.intro
+  },
+  have ⊤ → ∀ (x : u), ⊤ := {
+    assume ⊤,
+    take (x : u),
+    true.intro
+  },
+  iff.intro «(∀ (x : u), ⊤) → ⊤» «⊤ → ∀ (x : u), ⊤»
+},
+iff.right (uexists.congr «∀ (f : u → v), (∀ (x : u), ⊤) ↔ ⊤») «∃! (f : u → v), ∀ (x : u), ⊤»
+
+instance EmptyFunction.is_singleton.{u, v} [has (is_empty u)] : is_singleton (u → v) := {
+  lemma singleton : ∃! (f : u → v), ⊤ := empty_function.uexists
+}
+
+class instance EmptyFunction.has.is_singleton.{u, v} [has (is_empty u)] : has (is_singleton (u → v)) := {
+  def summon : is_singleton (u → v) := EmptyFunction.is_singleton
+}
+
+def empty_function.{u, v} [has (is_empty u)] : u → v := definite_description summon
+
+
 -- The type of decidable propositions.
 --
 -- The structure command below is desugared into the following set of declarations.
@@ -381,7 +461,7 @@ iff.intro
 --   const bool.rec.{α} : bool → (Prop → α) → α
 --   def bool.rep : bool → Prop := λ (this : bool), bool.rec.{Prop} this (λ (rep : Prop), rep)
 --   axiom bool.spec.{u} (this : bool) : bool.rep this = ⊤ ∨ bool.rep this = ⊥
---   axiom bool.abs.{u} (rep : Prop) : rep = ⊤ ∨ rep = ⊥ → ∃ this, rep = bool.rep this
+--   axiom bool.abs.{u, α} (rep : Prop) : rep = ⊤ ∨ rep = ⊥ → ∃ this, bool.rec.{α} this = λ (f : Prop → α), f rep
 --   axiom bool.ext.{u} (this₁ this₂ : bool) : bool.rep this₁ = bool.rep this₂ → this₁ = this₂
 --
 -- Of course, bool can be also defined in terms of an inductive type.
@@ -408,12 +488,17 @@ structure bool := {
 --
 instance bool.tt : bool := {
   def rep : Prop := ⊤
+  -- TODO: name collision
   lemma spec : rep = ⊤ ∨ rep = ⊥ := or.left eq.refl
 }
 
 instance bool.ff : bool := {
   def rep : Prop := ⊥
   lemma spec : rep = ⊤ ∨ rep = ⊥ := or.right eq.refl
+}
+
+class instance bool.default : default bool := {
+  def value : bool := bool.tt
 }
 
 def tt : bool := bool.tt
@@ -515,25 +600,111 @@ def subset.{u} (s : sub u) (t : sub u) : Prop := ∀ x, x ∈ s → x ∈ t
 def sep.{u} (s : sub u) (φ : u → Prop) : sub u := λ x, x ∈ s ∧ φ x
 def cap.{u} (s : sub u) (t : sub u) : sub u := { x | x ∈ s ∧ x ∈ t }
 def cup.{u} (s : sub u) (t : sub u) : sub u := { x | x ∈ s ∨ x ∈ t }
-def Cap.{u} (a : sub (sub u)) : sub u := { x | ∀ s, s ∈ a → x ∈ s }
-def Cup.{u} (a : sub (sub u)) : sub u := { x | ∃ s, s ∈ a ∧ x ∈ s }
+def bigcap.{u} (a : sub (sub u)) : sub u := { x | ∀ s, s ∈ a → x ∈ s }
+def bigcup.{u} (a : sub (sub u)) : sub u := { x | ∃ s, s ∈ a ∧ x ∈ s }
 def power.{u} (s : sub u) : sub (sub u) := { t | t ⊆ s }
 def setminus.{u} (s : sub u) (t : sub u) : sub u := { x | x ∈ s ∧ x ∉ t }
 def im.{u, v} (f : u → v) (s : sub u) : sub v := { y | ∃ x, x ∈ s ∧ y = f x }
 def insert.{u} (a : u) (s : sub u) : sub u := { x | x = a ∨ x ∈ s }
 
--- Consolas does not display well the cap and bigcap symbols:
+lemma set.ext.{u} (s t : sub u) : (∀ x, x ∈ s ↔ x ∈ t) → s = t :=
+assume ∀ x, x ∈ s ↔ x ∈ t,
+fun_ext (take (x : u), prop_ext («∀ x, x ∈ s ↔ x ∈ t»[x]))
+
+lemma subset.trans.{u} (s t r : sub u) : s ⊆ t → t ⊆ r → s ⊆ r :=
+assume s ⊆ t,
+assume t ⊆ r,
+take (x : u),
+assume x ∈ s,
+have x ∈ t := «s ⊆ t»[x] «x ∈ s»,
+«t ⊆ r»[x] «x ∈ t»
+
+lemma subset.refl.{u} (s : sub u) : s ⊆ s :=
+take (x : u),
+assume x ∈ s,
+«x ∈ s»
+
+lemma subset.antisymm.{u} (s t : sub u) : s ⊆ t → t ⊆ s → s = t :=
+assume s ⊆ t,
+assume t ⊆ s,
+have ∀ x, x ∈ s ↔ x ∈ t :=
+  take (x : u),
+  iff.intro («s ⊆ t»[x]) («t ⊆ s»[x]),
+set.ext «∀ x, x ∈ s ↔ x ∈ t»
+
+-- Note: Consolas does not display well the cap and bigcap symbols:
 --
 --    ∩  U+2229 INTERSECTION
 --    ⋂  U+22C2 N-ARY INTERSECTION
 --
--- that's why we use instead ⋒ U+22D2 DOUBLE INTERSECTION.
+-- We can perhaps use instead ⋒ U+22D2 DOUBLE INTERSECTION.
 -- In Lean, two character symbols ⋂₀ and ⋃₀ are adopted but I could not find their origin on the internet.
 -- https://github.com/leanprover/lean3/pull/936/commits/549feb5d7f95c0d28450b3778d471becafe58046
---
--- TODO: still unreadable?
-prefix ⋒ : 110 := Cap
-prefix ⋓ : 110 := Cup
+prefix ⋂ : 110 := bigcap
+prefix ⋃ : 110 := bigcup
+
+lemma bigcap.lower_bound.{u} (a : sub (sub u)) (s : sub u) : s ∈ a → ⋂ a ⊆ s :=
+assume s ∈ a,
+take (x : u),
+assume x ∈ ⋂ a,
+«x ∈ ⋂ a»[s] «s ∈ a»
+
+-- While Sub(X) is not a complete Heyting lattice object, it is indeed internally complete as this lemma shows.
+lemma bigcap.universal.{u} (a : sub (sub u)) (s : sub u) : (∀ t, t ∈ a → s ⊆ t) → s ⊆ ⋂ a :=
+assume ∀ t, t ∈ a → s ⊆ t,
+take (x : u),
+assume x ∈ s,
+have x ∈ ⋂ a :=
+  take (t : sub u),
+  assume t ∈ a,
+  have s ⊆ t := «∀ t, t ∈ a → s ⊆ t»[t] «t ∈ a»,
+  «s ⊆ t»[x] «x ∈ s»,
+«x ∈ ⋂ a»
+
+lemma bigcup.upper_bound.{u} (a : sub (sub u)) (s : sub u) : s ∈ a → s ⊆ ⋃ a :=
+assume s ∈ a,
+take (x : u),
+assume x ∈ s,
+@exists.intro[_, s] (and.intro «s ∈ a» «x ∈ s»)
+
+def monotone.{u} (f : sub u → sub u) : Prop := ∀ s t, s ⊆ t → f s ⊆ f t
+
+def mu.{u} (f : sub u → sub u) : sub u := ⋂ { s | f s ⊆ s }
+
+lemma mu.lower_bound.{u} (f : sub u → sub u) (s : sub u) : f s ⊆ s → mu f ⊆ s := bigcap.lower_bound
+
+lemma mu.is_prefix.{u} (f : sub u → sub u) : monotone f → f (mu f) ⊆ mu f :=
+assume monotone f,
+have ∀ s, f s ⊆ s → f (mu f) ⊆ s :=
+  take (s : sub u),
+  assume f s ⊆ s,
+  have mu f ⊆ s := mu.lower_bound «f s ⊆ s»,
+  have f (mu f) ⊆ f s := «monotone f»[mu f, s] «mu f ⊆ s»,
+  subset.trans «f (mu f) ⊆ f s» «f s ⊆ s»,
+bigcap.universal «∀ s, f s ⊆ s → f (mu f) ⊆ s»
+
+lemma mu.is_postfix.{u} (f : sub u → sub u) : monotone f → mu f ⊆ f (mu f) :=
+assume monotone f,
+have f (mu f) ⊆ mu f := mu.is_prefix «monotone f»,
+have f (f (mu f)) ⊆ f (mu f) := «monotone f»[f (mu f), mu f] «f (mu f) ⊆ mu f»,
+mu.lower_bound «f (f (mu f)) ⊆ f (mu f)»
+
+lemma mu.fixed_point.{u} (f : sub u → sub u) : monotone f → mu f = f (mu f) :=
+assume monotone f,
+have f (mu f) ⊆ mu f := mu.is_prefix «monotone f»,
+have mu f ⊆ f (mu f) := mu.is_postfix «monotone f»,
+subset.antisymm «mu f ⊆ f (mu f)» «f (mu f) ⊆ mu f»
+
+-- Knaster-Tarski
+lemma mu.least_fixed_point.{u} (f : sub u → sub u) : monotone f → mu f = f (mu f) ∧ (∀ s, s = f s → mu f ⊆ s) :=
+assume monotone f,
+have mu f = f (mu f) := mu.fixed_point «monotone f»,
+have ∀ s, s = f s → mu f ⊆ s :=
+  take (s : sub u),
+  assume s = f s,
+  have f s ⊆ s := eq.transport «s = f s» subset.refl,
+  mu.lower_bound «f s ⊆ s»,
+and.intro «mu f = f (mu f)» «∀ s, s = f s → mu f ⊆ s»
 
 lemma cantor.{u} : ¬(∃ (e : u → sub u), surjective e) :=
 mt lawvere_fixpoint (
@@ -547,10 +718,6 @@ inductive fin.{u} : sub u → Prop
 | empty : fin empty
 | insert (a : u) (s : sub u) : fin s → fin (insert a s)
 
-/-
- - choice
- -/
-
 -- The type of inhabited subsets.
 structure inhab u := {
   const rep : sub u
@@ -559,6 +726,19 @@ structure inhab u := {
 
 lemma inhab.uabs.{u} (s : sub u) : (∃ x, x ∈ s) → ∃! c, s = inhab.rep c :=
 assume ∃ x, x ∈ s,
+-- TODO: add obtain instance syntax
+--
+--   obtain instance c : inhab u := {
+--     def rep : sub u := s
+--     lemma inhabited : ∃ x, x ∈ rep := «∃ x, x ∈ s»
+--   },
+--
+-- which is desugared to
+--
+--   let c.rep : sub u := s,
+--   have c.inhabited : ∃ x, x ∈ c.rep := «∃ x, x ∈ s»,
+--   obtain (c : bool), inhab.rec c = λ (f : sub u → α), f c.rep := @inhab.abs[c.rep] c.inhabited,
+--
 obtain (c : inhab u), s = inhab.rep c := inhab.abs «∃ x, x ∈ s»,
 uexists.intro
   (exists.intro «s = inhab.rep c»)
@@ -569,29 +749,35 @@ uexists.intro
    have inhab.rep c₁ = inhab.rep c₂ := eq.trans (eq.symm «s = inhab.rep c₁») «s = inhab.rep c₂»,
    inhab.ext «inhab.rep c₁ = inhab.rep c₂»)
 
--- The existence of the constant and the axiom state that every type u is a choice type.
-const choice.{u} : inhab u → u
-axiom choice.spec.{u} (x : inhab u) : choice x ∈ inhab.rep x
+/-
+ - axiom of choice
+ -/
 
-lemma ac.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) := {
-  assume ∀ x, ∃ y, R x y,
-  have ∀ x, ∃! (h : inhab v), R x = inhab.rep h :=
-    take (x : u),
-    -- FIXME: the unifier could not synthesize `R x`. Perhaps because it's a partially applied term?
-    @inhab.uabs[R x] «∀ x, ∃ y, R x y»[x],
-  have ∃! (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
-    auc «∀ x, ∃! (h : inhab v), R x = inhab.rep h»,
-  obtain (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
-    uexists.exists «∃! (f : u → inhab v), ∀ x, R x = inhab.rep (f x)»,
-  exists.intro
-    (take (x : u),
-    have inhab.rep (f x) (choice (f x)) :=
-      choice.spec,
-    eq.transport (eq.symm (eq.congr_fun «∀ x, R x = inhab.rep (f x)»[x])) «inhab.rep (f x) (choice (f x))»)
-}
+axiom ac.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x)
 
-lemma surjective.split.{u, v} (f : u → v) : surjective f → split f :=
-ac
+lemma surjective.split.{u, v} (f : u → v) : surjective f → split f := ac
+
+def choice.{u} (f : inhab u → u) : Prop := ∀ (x : inhab u), f x ∈ inhab.rep x
+
+-- choice function exists for any inhabited type
+-- this is an equivalent formulation of ac
+-- later we will introduce a constructive version of this lemma, called `global_choice`.
+lemma choice.exists.{u} : ∃ (f : inhab u → u), choice f :=
+ac @inhab.inhabited
+
+lemma ac_from_choice_exists.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) :=
+obtain (c : inhab v → v), choice c := choice.exists,
+assume ∀ x, ∃ y, R x y,
+have ∀ x, ∃! (s : inhab v), R x = inhab.rep s :=
+  take (x : u),
+  have ∃ (y : v), R x y := «∀ x, ∃ y, R x y»[x],
+    -- FIXME: the unifier could not synthesize `R x`
+  @inhab.uabs[R x] «∃ (y : v), R x y»,
+have ∃! (g : u → inhab v), ∀ x, R x = inhab.rep (g x) := auc «∀ x, ∃! (s : inhab v), R x = inhab.rep s»,
+obtain (g : u → inhab v), ∀ x, R x = inhab.rep (g x) := uexists.exists «∃! (g : u → inhab v), ∀ x, R x = inhab.rep (g x)»,
+@exists.intro[_, λ x, c (g x)] (take (x : u),
+  have c (g x) ∈ inhab.rep (g x) := «choice c»[g x],
+  eq.transport (eq.symm «∀ x, R x = inhab.rep (g x)»[x]) «c (g x) ∈ inhab.rep (g x)»)
 
 -- Diaconescu's argument: ac + prop_ext + fun_ext → em
 --
@@ -604,7 +790,8 @@ lemma em (φ : Prop) : φ ∨ ¬φ := {
   have ∃ b, φ ∨ b = ff := exists.intro (or.right eq.refl),
   obtain (h₁ : inhab bool), (λ b, φ ∨ b = tt) = inhab.rep h₁ := inhab.abs «∃ b, φ ∨ b = tt»,
   obtain (h₂ : inhab bool), (λ b, φ ∨ b = ff) = inhab.rep h₂ := inhab.abs «∃ b, φ ∨ b = ff»,
-  have φ → choice h₁ = choice h₂ :=
+  obtain (c : inhab bool → bool), choice c := choice.exists,
+  have φ → c h₁ = c h₂ :=
     assume φ,
     have (λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff) := fun_ext (
       take (b : bool),
@@ -617,23 +804,23 @@ lemma em (φ : Prop) : φ ∨ ¬φ := {
     have h₁ = h₂ :=
       inhab.ext «inhab.rep h₁ = inhab.rep h₂»,
     eq.congr_arg «h₁ = h₂»,
-  have φ ∨ choice h₁ = tt :=
-    eq.transport (eq.symm (eq.congr_fun «(λ b, φ ∨ b = tt) = inhab.rep h₁»)) choice.spec,
-  have φ ∨ choice h₂ = ff :=
-    eq.transport (eq.symm (eq.congr_fun «(λ b, φ ∨ b = ff) = inhab.rep h₂»)) choice.spec,
-  have φ ∨ choice h₁ ≠ choice h₂ :=
-    or.ind «φ ∨ choice h₁ = tt»
+  have φ ∨ c h₁ = tt :=
+    eq.transport (eq.symm (eq.congr_fun «(λ b, φ ∨ b = tt) = inhab.rep h₁»)) «choice c»[h₁],
+  have φ ∨ c h₂ = ff :=
+    eq.transport (eq.symm (eq.congr_fun «(λ b, φ ∨ b = ff) = inhab.rep h₂»)) «choice c»[h₂],
+  have φ ∨ c h₁ ≠ c h₂ :=
+    or.ind «φ ∨ c h₁ = tt»
       (assume φ, or.left «φ»)
-      (assume choice h₁ = tt,
-        or.ind «φ ∨ choice h₂ = ff»
+      (assume c h₁ = tt,
+        or.ind «φ ∨ c h₂ = ff»
           (assume φ, or.left «φ»)
-          (assume choice h₂ = ff,
-            or.right (eq.transport (eq.symm «choice h₂ = ff») (eq.transport (eq.symm «choice h₁ = tt») bool.tt_ne_ff)))),
-  or.ind «φ ∨ choice h₁ ≠ choice h₂»
+          (assume c h₂ = ff,
+            or.right (eq.transport (eq.symm «c h₂ = ff») (eq.transport (eq.symm «c h₁ = tt») bool.tt_ne_ff)))),
+  or.ind «φ ∨ c h₁ ≠ c h₂»
     (assume φ,
       or.left «φ»)
-    (assume choice h₁ ≠ choice h₂,
-      or.right (mt «φ → choice h₁ = choice h₂» «choice h₁ ≠ choice h₂»))
+    (assume c h₁ ≠ c h₂,
+      or.right (mt «φ → c h₁ = c h₂» «c h₁ ≠ c h₂»))
 }
 
 -- double negation elimination
@@ -721,8 +908,18 @@ or.ind em
 
 -- A type operator sending an inhabited type to its propositional truncation.
 -- This type has several names in the literature, such as support type, bracket type, or propositional truncation.
+--
+-- In the presence of dependent products, this operator corresponds to the law of double negation:
+--
+--   is_inhabited u ≅ Π (p : Prop), (u → El(p)) → El(p)
+--
+-- where we assume Prop is a Tarski universe.
 structure is_inhabited u := {
   axiom inhabited : ∃ (a : u), ⊤
+}
+
+instance bool.is_inhabited : is_inhabited bool := {
+  lemma inhabited : ∃ (a : bool), ⊤ := @exists.intro[_, bool.tt] true.intro
 }
 
 -- (The dual of) the drinker paradox. This is equivalent to independence_of_premise.
@@ -746,31 +943,70 @@ obtain (x : u), (∃ y, P y) → P x := @strong_indefinite_description[h, P],
 have φ → P x := imp.trans «φ → ∃ x, P x» «(∃ y, P y) → P x»,
 exists.intro «φ → P x»
 
+-- This is equivalent to axiom of choice.
+lemma some.exists.{u} (h : is_inhabited u) : ∃ (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) :=
+ac @strong_indefinite_description[h]
+
+lemma ac₃.{u, v} (h : is_inhabited v) (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) :=
+assume ∀ x, ∃ y, R x y,
+obtain (ε : (v → Prop) → v), ∀ P, (∃ y, P y) → P (ε P) := @some.exists[h],
+@exists.intro[_, (λ x, ε (R x))]
+  (take (x : u),
+   have ∃ y, R x y := «∀ x, ∃ y, R x y»[_],
+   have (∃ y, R x y) → R x (ε (R x)) := «∀ P, (∃ y, P y) → P (ε P)»[R x],
+   have R x (ε (R x)) := «(∃ y, R x y) → R x (ε (R x))» «∃ y, R x y»,
+   «R x (ε (R x))»)
+
+lemma bool.has_choice : ∃ (f : inhab bool → bool), choice.{bool} f :=
+@ac₃[bool.is_inhabited, _] @inhab.inhabited
+
+lemma em₂ (φ : Prop) : φ ∨ ¬φ := {
+  have ∃ b, φ ∨ b = tt := exists.intro (or.right eq.refl),
+  have ∃ b, φ ∨ b = ff := exists.intro (or.right eq.refl),
+  obtain (h₁ : inhab bool), (λ b, φ ∨ b = tt) = inhab.rep h₁ := inhab.abs «∃ b, φ ∨ b = tt»,
+  obtain (h₂ : inhab bool), (λ b, φ ∨ b = ff) = inhab.rep h₂ := inhab.abs «∃ b, φ ∨ b = ff»,
+  obtain (c : inhab bool → bool), choice c := bool.has_choice,
+  have φ → c h₁ = c h₂ :=
+    assume φ,
+    have (λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff) := fun_ext (
+      take (b : bool),
+      have φ ∨ b = tt := or.left «φ»,
+      have φ ∨ b = ff := or.left «φ»,
+      prop_ext (iff.intro (assume φ ∨ b = tt, «φ ∨ b = ff») (assume φ ∨ b = ff, «φ ∨ b = tt»))
+    ),
+    have inhab.rep h₁ = inhab.rep h₂ :=
+      eq.trans (eq.symm «(λ b, φ ∨ b = tt) = inhab.rep h₁») (eq.trans «(λ b, φ ∨ b = tt) = (λ b, φ ∨ b = ff)» «(λ b, φ ∨ b = ff) = inhab.rep h₂»),
+    have h₁ = h₂ :=
+      inhab.ext «inhab.rep h₁ = inhab.rep h₂»,
+    eq.congr_arg «h₁ = h₂»,
+  have φ ∨ c h₁ = tt :=
+    eq.transport (eq.symm (eq.congr_fun «(λ b, φ ∨ b = tt) = inhab.rep h₁»)) «choice c»[h₁],
+  have φ ∨ c h₂ = ff :=
+    eq.transport (eq.symm (eq.congr_fun «(λ b, φ ∨ b = ff) = inhab.rep h₂»)) «choice c»[h₂],
+  have φ ∨ c h₁ ≠ c h₂ :=
+    or.ind «φ ∨ c h₁ = tt»
+      (assume φ, or.left «φ»)
+      (assume c h₁ = tt,
+        or.ind «φ ∨ c h₂ = ff»
+          (assume φ, or.left «φ»)
+          (assume c h₂ = ff,
+            or.right (eq.transport (eq.symm «c h₂ = ff») (eq.transport (eq.symm «c h₁ = tt») bool.tt_ne_ff)))),
+  or.ind «φ ∨ c h₁ ≠ c h₂»
+    (assume φ,
+      or.left «φ»)
+    (assume c h₁ ≠ c h₂,
+      or.right (mt «φ → c h₁ = c h₂» «c h₁ ≠ c h₂»))
+}
+
 /-
- - epsilon
+ - Indefinite description
  -/
 
--- internal global choice operator
--- 
 -- Introducing this constant restricts the class of models to toposes whose supports split.
 -- Postulating split supports together with the internal axiom of choice, our logic becomes
 -- precisely an internal logic of toposes satisfying the _external_ axiom of choice.
 --
 --    internal axiom of choice + split supports = external axiom of choice
---
--- Note we do not have an object-level function assigning for each type u the choice function,
--- which is strictly stronger than our choice and would imply the axiom of choice.
--- For the details of this direction see Lean's standard library.
---
--- In the presence of dependent products, this operator corresponds to the law of double negation:
---
---   is_inhabited u ≅ Π (p : Prop), (u → El(p)) → El(p)
---
--- where we assume Prop is a Tarski universe.
---
--- One can interpret this function in Kripke-Joyal semantics as follows:
--- whenever one proves ⊢ ∃ (x : u), ⊤, hence ⊩ ∃ (x : u), ⊤, which in general
--- means there exist an object V, V → 1 epi and V → u, one can safely assume V was 1.
 --
 -- Assuming IAC, the following are equivalent. E is a topos.
 -- (a) Supports split in E.
@@ -788,29 +1024,17 @@ exists.intro «φ → P x»
 --
 -- This lemma is very important because the fact the properties of the ambient category are
 -- inherited to its slices corresponds to that introducing a variable does not change the logic.
--- If we add locally defined types in the future, this lemma justifies the use of epsilon applying to
--- such types that may contain free (term) variables.
-const epsilon.{u} : is_inhabited u → u
+-- If we add locally defined types in the future, this lemma justifies the use of indefinite_description
+-- applying to such types that may contain free (term) variables.
+const indefinite_description.{u} : is_inhabited u → u
 
-structure pointed u := {
-  const pt : u
-}
+/-
+ -  Hilbert's epsilon
+ -/
 
-instance pointed.mk.{u} (x : u) : pointed u := {
-  def pt : u := x
-}
-
--- Essentially same as epsilon, but is more structured.
-def is_inhabited.pointed.{u} (h : is_inhabited u) : pointed u := pointed.mk (epsilon h)
-
--- Construct external epsilon operator from internal epsilon and internal axiom of choice.
+-- Construct Hilbert's epsilon from (internal) axiom of choice and indefinite description.
 -- A similar construction is found in arXiv:1603.00822.
 
-lemma some_exists.{u} (h : is_inhabited u) : ∃ (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) :=
-ac @strong_indefinite_description[h]
-
--- The followings are boilerplate. To obtain an object `x` from a proposition `∃ x, ...`, we first define a structure and then
--- prove its inhabitedness and finally get the term applying the internal epsilon.
 structure Some u := {
   const run : (u → Prop) → u
   axiom spec (P : u → Prop) : (∃ y, P y) → P (run P)
@@ -818,18 +1042,62 @@ structure Some u := {
 
 instance Some.is_inhabited.{u} (h : is_inhabited u) : is_inhabited (Some u) := {
   lemma inhabited : ∃ (x : Some u), ⊤ :=
-  obtain (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) := @some_exists[h],
+  obtain (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) := @some.exists[h],
   obtain (this : Some u), ε = Some.run this := @Some.abs[ε] «∀ P, (∃ y, P y) → P (ε P)»,
   @exists.intro[_, this] true.intro
 }
 
-def Some.pt.{u} (h : is_inhabited u) : Some u := pointed.pt (is_inhabited.pointed (Some.is_inhabited h))
+def some.{u} [has (is_inhabited u)] : (u → Prop) → u := Some.run (indefinite_description (Some.is_inhabited summon))
+lemma some.spec.{u} [has (is_inhabited u)] (P : u → Prop) : (∃ y, P y) → P (some P) := @Some.spec[_, P]
 
--- This is what we wanted, the Hilbert epsilon.
-def some.{u} [has (is_inhabited u)] : (u → Prop) → u := Some.run (Some.pt summon)
-lemma some.spec.{u} [has (is_inhabited u)] (P : u → Prop) : (∃ y, P y) → P (some P) := @Some.spec[Some.pt summon, P]
+/-
+ - Global choice
+ -/
 
-/-  
+-- The global choice operator is an object-level function assigning for each type u the choice function.
+-- This operator corresponds to external axiom of choice.
+-- We could postulate this operator first and then derive axiom of choice and indefinite description,
+-- but our choice is was to use two weaker primitives and combine them to construct the stronger operator.
+
+instance global_choice.is_inhabited.{u} : is_inhabited (inhab u → u) := {
+  lemma inhabited : ∃ (f : inhab u → u), ⊤ :=
+  obtain (f : inhab u → u), choice f := choice.exists,
+  @exists.intro[_, f] true.intro
+}
+
+class instance global_choice.has.is_inhabited.{u} : has (is_inhabited (inhab u → u)) := {
+  def summon : is_inhabited (inhab u → u) := global_choice.is_inhabited
+}
+
+def global_choice.{u} : inhab u → u := some choice
+lemma global_choice.spec.{u} : choice global_choice.{u} := some.spec choice.exists
+
+instance is_inhabited.inhab.{u} (h : is_inhabited u) : inhab u := {
+  def rep : sub u := λ x, ⊤
+  lemma inhabited : ∃ x, x ∈ rep := @is_inhabited.inhabited[h]
+}
+
+def epsilon₂.{u} : is_inhabited u → u := λ h, global_choice (is_inhabited.inhab h)
+
+lemma ac₂.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) := {
+  assume ∀ x, ∃ y, R x y,
+  have ∀ x, ∃! (h : inhab v), R x = inhab.rep h :=
+    take (x : u),
+    -- FIXME: the unifier could not synthesize `R x`. Perhaps because it's a partially applied term?
+    @inhab.uabs[R x] «∀ x, ∃ y, R x y»[x],
+  have ∃! (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
+    auc «∀ x, ∃! (h : inhab v), R x = inhab.rep h»,
+  obtain (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
+    uexists.exists «∃! (f : u → inhab v), ∀ x, R x = inhab.rep (f x)»,
+  exists.intro
+    (take (x : u),
+    have inhab.rep (f x) (global_choice (f x)) :=
+      @global_choice.spec[f x],
+    eq.transport (eq.symm (eq.congr_fun «∀ x, R x = inhab.rep (f x)»[x])) «inhab.rep (f x) (global_choice (f x))»)
+}
+
+
+/-
  - natural numbers
  -/
 
@@ -844,8 +1112,11 @@ lemma some.spec.{u} [has (is_inhabited u)] (P : u → Prop) : (∃ y, P y) → P
 -- axiom nat.succ.spec.{u} : ∀ n, nat.rec (nat.succ n) = λ x f, f n (nat.rec n x f)
 --
 -- Note that iota equations (rules in the form of `rec (ctor ..) = ..`) only hold propositionally in our system.
--- This is not a theoretical limination but to reduce the search space the higher-order unifier runs on.
+-- This is not a theoretical limitation but a measure to reduce the search space the higher-order unifier runs on.
 -- If this limitation is too restrictive, please report us.
+--
+-- Any topos with a natural number object is a model of W-types, hence supports general inductive types.
+-- [Moerdijk & Palmgren, '00]
 type inductive nat
 | zero : nat
 | succ : nat → nat
@@ -1040,7 +1311,7 @@ inductive topology.{u} (subbase : sub (sub u)) : sub (sub u)
 | subbase (x : sub u) : x ∈ subbase → topology x
 | univ : topology univ
 | inter (x y : sub u) : topology (x ∩ y)
-| union (A : sub (sub u)) : (∀ a, a ∈ A → topology a) → topology (Cup A)
+| union (A : sub (sub u)) : (∀ a, a ∈ A → topology a) → topology (bigcup A)
 
 structure space u := {
   const subbase : sub (sub u)
@@ -1049,18 +1320,6 @@ structure space u := {
 instance space.mk.{u} (subbase : sub (sub u)) : space u := {
   def subbase : sub (sub u) := subbase
 }
-
--- うごいた
-lemma not_not_em_1 (φ : Prop) : ¬(φ ∨ ¬φ) → ¬φ :=
-assume ¬(φ ∨ ¬φ),
-assume φ,
-contradiction (or.left «φ») «¬(φ ∨ ¬φ)»
-
--- うごいた
-lemma not_not_em (φ : Prop) : ¬¬(φ ∨ ¬φ) :=
-assume ¬(φ ∨ ¬φ),
-have ¬φ := not_not_em_1 «¬(φ ∨ ¬φ)»,
-contradiction (or.right «¬φ») «¬(φ ∨ ¬φ)»
 
 structure complete_lattice u := {
   const Meet : sub u → u
@@ -1106,7 +1365,7 @@ class instance complete_lattice.has_le.{u} [has (complete_lattice u)] : has_le u
 def Meet.{u} [has (complete_lattice u)] : sub u → u := complete_lattice.Meet summon
 def Join.{u} [has (complete_lattice u)] : sub u → u := complete_lattice.Join summon
 
-def monotone.{u, v} [has_le u] [has_le v] (f : u → v) : Prop := ∀ x y, x ≤ y → f x ≤ f y
+-- def monotone.{u, v} [has_le u] [has_le v] (f : u → v) : Prop := ∀ x y, x ≤ y → f x ≤ f y
 
 def lfp.{u} [has (complete_lattice u)] (f : u → u) : u := Meet { x | f x ≤ x }
 def gfp.{u} [has (complete_lattice u)] (f : u → u) : u := Join { x | x ≤ f x }
