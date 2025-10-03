@@ -551,9 +551,19 @@ impl Class {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Instance {
-    Local(Class),
+    Local(Arc<InstanceLocal>),
     Global(Arc<InstanceGlobal>),
-    Hole(Name),
+    Hole(Arc<InstanceHole>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceLocal {
+    pub class: Class,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceHole {
+    pub name: Name,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -566,7 +576,7 @@ pub struct InstanceGlobal {
 impl Display for Instance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Instance::Local(c) => write!(f, "${}", c),
+            Instance::Local(c) => write!(f, "${}", c.class),
             Instance::Global(i) => {
                 write!(f, "{}", i.name)?;
                 if !i.ty_args.is_empty() {
@@ -595,13 +605,13 @@ impl Display for Instance {
                 }
                 Ok(())
             }
-            Instance::Hole(name) => write!(f, "?{name}"),
+            Instance::Hole(name) => write!(f, "?{}", name.name),
         }
     }
 }
 
 pub fn mk_instance_local(class: Class) -> Instance {
-    Instance::Local(class)
+    Instance::Local(Arc::new(InstanceLocal { class }))
 }
 
 pub fn mk_instance_global(name: Name, ty_args: Vec<Type>, args: Vec<Instance>) -> Instance {
@@ -612,13 +622,32 @@ pub fn mk_instance_global(name: Name, ty_args: Vec<Type>, args: Vec<Instance>) -
     }))
 }
 
+pub fn mk_instance_hole(name: Name) -> Instance {
+    Instance::Hole(Arc::new(InstanceHole { name }))
+}
+
 impl Instance {
     fn replace_type(&self, f: &impl Fn(&Type) -> Type) -> Instance {
         match self {
-            Instance::Local(c) => Instance::Local(Class {
-                name: c.name,
-                args: c.args.iter().map(|t| f(t)).collect(),
-            }),
+            Instance::Local(c) => {
+                let mut changed = false;
+                let mut new_args = Vec::with_capacity(c.class.args.len());
+                for t in &c.class.args {
+                    let new_t = f(t);
+                    if !changed && !t.ptr_eq(&new_t) {
+                        changed = true;
+                    }
+                    new_args.push(new_t);
+                }
+                if !changed {
+                    return self.clone();
+                } else {
+                    mk_instance_local(Class {
+                        name: c.class.name,
+                        args: new_args,
+                    })
+                }
+            }
             Instance::Global(i) => {
                 let mut changed = false;
                 let ty_args: Vec<Type> = i
@@ -634,11 +663,7 @@ impl Instance {
                     .collect();
                 let args: Vec<Instance> = i.args.iter().map(|arg| arg.replace_type(f)).collect();
                 if changed || args.iter().zip(&i.args).any(|(a, b)| !a.ptr_eq(b)) {
-                    Instance::Global(Arc::new(InstanceGlobal {
-                        name: i.name,
-                        ty_args,
-                        args,
-                    }))
+                    mk_instance_global(i.name, ty_args, args)
                 } else {
                     self.clone()
                 }
@@ -649,7 +674,7 @@ impl Instance {
 
     fn contains_local_type(&self, name: Name) -> bool {
         match self {
-            Instance::Local(c) => c.contains_local(name),
+            Instance::Local(c) => c.class.contains_local(name),
             Instance::Global(i) => {
                 i.ty_args.iter().any(|t| t.contains_local(name))
                     || i.args.iter().any(|i| i.contains_local_type(name))
@@ -660,7 +685,7 @@ impl Instance {
 
     pub fn is_type_ground(&self) -> bool {
         match self {
-            Instance::Local(c) => c.is_ground(),
+            Instance::Local(c) => c.class.is_ground(),
             Instance::Global(i) => {
                 i.ty_args.iter().all(|t| t.is_ground()) && i.args.iter().all(|i| i.is_type_ground())
             }
@@ -672,7 +697,7 @@ impl Instance {
         match self {
             Instance::Local(c) => {
                 for (u, i) in subst {
-                    if c == u {
+                    if &c.class == u {
                         return i.clone();
                     }
                 }
@@ -692,11 +717,7 @@ impl Instance {
                     })
                     .collect();
                 if changed {
-                    Instance::Global(Arc::new(InstanceGlobal {
-                        name: i.name,
-                        ty_args: i.ty_args.clone(),
-                        args,
-                    }))
+                    mk_instance_global(i.name, i.ty_args.clone(), args)
                 } else {
                     self.clone()
                 }
@@ -707,9 +728,9 @@ impl Instance {
 
     fn ptr_eq(&self, other: &Instance) -> bool {
         match (self, other) {
-            (Instance::Local(a), Instance::Local(b)) => a == b,
+            (Instance::Local(a), Instance::Local(b)) => Arc::ptr_eq(a, b),
             (Instance::Global(a), Instance::Global(b)) => Arc::ptr_eq(a, b),
-            (Instance::Hole(a), Instance::Hole(b)) => a == b,
+            (Instance::Hole(a), Instance::Hole(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -1668,8 +1689,8 @@ impl Env<'_> {
         match i {
             Instance::Local(i) => {
                 for local_class in &local_env.local_classes {
-                    if local_class == i {
-                        return i.clone();
+                    if local_class == &i.class {
+                        return i.class.clone();
                     }
                 }
                 panic!("unknown local class instance: {:?}", i);

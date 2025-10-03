@@ -11,8 +11,8 @@ use crate::proof::{
     mk_expr_change, mk_expr_const, mk_expr_inst, mk_expr_take, mk_type_prop,
 };
 use crate::tt::{
-    Class, ClassType, Const, Instance, Kind, Name, Parameter, Term, Type, mk_const, mk_fresh_hole,
-    mk_fresh_type_hole, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
+    Class, ClassType, Const, Kind, Name, Parameter, Term, Type, mk_const, mk_fresh_hole,
+    mk_fresh_type_hole, mk_instance_hole, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
 };
 
 use crate::lex::{Lex, LexError, SourceInfo, Token, TokenKind};
@@ -562,7 +562,7 @@ impl<'a> Parser<'a> {
         }
         let mut instances = vec![];
         for _ in 0..const_info.local_classes.len() {
-            instances.push(Instance::Hole(Name::fresh()));
+            instances.push(mk_instance_hole(Name::fresh()));
         }
         Ok(mk_const(name, ty_args, instances))
     }
@@ -669,7 +669,7 @@ impl<'a> Parser<'a> {
         }
         let mut instances = vec![];
         for _ in 0..axiom_info.local_classes.len() {
-            instances.push(Instance::Hole(Name::fresh()));
+            instances.push(mk_instance_hole(Name::fresh()));
         }
         let mut expr = mk_expr_const(name, ty_args, instances);
         if auto_inst {

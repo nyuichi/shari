@@ -16,7 +16,7 @@ use crate::{
     tt::{
         self, Class, ClassInstance, ClassType, Const, Instance, InstanceGlobal, Kind, LocalEnv,
         Name, Parameter, Term, TermAbs, TermApp, Type, TypeApp, TypeArrow, mk_const,
-        mk_fresh_type_hole, mk_hole, mk_instance_global, mk_local, mk_type_arrow,
+        mk_fresh_type_hole, mk_hole, mk_instance_global, mk_instance_local, mk_local, mk_type_arrow,
     },
 };
 
@@ -331,10 +331,14 @@ impl<'a> Elaborator<'a> {
     fn visit_instance(&mut self, instance: &Instance, class: &Class) -> anyhow::Result<()> {
         match instance {
             Instance::Local(instance) => {
-                if !self.tt_local_env.local_classes.contains(instance) {
+                if !self
+                    .tt_local_env
+                    .local_classes
+                    .contains(&instance.class)
+                {
                     bail!("local class not found");
                 }
-                if instance != class {
+                if instance.class != *class {
                     bail!("class mismatch");
                 }
                 Ok(())
@@ -380,22 +384,25 @@ impl<'a> Elaborator<'a> {
                 }
                 Ok(())
             }
-            &Instance::Hole(instance) => {
+            Instance::Hole(instance) => {
                 if let Some((_, c)) = self
                     .instance_holes
                     .iter()
-                    .find(|&&(hole, _)| hole == instance)
+                    .find(|&&(hole, _)| hole == instance.name)
                 {
                     if c != class {
                         bail!("class mismatch");
                     }
                     return Ok(());
                 }
-                self.instance_holes.push((instance, class.clone()));
-                let error = Error::Visit(format!("could not synthesize instance: {}", instance));
+                self.instance_holes.push((instance.name, class.clone()));
+                let error = Error::Visit(format!(
+                    "could not synthesize instance: {}",
+                    instance.name
+                ));
                 self.class_constraints.push((
                     self.tt_local_env.clone(),
-                    instance,
+                    instance.name,
                     class.clone(),
                     error,
                 ));
@@ -751,9 +758,9 @@ impl<'a> Elaborator<'a> {
     fn watch_instance(&mut self, c: Rc<EqConstraint>) {
         if let Term::Const(left_head) = c.left.head() {
             if self.proof_env.tt_env.has_kappa(left_head.name) {
-                if let &Instance::Hole(hole) = &left_head.instances[0] {
+                if let Instance::Hole(hole) = &left_head.instances[0] {
                     self.instance_watch_list
-                        .entry(hole)
+                        .entry(hole.name)
                         .or_default()
                         .push(c.clone());
                     // we don't need to watch the right head.
@@ -763,9 +770,9 @@ impl<'a> Elaborator<'a> {
         }
         if let Term::Const(right_head) = c.right.head() {
             if self.proof_env.tt_env.has_kappa(right_head.name) {
-                if let &Instance::Hole(hole) = &right_head.instances[0] {
+                if let Instance::Hole(hole) = &right_head.instances[0] {
                     self.instance_watch_list
-                        .entry(hole)
+                        .entry(hole.name)
                         .or_default()
                         .push(c.clone());
                 }
@@ -777,7 +784,8 @@ impl<'a> Elaborator<'a> {
         if let Term::Const(left_head) = c.left.head() {
             if self.proof_env.tt_env.has_kappa(left_head.name) {
                 if let Instance::Hole(hole) = &left_head.instances[0] {
-                    let instance_watch_list = self.instance_watch_list.get_mut(hole).unwrap();
+                    let hole_name = hole.name;
+                    let instance_watch_list = self.instance_watch_list.get_mut(&hole_name).unwrap();
                     let mut index = 0;
                     for i in (0..instance_watch_list.len()).rev() {
                         if Rc::ptr_eq(&instance_watch_list[i], c) {
@@ -793,7 +801,8 @@ impl<'a> Elaborator<'a> {
         if let Term::Const(right_head) = c.right.head() {
             if self.proof_env.tt_env.has_kappa(right_head.name) {
                 if let Instance::Hole(hole) = &right_head.instances[0] {
-                    let instance_watch_list = self.instance_watch_list.get_mut(hole).unwrap();
+                    let hole_name = hole.name;
+                    let instance_watch_list = self.instance_watch_list.get_mut(&hole_name).unwrap();
                     let mut index = 0;
                     for i in (0..instance_watch_list.len()).rev() {
                         if Rc::ptr_eq(&instance_watch_list[i], c) {
@@ -861,7 +870,7 @@ impl<'a> Elaborator<'a> {
             let Instance::Hole(hole) = &head_const.instances[0] else {
                 return None;
             };
-            let Some(instance) = self.instance_subst_map.get(hole).cloned() else {
+            let Some(instance) = self.instance_subst_map.get(&hole.name).cloned() else {
                 return None;
             };
             let mut instances = head_const.instances.clone();
@@ -925,11 +934,11 @@ impl<'a> Elaborator<'a> {
     fn fully_inst_instance(&self, instance: &Instance) -> Instance {
         match instance {
             Instance::Local(class) => {
-                let new_class = self.fully_inst_class(class);
-                if &new_class == class {
+                let new_class = self.fully_inst_class(&class.class);
+                if new_class == class.class {
                     instance.clone()
                 } else {
-                    Instance::Local(new_class)
+                    mk_instance_local(new_class)
                 }
             }
             Instance::Global(instance) => {
@@ -961,8 +970,8 @@ impl<'a> Elaborator<'a> {
                     }))
                 }
             }
-            Instance::Hole(name) => {
-                let Some(target) = self.instance_subst_map.get(name) else {
+            Instance::Hole(hole) => {
+                let Some(target) = self.instance_subst_map.get(&hole.name) else {
                     return instance.clone();
                 };
                 self.fully_inst_instance(target)
@@ -1629,7 +1638,7 @@ impl<'a> Elaborator<'a> {
     fn resolve_class(&self, local_env: &LocalEnv, class: &Class) -> Option<Instance> {
         for local_class in &local_env.local_classes {
             if local_class == class {
-                return Some(Instance::Local(local_class.clone()));
+                return Some(mk_instance_local(local_class.clone()));
             }
         }
         'next_instance: for (&name, instance) in self.proof_env.tt_env.class_instance_table {
