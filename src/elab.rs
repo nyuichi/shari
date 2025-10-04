@@ -21,15 +21,6 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ConstraintKind {
-    Method,
-    Delta,
-    QuasiPattern,
-    FlexRigid,
-    FlexFlex,
-}
-
 #[derive(Debug, Clone)]
 enum Error {
     Visit(String),
@@ -49,8 +40,27 @@ impl std::fmt::Display for Error {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConstraintKind {
+    Delta,
+    QuasiPattern,
+    FlexRigid,
+    FlexFlex,
+}
+
 #[derive(Debug, Clone)]
 struct EqConstraint {
+    // TODO: only the locals field is used. Use a more efficient data structure.
+    local_env: LocalEnv,
+    left: Term,
+    right: Term,
+    kind: ConstraintKind,
+    error: Error,
+}
+
+// m l₁ ⋯ lₙ =?= t, where m is a method of an unresolved instance.
+#[derive(Debug, Clone)]
+struct MethodConstraint {
     // TODO: only the locals field is used. Use a more efficient data structure.
     local_env: LocalEnv,
     left: Term,
@@ -58,6 +68,7 @@ struct EqConstraint {
     error: Error,
 }
 
+// ?I : C t₁ ⋯ tₙ
 #[derive(Debug, Clone)]
 struct ClassConstraint {
     // TODO: only the local_classes field is used. Use a more efficient data structure.
@@ -80,18 +91,18 @@ struct Node {
 }
 
 struct Branch<'a> {
-    trail_len: usize,
     snapshot: Snapshot,
     nodes: Box<dyn Iterator<Item = Node> + 'a>,
 }
 
 enum Record {
-    AddEqConstraint(Rc<EqConstraint>, ConstraintKind),
+    AddEqConstraint(Rc<EqConstraint>),
+    AddMethodConstraint(Rc<MethodConstraint>),
     AddClassConstraint(Rc<ClassConstraint>),
     AddSubst { name: Name },
     AddTypeSubst { name: Name },
     AddInstanceSubst { name: Name },
-    RemoveEqConstraint(Rc<EqConstraint>, ConstraintKind),
+    RemoveEqConstraint(Rc<EqConstraint>),
 }
 
 struct Elaborator<'a> {
@@ -103,29 +114,35 @@ struct Elaborator<'a> {
     instance_holes: Vec<(Name, Class)>,
     // only used in visit
     local_axioms: Vec<Term>,
-    // TODO: resolveされた制約はその場で消したい
-    queue_delta: VecDeque<Rc<EqConstraint>>,
-    queue_qp: VecDeque<Rc<EqConstraint>>,
-    queue_fr: VecDeque<Rc<EqConstraint>>,
-    queue_ff: VecDeque<Rc<EqConstraint>>,
-    queue_class: VecDeque<Rc<ClassConstraint>>,
-    queue_method: VecDeque<Rc<EqConstraint>>,
-    watch_list: HashMap<Name, Vec<Rc<EqConstraint>>>,
-    type_watch_list: HashMap<Name, Vec<Rc<ClassConstraint>>>,
-    instance_watch_list: HashMap<Name, Vec<Rc<EqConstraint>>>,
-    subst_map: HashMap<Name, Term>,
-    type_subst_map: HashMap<Name, Type>,
-    instance_subst_map: HashMap<Name, Instance>,
-    decisions: Vec<Branch<'a>>,
-    // for backjumping.
-    // It extends when a new constraint is queued or a decision is made.
-    trail: Vec<Record>,
+
     // only used in find_conflict
     term_constraints: Vec<(LocalEnv, Term, Term, Error)>,
     // only used in find_conflict
     type_constraints: Vec<(Type, Type, Error)>,
     // only used in find_conflict
     class_constraints: Vec<(LocalEnv, Name, Class, Error)>,
+
+    // TODO: resolveされた制約はその場で消したい
+    queue_delta: VecDeque<Rc<EqConstraint>>,
+    queue_qp: VecDeque<Rc<EqConstraint>>,
+    queue_fr: VecDeque<Rc<EqConstraint>>,
+    queue_ff: VecDeque<Rc<EqConstraint>>,
+    queue_class: VecDeque<Rc<ClassConstraint>>,
+    queue_method: VecDeque<Rc<MethodConstraint>>,
+
+    watch_list: HashMap<Name, Vec<Rc<EqConstraint>>>,
+    type_watch_list: HashMap<Name, Vec<Rc<ClassConstraint>>>,
+    instance_watch_list: HashMap<Name, Vec<Rc<MethodConstraint>>>,
+
+    // current solution
+    subst_map: HashMap<Name, Term>,
+    type_subst_map: HashMap<Name, Type>,
+    instance_subst_map: HashMap<Name, Instance>,
+
+    decisions: Vec<Branch<'a>>,
+    // for backjumping.
+    // It extends when a new constraint is queued or a decision is made.
+    trail: Vec<Record>,
 }
 
 impl<'a> Elaborator<'a> {
@@ -743,7 +760,7 @@ impl<'a> Elaborator<'a> {
         type_watch_list.swap_remove(index);
     }
 
-    fn watch_instance(&mut self, c: Rc<EqConstraint>) {
+    fn watch_instance(&mut self, c: Rc<MethodConstraint>) {
         if let Term::Const(left_head) = c.left.head() {
             if self.proof_env.tt_env.has_kappa(left_head.name) {
                 if let Instance::Hole(hole) = &left_head.instances[0] {
@@ -768,7 +785,7 @@ impl<'a> Elaborator<'a> {
         }
     }
 
-    fn unwatch_instance(&mut self, c: &Rc<EqConstraint>) {
+    fn unwatch_instance(&mut self, c: &Rc<MethodConstraint>) {
         if let Term::Const(left_head) = c.left.head() {
             if self.proof_env.tt_env.has_kappa(left_head.name) {
                 if let Instance::Hole(hole) = &left_head.instances[0] {
@@ -1036,10 +1053,10 @@ impl<'a> Elaborator<'a> {
             local_env,
             left,
             right,
+            kind: ConstraintKind::Delta,
             error,
         });
-        self.trail
-            .push(Record::AddEqConstraint(c.clone(), ConstraintKind::Delta));
+        self.trail.push(Record::AddEqConstraint(c.clone()));
         self.queue_delta.push_back(c.clone());
     }
 
@@ -1080,10 +1097,11 @@ impl<'a> Elaborator<'a> {
             local_env,
             left,
             right,
+            kind,
             error,
         });
 
-        self.trail.push(Record::AddEqConstraint(c.clone(), kind));
+        self.trail.push(Record::AddEqConstraint(c.clone()));
 
         assert!(!self.is_resolved_constraint(&c));
 
@@ -1097,7 +1115,7 @@ impl<'a> Elaborator<'a> {
             ConstraintKind::FlexFlex => {
                 self.queue_ff.push_back(c.clone());
             }
-            ConstraintKind::Delta | ConstraintKind::Method => unreachable!(),
+            ConstraintKind::Delta => unreachable!(),
         }
 
         self.watch(c);
@@ -1119,14 +1137,13 @@ impl<'a> Elaborator<'a> {
             );
         }
 
-        let c = Rc::new(EqConstraint {
+        let c = Rc::new(MethodConstraint {
             local_env,
             left,
             right,
             error,
         });
-        self.trail
-            .push(Record::AddEqConstraint(c.clone(), ConstraintKind::Method));
+        self.trail.push(Record::AddMethodConstraint(c.clone()));
         self.queue_method.push_back(c.clone());
         self.watch_instance(c);
     }
@@ -1746,11 +1763,7 @@ impl<'a> Elaborator<'a> {
     fn restore(&mut self, snapshot: &Snapshot) {
         for _ in 0..self.trail.len() - snapshot.trail_len {
             match self.trail.pop().unwrap() {
-                Record::AddEqConstraint(c, kind) => match kind {
-                    ConstraintKind::Method => {
-                        self.queue_method.pop_back();
-                        self.unwatch_instance(&c);
-                    }
+                Record::AddEqConstraint(c) => match c.kind {
                     ConstraintKind::Delta => {
                         self.queue_delta.pop_back();
                     }
@@ -1767,6 +1780,10 @@ impl<'a> Elaborator<'a> {
                         self.unwatch(&c);
                     }
                 },
+                Record::AddMethodConstraint(c) => {
+                    self.queue_method.pop_back();
+                    self.unwatch_instance(&c);
+                }
                 Record::AddClassConstraint(c) => {
                     self.queue_class.pop_back();
                     self.unwatch_type(&c);
@@ -1780,30 +1797,7 @@ impl<'a> Elaborator<'a> {
                 Record::AddInstanceSubst { name } => {
                     self.instance_subst_map.remove(&name);
                 }
-                Record::RemoveEqConstraint(_, _) => {
-                    unreachable!();
-                }
-            }
-        }
-    }
-
-    fn push_branch(&mut self, trail_len: usize, nodes: Box<dyn Iterator<Item = Node> + 'a>) {
-        let snapshot = self.save();
-        self.decisions.push(Branch {
-            trail_len,
-            snapshot,
-            nodes,
-        });
-    }
-
-    fn pop_branch(&mut self) -> bool {
-        let Some(br) = self.decisions.pop() else {
-            return false;
-        };
-        self.restore(&br.snapshot);
-        for _ in 0..self.trail.len() - br.trail_len {
-            match self.trail.pop().unwrap() {
-                Record::RemoveEqConstraint(c, kind) => match kind {
+                Record::RemoveEqConstraint(c) => match c.kind {
                     ConstraintKind::Delta => {
                         self.queue_delta.push_front(c);
                     }
@@ -1816,20 +1810,9 @@ impl<'a> Elaborator<'a> {
                     ConstraintKind::FlexFlex => {
                         unreachable!()
                     }
-                    ConstraintKind::Method => {
-                        unreachable!()
-                    }
                 },
-                Record::AddEqConstraint(_, _)
-                | Record::AddClassConstraint(_)
-                | Record::AddSubst { .. }
-                | Record::AddTypeSubst { .. }
-                | Record::AddInstanceSubst { .. } => {
-                    unreachable!()
-                }
             }
         }
-        true
     }
 
     fn next(&mut self) -> bool {
@@ -2111,12 +2094,14 @@ impl<'a> Elaborator<'a> {
     }
 
     // Returns false if the constraints are pre-unified.
+    // This function does not resolve flex-flex constraints nor method constraints.
+    // There may be cases that can be resolved by checking method constraints, but we don't do that:
+    // - method-flex case: m l₁ ⋯ lₙ =?= ?M r₁ ⋯ rₘ
+    // - method-const case: m l₁ ⋯ lₙ =?= c r₁ ⋯ rₘ  (infer the type of m by searching the method table)
     fn decide(&mut self) -> bool {
-        let trail_len = self.trail.len();
         let nodes = 'next: {
             if let Some(c) = self.queue_delta.pop_front() {
-                self.trail
-                    .push(Record::RemoveEqConstraint(c.clone(), ConstraintKind::Delta));
+                self.trail.push(Record::RemoveEqConstraint(c.clone()));
                 #[cfg(debug_assertions)]
                 {
                     let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
@@ -2128,10 +2113,7 @@ impl<'a> Elaborator<'a> {
                 break 'next self.choice_delta(&c);
             }
             while let Some(c) = self.queue_qp.pop_front() {
-                self.trail.push(Record::RemoveEqConstraint(
-                    c.clone(),
-                    ConstraintKind::QuasiPattern,
-                ));
+                self.trail.push(Record::RemoveEqConstraint(c.clone()));
                 if !self.is_resolved_constraint(&c) {
                     #[cfg(debug_assertions)]
                     {
@@ -2145,10 +2127,7 @@ impl<'a> Elaborator<'a> {
                 }
             }
             while let Some(c) = self.queue_fr.pop_front() {
-                self.trail.push(Record::RemoveEqConstraint(
-                    c.clone(),
-                    ConstraintKind::FlexRigid,
-                ));
+                self.trail.push(Record::RemoveEqConstraint(c.clone()));
                 if !self.is_resolved_constraint(&c) {
                     #[cfg(debug_assertions)]
                     {
@@ -2164,7 +2143,11 @@ impl<'a> Elaborator<'a> {
             return false;
         };
 
-        self.push_branch(trail_len, Box::new(nodes.into_iter()));
+        self.decisions.push(Branch {
+            snapshot: self.save(),
+            nodes: Box::new(nodes.into_iter()),
+        });
+
         self.next();
         true
     }
@@ -2174,7 +2157,7 @@ impl<'a> Elaborator<'a> {
         self.type_constraints.clear();
         self.class_constraints.clear();
         while !self.next() {
-            if !self.pop_branch() {
+            if self.decisions.pop().is_none() {
                 return false;
             }
         }
