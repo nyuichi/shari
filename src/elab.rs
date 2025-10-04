@@ -23,7 +23,7 @@ use crate::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConstraintKind {
-    Postponed,
+    Method,
     Delta,
     QuasiPattern,
     FlexRigid,
@@ -85,12 +85,13 @@ struct Branch<'a> {
     nodes: Box<dyn Iterator<Item = Node> + 'a>,
 }
 
-enum TrailElement {
-    EqConstraint(Rc<EqConstraint>, ConstraintKind),
-    ClassConstraint(Rc<ClassConstraint>),
-    Subst { name: Name },
-    TypeSubst { name: Name },
-    InstanceSubst { name: Name },
+enum Record {
+    AddEqConstraint(Rc<EqConstraint>, ConstraintKind),
+    AddClassConstraint(Rc<ClassConstraint>),
+    AddSubst { name: Name },
+    AddTypeSubst { name: Name },
+    AddInstanceSubst { name: Name },
+    RemoveEqConstraint(Rc<EqConstraint>, ConstraintKind),
 }
 
 struct Elaborator<'a> {
@@ -102,12 +103,13 @@ struct Elaborator<'a> {
     instance_holes: Vec<(Name, Class)>,
     // only used in visit
     local_axioms: Vec<Term>,
+    // TODO: resolveされた制約はその場で消したい
     queue_delta: VecDeque<Rc<EqConstraint>>,
     queue_qp: VecDeque<Rc<EqConstraint>>,
     queue_fr: VecDeque<Rc<EqConstraint>>,
     queue_ff: VecDeque<Rc<EqConstraint>>,
     queue_class: VecDeque<Rc<ClassConstraint>>,
-    queue_postponed: VecDeque<Rc<EqConstraint>>,
+    queue_method: VecDeque<Rc<EqConstraint>>,
     watch_list: HashMap<Name, Vec<Rc<EqConstraint>>>,
     type_watch_list: HashMap<Name, Vec<Rc<ClassConstraint>>>,
     instance_watch_list: HashMap<Name, Vec<Rc<EqConstraint>>>,
@@ -117,7 +119,7 @@ struct Elaborator<'a> {
     decisions: Vec<Branch<'a>>,
     // for backjumping.
     // It extends when a new constraint is queued or a decision is made.
-    trail: Vec<TrailElement>,
+    trail: Vec<Record>,
     // only used in find_conflict
     term_constraints: Vec<(LocalEnv, Term, Term, Error)>,
     // only used in find_conflict
@@ -146,7 +148,7 @@ impl<'a> Elaborator<'a> {
             queue_fr: Default::default(),
             queue_ff: Default::default(),
             queue_class: Default::default(),
-            queue_postponed: Default::default(),
+            queue_method: Default::default(),
             watch_list: Default::default(),
             type_watch_list: Default::default(),
             instance_watch_list: Default::default(),
@@ -1037,7 +1039,7 @@ impl<'a> Elaborator<'a> {
             error,
         });
         self.trail
-            .push(TrailElement::EqConstraint(c.clone(), ConstraintKind::Delta));
+            .push(Record::AddEqConstraint(c.clone(), ConstraintKind::Delta));
         self.queue_delta.push_back(c.clone());
     }
 
@@ -1081,7 +1083,7 @@ impl<'a> Elaborator<'a> {
             error,
         });
 
-        self.trail.push(TrailElement::EqConstraint(c.clone(), kind));
+        self.trail.push(Record::AddEqConstraint(c.clone(), kind));
 
         assert!(!self.is_resolved_constraint(&c));
 
@@ -1095,13 +1097,13 @@ impl<'a> Elaborator<'a> {
             ConstraintKind::FlexFlex => {
                 self.queue_ff.push_back(c.clone());
             }
-            ConstraintKind::Delta | ConstraintKind::Postponed => unreachable!(),
+            ConstraintKind::Delta | ConstraintKind::Method => unreachable!(),
         }
 
         self.watch(c);
     }
 
-    fn add_postponed_constraint(
+    fn add_method_constraint(
         &mut self,
         local_env: LocalEnv,
         left: Term,
@@ -1112,7 +1114,7 @@ impl<'a> Elaborator<'a> {
         {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
             println!(
-                "{sp}new constraint (postponed):\n{sp}- {}\n{sp}  {}",
+                "{sp}new constraint (method):\n{sp}- {}\n{sp}  {}",
                 left, right
             );
         }
@@ -1123,11 +1125,9 @@ impl<'a> Elaborator<'a> {
             right,
             error,
         });
-        self.trail.push(TrailElement::EqConstraint(
-            c.clone(),
-            ConstraintKind::Postponed,
-        ));
-        self.queue_postponed.push_back(c.clone());
+        self.trail
+            .push(Record::AddEqConstraint(c.clone(), ConstraintKind::Method));
+        self.queue_method.push_back(c.clone());
         self.watch_instance(c);
     }
 
@@ -1153,7 +1153,7 @@ impl<'a> Elaborator<'a> {
             class,
             error,
         });
-        self.trail.push(TrailElement::ClassConstraint(c.clone()));
+        self.trail.push(Record::AddClassConstraint(c.clone()));
         self.queue_class.push_back(c.clone());
         self.watch_type(&c);
     }
@@ -1166,7 +1166,7 @@ impl<'a> Elaborator<'a> {
         }
 
         self.subst_map.insert(name, m.clone());
-        self.trail.push(TrailElement::Subst { name });
+        self.trail.push(Record::AddSubst { name });
 
         if let Some(constraints) = self.watch_list.get(&name) {
             for c in constraints {
@@ -1206,7 +1206,7 @@ impl<'a> Elaborator<'a> {
         }
 
         self.type_subst_map.insert(name, ty.clone());
-        self.trail.push(TrailElement::TypeSubst { name });
+        self.trail.push(Record::AddTypeSubst { name });
 
         if let Some(constraints) = self.type_watch_list.get(&name) {
             for c in constraints {
@@ -1229,7 +1229,7 @@ impl<'a> Elaborator<'a> {
         }
 
         self.instance_subst_map.insert(name, instance.clone());
-        self.trail.push(TrailElement::InstanceSubst { name });
+        self.trail.push(Record::AddInstanceSubst { name });
 
         if let Some(constraints) = self.instance_watch_list.get(&name) {
             for c in constraints {
@@ -1379,7 +1379,7 @@ impl<'a> Elaborator<'a> {
                         unreachable!();
                     };
                     if updated_left_head.instances[0].is_hole() {
-                        self.add_postponed_constraint(local_env, left, right, error);
+                        self.add_method_constraint(local_env, left, right, error);
                         return None;
                     }
                 }
@@ -1503,7 +1503,7 @@ impl<'a> Elaborator<'a> {
                         unreachable!();
                     };
                     if updated_right_head.instances[0].is_hole() {
-                        self.add_postponed_constraint(local_env, left, right, error);
+                        self.add_method_constraint(local_env, left, right, error);
                         return None;
                     }
                 }
@@ -1535,7 +1535,7 @@ impl<'a> Elaborator<'a> {
                 };
             }
             if left_head.instances[0].is_hole() {
-                self.add_postponed_constraint(local_env, left, right, error);
+                self.add_method_constraint(local_env, left, right, error);
                 return None;
             }
             if let Some(new_left) = self.proof_env.tt_env.unfold_head(&left) {
@@ -1553,7 +1553,7 @@ impl<'a> Elaborator<'a> {
                 };
             }
             if right_head.instances[0].is_hole() {
-                self.add_postponed_constraint(local_env, left, right, error);
+                self.add_method_constraint(local_env, left, right, error);
                 return None;
             }
             if let Some(new_right) = self.proof_env.tt_env.unfold_head(&right) {
@@ -1746,9 +1746,9 @@ impl<'a> Elaborator<'a> {
     fn restore(&mut self, snapshot: &Snapshot) {
         for _ in 0..self.trail.len() - snapshot.trail_len {
             match self.trail.pop().unwrap() {
-                TrailElement::EqConstraint(c, kind) => match kind {
-                    ConstraintKind::Postponed => {
-                        self.queue_postponed.pop_back();
+                Record::AddEqConstraint(c, kind) => match kind {
+                    ConstraintKind::Method => {
+                        self.queue_method.pop_back();
                         self.unwatch_instance(&c);
                     }
                     ConstraintKind::Delta => {
@@ -1767,18 +1767,21 @@ impl<'a> Elaborator<'a> {
                         self.unwatch(&c);
                     }
                 },
-                TrailElement::ClassConstraint(c) => {
+                Record::AddClassConstraint(c) => {
                     self.queue_class.pop_back();
                     self.unwatch_type(&c);
                 }
-                TrailElement::Subst { name } => {
+                Record::AddSubst { name } => {
                     self.subst_map.remove(&name);
                 }
-                TrailElement::TypeSubst { name } => {
+                Record::AddTypeSubst { name } => {
                     self.type_subst_map.remove(&name);
                 }
-                TrailElement::InstanceSubst { name } => {
+                Record::AddInstanceSubst { name } => {
                     self.instance_subst_map.remove(&name);
+                }
+                Record::RemoveEqConstraint(_, _) => {
+                    unreachable!();
                 }
             }
         }
@@ -1800,7 +1803,7 @@ impl<'a> Elaborator<'a> {
         self.restore(&br.snapshot);
         for _ in 0..self.trail.len() - br.trail_len {
             match self.trail.pop().unwrap() {
-                TrailElement::EqConstraint(c, kind) => match kind {
+                Record::RemoveEqConstraint(c, kind) => match kind {
                     ConstraintKind::Delta => {
                         self.queue_delta.push_front(c);
                     }
@@ -1811,23 +1814,18 @@ impl<'a> Elaborator<'a> {
                         self.queue_fr.push_front(c);
                     }
                     ConstraintKind::FlexFlex => {
-                        self.queue_ff.push_front(c);
+                        unreachable!()
                     }
-                    ConstraintKind::Postponed => {
-                        self.queue_postponed.push_front(c);
+                    ConstraintKind::Method => {
+                        unreachable!()
                     }
                 },
-                TrailElement::ClassConstraint(c) => {
-                    self.queue_class.push_front(c);
-                }
-                TrailElement::Subst { name } => {
-                    self.subst_map.remove(&name);
-                }
-                TrailElement::TypeSubst { name } => {
-                    self.type_subst_map.remove(&name);
-                }
-                TrailElement::InstanceSubst { name } => {
-                    self.instance_subst_map.remove(&name);
+                Record::AddEqConstraint(_, _)
+                | Record::AddClassConstraint(_)
+                | Record::AddSubst { .. }
+                | Record::AddTypeSubst { .. }
+                | Record::AddInstanceSubst { .. } => {
+                    unreachable!()
                 }
             }
         }
@@ -2118,7 +2116,7 @@ impl<'a> Elaborator<'a> {
         let nodes = 'next: {
             if let Some(c) = self.queue_delta.pop_front() {
                 self.trail
-                    .push(TrailElement::EqConstraint(c.clone(), ConstraintKind::Delta));
+                    .push(Record::RemoveEqConstraint(c.clone(), ConstraintKind::Delta));
                 #[cfg(debug_assertions)]
                 {
                     let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
@@ -2130,7 +2128,7 @@ impl<'a> Elaborator<'a> {
                 break 'next self.choice_delta(&c);
             }
             while let Some(c) = self.queue_qp.pop_front() {
-                self.trail.push(TrailElement::EqConstraint(
+                self.trail.push(Record::RemoveEqConstraint(
                     c.clone(),
                     ConstraintKind::QuasiPattern,
                 ));
@@ -2147,7 +2145,7 @@ impl<'a> Elaborator<'a> {
                 }
             }
             while let Some(c) = self.queue_fr.pop_front() {
-                self.trail.push(TrailElement::EqConstraint(
+                self.trail.push(Record::RemoveEqConstraint(
                     c.clone(),
                     ConstraintKind::FlexRigid,
                 ));
