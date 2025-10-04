@@ -16,7 +16,8 @@ use crate::{
     tt::{
         self, Class, ClassInstance, ClassType, Const, Instance, InstanceGlobal, Kind, LocalEnv,
         Name, Parameter, Term, TermAbs, TermApp, Type, TypeApp, TypeArrow, mk_const,
-        mk_fresh_type_hole, mk_hole, mk_instance_global, mk_instance_local, mk_local, mk_type_arrow,
+        mk_fresh_type_hole, mk_hole, mk_instance_global, mk_instance_local, mk_local,
+        mk_type_arrow,
     },
 };
 
@@ -68,10 +69,7 @@ struct ClassConstraint {
 
 #[derive(Debug, Clone)]
 struct Snapshot {
-    subst_len: usize,
     trail_len: usize,
-    type_subst_len: usize,
-    instance_subst_len: usize,
 }
 
 #[derive(Debug, Default)]
@@ -90,6 +88,9 @@ struct Branch<'a> {
 enum TrailElement {
     EqConstraint(Rc<EqConstraint>, ConstraintKind),
     ClassConstraint(Rc<ClassConstraint>),
+    Subst { name: Name },
+    TypeSubst { name: Name },
+    InstanceSubst { name: Name },
 }
 
 struct Elaborator<'a> {
@@ -110,14 +111,8 @@ struct Elaborator<'a> {
     watch_list: HashMap<Name, Vec<Rc<EqConstraint>>>,
     type_watch_list: HashMap<Name, Vec<Rc<ClassConstraint>>>,
     instance_watch_list: HashMap<Name, Vec<Rc<EqConstraint>>>,
-    // remove after adding TrailElement::Subst
-    subst: Vec<(Name, Term)>,
     subst_map: HashMap<Name, Term>,
-    // remove after adding TrailElement::TypeSubst
-    type_subst: Vec<(Name, Type)>,
     type_subst_map: HashMap<Name, Type>,
-    // remove after adding TrailElement::InstanceSubst
-    instance_subst: Vec<(Name, Instance)>,
     instance_subst_map: HashMap<Name, Instance>,
     decisions: Vec<Branch<'a>>,
     // for backjumping.
@@ -155,11 +150,8 @@ impl<'a> Elaborator<'a> {
             watch_list: Default::default(),
             type_watch_list: Default::default(),
             instance_watch_list: Default::default(),
-            subst: Default::default(),
             subst_map: Default::default(),
-            type_subst: Default::default(),
             type_subst_map: Default::default(),
-            instance_subst: Default::default(),
             instance_subst_map: Default::default(),
             decisions: Default::default(),
             trail: Default::default(),
@@ -331,11 +323,7 @@ impl<'a> Elaborator<'a> {
     fn visit_instance(&mut self, instance: &Instance, class: &Class) -> anyhow::Result<()> {
         match instance {
             Instance::Local(instance) => {
-                if !self
-                    .tt_local_env
-                    .local_classes
-                    .contains(&instance.class)
-                {
+                if !self.tt_local_env.local_classes.contains(&instance.class) {
                     bail!("local class not found");
                 }
                 if instance.class != *class {
@@ -396,10 +384,8 @@ impl<'a> Elaborator<'a> {
                     return Ok(());
                 }
                 self.instance_holes.push((instance.name, class.clone()));
-                let error = Error::Visit(format!(
-                    "could not synthesize instance: {}",
-                    instance.name
-                ));
+                let error =
+                    Error::Visit(format!("could not synthesize instance: {}", instance.name));
                 self.class_constraints.push((
                     self.tt_local_env.clone(),
                     instance.name,
@@ -1179,8 +1165,8 @@ impl<'a> Elaborator<'a> {
             println!("{sp}new subst {name} := {m}");
         }
 
-        self.subst.push((name, m.clone()));
         self.subst_map.insert(name, m.clone());
+        self.trail.push(TrailElement::Subst { name });
 
         if let Some(constraints) = self.watch_list.get(&name) {
             for c in constraints {
@@ -1219,8 +1205,8 @@ impl<'a> Elaborator<'a> {
             println!("{sp}new type subst {name} := {ty}");
         }
 
-        self.type_subst.push((name, ty.clone()));
         self.type_subst_map.insert(name, ty.clone());
+        self.trail.push(TrailElement::TypeSubst { name });
 
         if let Some(constraints) = self.type_watch_list.get(&name) {
             for c in constraints {
@@ -1242,8 +1228,8 @@ impl<'a> Elaborator<'a> {
             println!("{sp}new instance subst {name} := {instance}");
         }
 
-        self.instance_subst.push((name, instance.clone()));
         self.instance_subst_map.insert(name, instance.clone());
+        self.trail.push(TrailElement::InstanceSubst { name });
 
         if let Some(constraints) = self.instance_watch_list.get(&name) {
             for c in constraints {
@@ -1753,10 +1739,7 @@ impl<'a> Elaborator<'a> {
 
     fn save(&self) -> Snapshot {
         Snapshot {
-            subst_len: self.subst.len(),
             trail_len: self.trail.len(),
-            type_subst_len: self.type_subst.len(),
-            instance_subst_len: self.instance_subst.len(),
         }
     }
 
@@ -1788,19 +1771,16 @@ impl<'a> Elaborator<'a> {
                     self.queue_class.pop_back();
                     self.unwatch_type(&c);
                 }
+                TrailElement::Subst { name } => {
+                    self.subst_map.remove(&name);
+                }
+                TrailElement::TypeSubst { name } => {
+                    self.type_subst_map.remove(&name);
+                }
+                TrailElement::InstanceSubst { name } => {
+                    self.instance_subst_map.remove(&name);
+                }
             }
-        }
-        for _ in 0..self.subst.len() - snapshot.subst_len {
-            let name = self.subst.pop().unwrap().0;
-            self.subst_map.remove(&name);
-        }
-        for _ in 0..self.type_subst.len() - snapshot.type_subst_len {
-            let name = self.type_subst.pop().unwrap().0;
-            self.type_subst_map.remove(&name);
-        }
-        for _ in 0..self.instance_subst.len() - snapshot.instance_subst_len {
-            let name = self.instance_subst.pop().unwrap().0;
-            self.instance_subst_map.remove(&name);
         }
     }
 
@@ -1839,6 +1819,15 @@ impl<'a> Elaborator<'a> {
                 },
                 TrailElement::ClassConstraint(c) => {
                     self.queue_class.push_front(c);
+                }
+                TrailElement::Subst { name } => {
+                    self.subst_map.remove(&name);
+                }
+                TrailElement::TypeSubst { name } => {
+                    self.type_subst_map.remove(&name);
+                }
+                TrailElement::InstanceSubst { name } => {
+                    self.instance_subst_map.remove(&name);
                 }
             }
         }

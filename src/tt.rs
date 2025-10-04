@@ -830,7 +830,7 @@ impl TermConst {
 
 impl Default for Term {
     fn default() -> Self {
-        mk_var(usize::MAX)
+        mk_var(0)
     }
 }
 

@@ -173,6 +173,7 @@ pub fn unguard1(term: &Term) -> Option<(Term, Term)> {
 /// ------------------------
 /// Γ | Φ ⊢ change φ, h : φ
 ///
+// TODO: ArcじゃなくてBoxにする
 #[derive(Debug, Clone)]
 pub enum Expr {
     Assump(Arc<ExprAssump>),
