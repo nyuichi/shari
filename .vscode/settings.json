@@ -20,6 +20,7 @@
             "bigcup": "⋃",
             "<<": "«",
             ">>": "»",
+            "simeq": "≃",
         },
         "default-mappings.json",
     ],
