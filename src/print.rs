@@ -26,6 +26,37 @@ impl OpTable {
     }
 }
 
+fn uniquify_binder_name(binder_name: Name, body: &Term, local_names: &Vec<String>) -> String {
+    const DEFAULT_NAME: &str = "x";
+    const NUMERIC_SUB: [char; 10] = ['₀', '₁', '₂', '₃', '₄', '₅', '₆', '₇', '₈', '₉'];
+
+    // avoid empty names, default to "x". this choice is arbitrary.
+    let nickname = binder_name
+        .nickname()
+        .unwrap_or_else(|| DEFAULT_NAME.to_string());
+    let mut x = nickname.clone();
+    'refresh: for refresh_index in 0.. {
+        if refresh_index > 0 {
+            let mut n = refresh_index;
+            let mut chars = Vec::new();
+            while n > 0 {
+                let d = (n % 10) as usize;
+                chars.push(NUMERIC_SUB[d]);
+                n /= 10;
+            }
+            x = format!("{}{}", nickname, chars.iter().rev().collect::<String>());
+        }
+        // TODO: ensure also that x is not used as a global name
+        for (i, local_name) in local_names.iter().rev().enumerate() {
+            if local_name == &x && body.contains_var(i + 1) {
+                continue 'refresh;
+            }
+        }
+        break;
+    }
+    x
+}
+
 struct Printer<'a> {
     op_table: &'a OpTable,
     print_type_args: bool,
@@ -53,7 +84,7 @@ impl<'a> Printer<'a> {
         m: &Term,
         prec: usize,
         mut allow_lambda: bool,
-        local_names: &mut Vec<Name>,
+        local_names: &mut Vec<String>,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         if let Ok(Ctor { head, mut args }) = m.clone().try_into() {
@@ -125,20 +156,8 @@ impl<'a> Printer<'a> {
                             if !allow_lambda {
                                 write!(f, "(")?;
                             }
-                            let mut x = inner.binder_name;
-                            'refresh: for refresh_index in 0.. {
-                                if refresh_index > 0 {
-                                    x = Name::intern(
-                                        format!("{}{refresh_index}", inner.binder_name).as_str(),
-                                    );
-                                }
-                                for (i, local_name) in local_names.iter().rev().enumerate() {
-                                    if local_name == &x && inner.body.contains_var(i + 1) {
-                                        continue 'refresh;
-                                    }
-                                }
-                                break;
-                            }
+                            let x =
+                                uniquify_binder_name(inner.binder_name, &inner.body, local_names);
                             if self.print_binder_types {
                                 write!(f, "∀ ({} : ", x)?;
                                 self.fmt_type(f, &inner.binder_type)?;
@@ -164,20 +183,8 @@ impl<'a> Printer<'a> {
                             if !allow_lambda {
                                 write!(f, "(")?;
                             }
-                            let mut x = inner.binder_name;
-                            'refresh: for refresh_index in 0.. {
-                                if refresh_index > 0 {
-                                    x = Name::intern(
-                                        format!("{}{refresh_index}", inner.binder_name).as_str(),
-                                    );
-                                }
-                                for (i, local_name) in local_names.iter().rev().enumerate() {
-                                    if local_name == &x && inner.body.contains_var(i + 1) {
-                                        continue 'refresh;
-                                    }
-                                }
-                                break;
-                            }
+                            let x =
+                                uniquify_binder_name(inner.binder_name, &inner.body, local_names);
                             if self.print_binder_types {
                                 write!(f, "∃ ({} : ", x)?;
                                 self.fmt_type(f, &inner.binder_type)?;
@@ -203,20 +210,8 @@ impl<'a> Printer<'a> {
                             if !allow_lambda {
                                 write!(f, "(")?;
                             }
-                            let mut x = inner.binder_name;
-                            'refresh: for refresh_index in 0.. {
-                                if refresh_index > 0 {
-                                    x = Name::intern(
-                                        format!("{}{refresh_index}", inner.binder_name).as_str(),
-                                    );
-                                }
-                                for (i, local_name) in local_names.iter().rev().enumerate() {
-                                    if local_name == &x && inner.body.contains_var(i + 1) {
-                                        continue 'refresh;
-                                    }
-                                }
-                                break;
-                            }
+                            let x =
+                                uniquify_binder_name(inner.binder_name, &inner.body, local_names);
                             if self.print_binder_types {
                                 write!(f, "∃! ({} : ", x)?;
                                 self.fmt_type(f, &inner.binder_type)?;
@@ -278,18 +273,7 @@ impl<'a> Printer<'a> {
                 if !allow_lambda {
                     write!(f, "(")?;
                 }
-                let mut x = inner.binder_name;
-                'refresh: for refresh_index in 0.. {
-                    if refresh_index > 0 {
-                        x = Name::intern(format!("{}{refresh_index}", inner.binder_name).as_str());
-                    }
-                    for (i, local_name) in local_names.iter().rev().enumerate() {
-                        if local_name == &x && inner.body.contains_var(i + 1) {
-                            continue 'refresh;
-                        }
-                    }
-                    break;
-                }
+                let x = uniquify_binder_name(inner.binder_name, &inner.body, local_names);
                 if self.print_binder_types {
                     write!(f, "λ ({} : ", x)?;
                     self.fmt_type(f, &inner.binder_type)?;

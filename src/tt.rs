@@ -69,7 +69,7 @@ impl Name {
         name
     }
 
-    fn nickname(&self) -> Option<String> {
+    pub fn nickname(&self) -> Option<String> {
         NAME_REV_TABLE.lock().unwrap().get(self).cloned()
     }
 }
