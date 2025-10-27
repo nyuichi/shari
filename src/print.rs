@@ -101,11 +101,12 @@ impl<'a> Printer<'a> {
                 local_names.push(binder);
                 term = inner.body.clone();
             }
-            if let Ok(mut ctor) = Ctor::try_from(term.clone()) {
-                if ctor.head.name == ctor_name && ctor.args.len() == 1 {
-                    term = ctor.args.pop().unwrap();
-                    continue;
-                }
+            if let Ok(mut ctor) = Ctor::try_from(term.clone())
+                && ctor.head.name == ctor_name
+                && ctor.args.len() == 1
+            {
+                term = ctor.args.pop().unwrap();
+                continue;
             }
             break;
         }

@@ -640,7 +640,7 @@ impl Instance {
                     new_args.push(new_t);
                 }
                 if !changed {
-                    return self.clone();
+                    self.clone()
                 } else {
                     mk_instance_local(Class {
                         name: c.class.name,
@@ -1526,13 +1526,10 @@ impl Term {
             Term::App(inner) => {
                 let fun = inner.fun.whnf();
                 if let Term::Abs(abs) = fun.as_ref().unwrap_or(&inner.fun) {
-                    let body = abs.body.open(&[inner.arg.clone()], 0);
+                    let body = abs.body.open(std::slice::from_ref(&inner.arg), 0);
                     return Some(body.whnf().unwrap_or(body));
                 }
-                match fun {
-                    Some(fun) => Some(mk_app(fun, inner.arg.clone())),
-                    None => None,
-                }
+                fun.map(|fun| mk_app(fun, inner.arg.clone()))
             }
         }
     }
@@ -1855,15 +1852,12 @@ impl Env<'_> {
         let Term::Const(n) = m else {
             return None;
         };
-        let Some(Delta {
+        let Delta {
             local_types,
             local_classes,
             target,
             height: _,
-        }) = self.delta_table.get(&n.name)
-        else {
-            return None;
-        };
+        } = self.delta_table.get(&n.name)?;
         let mut type_subst = Vec::with_capacity(local_types.len());
         for (&x, t) in zip(local_types, &n.ty_args) {
             type_subst.push((x, t.clone()));
@@ -1884,9 +1878,7 @@ impl Env<'_> {
         let Term::Const(n) = m else {
             return None;
         };
-        if self.kappa_table.get(&n.name).is_none() {
-            return None;
-        }
+        self.kappa_table.get(&n.name)?;
         if n.instances.is_empty() {
             return None;
         }
@@ -1900,18 +1892,13 @@ impl Env<'_> {
         } = &**recv;
         // assert_eq!(ty_args, &n.ty_args);
         // assert_eq!(&args[..], &n.instances[1..]);
-        let Some(ClassInstance {
+        let ClassInstance {
             local_types,
             local_classes,
             target: _,
             method_table,
-        }) = self.class_instance_table.get(name)
-        else {
-            return None;
-        };
-        let Some(target) = method_table.get(&n.name) else {
-            return None;
-        };
+        } = self.class_instance_table.get(name)?;
+        let target = method_table.get(&n.name)?;
         let mut type_subst = Vec::with_capacity(local_types.len());
         for (&x, t) in zip(local_types, ty_args) {
             type_subst.push((x, t.clone()));
@@ -2013,7 +2000,7 @@ impl Env<'_> {
             if let (Term::Abs(inner1), Term::Abs(inner2)) = (&m1, &m2) {
                 let x = Name::fresh();
                 let local = mk_local(x);
-                m1 = inner1.body.open(&[local.clone()], 0);
+                m1 = inner1.body.open(std::slice::from_ref(&local), 0);
                 m2 = inner2.body.open(&[local], 0);
                 if m1.alpha_eq(&m2) {
                     return true;
@@ -2038,7 +2025,7 @@ impl Env<'_> {
                 if let (Term::Abs(inner1), Term::Abs(inner2)) = (&m1, &m2) {
                     let x = Name::fresh();
                     let local = mk_local(x);
-                    m1 = inner1.body.open(&[local.clone()], 0);
+                    m1 = inner1.body.open(std::slice::from_ref(&local), 0);
                     m2 = inner2.body.open(&[local], 0);
                     if m1.alpha_eq(&m2) {
                         return true;

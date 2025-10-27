@@ -596,13 +596,13 @@ impl Env<'_> {
                 let ExprTake { name, ty, expr } = &**e;
                 self.tt_env.check_wft(tt_local_env, ty);
                 for c in &local_env.local_axioms {
-                    if !c.is_fresh(&[name.clone()]) {
+                    if !c.is_fresh(std::slice::from_ref(name)) {
                         // eigenvariable condition fails
                         panic!("eigenvariable condition violated by {}", c);
                     }
                 }
                 let param = Parameter {
-                    name: name.clone(),
+                    name: *name,
                     ty: ty.clone(),
                 };
                 tt_local_env.locals.push(param);

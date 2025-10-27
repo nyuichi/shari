@@ -234,11 +234,11 @@ impl<'a> Parser<'a> {
     }
 
     fn ident_opt(&mut self) -> Option<Token> {
-        if let Some(token) = self.peek_opt() {
-            if token.is_ident() {
-                self.advance();
-                return Some(token);
-            }
+        if let Some(token) = self.peek_opt()
+            && token.is_ident()
+        {
+            self.advance();
+            return Some(token);
         }
         None
     }
@@ -268,11 +268,12 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_symbol_opt(&mut self, sym: &str) -> Option<Token> {
-        if let Some(token) = self.peek_opt() {
-            if token.kind == TokenKind::Symbol && token.as_str() == sym {
-                self.advance();
-                return Some(token);
-            }
+        if let Some(token) = self.peek_opt()
+            && token.kind == TokenKind::Symbol
+            && token.as_str() == sym
+        {
+            self.advance();
+            return Some(token);
         }
         None
     }

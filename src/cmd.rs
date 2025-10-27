@@ -657,7 +657,7 @@ impl Eval {
         elab::elaborate_expr(self.proof_env(), local_env, holes, expr, target)
     }
 
-    fn tt_env(&self) -> tt::Env {
+    fn tt_env(&self) -> tt::Env<'_> {
         tt::Env {
             type_const_table: &self.type_const_table,
             const_table: &self.const_table,
@@ -668,7 +668,7 @@ impl Eval {
         }
     }
 
-    fn proof_env(&self) -> proof::Env {
+    fn proof_env(&self) -> proof::Env<'_> {
         proof::Env {
             axiom_table: &self.axiom_table,
             tt_env: self.tt_env(),

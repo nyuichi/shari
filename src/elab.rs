@@ -281,9 +281,9 @@ impl<'a> Elaborator<'a> {
                     name: Name::fresh_from(*binder_name),
                     ty: binder_type.clone(),
                 };
-                let mut body = body.open(&[mk_local(x.name)], 0);
+                let body = body.open(&[mk_local(x.name)], 0);
                 self.tt_local_env.locals.push(x);
-                let body_ty = self.visit_term(&mut body)?;
+                let body_ty = self.visit_term(&body)?;
                 self.tt_local_env.locals.pop();
 
                 Ok(mk_type_arrow(binder_type.clone(), body_ty))
@@ -761,63 +761,59 @@ impl<'a> Elaborator<'a> {
     }
 
     fn watch_instance(&mut self, c: Rc<MethodConstraint>) {
-        if let Term::Const(left_head) = c.left.head() {
-            if self.proof_env.tt_env.has_kappa(left_head.name) {
-                if let Instance::Hole(hole) = &left_head.instances[0] {
-                    self.instance_watch_list
-                        .entry(hole.name)
-                        .or_default()
-                        .push(c.clone());
-                    // we don't need to watch the right head.
-                    return;
-                }
-            }
+        if let Term::Const(left_head) = c.left.head()
+            && self.proof_env.tt_env.has_kappa(left_head.name)
+            && let Instance::Hole(hole) = &left_head.instances[0]
+        {
+            self.instance_watch_list
+                .entry(hole.name)
+                .or_default()
+                .push(c.clone());
+            // we don't need to watch the right head.
+            return;
         }
-        if let Term::Const(right_head) = c.right.head() {
-            if self.proof_env.tt_env.has_kappa(right_head.name) {
-                if let Instance::Hole(hole) = &right_head.instances[0] {
-                    self.instance_watch_list
-                        .entry(hole.name)
-                        .or_default()
-                        .push(c.clone());
-                }
-            }
+        if let Term::Const(right_head) = c.right.head()
+            && self.proof_env.tt_env.has_kappa(right_head.name)
+            && let Instance::Hole(hole) = &right_head.instances[0]
+        {
+            self.instance_watch_list
+                .entry(hole.name)
+                .or_default()
+                .push(c.clone());
         }
     }
 
     fn unwatch_instance(&mut self, c: &Rc<MethodConstraint>) {
-        if let Term::Const(left_head) = c.left.head() {
-            if self.proof_env.tt_env.has_kappa(left_head.name) {
-                if let Instance::Hole(hole) = &left_head.instances[0] {
-                    let hole_name = hole.name;
-                    let instance_watch_list = self.instance_watch_list.get_mut(&hole_name).unwrap();
-                    let mut index = 0;
-                    for i in (0..instance_watch_list.len()).rev() {
-                        if Rc::ptr_eq(&instance_watch_list[i], c) {
-                            index = i;
-                            break;
-                        }
-                    }
-                    instance_watch_list.swap_remove(index);
-                    return;
+        if let Term::Const(left_head) = c.left.head()
+            && self.proof_env.tt_env.has_kappa(left_head.name)
+            && let Instance::Hole(hole) = &left_head.instances[0]
+        {
+            let hole_name = hole.name;
+            let instance_watch_list = self.instance_watch_list.get_mut(&hole_name).unwrap();
+            let mut index = 0;
+            for i in (0..instance_watch_list.len()).rev() {
+                if Rc::ptr_eq(&instance_watch_list[i], c) {
+                    index = i;
+                    break;
                 }
             }
+            instance_watch_list.swap_remove(index);
+            return;
         }
-        if let Term::Const(right_head) = c.right.head() {
-            if self.proof_env.tt_env.has_kappa(right_head.name) {
-                if let Instance::Hole(hole) = &right_head.instances[0] {
-                    let hole_name = hole.name;
-                    let instance_watch_list = self.instance_watch_list.get_mut(&hole_name).unwrap();
-                    let mut index = 0;
-                    for i in (0..instance_watch_list.len()).rev() {
-                        if Rc::ptr_eq(&instance_watch_list[i], c) {
-                            index = i;
-                            break;
-                        }
-                    }
-                    instance_watch_list.swap_remove(index);
+        if let Term::Const(right_head) = c.right.head()
+            && self.proof_env.tt_env.has_kappa(right_head.name)
+            && let Instance::Hole(hole) = &right_head.instances[0]
+        {
+            let hole_name = hole.name;
+            let instance_watch_list = self.instance_watch_list.get_mut(&hole_name).unwrap();
+            let mut index = 0;
+            for i in (0..instance_watch_list.len()).rev() {
+                if Rc::ptr_eq(&instance_watch_list[i], c) {
+                    index = i;
+                    break;
                 }
             }
+            instance_watch_list.swap_remove(index);
         }
     }
 
@@ -847,9 +843,7 @@ impl<'a> Elaborator<'a> {
             let Term::Hole(head) = head else {
                 return None;
             };
-            let Some(target) = self.subst_map.get(&head.name) else {
-                return None;
-            };
+            let target = self.subst_map.get(&head.name)?;
             Some(target.clone())
         })
     }
@@ -875,9 +869,7 @@ impl<'a> Elaborator<'a> {
             let Instance::Hole(hole) = &head_const.instances[0] else {
                 return None;
             };
-            let Some(instance) = self.instance_subst_map.get(&hole.name).cloned() else {
-                return None;
-            };
+            let instance = self.instance_subst_map.get(&hole.name).cloned()?;
             let mut instances = head_const.instances.clone();
             instances[0] = instance;
             Some(mk_const(
@@ -1189,15 +1181,15 @@ impl<'a> Elaborator<'a> {
             for c in constraints {
                 // skip constraints already resolved anyway
                 if c.left.head().alpha_eq(&mk_hole(name)) {
-                    if let Term::Hole(right_hole) = c.right.head() {
-                        if self.subst_map.contains_key(&right_hole.name) {
-                            continue;
-                        }
-                    }
-                } else if let Term::Hole(left_hole) = c.left.head() {
-                    if self.subst_map.contains_key(&left_hole.name) {
+                    if let Term::Hole(right_hole) = c.right.head()
+                        && self.subst_map.contains_key(&right_hole.name)
+                    {
                         continue;
                     }
+                } else if let Term::Hole(left_hole) = c.left.head()
+                    && self.subst_map.contains_key(&left_hole.name)
+                {
+                    continue;
                 }
                 let c = (**c).clone();
                 #[cfg(debug_assertions)]
@@ -1348,7 +1340,7 @@ impl<'a> Elaborator<'a> {
                 ty: l.binder_type.clone(),
             };
             let local = mk_local(x.name);
-            let left = l.body.open(&[local.clone()], 0);
+            let left = l.body.open(std::slice::from_ref(&local), 0);
             let right = r.body.open(&[local], 0);
             local_env.locals.push(x);
             self.push_term_constraint(local_env, left, right, error);
@@ -1450,37 +1442,39 @@ impl<'a> Elaborator<'a> {
         if let Term::Hole(right_head) = right.head() {
             let right_head = right_head.name;
             right = self.inst_arg_head(&right);
-            if let Some(args) = right.is_pattern() {
-                if self.occur_check(&left, right_head) && left.is_supported_by(&args) {
-                    let binders = args
-                        .into_iter()
-                        .map(|arg| Parameter {
-                            name: arg,
-                            ty: local_env.get_local(arg).unwrap().clone(),
-                        })
-                        .collect::<Vec<_>>();
-                    left = left.abs(&binders);
-                    self.add_subst(right_head, left, error);
-                    return None;
-                }
+            if let Some(args) = right.is_pattern()
+                && self.occur_check(&left, right_head)
+                && left.is_supported_by(&args)
+            {
+                let binders = args
+                    .into_iter()
+                    .map(|arg| Parameter {
+                        name: arg,
+                        ty: local_env.get_local(arg).unwrap().clone(),
+                    })
+                    .collect::<Vec<_>>();
+                left = left.abs(&binders);
+                self.add_subst(right_head, left, error);
+                return None;
             }
         }
         if let Term::Hole(left_head) = left.head() {
             let left_head = left_head.name;
             left = self.inst_arg_head(&left);
-            if let Some(args) = left.is_pattern() {
-                if self.occur_check(&right, left_head) && right.is_supported_by(&args) {
-                    let binders = args
-                        .into_iter()
-                        .map(|arg| Parameter {
-                            name: arg,
-                            ty: local_env.get_local(arg).unwrap().clone(),
-                        })
-                        .collect::<Vec<_>>();
-                    right = right.abs(&binders);
-                    self.add_subst(left_head, right, error);
-                    return None;
-                }
+            if let Some(args) = left.is_pattern()
+                && self.occur_check(&right, left_head)
+                && right.is_supported_by(&args)
+            {
+                let binders = args
+                    .into_iter()
+                    .map(|arg| Parameter {
+                        name: arg,
+                        ty: local_env.get_local(arg).unwrap().clone(),
+                    })
+                    .collect::<Vec<_>>();
+                right = right.abs(&binders);
+                self.add_subst(left_head, right, error);
+                return None;
             }
         }
         if right.head().is_hole() || left.head().is_hole() {
@@ -1510,30 +1504,29 @@ impl<'a> Elaborator<'a> {
         if right.head().is_local() {
             mem::swap(&mut left, &mut right);
         }
-        if let Term::Local(left_head) = left.head() {
-            if let Term::Const(right_head) = right.head().clone() {
-                if self.proof_env.tt_env.has_kappa(right_head.name) {
-                    if let Some(new_right) = self.inst_recv(&right) {
-                        right = new_right;
-                    }
-                    let Term::Const(updated_right_head) = right.head().clone() else {
-                        unreachable!();
-                    };
-                    if updated_right_head.instances[0].is_hole() {
-                        self.add_method_constraint(local_env, left, right, error);
-                        return None;
-                    }
-                }
-                if !right.contains_local(left_head.name) {
-                    return Some(error);
-                }
-                if let Some(new_right) = self.proof_env.tt_env.unfold_head(&right) {
+        let right_head_term = right.head().clone();
+        if let (Term::Local(left_head), Term::Const(right_head)) = (left.head(), right_head_term) {
+            if self.proof_env.tt_env.has_kappa(right_head.name) {
+                if let Some(new_right) = self.inst_recv(&right) {
                     right = new_right;
-                    self.push_term_constraint(local_env, left, right, error);
+                }
+                let Term::Const(updated_right_head) = right.head().clone() else {
+                    unreachable!();
+                };
+                if updated_right_head.instances[0].is_hole() {
+                    self.add_method_constraint(local_env, left, right, error);
                     return None;
                 }
+            }
+            if !right.contains_local(left_head.name) {
                 return Some(error);
             }
+            if let Some(new_right) = self.proof_env.tt_env.unfold_head(&right) {
+                right = new_right;
+                self.push_term_constraint(local_env, left, right, error);
+                return None;
+            }
+            return Some(error);
         }
         let mut left_head = match left.head().clone() {
             Term::Const(head) => head,
@@ -2080,15 +2073,15 @@ impl<'a> Elaborator<'a> {
     }
 
     fn is_resolved_constraint(&self, c: &EqConstraint) -> bool {
-        if let Term::Hole(right_head) = c.right.head() {
-            if self.subst_map.contains_key(&right_head.name) {
-                return true;
-            }
+        if let Term::Hole(right_head) = c.right.head()
+            && self.subst_map.contains_key(&right_head.name)
+        {
+            return true;
         }
-        if let Term::Hole(left_head) = c.left.head() {
-            if self.subst_map.contains_key(&left_head.name) {
-                return true;
-            }
+        if let Term::Hole(left_head) = c.left.head()
+            && self.subst_map.contains_key(&left_head.name)
+        {
+            return true;
         }
         false
     }
@@ -2202,7 +2195,7 @@ impl<'a> Elaborator<'a> {
         }
         let goal = goal_base;
         if let Some(instance) = self.resolve_class(
-            &self.tt_local_env,
+            self.tt_local_env,
             &Class {
                 name: Name::intern("default"),
                 args: vec![goal.clone()],
