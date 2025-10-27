@@ -7,3 +7,10 @@
 ## Testing
 
 - This repository uses snapshot testing with `cargo insta`. When snapshot tests differ and the change is intentional, run `cargo insta review --accept` to refresh snapshots. You don't need to ask for permission to do this.
+
+## Development Flow
+
+- Always run `cargo fmt` after making changes.
+- Keep `cargo clippy` warnings at zero.
+- Ensure `cargo test` passes.
+- After running `cargo test`, review your changes for consistency with the rest of the codebase and refactor when there is room for improvement.
