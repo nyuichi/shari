@@ -1322,6 +1322,9 @@ impl Term {
     }
 
     pub fn contains_var(&self, i: usize) -> bool {
+        if self.metadata().bound <= i {
+            return false;
+        }
         match self {
             Term::Var(inner) => i == inner.index,
             Term::Abs(inner) => inner.body.contains_var(i + 1),
