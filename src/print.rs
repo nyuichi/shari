@@ -26,7 +26,7 @@ impl OpTable {
     }
 }
 
-fn uniquify_binder_name(binder_name: Name, body: &Term, local_names: &Vec<String>) -> String {
+fn uniquify_binder_name(binder_name: Name, body: &Term, local_names: &[String]) -> String {
     const DEFAULT_NAME: &str = "x";
     const NUMERIC_SUB: [char; 10] = ['₀', '₁', '₂', '₃', '₄', '₅', '₆', '₇', '₈', '₉'];
 
@@ -70,6 +70,72 @@ impl<'a> Printer<'a> {
             print_type_args: false,
             print_binder_types: false,
         }
+    }
+
+    fn collect_lambda_binders(
+        &self,
+        mut term: Term,
+        local_names: &mut Vec<String>,
+    ) -> (Vec<(String, Type)>, Term) {
+        let mut binders = Vec::new();
+        while let Term::Abs(inner) = &term {
+            let binder = uniquify_binder_name(inner.binder_name, &inner.body, local_names);
+            binders.push((binder.clone(), inner.binder_type.clone()));
+            local_names.push(binder);
+            term = inner.body.clone();
+        }
+        (binders, term)
+    }
+
+    fn collect_ctor_binders(
+        &self,
+        mut term: Term,
+        ctor_name: Name,
+        local_names: &mut Vec<String>,
+    ) -> (Vec<(String, Type)>, Term) {
+        let mut binders = Vec::new();
+        loop {
+            while let Term::Abs(inner) = &term {
+                let binder = uniquify_binder_name(inner.binder_name, &inner.body, local_names);
+                binders.push((binder.clone(), inner.binder_type.clone()));
+                local_names.push(binder);
+                term = inner.body.clone();
+            }
+            if let Ok(mut ctor) = Ctor::try_from(term.clone()) {
+                if ctor.head.name == ctor_name && ctor.args.len() == 1 {
+                    term = ctor.args.pop().unwrap();
+                    continue;
+                }
+            }
+            break;
+        }
+        (binders, term)
+    }
+
+    fn fmt_binder_prefix(
+        &self,
+        f: &mut std::fmt::Formatter,
+        symbol: &str,
+        binders: &[(String, Type)],
+    ) -> std::fmt::Result {
+        debug_assert!(!binders.is_empty());
+        if self.print_binder_types {
+            write!(f, "{} ", symbol)?;
+            for (idx, (name, ty)) in binders.iter().enumerate() {
+                if idx > 0 {
+                    write!(f, " ")?;
+                }
+                write!(f, "({} : ", name)?;
+                self.fmt_type(f, ty)?;
+                write!(f, ")")?;
+            }
+        } else {
+            write!(f, "{}", symbol)?;
+            for (name, _) in binders {
+                write!(f, " {}", name)?;
+            }
+        }
+        write!(f, ", ")
     }
 
     fn fmt_term(&self, m: &Term, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -151,84 +217,74 @@ impl<'a> Printer<'a> {
             match name.to_string().as_str() {
                 "forall" => {
                     if args.len() == 1 {
-                        let mut arg = args.pop().unwrap();
-                        if let Term::Abs(inner) = &mut arg {
+                        let arg = args.pop().unwrap();
+                        let arg_copy = arg.clone();
+                        let snapshot = local_names.len();
+                        let (binders, body) = self.collect_ctor_binders(arg, name, local_names);
+                        if binders.is_empty() {
+                            local_names.truncate(snapshot);
+                            args.push(arg_copy);
+                        } else {
                             if !allow_lambda {
                                 write!(f, "(")?;
                             }
-                            let x =
-                                uniquify_binder_name(inner.binder_name, &inner.body, local_names);
-                            if self.print_binder_types {
-                                write!(f, "∀ ({} : ", x)?;
-                                self.fmt_type(f, &inner.binder_type)?;
-                                write!(f, "), ")?;
-                            } else {
-                                write!(f, "∀ {}, ", x)?;
-                            }
-                            local_names.push(x);
-                            self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
-                            local_names.pop();
+                            self.fmt_binder_prefix(f, "∀", &binders)?;
+                            let res = self.fmt_term_help(&body, 0, true, local_names, f);
+                            local_names.truncate(snapshot);
+                            res?;
                             if !allow_lambda {
                                 write!(f, ")")?;
                             }
                             return Ok(());
                         }
-                        args.push(arg);
                     }
                 }
                 "exists" => {
                     if args.len() == 1 {
-                        let mut arg = args.pop().unwrap();
-                        if let Term::Abs(inner) = &mut arg {
+                        let arg = args.pop().unwrap();
+                        let arg_copy = arg.clone();
+                        let snapshot = local_names.len();
+                        let (binders, body) = self.collect_ctor_binders(arg, name, local_names);
+                        if binders.is_empty() {
+                            local_names.truncate(snapshot);
+                            args.push(arg_copy);
+                        } else {
                             if !allow_lambda {
                                 write!(f, "(")?;
                             }
-                            let x =
-                                uniquify_binder_name(inner.binder_name, &inner.body, local_names);
-                            if self.print_binder_types {
-                                write!(f, "∃ ({} : ", x)?;
-                                self.fmt_type(f, &inner.binder_type)?;
-                                write!(f, "), ")?;
-                            } else {
-                                write!(f, "∃ {}, ", x)?;
-                            }
-                            local_names.push(x);
-                            self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
-                            local_names.pop();
+                            self.fmt_binder_prefix(f, "∃", &binders)?;
+                            let res = self.fmt_term_help(&body, 0, true, local_names, f);
+                            local_names.truncate(snapshot);
+                            res?;
                             if !allow_lambda {
                                 write!(f, ")")?;
                             }
                             return Ok(());
                         }
-                        args.push(arg);
                     }
                 }
                 "uexists" => {
                     if args.len() == 1 {
-                        let mut arg = args.pop().unwrap();
-                        if let Term::Abs(inner) = &mut arg {
+                        let arg = args.pop().unwrap();
+                        let arg_copy = arg.clone();
+                        let snapshot = local_names.len();
+                        let (binders, body) = self.collect_ctor_binders(arg, name, local_names);
+                        if binders.is_empty() {
+                            local_names.truncate(snapshot);
+                            args.push(arg_copy);
+                        } else {
                             if !allow_lambda {
                                 write!(f, "(")?;
                             }
-                            let x =
-                                uniquify_binder_name(inner.binder_name, &inner.body, local_names);
-                            if self.print_binder_types {
-                                write!(f, "∃! ({} : ", x)?;
-                                self.fmt_type(f, &inner.binder_type)?;
-                                write!(f, "), ")?;
-                            } else {
-                                write!(f, "∃! {}, ", x)?;
-                            }
-
-                            local_names.push(x);
-                            self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
-                            local_names.pop();
+                            self.fmt_binder_prefix(f, "∃!", &binders)?;
+                            let res = self.fmt_term_help(&body, 0, true, local_names, f);
+                            local_names.truncate(snapshot);
+                            res?;
                             if !allow_lambda {
                                 write!(f, ")")?;
                             }
                             return Ok(());
                         }
-                        args.push(arg);
                     }
                 }
                 _ => {}
@@ -269,21 +325,17 @@ impl<'a> Printer<'a> {
                 }
                 Ok(())
             }
-            Term::Abs(inner) => {
+            Term::Abs(_) => {
+                let snapshot = local_names.len();
+                let (binders, body) = self.collect_lambda_binders(m.clone(), local_names);
+                debug_assert!(!binders.is_empty());
                 if !allow_lambda {
                     write!(f, "(")?;
                 }
-                let x = uniquify_binder_name(inner.binder_name, &inner.body, local_names);
-                if self.print_binder_types {
-                    write!(f, "λ ({} : ", x)?;
-                    self.fmt_type(f, &inner.binder_type)?;
-                    write!(f, "), ")?;
-                } else {
-                    write!(f, "λ {}, ", x)?;
-                }
-                local_names.push(x);
-                self.fmt_term_help(&inner.body, 0, true, local_names, f)?;
-                local_names.pop();
+                self.fmt_binder_prefix(f, "λ", &binders)?;
+                let res = self.fmt_term_help(&body, 0, true, local_names, f);
+                local_names.truncate(snapshot);
+                res?;
                 if !allow_lambda {
                     write!(f, ")")?;
                 }
