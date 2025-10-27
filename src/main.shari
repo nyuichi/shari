@@ -16,11 +16,8 @@
  - [ ] kernel support for eta equality of lambdas
  -/
 
--- TODO: uexists := λ P, ∃ x, P x ∧ (∀ y, P y → x = y)
 -- TODO: structure.rec -> field projections
--- TODO: don't introduce structure.spec when no axioms are postulated
 -- TODO: remove structure.ext
--- TODO: expand introductory comments
 
 /-
 
