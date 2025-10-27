@@ -22,7 +22,7 @@ impl Display for Name {
         let Some(nickname) = self.nickname() else {
             return write!(f, "{}", self.0);
         };
-        if Name::intern(&nickname) == *self {
+        if self.is_interned() {
             write!(f, "{}", nickname)
         } else {
             write!(f, "{}{}", nickname, self.0)
@@ -71,6 +71,16 @@ impl Name {
 
     pub fn nickname(&self) -> Option<String> {
         NAME_REV_TABLE.lock().unwrap().get(self).cloned()
+    }
+
+    pub fn is_interned(&self) -> bool {
+        let Some(nickname) = self.nickname() else {
+            return false;
+        };
+        let Some(n) = NAME_TABLE.lock().unwrap().get(&nickname).copied() else {
+            return false;
+        };
+        n == *self
     }
 }
 
@@ -782,6 +792,7 @@ pub struct TermAbs {
     pub metadata: TermMetadata,
     pub binder_type: Type,
     // for pretty-printing
+    // TODO: generated name は受け付けないようにする。そもそも Name ではなく String の方が(効率はさておき)意味論的には適切。
     pub binder_name: Name,
     pub body: Term,
 }

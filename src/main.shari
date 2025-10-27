@@ -740,7 +740,7 @@ structure bool := {
 --   def bool.tt.rep : Prop := ⊤
 --   lemma bool.tt.spec : bool.tt.rep = ⊤ ∨ bool.tt.rep = ⊥ := tt_spec
 --   const bool.tt : bool
---   axiom bool.tt.spec.{α} : bool.rec bool.tt = λ (f : Prop → α), f bool.tt.rep
+--   axiom bool.tt.rec.{α} : bool.rec bool.tt = λ (f : Prop → α), f bool.tt.rep
 --
 instance bool.tt : bool := {
   def rep : Prop := ⊤
@@ -762,13 +762,13 @@ def ff : bool := bool.ff
 
 lemma bool.rep_tt_eq_true : bool.rep tt = ⊤ :=
 calc bool.rep tt = bool.rec tt (λ rep, rep)          := eq.refl
-             ... = (λ f, f bool.tt.rep) (λ rep, rep) := eq.ap bool.tt.spec
+             ... = (λ f, f bool.tt.rep) (λ rep, rep) := eq.ap bool.tt.rec
              ... = ⊤                                 := eq.refl,
 «bool.rep tt = ⊤»
 
 lemma bool.rep_ff_eq_false : bool.rep ff = ⊥ :=
 calc bool.rep ff = bool.rec ff (λ rep, rep)          := eq.refl
-             ... = (λ f, f bool.ff.rep) (λ rep, rep) := eq.ap bool.ff.spec
+             ... = (λ f, f bool.ff.rep) (λ rep, rep) := eq.ap bool.ff.rec
              ... = ⊥                                 := eq.refl,
 «bool.rep ff = ⊥»
 

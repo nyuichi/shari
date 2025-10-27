@@ -443,6 +443,32 @@ impl std::fmt::Display for Cmd {
     }
 }
 
+fn generate_fresh_local_type(local_types: &Vec<Name>) -> Name {
+    const DEFAULT_NAME: &str = "u";
+    const SUBSCRIPT_DIGITS: [char; 10] = ['₀', '₁', '₂', '₃', '₄', '₅', '₆', '₇', '₈', '₉'];
+
+    let mut x = DEFAULT_NAME.to_string();
+    'refresh: for refresh_index in 0.. {
+        if refresh_index > 0 {
+            let mut n = refresh_index;
+            let mut chars = Vec::new();
+            while n > 0 {
+                let d = (n % 10) as usize;
+                chars.push(SUBSCRIPT_DIGITS[d]);
+                n /= 10;
+            }
+            x = format!("{DEFAULT_NAME}{}", chars.iter().rev().collect::<String>());
+        }
+        for local_type in local_types {
+            if local_type.nickname().as_deref() == Some(&x) {
+                continue 'refresh;
+            }
+        }
+        break;
+    }
+    Name::intern(&x)
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Eval {
     pub tt: TokenTable,
@@ -484,6 +510,29 @@ impl Eval {
         local_classes: Vec<Class>,
         ty: Type,
     ) {
+        assert!(!self.const_table.contains_key(&name));
+        for local_type in &local_types {
+            assert!(local_type.is_interned())
+        }
+        for local_class in &local_classes {
+            self.tt_env().check_wfc(
+                &LocalEnv {
+                    local_types: local_types.clone(),
+                    local_classes: vec![],
+                    locals: vec![],
+                },
+                local_class,
+            );
+        }
+        self.tt_env().check_wft(
+            &LocalEnv {
+                local_types: local_types.clone(),
+                local_classes: local_classes.clone(),
+                locals: vec![],
+            },
+            &ty,
+        );
+
         self.const_table.insert(
             name,
             Const {
@@ -506,6 +555,20 @@ impl Eval {
         local_classes: Vec<Class>,
         target: Term,
     ) {
+        assert!(!self.axiom_table.contains_key(&name));
+        for local_type in &local_types {
+            assert!(local_type.is_interned())
+        }
+        for local_class in &local_classes {
+            self.tt_env().check_wfc(
+                &LocalEnv {
+                    local_types: local_types.clone(),
+                    local_classes: vec![],
+                    locals: vec![],
+                },
+                local_class,
+            );
+        }
         self.tt_env().check_wff(
             &mut LocalEnv {
                 local_types: local_types.clone(),
@@ -531,6 +594,8 @@ impl Eval {
     }
 
     fn add_type_const(&mut self, name: Name, kind: Kind) {
+        assert!(!self.type_const_table.contains_key(&name));
+
         self.type_const_table.insert(name, kind.clone());
 
         log::info!(
@@ -543,6 +608,8 @@ impl Eval {
     }
 
     fn add_class_predicate(&mut self, name: Name, ty: ClassType) {
+        assert!(!self.class_predicate_table.contains_key(&name));
+
         self.class_predicate_table.insert(name, ty);
 
         log::info!(
@@ -562,6 +629,30 @@ impl Eval {
         target: Class,
         method_table: HashMap<Name, Term>,
     ) {
+        assert!(!self.class_instance_table.contains_key(&name));
+        for local_type in &local_types {
+            assert!(local_type.is_interned())
+        }
+        for local_class in &local_classes {
+            self.tt_env().check_wfc(
+                &LocalEnv {
+                    local_types: local_types.clone(),
+                    local_classes: vec![],
+                    locals: vec![],
+                },
+                local_class,
+            );
+        }
+        self.tt_env().check_wfc(
+            &LocalEnv {
+                local_types: local_types.clone(),
+                local_classes: local_classes.clone(),
+                locals: vec![],
+            },
+            &target,
+        );
+        // TODO: check method_table
+
         self.class_instance_table.insert(
             name,
             ClassInstance {
@@ -574,11 +665,16 @@ impl Eval {
     }
 
     fn add_delta(&mut self, name: Name, target: Term) {
+        assert!(!self.delta_table.contains_key(&name));
+
         let Const {
             local_types,
             local_classes,
             ty,
-        } = self.const_table.get(&name).unwrap();
+        } = self
+            .const_table
+            .get(&name)
+            .expect("constant must be defined before delta");
 
         self.tt_env().check_type(
             &mut LocalEnv {
@@ -602,6 +698,8 @@ impl Eval {
     }
 
     fn add_kappa(&mut self, name: Name) {
+        assert!(!self.kappa_table.contains_key(&name));
+
         self.kappa_table.insert(name, Kappa);
     }
 
@@ -1144,7 +1242,7 @@ impl Eval {
         //   rec (succ α) ≡ λ k₁ k₂ k₃, k₂ α (rec α k₁ k₂ k₃)
         //   rec zero ≡ λ k₁ k₂ k₃, k₃
         //
-        let rec_ty_var = Name::fresh_with_name("α");
+        let rec_ty_var = generate_fresh_local_type(&local_types);
         let mut rec_local_types = local_types.clone();
         rec_local_types.push(rec_ty_var);
         let mut ctor_params_list = vec![];
@@ -1620,7 +1718,7 @@ impl Eval {
 
         // generate recursor
         //   rec.{u, α} : inhab u → (set u → α) → α
-        let ret_ty = Name::fresh();
+        let ret_ty = generate_fresh_local_type(&local_types);
         let mut rec_local_types = local_types.clone();
         rec_local_types.push(ret_ty);
         let rec_ty = mk_type_local(ret_ty).arrow(vec![
@@ -1915,8 +2013,8 @@ impl Eval {
         local_env
             .locals
             .truncate(local_env.locals.len() - num_consts);
-        let spec_name = Name::intern(&format!("{}.spec", name));
-        if self.has_axiom(spec_name) {
+        let rec_name = Name::intern(&format!("{}.rec", name));
+        if self.has_axiom(rec_name) {
             bail!("already defined");
         }
         // well-formedness check (all but entity elaboration) is completed.
@@ -1999,7 +2097,7 @@ impl Eval {
 
         // generate spec
         //   axiom power.inhab.spec.{u, α} (A : set u) : inhab.rec.{set u, α} (power.inhab A) = λ (f : set (set u) → α), f (power.inhab.rep A)
-        let ret_ty = Name::fresh();
+        let ret_ty = generate_fresh_local_type(&local_types);
         let mut left = mk_const(
             Name::intern(&format!("{}.rec", structure_name)),
             target_ty
@@ -2052,7 +2150,7 @@ impl Eval {
         target = generalize(&target, &params);
         let mut local_types = local_types.clone();
         local_types.push(ret_ty);
-        self.add_axiom(spec_name, local_types, local_classes, target);
+        self.add_axiom(rec_name, local_types, local_classes, target);
         Ok(())
     }
 

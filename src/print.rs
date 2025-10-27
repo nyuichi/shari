@@ -28,7 +28,7 @@ impl OpTable {
 
 fn uniquify_binder_name(binder_name: Name, body: &Term, local_names: &[String]) -> String {
     const DEFAULT_NAME: &str = "x";
-    const NUMERIC_SUB: [char; 10] = ['₀', '₁', '₂', '₃', '₄', '₅', '₆', '₇', '₈', '₉'];
+    const SUBSCRIPT_DIGITS: [char; 10] = ['₀', '₁', '₂', '₃', '₄', '₅', '₆', '₇', '₈', '₉'];
 
     // avoid empty names, default to "x". this choice is arbitrary.
     let nickname = binder_name
@@ -41,7 +41,7 @@ fn uniquify_binder_name(binder_name: Name, body: &Term, local_names: &[String]) 
             let mut chars = Vec::new();
             while n > 0 {
                 let d = (n % 10) as usize;
-                chars.push(NUMERIC_SUB[d]);
+                chars.push(SUBSCRIPT_DIGITS[d]);
                 n /= 10;
             }
             x = format!("{}{}", nickname, chars.iter().rev().collect::<String>());
