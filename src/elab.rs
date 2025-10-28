@@ -420,7 +420,7 @@ impl<'a> Elaborator<'a> {
     fn visit_expr(&mut self, expr: &mut Expr) -> anyhow::Result<Term> {
         match expr {
             Expr::Assump(expr) => {
-                let ExprAssump { target } = Arc::make_mut(expr);
+                let ExprAssump { target } = expr.as_mut();
 
                 let target_ty = self.visit_term(target)?;
                 let error = Error::Visit(format!("not a proposition: {}", target_ty));
@@ -441,21 +441,24 @@ impl<'a> Elaborator<'a> {
                 Ok(target.clone())
             }
             Expr::Assume(expr) => {
-                let ExprAssume { local_axiom, expr } = Arc::make_mut(expr);
+                let ExprAssume {
+                    local_axiom,
+                    expr: inner,
+                } = expr.as_mut();
 
                 let local_axiom_ty = self.visit_term(local_axiom)?;
                 let error = Error::Visit(format!("not a proposition: {}", local_axiom_ty));
                 self.push_type_constraint(local_axiom_ty, mk_type_prop(), error);
 
                 self.local_axioms.push(local_axiom.clone());
-                let mut target = self.visit_expr(expr)?;
+                let mut target = self.visit_expr(inner)?;
                 let p = self.local_axioms.pop().unwrap();
                 target = guard(&target, [p]);
 
                 Ok(target)
             }
             Expr::App(expr) => {
-                let ExprApp { expr1, expr2 } = Arc::make_mut(expr);
+                let ExprApp { expr1, expr2 } = expr.as_mut();
 
                 let fun = self.visit_expr(expr1)?;
                 let arg = self.visit_expr(expr2)?;
@@ -488,11 +491,12 @@ impl<'a> Elaborator<'a> {
                 Ok(ret)
             }
             Expr::Take(expr) => {
-                let &mut ExprTake {
+                let ExprTake {
                     name,
-                    ref mut ty,
-                    ref mut expr,
-                } = Arc::make_mut(expr);
+                    ty,
+                    expr: inner,
+                } = expr.as_mut();
+                let name = *name;
 
                 let ty_kind = self.visit_type(ty)?;
                 if !ty_kind.is_base() {
@@ -504,7 +508,7 @@ impl<'a> Elaborator<'a> {
                     ty: ty.clone(),
                 };
                 self.tt_local_env.locals.push(x);
-                let mut target = self.visit_expr(expr)?;
+                let mut target = self.visit_expr(inner)?;
                 let x = self.tt_local_env.locals.pop().unwrap();
 
                 target = generalize(&target, &[x]);
@@ -512,9 +516,9 @@ impl<'a> Elaborator<'a> {
                 Ok(target)
             }
             Expr::Inst(expr) => {
-                let ExprInst { expr, arg } = Arc::make_mut(expr);
+                let ExprInst { expr: inner, arg } = expr.as_mut();
 
-                let forall = self.visit_expr(expr)?;
+                let forall = self.visit_expr(inner)?;
                 let arg_ty = self.visit_term(arg)?;
 
                 if let Some((binder, mut body)) = ungeneralize1(&forall) {
@@ -543,10 +547,10 @@ impl<'a> Elaborator<'a> {
                     self.tt_local_env.clone(),
                     forall,
                     target.clone(),
-                    Error::Visit(format!("not a forall: {}", expr)),
+                    Error::Visit(format!("not a forall: {}", inner)),
                 );
 
-                *expr = mk_expr_change(target, mem::take(expr));
+                *inner = mk_expr_change(target, mem::take(inner));
 
                 let mut ret = hole;
                 ret = ret.apply([arg.clone()]);
@@ -589,19 +593,22 @@ impl<'a> Elaborator<'a> {
                 Ok(target)
             }
             Expr::Change(expr) => {
-                let ExprChange { target, expr } = Arc::make_mut(expr);
+                let ExprChange {
+                    target,
+                    expr: inner,
+                } = expr.as_mut();
 
                 let target_ty = self.visit_term(target)?;
                 let error = Error::Visit(format!("not a proposition: {}", target_ty));
                 self.push_type_constraint(target_ty, mk_type_prop(), error);
-                let expr_prop = self.visit_expr(expr)?;
+                let expr_prop = self.visit_expr(inner)?;
                 self.push_term_constraint(
                     self.tt_local_env.clone(),
                     expr_prop.clone(),
                     target.clone(),
                     Error::Visit(format!(
                         "propositions mismatch in change: {}\ntarget = {}\nexpr_prop = {}",
-                        expr, target, expr_prop
+                        inner, target, expr_prop
                     )),
                 );
 
@@ -610,7 +617,6 @@ impl<'a> Elaborator<'a> {
         }
     }
 
-    #[cfg(debug_assertions)]
     fn print_state(&self) {
         let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
         println!("{sp}+current state");
@@ -684,8 +690,7 @@ impl<'a> Elaborator<'a> {
     }
 
     fn push_term_constraint(&mut self, local_env: LocalEnv, left: Term, right: Term, error: Error) {
-        #[cfg(debug_assertions)]
-        {
+        if log::log_enabled!(log::Level::Debug) {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
             println!("{sp}→pushing constraint: {} =?= {}", left, right);
         }
@@ -693,8 +698,7 @@ impl<'a> Elaborator<'a> {
     }
 
     fn push_type_constraint(&mut self, left: Type, right: Type, error: Error) {
-        #[cfg(debug_assertions)]
-        {
+        if log::log_enabled!(log::Level::Debug) {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
             println!("{sp}→pushing type constraint: {} =?= {}", left, right);
         }
@@ -979,35 +983,38 @@ impl<'a> Elaborator<'a> {
     fn fully_inst_expr(&self, expr: &mut Expr) {
         match expr {
             Expr::Assump(expr) => {
-                let ExprAssump { target } = Arc::make_mut(expr);
+                let ExprAssump { target } = expr.as_mut();
                 *target = self.fully_inst(target);
             }
             Expr::Assume(expr) => {
-                let ExprAssume { local_axiom, expr } = Arc::make_mut(expr);
+                let ExprAssume {
+                    local_axiom,
+                    expr: inner,
+                } = expr.as_mut();
                 *local_axiom = self.fully_inst(local_axiom);
-                self.fully_inst_expr(expr);
+                self.fully_inst_expr(inner);
             }
             Expr::App(expr) => {
-                let ExprApp { expr1, expr2 } = Arc::make_mut(expr);
+                let ExprApp { expr1, expr2 } = expr.as_mut();
                 self.fully_inst_expr(expr1);
                 self.fully_inst_expr(expr2);
             }
             Expr::Take(expr) => {
-                let ExprTake { name: _, ty, expr } = Arc::make_mut(expr);
+                let ExprTake {
+                    ty, expr: inner, ..
+                } = expr.as_mut();
                 *ty = self.fully_inst_type(ty);
-                self.fully_inst_expr(expr);
+                self.fully_inst_expr(inner);
             }
             Expr::Inst(expr) => {
-                let ExprInst { expr, arg } = Arc::make_mut(expr);
-                self.fully_inst_expr(expr);
+                let ExprInst { expr: inner, arg } = expr.as_mut();
+                self.fully_inst_expr(inner);
                 *arg = self.fully_inst(arg);
             }
             Expr::Const(expr) => {
                 let ExprConst {
-                    name: _,
-                    ty_args,
-                    instances,
-                } = Arc::make_mut(expr);
+                    ty_args, instances, ..
+                } = expr.as_mut();
                 for ty in ty_args {
                     *ty = self.fully_inst_type(ty);
                 }
@@ -1024,16 +1031,18 @@ impl<'a> Elaborator<'a> {
                 }
             }
             Expr::Change(expr) => {
-                let ExprChange { target, expr } = Arc::make_mut(expr);
+                let ExprChange {
+                    target,
+                    expr: inner,
+                } = expr.as_mut();
                 *target = self.fully_inst(target);
-                self.fully_inst_expr(expr);
+                self.fully_inst_expr(inner);
             }
         }
     }
 
     fn add_delta_constraint(&mut self, local_env: LocalEnv, left: Term, right: Term, error: Error) {
-        #[cfg(debug_assertions)]
-        {
+        if log::log_enabled!(log::Level::Debug) {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
             println!(
                 "{sp}new constraint (delta):\n{sp}- {}\n{sp}  {}",
@@ -1076,8 +1085,7 @@ impl<'a> Elaborator<'a> {
             kind = ConstraintKind::FlexRigid;
         }
 
-        #[cfg(debug_assertions)]
-        {
+        if log::log_enabled!(log::Level::Debug) {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
             println!(
                 "{sp}new constraint ({kind:#?}):\n{sp}- {}\n{sp}  {}",
@@ -1120,8 +1128,7 @@ impl<'a> Elaborator<'a> {
         right: Term,
         error: Error,
     ) {
-        #[cfg(debug_assertions)]
-        {
+        if log::log_enabled!(log::Level::Debug) {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
             println!(
                 "{sp}new constraint (method):\n{sp}- {}\n{sp}  {}",
@@ -1147,8 +1154,7 @@ impl<'a> Elaborator<'a> {
         class: Class,
         error: Error,
     ) {
-        #[cfg(debug_assertions)]
-        {
+        if log::log_enabled!(log::Level::Debug) {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
             println!(
                 "{sp}new constraint (class):\n{sp}- {}\n{sp}  {}",
@@ -1168,8 +1174,7 @@ impl<'a> Elaborator<'a> {
     }
 
     fn add_subst(&mut self, name: Name, m: Term, error: Error) {
-        #[cfg(debug_assertions)]
-        {
+        if log::log_enabled!(log::Level::Debug) {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
             println!("{sp}new subst {name} := {m}");
         }
@@ -1192,8 +1197,7 @@ impl<'a> Elaborator<'a> {
                     continue;
                 }
                 let c = (**c).clone();
-                #[cfg(debug_assertions)]
-                {
+                if log::log_enabled!(log::Level::Debug) {
                     let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
                     println!("{sp}→waking constraint {} =?= {}", c.left, c.right);
                 }
@@ -1208,8 +1212,7 @@ impl<'a> Elaborator<'a> {
     }
 
     fn add_type_subst(&mut self, name: Name, ty: Type, error: Error) {
-        #[cfg(debug_assertions)]
-        {
+        if log::log_enabled!(log::Level::Debug) {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
             println!("{sp}new type subst {name} := {ty}");
         }
@@ -1231,8 +1234,7 @@ impl<'a> Elaborator<'a> {
     }
 
     fn add_instance_subst(&mut self, name: Name, instance: Instance, error: Error) {
-        #[cfg(debug_assertions)]
-        {
+        if log::log_enabled!(log::Level::Debug) {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
             println!("{sp}new instance subst {name} := {instance}");
         }
@@ -1243,8 +1245,7 @@ impl<'a> Elaborator<'a> {
         if let Some(constraints) = self.instance_watch_list.get(&name) {
             for c in constraints {
                 let c = (**c).clone();
-                #[cfg(debug_assertions)]
-                {
+                if log::log_enabled!(log::Level::Debug) {
                     let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
                     println!("{sp}→waking constraint {} =?= {}", c.left, c.right);
                 }
@@ -1694,8 +1695,7 @@ impl<'a> Elaborator<'a> {
     }
 
     fn find_conflict(&mut self) -> Option<Error> {
-        #[cfg(debug_assertions)]
-        {
+        if log::log_enabled!(log::Level::Debug) {
             self.print_state();
         }
         while !self.type_constraints.is_empty()
@@ -1703,16 +1703,14 @@ impl<'a> Elaborator<'a> {
             || !self.term_constraints.is_empty()
         {
             if let Some((t1, t2, error)) = self.type_constraints.pop() {
-                #[cfg(debug_assertions)]
-                {
+                if log::log_enabled!(log::Level::Debug) {
                     let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
                     let t1 = self.fully_inst_type(&t1);
                     let t2 = self.fully_inst_type(&t2);
                     println!("{sp}find conflict in {t1} =?= {t2}");
                 }
                 if let Some(error) = self.find_conflict_in_types(t1, t2, error) {
-                    #[cfg(debug_assertions)]
-                    {
+                    if log::log_enabled!(log::Level::Debug) {
                         let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
                         println!("{sp}conflict in types");
                     }
@@ -1727,16 +1725,14 @@ impl<'a> Elaborator<'a> {
                 continue;
             }
             if let Some((local_env, m1, m2, error)) = self.term_constraints.pop() {
-                #[cfg(debug_assertions)]
-                {
+                if log::log_enabled!(log::Level::Debug) {
                     let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
                     let m1 = self.fully_inst(&m1);
                     let m2 = self.fully_inst(&m2);
                     println!("{sp}find conflict in {m1} =?= {m2}");
                 }
                 if let Some(error) = self.find_conflict_in_terms(local_env, m1, m2, error) {
-                    #[cfg(debug_assertions)]
-                    {
+                    if log::log_enabled!(log::Level::Debug) {
                         let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
                         println!("{sp}conflict in terms: {error}");
                     }
@@ -2095,8 +2091,7 @@ impl<'a> Elaborator<'a> {
         let nodes = 'next: {
             if let Some(c) = self.queue_delta.pop_front() {
                 self.trail.push(Record::RemoveEqConstraint(c.clone()));
-                #[cfg(debug_assertions)]
-                {
+                if log::log_enabled!(log::Level::Debug) {
                     let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
                     println!(
                         "{sp}making a decision (delta):\n{sp}- {}\n{sp}  {}",
@@ -2108,8 +2103,7 @@ impl<'a> Elaborator<'a> {
             while let Some(c) = self.queue_qp.pop_front() {
                 self.trail.push(Record::RemoveEqConstraint(c.clone()));
                 if !self.is_resolved_constraint(&c) {
-                    #[cfg(debug_assertions)]
-                    {
+                    if log::log_enabled!(log::Level::Debug) {
                         let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
                         println!(
                             "{sp}making a decision (qp):\n{sp}- {}\n{sp}  {}",
@@ -2122,8 +2116,7 @@ impl<'a> Elaborator<'a> {
             while let Some(c) = self.queue_fr.pop_front() {
                 self.trail.push(Record::RemoveEqConstraint(c.clone()));
                 if !self.is_resolved_constraint(&c) {
-                    #[cfg(debug_assertions)]
-                    {
+                    if log::log_enabled!(log::Level::Debug) {
                         let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
                         println!(
                             "{sp}making a decision (fr):\n{sp}- {}\n{sp}  {}",
@@ -2160,8 +2153,7 @@ impl<'a> Elaborator<'a> {
     fn solve(&mut self) -> Result<(), Error> {
         loop {
             while let Some(error) = self.find_conflict() {
-                #[cfg(debug_assertions)]
-                {
+                if log::log_enabled!(log::Level::Debug) {
                     let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
                     println!("{sp}conflict found!");
                 }
@@ -2169,8 +2161,7 @@ impl<'a> Elaborator<'a> {
                     return Err(error);
                 }
             }
-            #[cfg(debug_assertions)]
-            {
+            if log::log_enabled!(log::Level::Debug) {
                 let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
                 println!("{sp}simplification done");
                 self.print_state();
@@ -2252,8 +2243,7 @@ pub fn elaborate_term(
     target: &mut Term,
     ty: &Type,
 ) -> anyhow::Result<()> {
-    #[cfg(debug_assertions)]
-    {
+    if log::log_enabled!(log::Level::Debug) {
         println!("elaborating:\n{target}");
     }
 
@@ -2272,8 +2262,7 @@ pub fn elaborate_term(
     ensure!(target.is_ground());
     ensure!(target.is_type_ground());
 
-    #[cfg(debug_assertions)]
-    {
+    if log::log_enabled!(log::Level::Debug) {
         println!("elaborated:\n{target}");
     }
 
@@ -2288,8 +2277,7 @@ pub fn elaborate_expr(
     e: &mut Expr,
     prop: &Term,
 ) -> anyhow::Result<()> {
-    #[cfg(debug_assertions)]
-    {
+    if log::log_enabled!(log::Level::Debug) {
         // print local_env
         println!("local env:");
         for param in &local_env.locals {
@@ -2320,8 +2308,7 @@ pub fn elaborate_expr(
 
     elab.fully_inst_expr(e);
 
-    #[cfg(debug_assertions)]
-    {
+    if log::log_enabled!(log::Level::Debug) {
         println!("fully instantiated:\n{e}");
     }
 
@@ -2340,8 +2327,7 @@ pub fn elaborate_expr(
 
     *e = mk_expr_change(prop.clone(), mem::take(e));
 
-    #[cfg(debug_assertions)]
-    {
+    if log::log_enabled!(log::Level::Debug) {
         println!("elaborated:\n{e}");
     }
 

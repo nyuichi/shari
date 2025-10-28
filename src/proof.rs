@@ -1,7 +1,7 @@
 //! Prove by type synthesis.
 
 use std::sync::LazyLock;
-use std::{collections::HashMap, iter::zip, sync::Arc};
+use std::{collections::HashMap, iter::zip};
 
 use crate::tt::{
     self, Class, Instance, Name, Parameter, Term, Type, mk_abs, mk_const, mk_local, mk_type_const,
@@ -173,16 +173,15 @@ pub fn unguard1(term: &Term) -> Option<(Term, Term)> {
 /// ------------------------
 /// Γ | Φ ⊢ change φ, h : φ
 ///
-// TODO: ArcじゃなくてBoxにする
 #[derive(Debug, Clone)]
 pub enum Expr {
-    Assump(Arc<ExprAssump>),
-    Assume(Arc<ExprAssume>),
-    App(Arc<ExprApp>),
-    Take(Arc<ExprTake>),
-    Inst(Arc<ExprInst>),
-    Const(Arc<ExprConst>),
-    Change(Arc<ExprChange>),
+    Assump(Box<ExprAssump>),
+    Assume(Box<ExprAssume>),
+    App(Box<ExprApp>),
+    Take(Box<ExprTake>),
+    Inst(Box<ExprInst>),
+    Const(Box<ExprConst>),
+    Change(Box<ExprChange>),
 }
 
 #[derive(Debug, Clone)]
@@ -236,33 +235,33 @@ impl Default for Expr {
 }
 
 pub fn mk_expr_assump(m: Term) -> Expr {
-    Expr::Assump(Arc::new(ExprAssump { target: m }))
+    Expr::Assump(Box::new(ExprAssump { target: m }))
 }
 
 pub fn mk_expr_assume(h: Term, e: Expr) -> Expr {
-    Expr::Assume(Arc::new(ExprAssume {
+    Expr::Assume(Box::new(ExprAssume {
         local_axiom: h,
         expr: e,
     }))
 }
 
 pub fn mk_expr_app(e1: Expr, e2: Expr) -> Expr {
-    Expr::App(Arc::new(ExprApp {
+    Expr::App(Box::new(ExprApp {
         expr1: e1,
         expr2: e2,
     }))
 }
 
 pub fn mk_expr_take(name: Name, ty: Type, e: Expr) -> Expr {
-    Expr::Take(Arc::new(ExprTake { name, ty, expr: e }))
+    Expr::Take(Box::new(ExprTake { name, ty, expr: e }))
 }
 
 pub fn mk_expr_inst(e: Expr, m: Term) -> Expr {
-    Expr::Inst(Arc::new(ExprInst { expr: e, arg: m }))
+    Expr::Inst(Box::new(ExprInst { expr: e, arg: m }))
 }
 
 pub fn mk_expr_const(name: Name, ty_args: Vec<Type>, instances: Vec<Instance>) -> Expr {
-    Expr::Const(Arc::new(ExprConst {
+    Expr::Const(Box::new(ExprConst {
         name,
         ty_args,
         instances,
@@ -270,7 +269,7 @@ pub fn mk_expr_const(name: Name, ty_args: Vec<Type>, instances: Vec<Instance>) -
 }
 
 pub fn mk_expr_change(target: Term, expr: Expr) -> Expr {
-    Expr::Change(Arc::new(ExprChange { target, expr }))
+    Expr::Change(Box::new(ExprChange { target, expr }))
 }
 
 impl std::fmt::Display for Expr {
@@ -452,34 +451,34 @@ impl Expr {
     pub fn subst(&mut self, subst: &[(Name, Term)]) {
         match self {
             Expr::Assump(e) => {
-                let ExprAssump { target } = Arc::make_mut(e);
+                let ExprAssump { target } = e.as_mut();
                 let new_target = target.subst(subst);
                 *target = new_target;
             }
             Expr::Assume(e) => {
-                let ExprAssume { local_axiom, expr } = Arc::make_mut(e);
+                let ExprAssume { local_axiom, expr } = e.as_mut();
                 let new_local_axiom = local_axiom.subst(subst);
                 *local_axiom = new_local_axiom;
                 expr.subst(subst);
             }
             Expr::App(e) => {
-                let ExprApp { expr1, expr2 } = Arc::make_mut(e);
+                let ExprApp { expr1, expr2 } = e.as_mut();
                 expr1.subst(subst);
                 expr2.subst(subst);
             }
             Expr::Take(e) => {
-                let ExprTake { expr, .. } = Arc::make_mut(e);
+                let ExprTake { expr, .. } = e.as_mut();
                 expr.subst(subst);
             }
             Expr::Inst(e) => {
-                let ExprInst { expr, arg } = Arc::make_mut(e);
+                let ExprInst { expr, arg } = e.as_mut();
                 expr.subst(subst);
                 let new_arg = arg.subst(subst);
                 *arg = new_arg;
             }
             Expr::Const(_) => {}
             Expr::Change(e) => {
-                let ExprChange { target, expr } = Arc::make_mut(e);
+                let ExprChange { target, expr } = e.as_mut();
                 let new_target = target.subst(subst);
                 *target = new_target;
                 expr.subst(subst);
@@ -493,31 +492,31 @@ impl Expr {
     {
         match self {
             Expr::Assump(e) => {
-                let ExprAssump { target } = Arc::make_mut(e);
+                let ExprAssump { target } = e.as_mut();
                 *target = target.replace_hole(f);
             }
             Expr::Assume(e) => {
-                let ExprAssume { local_axiom, expr } = Arc::make_mut(e);
+                let ExprAssume { local_axiom, expr } = e.as_mut();
                 *local_axiom = local_axiom.replace_hole(f);
                 expr.replace_hole(f);
             }
             Expr::App(e) => {
-                let ExprApp { expr1, expr2 } = Arc::make_mut(e);
+                let ExprApp { expr1, expr2 } = e.as_mut();
                 expr1.replace_hole(f);
                 expr2.replace_hole(f);
             }
             Expr::Take(e) => {
-                let ExprTake { expr, .. } = Arc::make_mut(e);
+                let ExprTake { expr, .. } = e.as_mut();
                 expr.replace_hole(f);
             }
             Expr::Inst(e) => {
-                let ExprInst { expr, arg } = Arc::make_mut(e);
+                let ExprInst { expr, arg } = e.as_mut();
                 expr.replace_hole(f);
                 *arg = arg.replace_hole(f);
             }
             Expr::Const(_) => {}
             Expr::Change(e) => {
-                let ExprChange { target, expr } = Arc::make_mut(e);
+                let ExprChange { target, expr } = e.as_mut();
                 *target = target.replace_hole(f);
                 expr.replace_hole(f);
             }
