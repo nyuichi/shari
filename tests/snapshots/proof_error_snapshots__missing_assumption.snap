@@ -1,0 +1,8 @@
+---
+source: tests/proof_error_snapshots.rs
+expression: formatted
+---
+error chain:
+  - command error
+  - assumption not found: foo
+fixture: tests/proof_errors/missing_assumption.shari

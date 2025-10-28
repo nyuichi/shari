@@ -1,0 +1,4 @@
+type const Prop : Type
+const foo : Prop
+
+lemma missing_assumption : foo := «foo»
