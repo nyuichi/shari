@@ -1,0 +1,4 @@
+type const Prop : Type
+const foo : Prop
+
+def type_mismatch_term : Prop := λ (x : Prop), x

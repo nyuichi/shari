@@ -1,0 +1,6 @@
+type const Prop : Type
+const foo : Prop
+
+axiom trivial : foo
+
+lemma not_a_forall : foo := @trivial[foo]

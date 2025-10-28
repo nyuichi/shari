@@ -1,0 +1,8 @@
+---
+source: tests/proof_error_snapshots.rs
+expression: formatted
+---
+error chain:
+  - command error
+  - unification failed: could not synthesize instance: 29
+fixture: tests/proof_errors/could_not_synthesize_instance.shari

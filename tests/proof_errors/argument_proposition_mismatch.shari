@@ -1,0 +1,10 @@
+type const Prop : Type
+const imp : Prop → Prop → Prop
+infixr → : 25 := imp
+const foo : Prop
+const bar : Prop
+
+lemma argument_proposition_mismatch : foo → bar → foo :=
+  assume foo,
+    assume bar,
+      (assume foo, «foo») «bar»

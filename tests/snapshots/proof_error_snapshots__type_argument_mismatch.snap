@@ -1,0 +1,8 @@
+---
+source: tests/proof_error_snapshots.rs
+expression: formatted
+---
+error chain:
+  - command error
+  - unification failed: type argument mismatch: expected Prop, but got (Prop → Prop) → Prop → Prop
+fixture: tests/proof_errors/type_argument_mismatch.shari

@@ -1,0 +1,9 @@
+type const Prop : Type
+
+class structure has_dummy u := {
+  const witness : u
+}
+
+const need_dummy.{u} [has_dummy u] : u
+
+def could_not_synthesize_instance : Prop := need_dummy.{Prop}

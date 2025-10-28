@@ -1,0 +1,6 @@
+type const Prop : Type
+const foo : Prop
+const bar : Prop
+axiom pf_bar : bar
+
+lemma change_proposition_mismatch : foo := change foo, pf_bar

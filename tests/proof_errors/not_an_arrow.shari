@@ -1,0 +1,4 @@
+type const Prop : Type
+const foo : Prop
+
+def not_an_arrow : Prop := foo foo

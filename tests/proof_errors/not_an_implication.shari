@@ -1,0 +1,6 @@
+type const Prop : Type
+const imp : Prop → Prop → Prop
+infixr → : 25 := imp
+const foo : Prop
+
+lemma not_an_implication : foo → foo := assume foo, «foo» «foo»

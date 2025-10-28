@@ -1,0 +1,6 @@
+type const Prop : Type
+const foo : Prop
+const bad : Prop → Prop
+axiom pf_foo : foo
+
+lemma change_target_not_proposition : foo := change bad, pf_foo

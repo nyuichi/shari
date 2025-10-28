@@ -1,0 +1,8 @@
+---
+source: tests/proof_error_snapshots.rs
+expression: formatted
+---
+error chain:
+  - command error
+  - unification failed: not an implication: «foo»
+fixture: tests/proof_errors/not_an_implication.shari

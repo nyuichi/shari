@@ -1,0 +1,10 @@
+---
+source: tests/proof_error_snapshots.rs
+expression: formatted
+---
+error chain:
+  - command error
+  - unification failed: propositions mismatch in change: pf_bar
+target = foo
+expr_prop = bar
+fixture: tests/proof_errors/change_proposition_mismatch.shari

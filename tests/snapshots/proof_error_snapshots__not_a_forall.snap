@@ -1,0 +1,8 @@
+---
+source: tests/proof_error_snapshots.rs
+expression: formatted
+---
+error chain:
+  - command error
+  - unification failed: not a forall: trivial
+fixture: tests/proof_errors/not_a_forall.shari

@@ -1,0 +1,9 @@
+type const Prop : Type
+type const X : Type
+const imp : Prop → Prop → Prop
+infixr → : 25 := imp
+const foo : Prop
+const bad_type : X
+axiom pf_foo : foo
+
+lemma assume_not_proposition : foo := assume bad_type, pf_foo

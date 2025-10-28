@@ -1,0 +1,8 @@
+---
+source: tests/proof_error_snapshots.rs
+expression: formatted
+---
+error chain:
+  - command error
+  - unification failed: type mismatch
+fixture: tests/proof_errors/type_mismatch_term.shari

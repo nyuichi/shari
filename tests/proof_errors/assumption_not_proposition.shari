@@ -1,0 +1,7 @@
+type const Prop : Type
+type const X : Type
+const imp : X → X → Prop
+infixr → : 25 := imp
+const bad_type : X
+
+lemma assumption_not_proposition : bad_type → bad_type := assume bad_type, «bad_type»
