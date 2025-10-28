@@ -788,8 +788,7 @@ impl<'a> Parser<'a> {
                 "calc" => {
                     // calc m₁ = m₂ := e₁
                     //     ... = m₃ := e₂
-                    //     ... = m₄ := e₃,
-                    // e
+                    //     ... = m₄ := e₃
                     //
                     // is equivalent to
                     //
@@ -800,7 +799,7 @@ impl<'a> Parser<'a> {
                     // have m₁ = m₄ :=
                     //   have m₃ = m₄ := e₃,
                     //   eq.trans «m₁ = m₃» «m₃ = m₄»,
-                    // e
+                    // «m₁ = m₄»
                     let eq_prec = self
                         .tt
                         .led
@@ -819,9 +818,6 @@ impl<'a> Parser<'a> {
                             break;
                         }
                     }
-                    self.expect_symbol(",")?;
-                    let body = self.expr()?;
-
                     let mut lemma_list = vec![];
                     let mut last_rhs: Option<Term> = None;
                     for (rhs, e) in rhs_list {
@@ -840,7 +836,8 @@ impl<'a> Parser<'a> {
                         last_rhs = Some(rhs);
                     }
 
-                    let mut body = body;
+                    let last_rhs = last_rhs.expect("calc requires at least one equality");
+                    let mut body = mk_expr_assump(Self::mk_eq(lhs.clone(), last_rhs));
                     for (lhs, e) in lemma_list.into_iter().rev() {
                         body = Self::mk_have(lhs, e, body);
                     }

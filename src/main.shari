@@ -39,7 +39,7 @@ change φ, e                   change the goal to a definitional equivalent
 ( e ), { e }                  grouping. no distinction between a pair of parentheses and of braces.
 have φ := e₁, e₂
 obtain (x : τ), φ := e₁, e₂
-calc m₁ = m₂ := e₁ ... = m₃ := e₂ ... = m₄ := e₃, e₄
+calc m₁ = m₂ := e₁ ... = m₃ := e₂ ... = m₄ := e₃
 
 
 # The logical foundation
@@ -763,26 +763,26 @@ def ff : bool := bool.ff
 lemma bool.rep_tt_eq_true : bool.rep tt = ⊤ :=
 calc bool.rep tt = bool.rec tt (λ rep, rep)          := eq.refl
              ... = (λ f, f bool.tt.rep) (λ rep, rep) := eq.ap bool.tt.rec
-             ... = ⊤                                 := eq.refl,
-«bool.rep tt = ⊤»
+             ... = ⊤                                 := eq.refl
 
 lemma bool.rep_ff_eq_false : bool.rep ff = ⊥ :=
 calc bool.rep ff = bool.rec ff (λ rep, rep)          := eq.refl
              ... = (λ f, f bool.ff.rep) (λ rep, rep) := eq.ap bool.ff.rec
-             ... = ⊥                                 := eq.refl,
-«bool.rep ff = ⊥»
+             ... = ⊥                                 := eq.refl
 
 lemma bool.eq_tt (b : bool) : bool.rep b = ⊤ → b = tt :=
 assume bool.rep b = ⊤,
-calc bool.rep b = ⊤           := «bool.rep b = ⊤»
-            ... = bool.rep tt := eq.symm bool.rep_tt_eq_true,
-bool.ext «bool.rep b = bool.rep tt»
+bool.ext (
+  calc bool.rep b = ⊤           := «bool.rep b = ⊤»
+              ... = bool.rep tt := eq.symm bool.rep_tt_eq_true
+)
 
 lemma bool.eq_ff (b : bool) : bool.rep b = ⊥ → b = ff :=
 assume bool.rep b = ⊥,
-calc bool.rep b = ⊥           := «bool.rep b = ⊥»
-            ... = bool.rep ff := eq.symm bool.rep_ff_eq_false,
-bool.ext «bool.rep b = bool.rep ff»
+bool.ext (
+  calc bool.rep b = ⊥           := «bool.rep b = ⊥»
+              ... = bool.rep ff := eq.symm bool.rep_ff_eq_false
+)
 
 lemma bool.case (b : bool) : b = tt ∨ b = ff :=
 or.ind bool.spec
@@ -793,10 +793,11 @@ or.ind bool.spec
 
 lemma bool.tt_ne_ff : tt ≠ ff :=
 assume tt = ff,
-calc ⊤ = bool.rep tt := eq.symm bool.rep_tt_eq_true
-   ... = bool.rep ff := eq.ap «tt = ff»
-   ... = ⊥           := bool.rep_ff_eq_false,
-contradiction «⊤ = ⊥» true_ne_false
+contradiction
+  (calc ⊤ = bool.rep tt := eq.symm bool.rep_tt_eq_true
+        ... = bool.rep ff := eq.ap «tt = ff»
+        ... = ⊥           := bool.rep_ff_eq_false)
+  true_ne_false
 
 /-
 lemma bool.ite.uexists.{u} : ∃! (ite : bool → u → u → u), ∀ (b : bool) (x y : u), ite tt x y = x ∧ ite ff x y = y :=
@@ -1058,8 +1059,7 @@ lemma prod.eta.{u, v} (p : u × v) : p = pair (fst p) (snd p) :=
   (take (a : u),
    take (b : v),
    calc pair a b = pair (fst (pair a b)) b := eq.transport (eq.symm fst.pair) eq.refl
-        ...      = pair (fst (pair a b)) (snd (pair a b)) := eq.transport (eq.symm snd.pair) eq.refl,
-   «pair a b = pair (fst (pair a b)) (snd (pair a b))»)
+        ...      = pair (fst (pair a b)) (snd (pair a b)) := eq.transport (eq.symm snd.pair) eq.refl)
 
 structure total u v := {
   const rel : u → v → Prop
@@ -1089,7 +1089,6 @@ lemma f.surjective.{u, v} : surjective f.{u, v} := {
     calc p = pair (fst p) (snd p)                    := prod.eta
          ... = pair (total.el.x e) (snd p)           := eq.transport «fst p = total.el.x e» eq.refl
          ... = pair (total.el.x e) (total.el.rel e)  := eq.transport «snd p = total.el.rel e» eq.refl,
-    «p = pair (total.el.x e) (total.el.rel e)»,
   @exists.intro[_, e] «p = pair (total.el.x e) (total.el.rel e)»
 }
 
@@ -1102,12 +1101,10 @@ obtain (g : u × total u v → total.el u v), ∀ p, p = f (g p) := surjective.s
     calc x = fst (pair x r)                            := eq.symm fst.pair
          ... = fst (f (g (pair x r)))                  := eq.congr_arg «pair x r = f (g (pair x r))»
          ... = total.el.x (g (pair x r))               := fst.pair,
-    «x = total.el.x (g (pair x r))»,
   have r = total.el.rel (g (pair x r)) :=
     calc r = snd (pair x r)                            := eq.symm snd.pair
          ... = snd (f (g (pair x r)))                  := eq.congr_arg «pair x r = f (g (pair x r))»
          ... = total.el.rel (g (pair x r))             := snd.pair,
-    «r = total.el.rel (g (pair x r))»,
   have total.rel r x (total.el.y (g (pair x r))) :=
     eq.transport (eq.symm «r = total.el.rel (g (pair x r))») (eq.transport (eq.symm «x = total.el.x (g (pair x r))») @total.el.spec[g (pair x r)]),
   «total.rel r x (total.el.y (g (pair x r)))»
@@ -1712,8 +1709,7 @@ calc unit m₁ = mult m₁ (unit m₁) (unit m₁)                              
          ... = mult m₂ (mult m₁ (unit m₂) (unit m₁)) (mult m₁ (unit m₁) (unit m₂)) := «interchange m₁ m₂»[_, _, _, _]
          ... = mult m₂ (unit m₂) (mult m₁ (unit m₁) (unit m₂))                     := eq.ap monoid.right_unit
          ... = mult m₂ (unit m₂) (unit m₂)                                         := eq.ap monoid.left_unit
-         ... = unit m₂                                                             := eq.ap monoid.right_unit,
-«unit m₁ = unit m₂»
+         ... = unit m₂                                                             := eq.ap monoid.right_unit
 
 lemma interchange.equates_mult.{u} (m₁ m₂ : monoid u) : interchange m₁ m₂ → mult m₁ = mult m₂ :=
 assume interchange m₁ m₂,
@@ -1727,7 +1723,6 @@ have ∀ a b, mult m₁ a b = mult m₂ a b :=
                ... = mult m₂ (mult m₁ a (unit m₁)) (mult m₁ (unit m₁) b) := eq.ap (eq.symm (interchange.equates_unit «interchange m₁ m₂»))
                ... = mult m₂ a (mult m₁ (unit m₁) b)                     := eq.ap monoid.right_unit
                ... = mult m₂ a b                                         := eq.ap monoid.left_unit,
-  «mult m₁ a b = mult m₂ a b»,
 -- FIXME: remove @ from fun_ext after the bug in the unifier is fixed.
 @fun_ext[mult m₁, mult m₂] (take (a : u), @fun_ext[mult m₁ a, mult m₂ a] «∀ a b, mult m₁ a b = mult m₂ a b»[a])
 
