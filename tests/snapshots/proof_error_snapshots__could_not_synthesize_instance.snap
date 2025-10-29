@@ -4,5 +4,5 @@ expression: formatted
 ---
 error chain:
   - command error
-  - unification failed: could not synthesize instance: 29
+  - unification failed: could not synthesize instance
 fixture: tests/proof_errors/could_not_synthesize_instance.shari
