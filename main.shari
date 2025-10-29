@@ -12,7 +12,6 @@
  - [ ] namespace
  - [ ] let expr
  - [ ] local typedef
- - [ ] more tests
  - [ ] kernel support for eta equality of lambdas
  -/
 
