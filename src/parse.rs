@@ -11,8 +11,9 @@ use crate::proof::{
     mk_expr_change, mk_expr_const, mk_expr_inst, mk_expr_take, mk_type_prop,
 };
 use crate::tt::{
-    Class, ClassType, Const, Kind, Name, Parameter, Term, Type, mk_const, mk_fresh_hole,
-    mk_fresh_type_hole, mk_instance_hole, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
+    Class, ClassType, Const, Kind, Name, Parameter, QualifiedName, Term, Type, mk_const,
+    mk_fresh_hole, mk_fresh_type_hole, mk_instance_hole, mk_local, mk_type_arrow, mk_type_const,
+    mk_type_local,
 };
 
 use crate::lex::{Lex, LexError, SourceInfo, Token, TokenKind};
@@ -139,10 +140,11 @@ pub enum ParseError {
 pub struct Parser<'a> {
     lex: &'a mut Lex,
     tt: &'a TokenTable,
-    type_const_table: &'a HashMap<Name, Kind>,
-    const_table: &'a HashMap<Name, Const>,
-    axiom_table: &'a HashMap<Name, Axiom>,
-    class_predicate_table: &'a HashMap<Name, ClassType>,
+    // TODO: change Name and QualifiedName below to String to avoid intern cost
+    type_const_table: &'a HashMap<QualifiedName, Kind>,
+    const_table: &'a HashMap<QualifiedName, Const>,
+    axiom_table: &'a HashMap<QualifiedName, Axiom>,
+    class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
     type_locals: Vec<Name>,
     locals: Vec<Name>,
     holes: Vec<(Name, Type)>,
@@ -152,10 +154,10 @@ impl<'a> Parser<'a> {
     pub fn new(
         lex: &'a mut Lex,
         tt: &'a TokenTable,
-        type_const_table: &'a HashMap<Name, Kind>,
-        const_table: &'a HashMap<Name, Const>,
-        axiom_table: &'a HashMap<Name, Axiom>,
-        class_predicate_table: &'a HashMap<Name, ClassType>,
+        type_const_table: &'a HashMap<QualifiedName, Kind>,
+        const_table: &'a HashMap<QualifiedName, Const>,
+        axiom_table: &'a HashMap<QualifiedName, Axiom>,
+        class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
         type_variables: Vec<Name>,
     ) -> Self {
         Self {
@@ -310,6 +312,10 @@ impl<'a> Parser<'a> {
         self.ident_opt().map(|token| Name::intern(token.as_str()))
     }
 
+    fn qualified_name(&mut self) -> Result<QualifiedName, ParseError> {
+        Ok(QualifiedName::intern(self.ident()?.as_str()))
+    }
+
     fn kind(&mut self) -> Result<Kind, ParseError> {
         let mut kind = 0;
         self.expect_ident("Type")?;
@@ -326,15 +332,18 @@ impl<'a> Parser<'a> {
             let name = Name::intern(token.as_str());
             if self.type_locals.iter().any(|x| x == &name) {
                 Ok(mk_type_local(name))
-            } else if self.type_const_table.contains_key(&name) {
-                Ok(mk_type_const(name))
-            } else if token.as_str() == "sub" {
-                let t = self.subty(1024)?;
-                Ok(mk_type_arrow(t, mk_type_prop()))
-            } else if token.as_str() == "ℕ" {
-                Ok(mk_type_const(Name::intern("nat")))
             } else {
-                Self::fail(token, "unknown type variable")
+                let qualified = QualifiedName::intern(token.as_str());
+                if self.type_const_table.contains_key(&qualified) {
+                    Ok(mk_type_const(qualified))
+                } else if token.as_str() == "sub" {
+                    let t = self.subty(1024)?;
+                    Ok(mk_type_arrow(t, mk_type_prop()))
+                } else if token.as_str() == "ℕ" {
+                    Ok(mk_type_const(QualifiedName::intern("nat")))
+                } else {
+                    Self::fail(token, "unknown type constant")
+                }
             }
         } else if token.is_symbol() && token.as_str() == "(" {
             let t = self.ty()?;
@@ -366,7 +375,7 @@ impl<'a> Parser<'a> {
                 }
                 self.advance();
                 let s = self.subty(34)?;
-                t = mk_type_const(Name::intern("prod")).apply([t, s]);
+                t = mk_type_const(QualifiedName::intern("prod")).apply([t, s]);
             } else if token.is_ident()
                 || (token.is_symbol() && token.as_str() == "(")
                 || (token.is_symbol() && token.as_str() == "${")
@@ -433,7 +442,7 @@ impl<'a> Parser<'a> {
         if !token.is_ident() {
             return Self::fail(token, "expected class name");
         }
-        let name = Name::intern(token.as_str());
+        let name = QualifiedName::intern(token.as_str());
         if !self.class_predicate_table.contains_key(&name) {
             return Self::fail(token, "unknown class");
         }
@@ -508,7 +517,7 @@ impl<'a> Parser<'a> {
         for x in binders.into_iter().rev() {
             m = m.abs(slice::from_ref(&x));
             let f = mem::take(&mut m);
-            m = mk_const(Name::intern(binder), vec![x.ty], vec![]);
+            m = mk_const(QualifiedName::intern(binder), vec![x.ty], vec![]);
             m = m.apply(vec![f]);
         }
         Ok(m)
@@ -532,17 +541,21 @@ impl<'a> Parser<'a> {
         Ok(m)
     }
 
-    fn term_var(&mut self, token: Token, entity: Option<Name>) -> Result<Term, ParseError> {
-        let name = match entity {
-            None => Name::intern(token.as_str()),
-            Some(s) => s,
-        };
-        for x in self.locals.iter().rev() {
-            if x == &name {
-                return Ok(mk_local(name));
+    fn term_var(
+        &mut self,
+        token: Token,
+        entity: Option<QualifiedName>,
+    ) -> Result<Term, ParseError> {
+        if entity.is_none() {
+            let local = Name::intern(token.as_str());
+            for x in self.locals.iter().rev() {
+                if x == &local {
+                    return Ok(mk_local(local));
+                }
             }
         }
-        let Some(const_info) = self.const_table.get(&name) else {
+        let qualified = entity.unwrap_or_else(|| QualifiedName::intern(token.as_str()));
+        let Some(const_info) = self.const_table.get(&qualified) else {
             return Self::fail(token, "unknown variable");
         };
         let mut ty_args = vec![];
@@ -565,7 +578,7 @@ impl<'a> Parser<'a> {
         for _ in 0..const_info.local_classes.len() {
             instances.push(mk_instance_hole(Name::fresh()));
         }
-        Ok(mk_const(name, ty_args, instances))
+        Ok(mk_const(qualified, ty_args, instances))
     }
 
     fn subterm(&mut self, rbp: usize) -> Result<Term, ParseError> {
@@ -587,9 +600,9 @@ impl<'a> Parser<'a> {
             Nud::Exists => self.term_binder(token, "exists")?,
             Nud::Uexists => self.term_binder(token, "uexists")?,
             Nud::User(op) => match op.fixity {
-                Fixity::Nofix => self.term_var(token, Some(op.entity))?,
+                Fixity::Nofix => self.term_var(token, Some(op.entity.clone()))?,
                 Fixity::Prefix => {
-                    let mut fun = self.term_var(token, Some(op.entity))?;
+                    let mut fun = self.term_var(token, Some(op.entity.clone()))?;
                     let arg = self.subterm(op.prec)?;
                     fun = fun.apply(vec![arg]);
                     fun
@@ -621,7 +634,7 @@ impl<'a> Parser<'a> {
                         Fixity::Nofix | Fixity::Prefix => unreachable!("op = {op:?}"),
                     };
                     self.advance();
-                    let mut fun = self.term_var(token, Some(op.entity))?;
+                    let mut fun = self.term_var(token, Some(op.entity.clone()))?;
                     let right = self.subterm(prec)?;
                     fun = fun.apply(vec![left, right]);
                     left = fun;
@@ -648,7 +661,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expr_const(&mut self, token: Token, auto_inst: bool) -> Result<Expr, ParseError> {
-        let name = Name::intern(token.as_str());
+        let name = QualifiedName::intern(token.as_str());
         let Some(axiom_info) = self.axiom_table.get(&name) else {
             return Self::fail(token, "unknown variable");
         };
@@ -672,7 +685,7 @@ impl<'a> Parser<'a> {
         for _ in 0..axiom_info.local_classes.len() {
             instances.push(mk_instance_hole(Name::fresh()));
         }
-        let mut expr = mk_expr_const(name, ty_args, instances);
+        let mut expr = mk_expr_const(name.clone(), ty_args, instances);
         if auto_inst {
             for _ in 0..count_forall(&axiom_info.target) {
                 expr = mk_expr_inst(expr, self.mk_term_hole());
@@ -686,13 +699,17 @@ impl<'a> Parser<'a> {
     }
 
     fn mk_eq(lhs: Term, rhs: Term) -> Term {
-        let mut eq = mk_const(Name::intern("eq"), vec![mk_fresh_type_hole()], vec![]);
+        let mut eq = mk_const(
+            QualifiedName::intern("eq"),
+            vec![mk_fresh_type_hole()],
+            vec![],
+        );
         eq = eq.apply([lhs, rhs]);
         eq
     }
 
     fn mk_eq_trans(&mut self, e1: Expr, e2: Expr) -> Expr {
-        let name = Name::intern("eq.trans");
+        let name = QualifiedName::intern("eq.trans");
         let ty_args = vec![mk_fresh_type_hole()];
         let instances = vec![];
         let mut eq_trans = mk_expr_const(name, ty_args, instances);
@@ -777,7 +794,11 @@ impl<'a> Parser<'a> {
                     self.locals.pop();
 
                     // Expand[obtain (x : τ), p := e1, e2] := exists.ind.{τ}[_, _] e1 (take (x : τ), assume p, e2)
-                    let e = mk_expr_const(Name::intern("exists.ind"), vec![ty.clone()], vec![]);
+                    let e = mk_expr_const(
+                        QualifiedName::intern("exists.ind"),
+                        vec![ty.clone()],
+                        vec![],
+                    );
                     let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_app(e, e1);
@@ -1027,7 +1048,7 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let entity = self.name()?;
+        let entity = self.qualified_name()?;
         Ok(CmdInfixr {
             op: op.as_str().to_owned(),
             prec,
@@ -1044,7 +1065,7 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let entity = self.name()?;
+        let entity = self.qualified_name()?;
         Ok(CmdInfixl {
             op: op.as_str().to_owned(),
             prec,
@@ -1061,7 +1082,7 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let entity = self.name()?;
+        let entity = self.qualified_name()?;
         Ok(CmdInfix {
             op: op.as_str().to_owned(),
             prec,
@@ -1078,7 +1099,7 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let entity = self.name()?;
+        let entity = self.qualified_name()?;
         Ok(CmdPrefix {
             op: op.as_str().to_owned(),
             prec,
@@ -1089,7 +1110,7 @@ impl<'a> Parser<'a> {
     fn nofix_cmd(&mut self, _token: Token) -> Result<CmdNofix, ParseError> {
         let op = self.symbol()?;
         self.expect_symbol(":=")?;
-        let entity = self.name()?;
+        let entity = self.qualified_name()?;
         Ok(CmdNofix {
             op: op.as_str().to_owned(),
             entity,
@@ -1097,7 +1118,7 @@ impl<'a> Parser<'a> {
     }
 
     fn def_cmd(&mut self, _token: Token) -> Result<CmdDef, ParseError> {
-        let name = self.name()?;
+        let name = self.qualified_name()?;
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.type_locals.push(*ty);
@@ -1129,7 +1150,7 @@ impl<'a> Parser<'a> {
     }
 
     fn axiom_cmd(&mut self, _token: Token) -> Result<CmdAxiom, ParseError> {
-        let name = self.name()?;
+        let name = self.qualified_name()?;
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.type_locals.push(*ty);
@@ -1155,7 +1176,7 @@ impl<'a> Parser<'a> {
     }
 
     fn lemma_cmd(&mut self, _token: Token) -> Result<CmdLemma, ParseError> {
-        let name = self.name()?;
+        let name = self.qualified_name()?;
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.type_locals.push(*ty);
@@ -1189,7 +1210,7 @@ impl<'a> Parser<'a> {
     }
 
     fn const_cmd(&mut self, _token: Token) -> Result<CmdConst, ParseError> {
-        let name = self.name()?;
+        let name = self.qualified_name()?;
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.type_locals.push(*ty);
@@ -1209,7 +1230,7 @@ impl<'a> Parser<'a> {
     }
 
     fn type_const_cmd(&mut self, _token: Token) -> Result<CmdTypeConst, ParseError> {
-        let name = self.name()?;
+        let name = self.qualified_name()?;
         self.expect_symbol(":")?;
         let kind = self.kind()?;
         Ok(CmdTypeConst { name, kind })
@@ -1224,8 +1245,9 @@ impl<'a> Parser<'a> {
     }
 
     fn type_inductive_cmd(&mut self, _token: Token) -> Result<CmdTypeInductive, ParseError> {
-        let name = self.name()?;
-        self.type_locals.push(name);
+        let name = self.qualified_name()?;
+        let local_name = Name::intern(name.as_str());
+        self.type_locals.push(local_name);
 
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
@@ -1241,7 +1263,7 @@ impl<'a> Parser<'a> {
         let mut ctors: Vec<DataConstructor> = vec![];
         while let Some(_token) = self.expect_symbol_opt("|") {
             let token = self.ident()?;
-            let ctor_name = Name::intern(token.as_str());
+            let ctor_name = QualifiedName::intern(token.as_str());
             for ctor in &ctors {
                 if ctor_name == ctor.name {
                     return Self::fail(token, "duplicate constructor")?;
@@ -1260,14 +1282,16 @@ impl<'a> Parser<'a> {
         self.type_locals.pop();
         Ok(CmdTypeInductive {
             name,
+            local_name,
             local_types,
             ctors,
         })
     }
 
     fn inductive_cmd(&mut self, _token: Token) -> Result<CmdInductive, ParseError> {
-        let name = self.name()?;
-        self.locals.push(name);
+        let name = self.qualified_name()?;
+        let local_name = Name::intern(name.as_str());
+        self.locals.push(local_name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.type_locals.push(*ty);
@@ -1281,7 +1305,7 @@ impl<'a> Parser<'a> {
         let mut ctors: Vec<Constructor> = vec![];
         while let Some(_token) = self.expect_symbol_opt("|") {
             let token = self.ident()?;
-            let ctor_name = Name::intern(token.as_str());
+            let ctor_name = QualifiedName::intern(token.as_str());
             for ctor in &ctors {
                 if ctor_name == ctor.name {
                     return Self::fail(token, "duplicate constructor")?;
@@ -1307,6 +1331,7 @@ impl<'a> Parser<'a> {
             .truncate(self.type_locals.len() - local_types.len());
         Ok(CmdInductive {
             name,
+            local_name,
             local_types,
             ctors,
             params,
@@ -1315,7 +1340,7 @@ impl<'a> Parser<'a> {
     }
 
     fn structure_cmd(&mut self, _token: Token) -> Result<CmdStructure, ParseError> {
-        let name = self.name()?;
+        let name = self.qualified_name()?;
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
             let tv = Name::intern(token.as_str());
@@ -1377,7 +1402,7 @@ impl<'a> Parser<'a> {
     }
 
     fn instance_cmd(&mut self, _token: Token) -> Result<CmdInstance, ParseError> {
-        let name = self.name()?;
+        let name = self.qualified_name()?;
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.type_locals.push(*ty);
@@ -1464,7 +1489,7 @@ impl<'a> Parser<'a> {
     }
 
     fn class_structure_cmd(&mut self, _token: Token) -> Result<CmdClassStructure, ParseError> {
-        let name = self.name()?;
+        let name = self.qualified_name()?;
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
             let tv = Name::intern(token.as_str());
@@ -1526,7 +1551,7 @@ impl<'a> Parser<'a> {
     }
 
     fn class_instance_cmd(&mut self, _token: Token) -> Result<CmdClassInstance, ParseError> {
-        let name = self.name()?;
+        let name = self.qualified_name()?;
         let local_types = self.local_type_parameters()?;
         for &ty in &local_types {
             self.type_locals.push(ty);

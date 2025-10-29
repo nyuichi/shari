@@ -1,7 +1,7 @@
 use crate::{
     cmd::{Fixity, Operator},
     proof::Axiom,
-    tt::{Class, ClassType, Const, Ctor, Kind, Name, Term, Type},
+    tt::{Class, ClassType, Const, Ctor, Kind, Name, QualifiedName, Term, Type},
 };
 
 use anyhow::bail;
@@ -9,20 +9,20 @@ use std::{collections::HashMap, fmt::Display};
 
 #[derive(Debug, Default, Clone)]
 pub struct OpTable {
-    op_table: HashMap<Name, Operator>,
+    op_table: HashMap<QualifiedName, Operator>,
 }
 
 impl OpTable {
     pub fn add(&mut self, op: Operator) -> anyhow::Result<()> {
-        let entity = op.entity;
+        let entity = op.entity.clone();
         if self.op_table.insert(entity, op).is_some() {
             bail!("notation already defined");
         }
         Ok(())
     }
 
-    fn get(&self, name: Name) -> Option<&Operator> {
-        self.op_table.get(&name)
+    fn get(&self, name: &QualifiedName) -> Option<&Operator> {
+        self.op_table.get(name)
     }
 }
 
@@ -90,7 +90,7 @@ impl<'a> Printer<'a> {
     fn collect_ctor_binders(
         &self,
         mut term: Term,
-        ctor_name: Name,
+        ctor_name: QualifiedName,
         local_names: &mut Vec<String>,
     ) -> (Vec<(String, Type)>, Term) {
         let mut binders = Vec::new();
@@ -155,8 +155,7 @@ impl<'a> Printer<'a> {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         if let Ok(Ctor { head, mut args }) = m.clone().try_into() {
-            let name = head.name;
-            if let Some(op) = self.op_table.get(name) {
+            if let Some(op) = self.op_table.get(&head.name) {
                 match op.fixity {
                     Fixity::Infix | Fixity::Infixl => {
                         if args.len() == 2 {
@@ -215,13 +214,16 @@ impl<'a> Printer<'a> {
                     }
                 }
             }
+            let name = head.name.clone();
+            // TODO: don't use to_string. this is inefficient. Use LazyLock to cache QualifiedName instances of "forall", "exists", "uexists".
             match name.to_string().as_str() {
                 "forall" => {
                     if args.len() == 1 {
                         let arg = args.pop().unwrap();
                         let arg_copy = arg.clone();
                         let snapshot = local_names.len();
-                        let (binders, body) = self.collect_ctor_binders(arg, name, local_names);
+                        let (binders, body) =
+                            self.collect_ctor_binders(arg, name.clone(), local_names);
                         if binders.is_empty() {
                             local_names.truncate(snapshot);
                             args.push(arg_copy);
@@ -245,7 +247,8 @@ impl<'a> Printer<'a> {
                         let arg = args.pop().unwrap();
                         let arg_copy = arg.clone();
                         let snapshot = local_names.len();
-                        let (binders, body) = self.collect_ctor_binders(arg, name, local_names);
+                        let (binders, body) =
+                            self.collect_ctor_binders(arg, name.clone(), local_names);
                         if binders.is_empty() {
                             local_names.truncate(snapshot);
                             args.push(arg_copy);
@@ -269,7 +272,8 @@ impl<'a> Printer<'a> {
                         let arg = args.pop().unwrap();
                         let arg_copy = arg.clone();
                         let snapshot = local_names.len();
-                        let (binders, body) = self.collect_ctor_binders(arg, name, local_names);
+                        let (binders, body) =
+                            self.collect_ctor_binders(arg, name.clone(), local_names);
                         if binders.is_empty() {
                             local_names.truncate(snapshot);
                             args.push(arg_copy);
@@ -460,7 +464,7 @@ impl Display for Pretty<'_, Class> {
     }
 }
 
-impl Display for Pretty<'_, (&Name, &Const)> {
+impl Display for Pretty<'_, (&QualifiedName, &Const)> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (
             name,
@@ -491,7 +495,7 @@ impl Display for Pretty<'_, (&Name, &Const)> {
     }
 }
 
-impl Display for Pretty<'_, (&Name, &Axiom)> {
+impl Display for Pretty<'_, (&QualifiedName, &Axiom)> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (
             name,
@@ -522,14 +526,14 @@ impl Display for Pretty<'_, (&Name, &Axiom)> {
     }
 }
 
-impl Display for Pretty<'_, (&Name, &Kind)> {
+impl Display for Pretty<'_, (&QualifiedName, &Kind)> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (name, kind) = self.data;
         write!(f, "type const {} : {}", name, kind)
     }
 }
 
-impl Display for Pretty<'_, (&Name, &ClassType)> {
+impl Display for Pretty<'_, (&QualifiedName, &ClassType)> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (name, &ClassType { arity }) = self.data;
         write!(f, "class {}", name)?;

@@ -15,7 +15,7 @@ use crate::{
     },
     tt::{
         self, Class, ClassInstance, ClassType, Const, Instance, InstanceGlobal, Kind, LocalEnv,
-        Name, Parameter, Term, TermAbs, TermApp, Type, TypeApp, TypeArrow, mk_const,
+        Name, Parameter, QualifiedName, Term, TermAbs, TermApp, Type, TypeApp, TypeArrow, mk_const,
         mk_fresh_type_hole, mk_hole, mk_instance_global, mk_instance_local, mk_local,
         mk_type_arrow,
     },
@@ -541,7 +541,11 @@ impl<'a> Elaborator<'a> {
                 pred = pred.apply([mk_local(x.name)]);
                 pred = pred.abs(&[x]);
 
-                let mut target = mk_const(Name::intern("forall"), vec![arg_ty.clone()], vec![]);
+                let mut target = mk_const(
+                    QualifiedName::intern("forall"),
+                    vec![arg_ty.clone()],
+                    vec![],
+                );
                 target = target.apply([pred]);
                 self.push_term_constraint(
                     self.tt_local_env.clone(),
@@ -766,7 +770,7 @@ impl<'a> Elaborator<'a> {
 
     fn watch_instance(&mut self, c: Rc<MethodConstraint>) {
         if let Term::Const(left_head) = c.left.head()
-            && self.proof_env.tt_env.has_kappa(left_head.name)
+            && self.proof_env.tt_env.has_kappa(left_head.name.clone())
             && let Instance::Hole(hole) = &left_head.instances[0]
         {
             self.instance_watch_list
@@ -777,7 +781,7 @@ impl<'a> Elaborator<'a> {
             return;
         }
         if let Term::Const(right_head) = c.right.head()
-            && self.proof_env.tt_env.has_kappa(right_head.name)
+            && self.proof_env.tt_env.has_kappa(right_head.name.clone())
             && let Instance::Hole(hole) = &right_head.instances[0]
         {
             self.instance_watch_list
@@ -789,7 +793,7 @@ impl<'a> Elaborator<'a> {
 
     fn unwatch_instance(&mut self, c: &Rc<MethodConstraint>) {
         if let Term::Const(left_head) = c.left.head()
-            && self.proof_env.tt_env.has_kappa(left_head.name)
+            && self.proof_env.tt_env.has_kappa(left_head.name.clone())
             && let Instance::Hole(hole) = &left_head.instances[0]
         {
             let hole_name = hole.name;
@@ -805,7 +809,7 @@ impl<'a> Elaborator<'a> {
             return;
         }
         if let Term::Const(right_head) = c.right.head()
-            && self.proof_env.tt_env.has_kappa(right_head.name)
+            && self.proof_env.tt_env.has_kappa(right_head.name.clone())
             && let Instance::Hole(hole) = &right_head.instances[0]
         {
             let hole_name = hole.name;
@@ -864,7 +868,7 @@ impl<'a> Elaborator<'a> {
             let Term::Const(head_const) = head else {
                 return None;
             };
-            if !self.proof_env.tt_env.has_kappa(head_const.name) {
+            if !self.proof_env.tt_env.has_kappa(head_const.name.clone()) {
                 return None;
             }
             if head_const.instances.is_empty() {
@@ -877,7 +881,7 @@ impl<'a> Elaborator<'a> {
             let mut instances = head_const.instances.clone();
             instances[0] = instance;
             Some(mk_const(
-                head_const.name,
+                head_const.name.clone(),
                 head_const.ty_args.clone(),
                 instances,
             ))
@@ -926,7 +930,7 @@ impl<'a> Elaborator<'a> {
             class.clone()
         } else {
             Class {
-                name: class.name,
+                name: class.name.clone(),
                 args,
             }
         }
@@ -965,7 +969,7 @@ impl<'a> Elaborator<'a> {
                     Instance::Global(instance.clone())
                 } else {
                     Instance::Global(Arc::new(InstanceGlobal {
-                        name: *name,
+                        name: name.clone(),
                         ty_args: new_ty_args,
                         args: new_args,
                     }))
@@ -1381,7 +1385,7 @@ impl<'a> Elaborator<'a> {
             // 1. L is stuck by an unfoldable constant
             // 2. L is stuck by an unassigned hole
             if let Term::Const(left_head) = left.head().clone() {
-                if self.proof_env.tt_env.has_kappa(left_head.name) {
+                if self.proof_env.tt_env.has_kappa(left_head.name.clone()) {
                     if let Some(new_left) = self.inst_recv(&left) {
                         left = new_left;
                     }
@@ -1507,7 +1511,7 @@ impl<'a> Elaborator<'a> {
         }
         let right_head_term = right.head().clone();
         if let (Term::Local(left_head), Term::Const(right_head)) = (left.head(), right_head_term) {
-            if self.proof_env.tt_env.has_kappa(right_head.name) {
+            if self.proof_env.tt_env.has_kappa(right_head.name.clone()) {
                 if let Some(new_right) = self.inst_recv(&right) {
                     right = new_right;
                 }
@@ -1537,7 +1541,7 @@ impl<'a> Elaborator<'a> {
             Term::Const(head) => head,
             _ => unreachable!(),
         };
-        if self.proof_env.tt_env.has_kappa(left_head.name) {
+        if self.proof_env.tt_env.has_kappa(left_head.name.clone()) {
             if let Some(new_left) = self.inst_recv(&left) {
                 left = new_left;
                 left_head = match left.head().clone() {
@@ -1555,7 +1559,7 @@ impl<'a> Elaborator<'a> {
                 return None;
             }
         }
-        if self.proof_env.tt_env.has_kappa(right_head.name) {
+        if self.proof_env.tt_env.has_kappa(right_head.name.clone()) {
             if let Some(new_right) = self.inst_recv(&right) {
                 right = new_right;
                 right_head = match right.head().clone() {
@@ -1578,7 +1582,7 @@ impl<'a> Elaborator<'a> {
             _ => unreachable!(),
         };
         if left_head.name == right_head.name {
-            if self.proof_env.tt_env.has_delta(left_head.name) {
+            if self.proof_env.tt_env.has_delta(left_head.name.clone()) {
                 // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where f is unfoldable
                 self.add_delta_constraint(local_env, left, right, error);
                 return None;
@@ -1602,8 +1606,8 @@ impl<'a> Elaborator<'a> {
             }
             return None;
         }
-        let left_height = self.proof_env.tt_env.delta_height(left_head.name);
-        let right_height = self.proof_env.tt_env.delta_height(right_head.name);
+        let left_height = self.proof_env.tt_env.delta_height(left_head.name.clone());
+        let right_height = self.proof_env.tt_env.delta_height(right_head.name.clone());
         if left_height == 0 && right_height == 0 {
             // (f t₁ ⋯ tₙ) ≈ (g s₁ ⋯ sₘ) where f and g are both irreducible.
             return Some(error);
@@ -1638,7 +1642,7 @@ impl<'a> Elaborator<'a> {
                 return Some(mk_instance_local(local_class.clone()));
             }
         }
-        'next_instance: for (&name, instance) in self.proof_env.tt_env.class_instance_table {
+        'next_instance: for (name, instance) in self.proof_env.tt_env.class_instance_table {
             let ClassInstance {
                 local_types,
                 local_classes,
@@ -1646,7 +1650,7 @@ impl<'a> Elaborator<'a> {
                 method_table: _,
             } = instance;
             let mut type_subst = vec![];
-            for &local_type in local_types {
+            for &local_type in local_types.iter() {
                 type_subst.push((local_type, mk_fresh_type_hole()));
             }
             let target = target.subst(&type_subst);
@@ -1658,7 +1662,9 @@ impl<'a> Elaborator<'a> {
                 .into_iter()
                 .map(|(_, ty)| ty.inst(&subst))
                 .collect::<Vec<_>>();
-            let subst = zip(local_types, &ty_args)
+            let subst = local_types
+                .iter()
+                .zip(&ty_args)
                 .map(|(&name, ty)| (name, ty.clone()))
                 .collect::<Vec<_>>();
             let mut args = vec![];
@@ -1669,7 +1675,7 @@ impl<'a> Elaborator<'a> {
                 };
                 args.push(instance);
             }
-            return Some(mk_instance_global(name, ty_args, args));
+            return Some(mk_instance_global(name.clone(), ty_args, args));
         }
         None
     }
@@ -2188,12 +2194,12 @@ impl<'a> Elaborator<'a> {
         if let Some(instance) = self.resolve_class(
             self.tt_local_env,
             &Class {
-                name: Name::intern("default"),
+                name: QualifiedName::intern("default"),
                 args: vec![goal.clone()],
             },
         ) {
             let mut m = mk_const(
-                Name::intern("default.value"),
+                QualifiedName::intern("default.value"),
                 vec![goal.clone()],
                 vec![instance],
             );
@@ -2369,8 +2375,8 @@ mod tests {
     fn unify_fails_for_inhabited_terms() {
         let name_u = Name::intern("u");
         let ty_u = mk_type_local(name_u);
-        let name_is_inhabited = Name::intern("is_inhabited");
-        let ty_is_inhabited_u = mk_type_app(mk_type_const(name_is_inhabited), ty_u.clone());
+        let name_is_inhabited = QualifiedName::intern("is_inhabited");
+        let ty_is_inhabited_u = mk_type_app(mk_type_const(name_is_inhabited.clone()), ty_u.clone());
         let ty_u_to_prop = mk_type_arrow(ty_u.clone(), mk_type_prop());
 
         let hole_name = Name::intern("46380");
@@ -2389,7 +2395,7 @@ mod tests {
         let name_x = Name::intern("x46373");
 
         let rep_term = mk_const(
-            Name::intern("is_inhabited.inhab.rep"),
+            QualifiedName::intern("is_inhabited.inhab.rep"),
             vec![ty_u.clone()],
             vec![],
         );
@@ -2417,7 +2423,7 @@ mod tests {
             mk_local(name_x),
         );
 
-        let in_term = mk_const(Name::intern("in"), vec![ty_u.clone()], vec![]);
+        let in_term = mk_const(QualifiedName::intern("in"), vec![ty_u.clone()], vec![]);
         let right = mk_app(mk_app(in_term, mk_local(name_x)), rep_applied.clone());
 
         let locals = vec![
@@ -2438,16 +2444,18 @@ mod tests {
         };
         let mut tt_local_env = local_env.clone();
 
-        let name_prop = Name::intern("Prop");
+        let name_prop = QualifiedName::intern("Prop");
 
-        let type_const_table: HashMap<Name, Kind> =
-            HashMap::from([(name_prop, Kind::base()), (name_is_inhabited, Kind(1))]);
-        let const_table: HashMap<Name, Const> = HashMap::new();
-        let delta_table: HashMap<Name, Delta> = HashMap::new();
-        let kappa_table: HashMap<Name, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<Name, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<Name, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<Name, proof::Axiom> = HashMap::new();
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::from([
+            (name_prop.clone(), Kind::base()),
+            (name_is_inhabited.clone(), Kind(1)),
+        ]);
+        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
 
         let tt_env = tt::Env {
             type_const_table: &type_const_table,

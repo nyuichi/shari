@@ -4,16 +4,17 @@ use std::sync::LazyLock;
 use std::{collections::HashMap, iter::zip};
 
 use crate::tt::{
-    self, Class, Instance, Name, Parameter, Term, Type, mk_abs, mk_const, mk_local, mk_type_const,
+    self, Class, Instance, Name, Parameter, QualifiedName, Term, Type, mk_abs, mk_const, mk_local,
+    mk_type_const,
 };
 
 pub fn mk_type_prop() -> Type {
-    static T_PROP: LazyLock<Type> = LazyLock::new(|| mk_type_const(Name::intern("Prop")));
+    static T_PROP: LazyLock<Type> = LazyLock::new(|| mk_type_const(QualifiedName::intern("Prop")));
     T_PROP.clone()
 }
 
 pub fn count_forall(term: &Term) -> usize {
-    static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall"));
+    static FORALL: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("forall"));
 
     let mut count = 0;
     let mut current = term;
@@ -40,13 +41,13 @@ pub fn count_forall(term: &Term) -> usize {
 }
 
 pub fn generalize(term: &Term, xs: &[Parameter]) -> Term {
-    static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall"));
+    static FORALL: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("forall"));
 
     let locals = xs.iter().map(|x| x.name).collect::<Vec<_>>();
     let mut result = term.close(&locals, 0);
     for x in xs.iter().rev() {
         result = mk_abs(x.name, x.ty.clone(), result);
-        let mut c = mk_const(*FORALL, vec![x.ty.clone()], vec![]);
+        let mut c = mk_const(FORALL.clone(), vec![x.ty.clone()], vec![]);
         c = c.apply([result]);
         result = c;
     }
@@ -64,7 +65,7 @@ pub fn ungeneralize(term: &Term) -> (Vec<Parameter>, Term) {
 }
 
 pub fn ungeneralize1(term: &Term) -> Option<(Parameter, Term)> {
-    static FORALL: LazyLock<Name> = LazyLock::new(|| Name::intern("forall"));
+    static FORALL: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("forall"));
 
     let Term::App(m) = term else {
         return None;
@@ -98,11 +99,11 @@ pub fn guard(term: &Term, guards: impl IntoIterator<Item = Term>) -> Term {
 }
 
 fn guard_help(target: Term, mut guards: impl Iterator<Item = Term>) -> Term {
-    static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp"));
+    static IMP: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("imp"));
 
     if let Some(guard_term) = guards.next() {
         let inner = guard_help(target, guards);
-        let mut m = mk_const(*IMP, vec![], vec![]);
+        let mut m = mk_const(IMP.clone(), vec![], vec![]);
         m = m.apply([guard_term, inner]);
         m
     } else {
@@ -121,7 +122,7 @@ pub fn unguard(term: &Term) -> (Vec<Term>, Term) {
 }
 
 pub fn unguard1(term: &Term) -> Option<(Term, Term)> {
-    static IMP: LazyLock<Name> = LazyLock::new(|| Name::intern("imp"));
+    static IMP: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("imp"));
 
     let Term::App(m) = term else {
         return None;
@@ -216,7 +217,7 @@ pub struct ExprInst {
 
 #[derive(Debug, Clone)]
 pub struct ExprConst {
-    pub name: Name,
+    pub name: QualifiedName,
     pub ty_args: Vec<Type>,
     pub instances: Vec<Instance>,
 }
@@ -260,7 +261,7 @@ pub fn mk_expr_inst(e: Expr, m: Term) -> Expr {
     Expr::Inst(Box::new(ExprInst { expr: e, arg: m }))
 }
 
-pub fn mk_expr_const(name: Name, ty_args: Vec<Type>, instances: Vec<Instance>) -> Expr {
+pub fn mk_expr_const(name: QualifiedName, ty_args: Vec<Type>, instances: Vec<Instance>) -> Expr {
     Expr::Const(Box::new(ExprConst {
         name,
         ty_args,
@@ -535,7 +536,7 @@ pub struct Axiom {
 pub struct Env<'a> {
     pub tt_env: tt::Env<'a>,
     // Proved or postulated facts
-    pub axiom_table: &'a HashMap<Name, Axiom>,
+    pub axiom_table: &'a HashMap<QualifiedName, Axiom>,
 }
 
 #[derive(Debug, Clone, Default)]

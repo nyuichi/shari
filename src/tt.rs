@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::hash::Hash;
 use std::iter::zip;
-use std::sync::LazyLock;
 use std::sync::atomic::AtomicUsize;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::vec;
 
 use crate::proof::mk_type_prop;
@@ -13,9 +11,15 @@ use crate::proof::mk_type_prop;
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
 pub struct Name(usize);
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
+pub struct QualifiedName(Arc<String>);
+
 static NAME_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static NAME_TABLE: LazyLock<Mutex<HashMap<String, Name>>> = LazyLock::new(Default::default);
 static NAME_REV_TABLE: LazyLock<Mutex<HashMap<Name, String>>> = LazyLock::new(Default::default);
+
+static QUALIFIED_NAME_TABLE: LazyLock<Mutex<HashMap<String, Weak<String>>>> =
+    LazyLock::new(Default::default);
 
 impl Display for Name {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -84,6 +88,29 @@ impl Name {
     }
 }
 
+impl Display for QualifiedName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl QualifiedName {
+    pub fn intern(value: &str) -> QualifiedName {
+        let mut table = QUALIFIED_NAME_TABLE.lock().unwrap();
+        if let Some(existing) = table.get(value).and_then(|weak| weak.upgrade()) {
+            return QualifiedName(existing);
+        }
+
+        let owned = Arc::new(value.to_owned());
+        table.insert(value.to_owned(), Arc::downgrade(&owned));
+        QualifiedName(owned)
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Kind(pub usize);
 
@@ -119,7 +146,7 @@ pub enum Type {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct TypeConst {
-    pub name: Name,
+    pub name: QualifiedName,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -215,7 +242,7 @@ pub fn mk_type_local(name: Name) -> Type {
 }
 
 #[inline]
-pub fn mk_type_const(name: Name) -> Type {
+pub fn mk_type_const(name: QualifiedName) -> Type {
     Type::Const(Arc::new(TypeConst { name }))
 }
 
@@ -491,7 +518,7 @@ pub struct ClassType {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Class {
-    pub name: Name,
+    pub name: QualifiedName,
     pub args: Vec<Type>,
 }
 
@@ -525,7 +552,7 @@ impl Class {
             .collect();
         if changed {
             Class {
-                name: self.name,
+                name: self.name.clone(),
                 args,
             }
         } else {
@@ -578,7 +605,7 @@ pub struct InstanceHole {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceGlobal {
-    pub name: Name,
+    pub name: QualifiedName,
     pub ty_args: Vec<Type>,
     pub args: Vec<Instance>,
 }
@@ -624,7 +651,11 @@ pub fn mk_instance_local(class: Class) -> Instance {
     Instance::Local(Arc::new(InstanceLocal { class }))
 }
 
-pub fn mk_instance_global(name: Name, ty_args: Vec<Type>, args: Vec<Instance>) -> Instance {
+pub fn mk_instance_global(
+    name: QualifiedName,
+    ty_args: Vec<Type>,
+    args: Vec<Instance>,
+) -> Instance {
     Instance::Global(Arc::new(InstanceGlobal {
         name,
         ty_args,
@@ -653,7 +684,7 @@ impl Instance {
                     self.clone()
                 } else {
                     mk_instance_local(Class {
-                        name: c.class.name,
+                        name: c.class.name.clone(),
                         args: new_args,
                     })
                 }
@@ -673,7 +704,7 @@ impl Instance {
                     .collect();
                 let args: Vec<Instance> = i.args.iter().map(|arg| arg.replace_type(f)).collect();
                 if changed || args.iter().zip(&i.args).any(|(a, b)| !a.ptr_eq(b)) {
-                    mk_instance_global(i.name, ty_args, args)
+                    mk_instance_global(i.name.clone(), ty_args, args)
                 } else {
                     self.clone()
                 }
@@ -727,7 +758,7 @@ impl Instance {
                     })
                     .collect();
                 if changed {
-                    mk_instance_global(i.name, i.ty_args.clone(), args)
+                    mk_instance_global(i.name.clone(), i.ty_args.clone(), args)
                 } else {
                     self.clone()
                 }
@@ -813,7 +844,7 @@ pub struct TermLocal {
 #[derive(Clone, Debug)]
 pub struct TermConst {
     pub metadata: TermMetadata,
-    pub name: Name,
+    pub name: QualifiedName,
     pub ty_args: Vec<Type>,
     pub instances: Vec<Instance>,
 }
@@ -944,7 +975,7 @@ pub fn mk_var(index: usize) -> Term {
     Term::Var(Arc::new(TermVar { metadata, index }))
 }
 
-pub fn mk_const(name: Name, ty_args: Vec<Type>, instances: Vec<Instance>) -> Term {
+pub fn mk_const(name: QualifiedName, ty_args: Vec<Type>, instances: Vec<Instance>) -> Term {
     let metadata = TermMetadata {
         is_closed: true,
         bound: 0,
@@ -1221,7 +1252,7 @@ impl Term {
                     })
                     .collect();
                 if changed {
-                    mk_const(inner.name, inner.ty_args.clone(), instances)
+                    mk_const(inner.name.clone(), inner.ty_args.clone(), instances)
                 } else {
                     self.clone()
                 }
@@ -1277,7 +1308,7 @@ impl Term {
                     })
                     .collect();
                 if changed {
-                    mk_const(inner.name, ty_args, instances)
+                    mk_const(inner.name.clone(), ty_args, instances)
                 } else {
                     self.clone()
                 }
@@ -1600,17 +1631,17 @@ pub struct ClassInstance {
     pub local_types: Vec<Name>,
     pub local_classes: Vec<Class>,
     pub target: Class,
-    pub method_table: HashMap<Name, Term>,
+    pub method_table: HashMap<QualifiedName, Term>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Env<'a> {
-    pub type_const_table: &'a HashMap<Name, Kind>,
-    pub const_table: &'a HashMap<Name, Const>,
-    pub delta_table: &'a HashMap<Name, Delta>,
-    pub kappa_table: &'a HashMap<Name, Kappa>,
-    pub class_predicate_table: &'a HashMap<Name, ClassType>,
-    pub class_instance_table: &'a HashMap<Name, ClassInstance>,
+    pub type_const_table: &'a HashMap<QualifiedName, Kind>,
+    pub const_table: &'a HashMap<QualifiedName, Const>,
+    pub delta_table: &'a HashMap<QualifiedName, Delta>,
+    pub kappa_table: &'a HashMap<QualifiedName, Kappa>,
+    pub class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
+    pub class_instance_table: &'a HashMap<QualifiedName, ClassInstance>,
 }
 
 impl Env<'_> {
@@ -1933,7 +1964,7 @@ impl Env<'_> {
         })
     }
 
-    pub fn delta_height(&self, name: Name) -> usize {
+    pub fn delta_height(&self, name: QualifiedName) -> usize {
         match self.delta_table.get(&name) {
             Some(delta) => delta.height + 1,
             None => 0,
@@ -1947,16 +1978,16 @@ impl Env<'_> {
             Term::Abs(m) => self.height(&m.body),
             Term::App(m) => std::cmp::max(self.height(&m.fun), self.height(&m.arg)),
             Term::Local(_) => 0,
-            Term::Const(m) => self.delta_height(m.name),
+            Term::Const(m) => self.delta_height(m.name.clone()),
             Term::Hole(_) => 0,
         }
     }
 
-    pub fn has_kappa(&self, name: Name) -> bool {
+    pub fn has_kappa(&self, name: QualifiedName) -> bool {
         self.kappa_table.contains_key(&name)
     }
 
-    pub fn has_delta(&self, name: Name) -> bool {
+    pub fn has_delta(&self, name: QualifiedName) -> bool {
         self.delta_table.contains_key(&name)
     }
 
@@ -2116,7 +2147,8 @@ impl Env<'_> {
                 }
             }
 
-            if self.has_kappa(head1_inner.name) || self.has_kappa(head2_inner.name) {
+            if self.has_kappa(head1_inner.name.clone()) || self.has_kappa(head2_inner.name.clone())
+            {
                 if let Some(new_m1) = self.unfold_head(&m1) {
                     m1 = new_m1;
                     if m1.alpha_eq(&m2) {
@@ -2134,8 +2166,8 @@ impl Env<'_> {
                 return false;
             }
 
-            let height1 = self.delta_height(head1_inner.name);
-            let height2 = self.delta_height(head2_inner.name);
+            let height1 = self.delta_height(head1_inner.name.clone());
+            let height2 = self.delta_height(head2_inner.name.clone());
             if height1 == 0 && height2 == 0 {
                 return false;
             }
@@ -2191,12 +2223,12 @@ mod tests {
     use std::collections::HashMap;
 
     struct EnvFixture {
-        type_const_table: HashMap<Name, Kind>,
-        const_table: HashMap<Name, Const>,
-        delta_table: HashMap<Name, Delta>,
-        kappa_table: HashMap<Name, Kappa>,
-        class_predicate_table: HashMap<Name, ClassType>,
-        class_instance_table: HashMap<Name, ClassInstance>,
+        type_const_table: HashMap<QualifiedName, Kind>,
+        const_table: HashMap<QualifiedName, Const>,
+        delta_table: HashMap<QualifiedName, Delta>,
+        kappa_table: HashMap<QualifiedName, Kappa>,
+        class_predicate_table: HashMap<QualifiedName, ClassType>,
+        class_instance_table: HashMap<QualifiedName, ClassInstance>,
     }
 
     impl EnvFixture {
@@ -2211,7 +2243,7 @@ mod tests {
             }
         }
 
-        fn with_delta(mut self, name: Name, delta: Delta) -> Self {
+        fn with_delta(mut self, name: QualifiedName, delta: Delta) -> Self {
             self.delta_table.insert(name, delta);
             self
         }
@@ -2237,8 +2269,8 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let c = Name::intern("c");
-        let left = mk_const(c, vec![], vec![]);
+        let c = QualifiedName::intern("c");
+        let left = mk_const(c.clone(), vec![], vec![]);
         let right = mk_const(c, vec![], vec![]);
 
         assert!(is_equiv(&env, &left, &right));
@@ -2250,10 +2282,10 @@ mod tests {
         let env = fixture.env();
 
         let x = Name::intern("x");
-        let a = Name::intern("a");
+        let a = QualifiedName::intern("a");
         let body = mk_var(0);
         let lambda = mk_abs(x, mk_type_prop(), body);
-        let arg = mk_const(a, vec![], vec![]);
+        let arg = mk_const(a.clone(), vec![], vec![]);
         let applied = mk_app(lambda, arg.clone());
 
         assert!(is_equiv(&env, &applied, &arg));
@@ -2261,17 +2293,17 @@ mod tests {
 
     #[test]
     fn equiv_delta_unfolds_constant() {
-        let c = Name::intern("c");
-        let d = Name::intern("d");
+        let c = QualifiedName::intern("c");
+        let d = QualifiedName::intern("d");
 
         let delta = Delta {
             local_types: vec![],
             local_classes: vec![],
-            target: mk_const(d, vec![], vec![]),
+            target: mk_const(d.clone(), vec![], vec![]),
             height: 0,
         };
 
-        let fixture = EnvFixture::new().with_delta(c, delta);
+        let fixture = EnvFixture::new().with_delta(c.clone(), delta);
         let env = fixture.env();
 
         let defined = mk_const(c, vec![], vec![]);
@@ -2285,8 +2317,8 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let c = Name::intern("c");
-        let d = Name::intern("d");
+        let c = QualifiedName::intern("c");
+        let d = QualifiedName::intern("d");
         let left = mk_const(c, vec![], vec![]);
         let right = mk_const(d, vec![], vec![]);
 
@@ -2298,9 +2330,9 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let f = Name::intern("f");
-        let a = Name::intern("a");
-        let b = Name::intern("b");
+        let f = QualifiedName::intern("f");
+        let a = QualifiedName::intern("a");
+        let b = QualifiedName::intern("b");
 
         let fun = mk_const(f, vec![], vec![]);
         let left = mk_app(fun.clone(), mk_const(a, vec![], vec![]));
