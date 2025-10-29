@@ -33,12 +33,15 @@ Proof expressions include the following:
 take (x : τ), e               forall introduction
 e[m₁, ⋯, mₙ]                  forall elimination (Note that invocation of a proved or postulated fact implicitly inserts forall eliminations.)
 assume φ, e                   imp introduction
+assume φ as h, e              imp introduction with alias h
 e₁ e₁                         imp elimination
 change φ, e                   change the goal to a definitional equivalent
 ( e ), { e }                  grouping. no distinction between a pair of parentheses and of braces.
 have φ := e₁, e₂
+have φ as h := e₁, e₂         have-expression that binds alias h
 obtain (x : τ), φ := e₁, e₂
 calc m₁ = m₂ := e₁ ... = m₃ := e₂ ... = m₄ := e₃
+h                             alias introduced by the nearest enclosing assume/have
 
 
 # The logical foundation

@@ -8,7 +8,8 @@ use crate::cmd::{
 };
 use crate::proof::{
     Axiom, Expr, count_forall, generalize, mk_expr_app, mk_expr_assume, mk_expr_assump,
-    mk_expr_change, mk_expr_const, mk_expr_inst, mk_expr_take, mk_type_prop,
+    mk_expr_assump_by_name, mk_expr_change, mk_expr_const, mk_expr_inst, mk_expr_take,
+    mk_type_prop,
 };
 use crate::tt::{
     Class, ClassType, Const, Kind, Name, Parameter, QualifiedName, Term, Type, mk_const,
@@ -173,6 +174,7 @@ pub struct Parser<'a> {
     class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
     type_locals: Vec<Name>,
     locals: Vec<Name>,
+    local_axioms: Vec<Name>,
     holes: Vec<(Name, Type)>,
 }
 
@@ -195,6 +197,7 @@ impl<'a> Parser<'a> {
             class_predicate_table,
             type_locals: type_variables,
             locals: vec![],
+            local_axioms: vec![],
             holes: vec![],
         }
     }
@@ -340,6 +343,17 @@ impl<'a> Parser<'a> {
 
     fn qualified_name(&mut self) -> Result<QualifiedName, ParseError> {
         Ok(QualifiedName::intern(self.ident()?.as_str()))
+    }
+
+    fn alias_opt(&mut self) -> Result<Option<Name>, ParseError> {
+        if let Some(token) = self.peek_opt()
+            && token.kind == TokenKind::Keyword
+            && token.as_str() == "as"
+        {
+            self.advance();
+            return Ok(Some(self.name()?));
+        }
+        Ok(None)
     }
 
     fn kind(&mut self) -> Result<Kind, ParseError> {
@@ -747,8 +761,8 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn mk_have(m: Term, e: Expr, body: Expr) -> Expr {
-        mk_expr_app(mk_expr_assume(m, body), e)
+    fn mk_have(m: Term, alias: Option<Name>, e: Expr, body: Expr) -> Expr {
+        mk_expr_app(mk_expr_assume(m, alias, body), e)
     }
 
     fn mk_eq(lhs: Term, rhs: Term) -> Term {
@@ -799,9 +813,24 @@ impl<'a> Parser<'a> {
             match token.as_str() {
                 "assume" => {
                     let m = self.term()?;
+                    let alias = self.alias_opt()?;
                     self.expect_symbol(",")?;
-                    let e = self.expr()?;
-                    mk_expr_assume(m, e)
+                    if let Some(name) = alias {
+                        self.local_axioms.push(name);
+                    }
+                    let expr = match self.expr() {
+                        Ok(expr) => expr,
+                        Err(err) => {
+                            if alias.is_some() {
+                                self.local_axioms.pop();
+                            }
+                            return Err(err);
+                        }
+                    };
+                    if alias.is_some() {
+                        self.local_axioms.pop();
+                    }
+                    mk_expr_assume(m, alias, expr)
                 }
                 "take" => {
                     self.expect_symbol("(")?;
@@ -823,11 +852,26 @@ impl<'a> Parser<'a> {
                 }
                 "have" => {
                     let m = self.term()?;
+                    let alias = self.alias_opt()?;
                     self.expect_symbol(":=")?;
                     let e1 = self.expr()?;
                     self.expect_symbol(",")?;
-                    let e2 = self.expr()?;
-                    Self::mk_have(m, e1, e2)
+                    if let Some(name) = alias {
+                        self.local_axioms.push(name);
+                    }
+                    let e2 = match self.expr() {
+                        Ok(expr) => expr,
+                        Err(err) => {
+                            if alias.is_some() {
+                                self.local_axioms.pop();
+                            }
+                            return Err(err);
+                        }
+                    };
+                    if alias.is_some() {
+                        self.local_axioms.pop();
+                    }
+                    Self::mk_have(m, alias, e1, e2)
                 }
                 "obtain" => {
                     self.expect_symbol("(")?;
@@ -855,7 +899,7 @@ impl<'a> Parser<'a> {
                     let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_app(e, e1);
-                    let e_body = mk_expr_assume(p, e2);
+                    let e_body = mk_expr_assume(p, None, e2);
                     let e_body = mk_expr_take(name, ty, e_body);
                     mk_expr_app(e, e_body)
                 }
@@ -898,6 +942,7 @@ impl<'a> Parser<'a> {
                         let e = match last_rhs {
                             Some(last) => Self::mk_have(
                                 Self::mk_eq(last.clone(), rhs.clone()),
+                                None,
                                 e,
                                 self.mk_eq_trans(
                                     mk_expr_assump(Self::mk_eq(lhs.clone(), last.clone())),
@@ -913,11 +958,18 @@ impl<'a> Parser<'a> {
                     let last_rhs = last_rhs.expect("calc requires at least one equality");
                     let mut body = mk_expr_assump(Self::mk_eq(lhs.clone(), last_rhs));
                     for (lhs, e) in lemma_list.into_iter().rev() {
-                        body = Self::mk_have(lhs, e, body);
+                        body = Self::mk_have(lhs, None, e, body);
                     }
                     body
                 }
-                _ => self.expr_const(token, true)?,
+                _ => {
+                    let name = Name::intern(token.as_str());
+                    if self.local_axioms.iter().rev().any(|alias| *alias == name) {
+                        mk_expr_assump_by_name(name)
+                    } else {
+                        self.expr_const(token, true)?
+                    }
+                }
             }
         };
         while let Some(token) = self.peek_opt() {
@@ -1677,5 +1729,134 @@ impl<'a> Parser<'a> {
             target,
             fields,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lex::Lex;
+    use crate::proof::{ExprApp, ExprAssume, ExprAssumpByName};
+    use std::sync::Arc;
+
+    fn setup_tables() -> (
+        TokenTable,
+        HashMap<QualifiedName, Kind>,
+        HashMap<QualifiedName, Const>,
+        HashMap<QualifiedName, Axiom>,
+        HashMap<QualifiedName, ClassType>,
+    ) {
+        let tt = TokenTable::default();
+        let mut type_const_table = HashMap::new();
+        let mut const_table = HashMap::new();
+        let axiom_table = HashMap::new();
+        let class_predicate_table = HashMap::new();
+
+        let prop = QualifiedName::intern("Prop");
+        type_const_table.insert(prop.clone(), Kind(0));
+
+        let p = QualifiedName::intern("p");
+        const_table.insert(
+            p,
+            Const {
+                local_types: vec![],
+                local_classes: vec![],
+                ty: mk_type_const(prop),
+            },
+        );
+
+        (
+            tt,
+            type_const_table,
+            const_table,
+            axiom_table,
+            class_predicate_table,
+        )
+    }
+
+    fn parse_expr(input: &str) -> Expr {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut lex = Lex::new(Arc::new(input.to_owned()));
+        let mut parser = Parser::new(
+            &mut lex,
+            &tt,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+            vec![],
+        );
+        assert!(
+            parser.const_table.contains_key(&QualifiedName::intern("p")),
+            "const table missing p"
+        );
+        parser.expr().expect("expression parses")
+    }
+
+    #[test]
+    fn assume_alias_is_resolved_by_name() {
+        let expr = parse_expr("assume p as this, this");
+        let Expr::Assume(assume) = expr else {
+            panic!("expected assume expression");
+        };
+
+        let ExprAssume {
+            local_axiom,
+            alias,
+            expr: body,
+        } = *assume;
+        assert_eq!(alias, Some(Name::intern("this")));
+        let expected = mk_const(QualifiedName::intern("p"), vec![], vec![]);
+        assert!(local_axiom.alpha_eq(&expected));
+
+        let Expr::AssumpByName(assump) = body else {
+            panic!("expected body to reference assumption alias");
+        };
+        let ExprAssumpByName { name } = *assump;
+        assert_eq!(name, Name::intern("this"));
+    }
+
+    #[test]
+    fn have_alias_is_resolved_by_name() {
+        let expr = parse_expr("assume p as hp, have p as this := hp, this");
+        let Expr::Assume(outer) = expr else {
+            panic!("expected outer assume expression");
+        };
+
+        let ExprAssume {
+            local_axiom: outer_axiom,
+            alias: outer_alias,
+            expr: outer_body,
+        } = *outer;
+        assert_eq!(outer_alias, Some(Name::intern("hp")));
+        let expected = mk_const(QualifiedName::intern("p"), vec![], vec![]);
+        assert!(outer_axiom.alpha_eq(&expected));
+
+        let Expr::App(app) = outer_body else {
+            panic!("expected have expansion to be an application");
+        };
+        let ExprApp { expr1, expr2 } = *app;
+
+        let Expr::Assume(inner_assume) = expr1 else {
+            panic!("expected inner assume for have");
+        };
+        let ExprAssume {
+            local_axiom: inner_axiom,
+            alias: inner_alias,
+            expr: inner_body,
+        } = *inner_assume;
+        assert_eq!(inner_alias, Some(Name::intern("this")));
+        assert!(inner_axiom.alpha_eq(&expected));
+        let Expr::AssumpByName(inner_assump) = inner_body else {
+            panic!("expected have body to reference alias");
+        };
+        let ExprAssumpByName { name: inner_name } = *inner_assump;
+        assert_eq!(inner_name, Name::intern("this"));
+
+        let Expr::AssumpByName(have_arg) = expr2 else {
+            panic!("expected have argument to reference outer alias");
+        };
+        let ExprAssumpByName { name: outer_name } = *have_arg;
+        assert_eq!(outer_name, Name::intern("hp"));
     }
 }

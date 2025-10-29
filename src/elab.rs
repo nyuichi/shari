@@ -10,8 +10,9 @@ use anyhow::{bail, ensure};
 
 use crate::{
     proof::{
-        self, Axiom, Expr, ExprApp, ExprAssume, ExprAssump, ExprChange, ExprConst, ExprInst,
-        ExprTake, generalize, guard, mk_expr_change, mk_type_prop, ungeneralize1, unguard1,
+        self, Axiom, Expr, ExprApp, ExprAssume, ExprAssump, ExprAssumpByName, ExprChange,
+        ExprConst, ExprInst, ExprTake, LocalAxiom, generalize, guard, mk_expr_change, mk_type_prop,
+        ungeneralize1, unguard1,
     },
     tt::{
         self, Class, ClassInstance, ClassType, Const, Instance, InstanceGlobal, Kind, LocalEnv,
@@ -113,7 +114,7 @@ struct Elaborator<'a> {
     // only used in visit
     instance_holes: Vec<(Name, Class)>,
     // only used in visit
-    local_axioms: Vec<Term>,
+    local_axioms: Vec<LocalAxiom>,
 
     // only used in find_conflict
     term_constraints: Vec<(LocalEnv, Term, Term, Error)>,
@@ -428,7 +429,7 @@ impl<'a> Elaborator<'a> {
                 let mut found = false;
                 for local in &self.local_axioms {
                     // don't need strict check here
-                    if local.maybe_alpha_eq(target) {
+                    if local.prop.maybe_alpha_eq(target) {
                         found = true;
                         break;
                     }
@@ -439,9 +440,21 @@ impl<'a> Elaborator<'a> {
 
                 Ok(target.clone())
             }
+            Expr::AssumpByName(expr) => {
+                let ExprAssumpByName { name } = expr.as_ref();
+
+                for local in self.local_axioms.iter().rev() {
+                    if local.name == Some(*name) {
+                        return Ok(local.prop.clone());
+                    }
+                }
+
+                bail!("assumption alias not found: {name}");
+            }
             Expr::Assume(expr) => {
                 let ExprAssume {
                     local_axiom,
+                    alias,
                     expr: inner,
                 } = expr.as_mut();
 
@@ -449,10 +462,13 @@ impl<'a> Elaborator<'a> {
                 let error = Error::Visit(format!("not a proposition: {}", local_axiom_ty));
                 self.push_type_constraint(local_axiom_ty, mk_type_prop(), error);
 
-                self.local_axioms.push(local_axiom.clone());
+                self.local_axioms.push(LocalAxiom {
+                    name: *alias,
+                    prop: local_axiom.clone(),
+                });
                 let mut target = self.visit_expr(inner)?;
                 let p = self.local_axioms.pop().unwrap();
-                target = guard(&target, [p]);
+                target = guard(&target, [p.prop]);
 
                 Ok(target)
             }
@@ -989,9 +1005,11 @@ impl<'a> Elaborator<'a> {
                 let ExprAssump { target } = expr.as_mut();
                 *target = self.fully_inst(target);
             }
+            Expr::AssumpByName(_) => {}
             Expr::Assume(expr) => {
                 let ExprAssume {
                     local_axiom,
+                    alias: _,
                     expr: inner,
                 } = expr.as_mut();
                 *local_axiom = self.fully_inst(local_axiom);

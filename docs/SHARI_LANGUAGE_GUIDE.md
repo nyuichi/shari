@@ -24,9 +24,9 @@ This document summarizes the surface syntax, proof language, and module system o
 - **Unsupported numerals** – Numerical literals currently raise a parse error when used as terms; write explicit constants such as `nat.zero` instead.
 
 ## Proof expressions
-- **Atomic proof** – `«φ»` quotes a goal assumption; `assume φ, e`, `take (x : τ), e`, and `change φ, e` correspond to implication introduction, universal introduction, and definitional rewriting. Function application uses juxtaposition, and explicit instantiation `e[m₁, …, mₙ]` supplies arguments to universal hypotheses.
+- **Atomic proof** – `«φ»` quotes a goal assumption; `assume φ, e` introduces an implication, and the variant `assume φ as h, e` binds the hypothesis under the alias `h`. Aliases act like local proofs and can be referenced directly by name inside their scope. `take (x : τ), e` and `change φ, e` correspond to universal introduction and definitional rewriting. Function application uses juxtaposition, and explicit instantiation `e[m₁, …, mₙ]` supplies arguments to universal hypotheses.
 - **Constants** – Naming a lemma or axiom introduces it with implicit higher-order instantiation; prefixing the name with `@` suppresses automatic instantiation when manual control is required.
-- **Derived constructs** – `have φ := e₁, e₂` packages a lemma; `obtain (x : τ), φ := e₁, e₂` performs existential elimination; and `calc` chains equalities via `have` and `eq.trans` expansions.
+- **Derived constructs** – `have φ := e₁, e₂` packages a lemma. Writing `have φ as h := e₁, e₂` additionally introduces an alias `h` scoped to `e₂`, allowing subsequent expressions to use `h` as a proof term. `obtain (x : τ), φ := e₁, e₂` performs existential elimination, and `calc` chains equalities via `have` and `eq.trans` expansions.
 
 ## Top-level commands
 The `cmd` dispatcher recognizes the following keywords. Each command builds a structured object in `cmd.rs` that the elaborator consumes.

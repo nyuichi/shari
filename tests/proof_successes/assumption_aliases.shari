@@ -1,0 +1,39 @@
+type const Prop : Type
+const imp : Prop → Prop → Prop
+infixr → : 25 := imp
+const p : Prop
+const q : Prop
+
+lemma assume.alias : p → p :=
+assume p as this,
+this
+
+lemma have.alias : p → p :=
+assume p as outer,
+have p as inner := outer,
+inner
+
+lemma alias.shadow : p → p :=
+assume p as alias,
+have p as alias := alias,
+alias
+
+lemma assume.shadow : p → p → p :=
+assume p as alias,
+assume p as alias,
+alias
+
+lemma alias.same.name.different.prop.inner : p → q → q :=
+assume p as alias,
+assume q as alias,
+alias
+
+lemma alias.same.name.different.prop.outer : p → q → p :=
+assume p as alias,
+assume q as alias,
+«p»
+
+lemma alias.outer.access : p → p → p :=
+assume p as outer,
+assume p as inner,
+outer

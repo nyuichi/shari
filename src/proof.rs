@@ -177,6 +177,7 @@ pub fn unguard1(term: &Term) -> Option<(Term, Term)> {
 #[derive(Debug, Clone)]
 pub enum Expr {
     Assump(Box<ExprAssump>),
+    AssumpByName(Box<ExprAssumpByName>),
     Assume(Box<ExprAssume>),
     App(Box<ExprApp>),
     Take(Box<ExprTake>),
@@ -191,8 +192,14 @@ pub struct ExprAssump {
 }
 
 #[derive(Debug, Clone)]
+pub struct ExprAssumpByName {
+    pub name: Name,
+}
+
+#[derive(Debug, Clone)]
 pub struct ExprAssume {
     pub local_axiom: Term,
+    pub alias: Option<Name>,
     pub expr: Expr,
 }
 
@@ -239,9 +246,14 @@ pub fn mk_expr_assump(m: Term) -> Expr {
     Expr::Assump(Box::new(ExprAssump { target: m }))
 }
 
-pub fn mk_expr_assume(h: Term, e: Expr) -> Expr {
+pub fn mk_expr_assump_by_name(name: Name) -> Expr {
+    Expr::AssumpByName(Box::new(ExprAssumpByName { name }))
+}
+
+pub fn mk_expr_assume(h: Term, alias: Option<Name>, e: Expr) -> Expr {
     Expr::Assume(Box::new(ExprAssume {
         local_axiom: h,
+        alias,
         expr: e,
     }))
 }
@@ -283,7 +295,7 @@ impl std::fmt::Display for Expr {
 
         fn precedence(expr: &Expr) -> u8 {
             match expr {
-                Expr::Assump(_) | Expr::Const(_) => PREC_ATOM,
+                Expr::Assump(_) | Expr::AssumpByName(_) | Expr::Const(_) => PREC_ATOM,
                 Expr::Inst(_) => PREC_INST,
                 Expr::App(_) => PREC_APP,
                 Expr::Assume(_) | Expr::Take(_) | Expr::Change(_) => PREC_PREFIX,
@@ -315,8 +327,15 @@ impl std::fmt::Display for Expr {
                 Expr::Assump(e) => {
                     write!(f, "«{}»", e.target)?;
                 }
+                Expr::AssumpByName(e) => {
+                    write!(f, "{}", e.name)?;
+                }
                 Expr::Assume(e) => {
-                    write!(f, "assume {}, ", e.local_axiom)?;
+                    write!(f, "assume {}", e.local_axiom)?;
+                    if let Some(alias) = e.alias {
+                        write!(f, " as {}", alias)?;
+                    }
+                    write!(f, ", ")?;
                     fmt_expr(&e.expr, f, PREC_LOWEST)?;
                 }
                 Expr::App(e) => {
@@ -389,8 +408,13 @@ impl Expr {
                 let ExprAssump { target } = &**e;
                 target.is_ground()
             }
+            Expr::AssumpByName(_) => true,
             Expr::Assume(e) => {
-                let ExprAssume { local_axiom, expr } = &**e;
+                let ExprAssume {
+                    local_axiom,
+                    alias: _,
+                    expr,
+                } = &**e;
                 local_axiom.is_ground() && expr.is_ground()
             }
             Expr::App(e) => {
@@ -423,8 +447,13 @@ impl Expr {
                 let ExprAssump { target } = &**e;
                 target.is_type_ground()
             }
+            Expr::AssumpByName(_) => true,
             Expr::Assume(e) => {
-                let ExprAssume { local_axiom, expr } = &**e;
+                let ExprAssume {
+                    local_axiom,
+                    alias: _,
+                    expr,
+                } = &**e;
                 local_axiom.is_type_ground() && expr.is_type_ground()
             }
             Expr::App(e) => {
@@ -462,8 +491,13 @@ impl Expr {
                 let new_target = target.subst(subst);
                 *target = new_target;
             }
+            Expr::AssumpByName(_) => {}
             Expr::Assume(e) => {
-                let ExprAssume { local_axiom, expr } = e.as_mut();
+                let ExprAssume {
+                    local_axiom,
+                    alias: _,
+                    expr,
+                } = e.as_mut();
                 let new_local_axiom = local_axiom.subst(subst);
                 *local_axiom = new_local_axiom;
                 expr.subst(subst);
@@ -506,8 +540,13 @@ impl Expr {
                 let ExprAssump { target } = e.as_mut();
                 *target = target.replace_hole(f);
             }
+            Expr::AssumpByName(_) => {}
             Expr::Assume(e) => {
-                let ExprAssume { local_axiom, expr } = e.as_mut();
+                let ExprAssume {
+                    local_axiom,
+                    alias: _,
+                    expr,
+                } = e.as_mut();
                 *local_axiom = local_axiom.replace_hole(f);
                 expr.replace_hole(f);
             }
@@ -553,9 +592,15 @@ pub struct Env<'a> {
     pub axiom_table: &'a HashMap<QualifiedName, Axiom>,
 }
 
+#[derive(Debug, Clone)]
+pub struct LocalAxiom {
+    pub name: Option<Name>,
+    pub prop: Term,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct LocalEnv {
-    pub local_axioms: Vec<Term>,
+    pub local_axioms: Vec<LocalAxiom>,
 }
 
 impl Env<'_> {
@@ -583,19 +628,35 @@ impl Env<'_> {
             Expr::Assump(e) => {
                 let ExprAssump { target } = &**e;
                 for local_axiom in &local_env.local_axioms {
-                    if target.alpha_eq(local_axiom) {
+                    if target.alpha_eq(&local_axiom.prop) {
                         return target.clone();
                     }
                 }
                 panic!("unknown assumption: {}", target);
             }
+            Expr::AssumpByName(e) => {
+                let ExprAssumpByName { name } = &**e;
+                for local_axiom in local_env.local_axioms.iter().rev() {
+                    if local_axiom.name == Some(*name) {
+                        return local_axiom.prop.clone();
+                    }
+                }
+                panic!("unknown assumption alias: {}", name);
+            }
             Expr::Assume(e) => {
-                let ExprAssume { local_axiom, expr } = &**e;
+                let ExprAssume {
+                    local_axiom,
+                    alias,
+                    expr,
+                } = &**e;
                 self.tt_env.check_wff(tt_local_env, local_axiom);
-                local_env.local_axioms.push(local_axiom.clone());
+                local_env.local_axioms.push(LocalAxiom {
+                    name: *alias,
+                    prop: local_axiom.clone(),
+                });
                 let target = self.infer_prop(tt_local_env, local_env, expr);
                 let p = local_env.local_axioms.pop().unwrap();
-                guard(&target, [p])
+                guard(&target, [p.prop])
             }
             Expr::App(e) => {
                 let ExprApp { expr1, expr2 } = &**e;
@@ -610,9 +671,9 @@ impl Env<'_> {
                 let ExprTake { name, ty, expr } = &**e;
                 self.tt_env.check_wft(tt_local_env, ty);
                 for c in &local_env.local_axioms {
-                    if !c.is_fresh(std::slice::from_ref(name)) {
+                    if !c.prop.is_fresh(std::slice::from_ref(name)) {
                         // eigenvariable condition fails
-                        panic!("eigenvariable condition violated by {}", c);
+                        panic!("eigenvariable condition violated by {}", c.prop);
                     }
                 }
                 let param = Parameter {
