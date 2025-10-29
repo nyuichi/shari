@@ -7,7 +7,6 @@ use std::vec;
 
 use crate::proof::mk_type_prop;
 
-// TODO: struct Path(Name) を用意して Const の中身を Path にする。
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
 pub struct Name(usize);
 
