@@ -209,7 +209,7 @@ impl Iterator for Lex {
                 (Kind::Space, r"\s+|--.*|/-"),
                 (
                     Kind::Ident,
-                    r"[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*(\.[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*)*",
+                    r"[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_']*(\.[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_']*)*",
                 ),
                 (
                     Kind::Symbol,
@@ -294,3 +294,40 @@ impl Iterator for Lex {
 }
 
 impl FusedIterator for Lex {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tokenize(input: &str) -> Vec<Token> {
+        Lex::new(Arc::new(input.to_owned()))
+            .map(|token| token.expect("lexing failed"))
+            .collect()
+    }
+
+    #[test]
+    fn ident_with_apostrophe() {
+        let tokens = tokenize("x'");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, TokenKind::Ident);
+        assert_eq!(tokens[0].as_str(), "x'");
+    }
+
+    #[test]
+    fn dotted_ident_with_apostrophe() {
+        let tokens = tokenize("foo.bar'");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, TokenKind::Ident);
+        assert_eq!(tokens[0].as_str(), "foo.bar'");
+    }
+
+    #[test]
+    fn ident_cannot_start_with_apostrophe() {
+        let tokens = tokenize("'foo");
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, TokenKind::Symbol);
+        assert_eq!(tokens[0].as_str(), "'");
+        assert_eq!(tokens[1].kind, TokenKind::Ident);
+        assert_eq!(tokens[1].as_str(), "foo");
+    }
+}
