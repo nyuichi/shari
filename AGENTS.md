@@ -15,3 +15,8 @@
 - Keep `cargo clippy` warnings at zero.
 - Ensure `cargo test` passes.
 - After running `cargo test`, review your changes for consistency with the rest of the codebase and refactor when there is room for improvement.
+
+## Shari language reference
+
+- Before editing or creating `.shari` sources, read and follow the guidance in `docs/SHARI_LANGUAGE_GUIDE.md` so generated proofs respect the language grammar and features.
+- When adding or changing Shari language features (syntax, commands, elaboration behavior), update `docs/SHARI_LANGUAGE_GUIDE.md` to keep the reference accurate.
