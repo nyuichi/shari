@@ -1004,7 +1004,9 @@ impl<'a> Elaborator<'a> {
             }
             Expr::Take(expr) => {
                 let ExprTake {
-                    ty, expr: inner, ..
+                    name: _,
+                    ty,
+                    expr: inner,
                 } = expr.as_mut();
                 *ty = self.fully_inst_type(ty);
                 self.fully_inst_expr(inner);
@@ -1016,7 +1018,9 @@ impl<'a> Elaborator<'a> {
             }
             Expr::Const(expr) => {
                 let ExprConst {
-                    ty_args, instances, ..
+                    name: _,
+                    ty_args,
+                    instances,
                 } = expr.as_mut();
                 for ty in ty_args {
                     *ty = self.fully_inst_type(ty);

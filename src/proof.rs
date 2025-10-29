@@ -398,7 +398,11 @@ impl Expr {
                 expr1.is_ground() && expr2.is_ground()
             }
             Expr::Take(e) => {
-                let ExprTake { expr, .. } = &**e;
+                let ExprTake {
+                    name: _,
+                    ty: _,
+                    expr,
+                } = &**e;
                 expr.is_ground()
             }
             Expr::Inst(e) => {
@@ -428,7 +432,7 @@ impl Expr {
                 expr1.is_type_ground() && expr2.is_type_ground()
             }
             Expr::Take(e) => {
-                let ExprTake { ty, expr, .. } = &**e;
+                let ExprTake { name: _, ty, expr } = &**e;
                 ty.is_ground() && expr.is_type_ground()
             }
             Expr::Inst(e) => {
@@ -437,7 +441,9 @@ impl Expr {
             }
             Expr::Const(e) => {
                 let ExprConst {
-                    ty_args, instances, ..
+                    name: _,
+                    ty_args,
+                    instances,
                 } = &**e;
                 ty_args.iter().all(|t| t.is_ground())
                     && instances.iter().all(|i| i.is_type_ground())
@@ -468,7 +474,11 @@ impl Expr {
                 expr2.subst(subst);
             }
             Expr::Take(e) => {
-                let ExprTake { expr, .. } = e.as_mut();
+                let ExprTake {
+                    name: _,
+                    ty: _,
+                    expr,
+                } = e.as_mut();
                 expr.subst(subst);
             }
             Expr::Inst(e) => {
@@ -507,7 +517,11 @@ impl Expr {
                 expr2.replace_hole(f);
             }
             Expr::Take(e) => {
-                let ExprTake { expr, .. } = e.as_mut();
+                let ExprTake {
+                    name: _,
+                    ty: _,
+                    expr,
+                } = e.as_mut();
                 expr.replace_hole(f);
             }
             Expr::Inst(e) => {

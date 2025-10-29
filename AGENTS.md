@@ -3,6 +3,7 @@
 ## Coding style
 
 - Favor short, descriptive identifiers that match existing naming patterns. Spend a moment to choose names that communicate intent clearly.
+- Prefer destructuring bindings when working with structs or enums. Avoid using `..` in patterns; instead, list fields explicitly and bind unused ones to `_` or `_name`.
 
 ## Testing
 
