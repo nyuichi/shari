@@ -92,6 +92,7 @@ enum Nud {
     Paren,
     Hole,
     Brace,
+    Pair,
     User(Operator),
     NumLit,
 }
@@ -135,6 +136,7 @@ impl TokenTable {
                     "∃!" => Some(Nud::Uexists),
                     "_" => Some(Nud::Hole),
                     "{" => Some(Nud::Brace),
+                    "⟨" => Some(Nud::Pair),
                     _ => self.nud.get(token.as_str()).map(|op| Nud::User(op.clone())),
                 }
             }
@@ -565,6 +567,28 @@ impl<'a> Parser<'a> {
         Ok(m)
     }
 
+    fn term_pair(&mut self, _token: Token) -> Result<Term, ParseError> {
+        let fst = self.subterm(0)?;
+        self.expect_symbol(",")?;
+        let snd = self.subterm(0)?;
+        self.expect_symbol("⟩")?;
+        let pair = mk_const(
+            QualifiedName::intern("pair"),
+            vec![mk_fresh_type_hole(), mk_fresh_type_hole()],
+            vec![],
+        );
+        Ok(pair.apply(vec![fst, snd]))
+    }
+
+    fn term_proj(&mut self, term: Term, proj: Proj) -> Term {
+        let proj = mk_const(
+            proj.name(),
+            vec![mk_fresh_type_hole(), mk_fresh_type_hole()],
+            vec![],
+        );
+        proj.apply(vec![term])
+    }
+
     fn term_var(
         &mut self,
         token: Token,
@@ -605,16 +629,6 @@ impl<'a> Parser<'a> {
         Ok(mk_const(qualified, ty_args, instances))
     }
 
-    fn term_proj(&mut self, term: Term, projection: Proj) -> Term {
-        let name = projection.name();
-        let proj = mk_const(
-            name,
-            vec![mk_fresh_type_hole(), mk_fresh_type_hole()],
-            vec![],
-        );
-        proj.apply(vec![term])
-    }
-
     fn subterm(&mut self, rbp: usize) -> Result<Term, ParseError> {
         let token = self.any_token()?;
         // nud
@@ -646,6 +660,7 @@ impl<'a> Parser<'a> {
             Nud::NumLit => Self::fail(token, "numeric literal is unsupported")?,
             Nud::Hole => self.mk_term_hole(),
             Nud::Brace => self.term_sep(token)?,
+            Nud::Pair => self.term_pair(token)?,
         };
         while let Some(token) = self.peek_opt() {
             let led = match self.tt.get_led(&token) {

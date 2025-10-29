@@ -18,6 +18,7 @@ This document summarizes the surface syntax, proof language, and module system o
 - **Binders** – Lambda abstractions use `λ` followed by parameters and a comma; binders `∀`, `∃`, and `∃!` require at least one parameter tuple before the comma. Each binder inserts the parameters into scope before parsing the body.
 - **Set comprehension** – `{ x : T | e }` (or `{ x | e }`) produces a lambda with binder `x` and optional type annotation.
 - **Variables and constants** – A bare identifier resolves first to locals, otherwise to registered constants. Explicit type arguments use `.{τ₁, …, τₙ}`; omitted arguments generate metavariables. Class constraints create implicit instance holes that elaboration fills later.
+- **Pairs** – The Lean-style bracket syntax `⟨m, n⟩` is available as sugar for `pair m n`, with both components parsed as full terms. There are also projections `.0` and `.1`.
 - **Applications and user operators** – Function application is implicit juxtaposition. Operator fixity, precedence, and entity resolution come from the token table populated by `infix`, `infixl`, `infixr`, `prefix`, and `nofix` commands.
 - **Holes** – An underscore `_` introduces a fresh metavariable applied to the current local context, tracked for later synthesis.
 - **Unsupported numerals** – Numerical literals currently raise a parse error when used as terms; write explicit constants such as `nat.zero` instead.

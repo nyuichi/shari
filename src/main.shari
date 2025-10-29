@@ -1047,18 +1047,18 @@ def fst.{u, v} : u × v → u := prod.fst
 def snd.{u, v} : u × v → v := prod.snd
 def pair.{u, v} : u → v → u × v := prod.pair
 
-lemma fst.pair.{u, v} (x : u) (y : v) : (pair x y).0 = x :=
+lemma fst.pair.{u, v} (x : u) (y : v) : ⟨x, y⟩.0 = x :=
 eq.congr_fun prod.pair.spec
 
-lemma snd.pair.{u, v} (x : u) (y : v) : (pair x y).1 = y :=
+lemma snd.pair.{u, v} (x : u) (y : v) : ⟨x, y⟩.1 = y :=
 eq.congr_fun prod.pair.spec
 
-lemma prod.eta.{u, v} (p : u × v) : p = pair p.0 p.1 :=
-@prod.ind[p, λ p, p = pair p.0 p.1]
+lemma prod.eta.{u, v} (p : u × v) : p = ⟨p.0, p.1⟩ :=
+@prod.ind[p, λ p, p = ⟨p.0, p.1⟩]
   (take (a : u),
    take (b : v),
-   calc pair a b = pair (pair a b).0 b := eq.transport (eq.symm fst.pair) eq.refl
-        ...      = pair (pair a b).0 (pair a b).1 := eq.transport (eq.symm snd.pair) eq.refl)
+   calc ⟨a, b⟩ = ⟨⟨a, b⟩.0, b⟩ := eq.transport (eq.symm fst.pair) eq.refl
+        ...      = ⟨⟨a, b⟩.0, ⟨a, b⟩.1⟩ := eq.transport (eq.symm snd.pair) eq.refl)
 
 structure total u v := {
   const rel : u → v → Prop
@@ -1084,29 +1084,29 @@ lemma f.surjective.{u, v} : surjective f.{u, v} := {
     «∃ (e : total.el u v), p.1 = total.el.rel e ∧ p.0 = total.el.x e ∧ y = total.el.y e»,
   have p.1 = total.el.rel e := and.left (and.left «p.1 = total.el.rel e ∧ p.0 = total.el.x e ∧ y = total.el.y e»),
   have p.0 = total.el.x e := and.right (and.left «p.1 = total.el.rel e ∧ p.0 = total.el.x e ∧ y = total.el.y e»),
-  have p = pair (total.el.x e) (total.el.rel e) :=
-    calc p = pair p.0 p.1                    := prod.eta
-         ... = pair (total.el.x e) p.1         := eq.transport «p.0 = total.el.x e» eq.refl
-         ... = pair (total.el.x e) (total.el.rel e)  := eq.transport «p.1 = total.el.rel e» eq.refl,
-  @exists.intro[_, e] «p = pair (total.el.x e) (total.el.rel e)»
+  have p = ⟨total.el.x e, total.el.rel e⟩ :=
+    calc p = ⟨p.0, p.1⟩                    := prod.eta
+         ... = ⟨total.el.x e, p.1⟩         := eq.transport «p.0 = total.el.x e» eq.refl
+         ... = ⟨total.el.x e, total.el.rel e⟩  := eq.transport «p.1 = total.el.rel e» eq.refl,
+  @exists.intro[_, e] «p = ⟨total.el.x e, total.el.rel e⟩»
 }
 
 lemma total.choice.exists.{u, v} (r : total u v) : ∃ h, ∀ x, total.rel r x (h x) :=
 obtain (g : u × total u v → total.el u v), ∀ p, p = f (g p) := surjective.split f.surjective,
-@exists.intro[_, λ x, total.el.y (g (pair x r))]
+@exists.intro[_, λ x, total.el.y (g ⟨x, r⟩)]
   take (x : u),
-  have pair x r = f (g (pair x r)) := «∀ p, p = f (g p)»[_],
-  have x = total.el.x (g (pair x r)) :=
-    calc x = (pair x r).0                            := eq.symm fst.pair
-         ... = (f (g (pair x r))).0                  := eq.congr_arg «pair x r = f (g (pair x r))»
-         ... = total.el.x (g (pair x r))             := fst.pair,
-  have r = total.el.rel (g (pair x r)) :=
-    calc r = (pair x r).1                            := eq.symm snd.pair
-         ... = (f (g (pair x r))).1                  := eq.congr_arg «pair x r = f (g (pair x r))»
-         ... = total.el.rel (g (pair x r))           := snd.pair,
-  have total.rel r x (total.el.y (g (pair x r))) :=
-    eq.transport (eq.symm «r = total.el.rel (g (pair x r))») (eq.transport (eq.symm «x = total.el.x (g (pair x r))») @total.el.spec[g (pair x r)]),
-  «total.rel r x (total.el.y (g (pair x r)))»
+  have ⟨x, r⟩ = f (g ⟨x, r⟩) := «∀ p, p = f (g p)»[_],
+  have x = total.el.x (g ⟨x, r⟩) :=
+    calc x = ⟨x, r⟩.0                            := eq.symm fst.pair
+         ... = (f (g ⟨x, r⟩)).0                  := eq.congr_arg «⟨x, r⟩ = f (g ⟨x, r⟩)»
+         ... = total.el.x (g ⟨x, r⟩)             := fst.pair,
+  have r = total.el.rel (g ⟨x, r⟩) :=
+    calc r = ⟨x, r⟩.1                            := eq.symm snd.pair
+         ... = (f (g ⟨x, r⟩)).1                  := eq.congr_arg «⟨x, r⟩ = f (g ⟨x, r⟩)»
+         ... = total.el.rel (g ⟨x, r⟩)           := snd.pair,
+  have total.rel r x (total.el.y (g ⟨x, r⟩)) :=
+    eq.transport (eq.symm «r = total.el.rel (g ⟨x, r⟩)») (eq.transport (eq.symm «x = total.el.x (g ⟨x, r⟩)») @total.el.spec[g ⟨x, r⟩]),
+  «total.rel r x (total.el.y (g ⟨x, r⟩))»
 
 lemma ac_from_surjective_split.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) :=
 assume ∀ x, ∃ y, R x y,
