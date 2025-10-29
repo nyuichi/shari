@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 use std::{collections::HashMap, iter::zip};
 
 use crate::tt::{
-    self, Class, Instance, Name, Parameter, QualifiedName, Term, Type, mk_abs, mk_const, mk_local,
+    self, Class, Instance, Name, Local, QualifiedName, Term, Type, mk_abs, mk_const, mk_local,
     mk_type_const,
 };
 
@@ -40,7 +40,7 @@ pub fn count_forall(term: &Term) -> usize {
     count
 }
 
-pub fn generalize(term: &Term, xs: &[Parameter]) -> Term {
+pub fn generalize(term: &Term, xs: &[Local]) -> Term {
     static FORALL: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("forall"));
 
     let locals = xs.iter().map(|x| x.name).collect::<Vec<_>>();
@@ -54,7 +54,7 @@ pub fn generalize(term: &Term, xs: &[Parameter]) -> Term {
     result
 }
 
-pub fn ungeneralize(term: &Term) -> (Vec<Parameter>, Term) {
+pub fn ungeneralize(term: &Term) -> (Vec<Local>, Term) {
     let mut acc = vec![];
     let mut current = term.clone();
     while let Some((binder, body)) = ungeneralize1(&current) {
@@ -64,7 +64,7 @@ pub fn ungeneralize(term: &Term) -> (Vec<Parameter>, Term) {
     (acc, current)
 }
 
-pub fn ungeneralize1(term: &Term) -> Option<(Parameter, Term)> {
+pub fn ungeneralize1(term: &Term) -> Option<(Local, Term)> {
     static FORALL: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("forall"));
 
     let Term::App(m) = term else {
@@ -87,7 +87,7 @@ pub fn ungeneralize1(term: &Term) -> Option<(Parameter, Term)> {
     } = &**abs;
     let name = Name::fresh_from(*binder_name);
     let body = body.open(&[mk_local(name)], 0);
-    let binder = Parameter {
+    let binder = Local {
         name,
         ty: binder_type.clone(),
     };
@@ -676,7 +676,7 @@ impl Env<'_> {
                         panic!("eigenvariable condition violated by {}", c.prop);
                     }
                 }
-                let param = Parameter {
+                let param = Local {
                     name: *name,
                     ty: ty.clone(),
                 };
@@ -688,7 +688,7 @@ impl Env<'_> {
             Expr::Inst(e) => {
                 let ExprInst { expr, arg } = &**e;
                 let target = self.infer_prop(tt_local_env, local_env, expr);
-                let Some((Parameter { name, ty }, mut body)) = ungeneralize1(&target) else {
+                let Some((Local { name, ty }, mut body)) = ungeneralize1(&target) else {
                     panic!("∀ expected, got {}", target);
                 };
                 self.tt_env.check_type(tt_local_env, arg, &ty);

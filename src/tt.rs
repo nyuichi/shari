@@ -1040,7 +1040,7 @@ impl TryFrom<Term> for Ctor {
 }
 
 #[derive(Debug, Clone)]
-pub struct Parameter {
+pub struct Local {
     pub name: Name,
     pub ty: Type,
 }
@@ -1495,7 +1495,7 @@ impl Term {
     }
 
     /// Returns the abstraction `λ xs, self`.
-    pub fn abs(&self, xs: &[Parameter]) -> Term {
+    pub fn abs(&self, xs: &[Local]) -> Term {
         let locals = xs.iter().map(|x| x.name).collect::<Vec<_>>();
         let mut m = self.close(&locals, 0);
         for x in xs.iter().rev() {
@@ -1591,7 +1591,7 @@ impl Term {
 pub struct LocalEnv {
     pub local_types: Vec<Name>,
     pub local_classes: Vec<Class>,
-    pub locals: Vec<Parameter>,
+    pub locals: Vec<Local>,
 }
 
 impl LocalEnv {
@@ -1797,7 +1797,7 @@ impl Env<'_> {
             Term::Var(_) => panic!("cannot infer type of a raw variable"),
             Term::Abs(m) => {
                 self.check_wft(local_env, &m.binder_type);
-                let x = Parameter {
+                let x = Local {
                     name: Name::fresh_from(m.binder_name),
                     ty: m.binder_type.clone(),
                 };

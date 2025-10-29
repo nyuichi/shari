@@ -15,8 +15,8 @@ use crate::{
         ungeneralize1, unguard1,
     },
     tt::{
-        self, Class, ClassInstance, ClassType, Const, Instance, InstanceGlobal, Kind, LocalEnv,
-        Name, Parameter, QualifiedName, Term, TermAbs, TermApp, Type, TypeApp, TypeArrow, mk_const,
+        self, Class, ClassInstance, ClassType, Const, Instance, InstanceGlobal, Kind, Local,
+        LocalEnv, Name, QualifiedName, Term, TermAbs, TermApp, Type, TypeApp, TypeArrow, mk_const,
         mk_fresh_type_hole, mk_hole, mk_instance_global, mk_instance_local, mk_local,
         mk_type_arrow,
     },
@@ -278,7 +278,7 @@ impl<'a> Elaborator<'a> {
                     bail!("expected Type, but got {binder_type_kind}");
                 }
 
-                let x = Parameter {
+                let x = Local {
                     name: Name::fresh_from(*binder_name),
                     ty: binder_type.clone(),
                 };
@@ -518,7 +518,7 @@ impl<'a> Elaborator<'a> {
                     bail!("expected Type, but got {ty_kind}");
                 }
 
-                let x = Parameter {
+                let x = Local {
                     name,
                     ty: ty.clone(),
                 };
@@ -548,7 +548,7 @@ impl<'a> Elaborator<'a> {
 
                 let hole = self.mk_term_hole(mk_type_arrow(arg_ty.clone(), mk_type_prop()));
 
-                let x = Parameter {
+                let x = Local {
                     name: Name::fresh(),
                     ty: arg_ty.clone(),
                 };
@@ -1361,7 +1361,7 @@ impl<'a> Elaborator<'a> {
         }
         if let (Term::Abs(l), Term::Abs(r)) = (&left, &right) {
             self.push_type_constraint(l.binder_type.clone(), r.binder_type.clone(), error.clone());
-            let x = Parameter {
+            let x = Local {
                 name: Name::fresh(),
                 ty: l.binder_type.clone(),
             };
@@ -1451,7 +1451,7 @@ impl<'a> Elaborator<'a> {
                     };
                     Arc::unwrap_or_clone(right_inner)
                 };
-                let x = Parameter {
+                let x = Local {
                     name: Name::fresh_from(right_binder_name),
                     ty: right_binder_type,
                 };
@@ -1474,7 +1474,7 @@ impl<'a> Elaborator<'a> {
             {
                 let binders = args
                     .into_iter()
-                    .map(|arg| Parameter {
+                    .map(|arg| Local {
                         name: arg,
                         ty: local_env.get_local(arg).unwrap().clone(),
                     })
@@ -1493,7 +1493,7 @@ impl<'a> Elaborator<'a> {
             {
                 let binders = args
                     .into_iter()
-                    .map(|arg| Parameter {
+                    .map(|arg| Local {
                         name: arg,
                         ty: local_env.get_local(arg).unwrap().clone(),
                     })
@@ -1930,7 +1930,7 @@ impl<'a> Elaborator<'a> {
             .components()
             .iter()
             .take(left_args.len())
-            .map(|&t| Parameter {
+            .map(|&t| Local {
                 name: Name::fresh(),
                 ty: t.clone(),
             })
@@ -2204,7 +2204,7 @@ impl<'a> Elaborator<'a> {
         let (components, goal_base) = goal.unarrow();
         let mut binders = vec![];
         for component in components {
-            let binder = Parameter {
+            let binder = Local {
                 name: Name::fresh(),
                 ty: component.clone(),
             };
@@ -2385,9 +2385,9 @@ mod tests {
         proof,
         proof::mk_type_prop,
         tt::{
-            self, ClassInstance, ClassType, Const, Delta, Kappa, Kind, Name, Parameter, mk_abs,
-            mk_app, mk_const, mk_hole, mk_local, mk_type_app, mk_type_arrow, mk_type_const,
-            mk_type_local, mk_var,
+            self, ClassInstance, ClassType, Const, Delta, Kappa, Kind, Local, Name, mk_abs, mk_app,
+            mk_const, mk_hole, mk_local, mk_type_app, mk_type_arrow, mk_type_const, mk_type_local,
+            mk_var,
         },
     };
     use std::collections::HashMap;
@@ -2448,11 +2448,11 @@ mod tests {
         let right = mk_app(mk_app(in_term, mk_local(name_x)), rep_applied.clone());
 
         let locals = vec![
-            Parameter {
+            Local {
                 name: name_h,
                 ty: ty_is_inhabited_u.clone(),
             },
-            Parameter {
+            Local {
                 name: name_x,
                 ty: ty_u.clone(),
             },

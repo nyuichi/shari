@@ -8,9 +8,9 @@ use crate::{
     print::{OpTable, Pretty},
     proof::{self, Axiom, Expr, generalize, guard, mk_type_prop, ungeneralize, unguard},
     tt::{
-        self, Class, ClassInstance, ClassType, Const, Delta, Kappa, Kind, LocalEnv, Name,
-        Parameter, QualifiedName, Term, Type, mk_const, mk_fresh_type_hole, mk_instance_local,
-        mk_local, mk_type_arrow, mk_type_const, mk_type_local,
+        self, Class, ClassInstance, ClassType, Const, Delta, Kappa, Kind, Local, LocalEnv, Name,
+        QualifiedName, Term, Type, mk_const, mk_fresh_type_hole, mk_instance_local, mk_local,
+        mk_type_arrow, mk_type_const, mk_type_local,
     },
 };
 
@@ -134,7 +134,7 @@ pub struct CmdInductive {
     pub name: QualifiedName,
     pub local_name: Name,
     pub local_types: Vec<Name>,
-    pub params: Vec<Parameter>,
+    pub params: Vec<Local>,
     pub target_ty: Type,
     pub ctors: Vec<Constructor>,
 }
@@ -175,7 +175,7 @@ pub struct CmdInstance {
     pub name: QualifiedName,
     pub local_types: Vec<Name>,
     pub local_classes: Vec<Class>,
-    pub params: Vec<Parameter>,
+    pub params: Vec<Local>,
     pub target_ty: Type,
     pub fields: Vec<InstanceField>,
 }
@@ -1171,7 +1171,7 @@ impl Eval {
         //           (∀ α, P α → P (succ α)) →
         //           P zero →
         //           P α
-        let motive = Parameter {
+        let motive = Local {
             name: Name::fresh_with_name("motive"),
             ty: mk_type_arrow(target_ty.clone(), mk_type_prop()),
         };
@@ -1180,7 +1180,7 @@ impl Eval {
             let mut args = vec![];
             let (ctor_arg_tys, _) = ctor.ty.unarrow();
             for arg_ty in ctor_arg_tys {
-                args.push(Parameter {
+                args.push(Local {
                     name: Name::fresh(),
                     ty: arg_ty,
                 });
@@ -1191,7 +1191,7 @@ impl Eval {
                 let (xs_types, head) = arg.ty.unarrow();
                 let xs: Vec<_> = xs_types
                     .into_iter()
-                    .map(|x| Parameter {
+                    .map(|x| Local {
                         name: Name::fresh(),
                         ty: x,
                     })
@@ -1225,7 +1225,7 @@ impl Eval {
             guards.push(target);
         }
         // ∀ x P, {guards} → P x
-        let x = Parameter {
+        let x = Local {
             name: Name::fresh_with_name("x"),
             ty: target_ty.clone(),
         };
@@ -1256,7 +1256,7 @@ impl Eval {
             let (ctor_param_tys, _) = ctor.ty.unarrow();
             for ctor_param_ty in ctor_param_tys {
                 let ctor_param_ty = ctor_param_ty.subst(&subst);
-                ctor_params.push(Parameter {
+                ctor_params.push(Local {
                     name: Name::fresh(),
                     ty: ctor_param_ty,
                 });
@@ -1294,7 +1294,7 @@ impl Eval {
 
                 let binders: Vec<_> = arg_tys
                     .into_iter()
-                    .map(|arg_ty| Parameter {
+                    .map(|arg_ty| Local {
                         name: Name::fresh(),
                         ty: arg_ty,
                     })
@@ -1324,7 +1324,7 @@ impl Eval {
 
         let mut rhs_binders = vec![];
         for (x, t) in zip(cont_params, &cont_param_tys) {
-            rhs_binders.push(Parameter {
+            rhs_binders.push(Local {
                 name: x,
                 ty: t.clone(),
             });
@@ -1434,7 +1434,7 @@ impl Eval {
         }
         local_env.locals.insert(
             0,
-            Parameter {
+            Local {
                 name: local_name,
                 ty: target_ty.clone(),
             },
@@ -1536,12 +1536,12 @@ impl Eval {
         let (index_types, _) = target_ty.unarrow();
         let indexes = index_types
             .into_iter()
-            .map(|t| Parameter {
+            .map(|t| Local {
                 name: Name::fresh(),
                 ty: t,
             })
             .collect::<Vec<_>>();
-        let motive = Parameter {
+        let motive = Local {
             name: Name::fresh_with_name("motive"),
             ty: target_ty.clone(),
         };
@@ -1661,7 +1661,7 @@ impl Eval {
                     }
                     const_field_names.push(field_name);
                     self.elaborate_type(&mut local_env, field_ty, Kind::base())?;
-                    local_env.locals.push(Parameter {
+                    local_env.locals.push(Local {
                         name: field_name,
                         ty: field_ty.clone(),
                     });
@@ -1707,7 +1707,7 @@ impl Eval {
         self.add_type_const(name.clone(), Kind(local_types.len()));
 
         // inhab u
-        let this = Parameter {
+        let this = Local {
             name: Name::fresh_with_name("this"),
             ty: {
                 mk_type_const(name.clone()).apply(local_types.iter().map(|&x| mk_type_local(x)))
@@ -1717,7 +1717,7 @@ impl Eval {
         let mut const_fields = vec![];
         for field in &fields {
             if let StructureField::Const(field) = field {
-                const_fields.push(Parameter {
+                const_fields.push(Local {
                     name: field.name,
                     ty: field.ty.clone(),
                 });
@@ -1791,7 +1791,7 @@ impl Eval {
             match field {
                 StructureField::Const(field) => {
                     // (s : set u)
-                    let param = Parameter {
+                    let param = Local {
                         name: Name::fresh_from(field.name),
                         ty: field.ty.clone(),
                     };
@@ -1847,11 +1847,11 @@ impl Eval {
 
         // generate extensionality
         // axiom inhab.ext.{u} (this₁ this₂ : inhab u) : inhab.rep this₁ = inhab.rep this₂ → this₁ = this₂
-        let this1 = Parameter {
+        let this1 = Local {
             name: Name::fresh_with_name("this₁"),
             ty: this.ty.clone(),
         };
-        let this2 = Parameter {
+        let this2 = Local {
             name: Name::fresh_with_name("this₂"),
             ty: this.ty.clone(),
         };
@@ -1990,7 +1990,7 @@ impl Eval {
                     if structure_field_ty != *ty {
                         bail!("type mismatch");
                     }
-                    local_env.locals.push(Parameter {
+                    local_env.locals.push(Local {
                         name: *field_name,
                         ty: ty.clone(),
                     });
@@ -2138,7 +2138,7 @@ impl Eval {
             target = target.apply(params.iter().map(|param| mk_local(param.name)));
             target
         }]);
-        let f = Parameter {
+        let f = Local {
             name: Name::fresh_with_name("f"),
             ty: mk_type_local(ret_ty).arrow(fields.iter().filter_map(|field| match field {
                 InstanceField::Def(field) => Some(field.ty.clone()),
@@ -2211,7 +2211,7 @@ impl Eval {
                     }
                     const_field_names.push(field_name);
                     self.elaborate_type(&mut local_env, field_ty, Kind::base())?;
-                    local_env.locals.push(Parameter {
+                    local_env.locals.push(Local {
                         name: field_name,
                         ty: field_ty.clone(),
                     });

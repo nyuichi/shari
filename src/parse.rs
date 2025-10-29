@@ -12,7 +12,7 @@ use crate::proof::{
     mk_type_prop,
 };
 use crate::tt::{
-    Class, ClassType, Const, Kind, Name, Parameter, QualifiedName, Term, Type, mk_const,
+    Class, ClassType, Const, Kind, Name, Local, QualifiedName, Term, Type, mk_const,
     mk_fresh_hole, mk_fresh_type_hole, mk_instance_hole, mk_local, mk_type_arrow, mk_type_const,
     mk_type_local,
 };
@@ -446,12 +446,12 @@ impl<'a> Parser<'a> {
     }
 
     /// e.g. `"(x y : T) (z : U)"`
-    fn typed_parameters(&mut self) -> Result<Vec<Parameter>, ParseError> {
+    fn typed_parameters(&mut self) -> Result<Vec<Local>, ParseError> {
         let mut params = vec![];
         while let Some(token) = self.expect_symbol_opt("(") {
             let (names, ty) = self.typed_parameter(token)?;
             for name in names {
-                params.push(Parameter {
+                params.push(Local {
                     name,
                     ty: ty.clone(),
                 });
@@ -524,7 +524,7 @@ impl<'a> Parser<'a> {
                 Some(ty) => ty,
                 None => mk_fresh_type_hole(),
             };
-            binders.push(Parameter { name, ty });
+            binders.push(Local { name, ty });
         }
         for x in &binders {
             self.locals.push(x.name);
@@ -547,7 +547,7 @@ impl<'a> Parser<'a> {
                 Some(ty) => ty,
                 None => mk_fresh_type_hole(),
             };
-            binders.push(Parameter { name, ty });
+            binders.push(Local { name, ty });
         }
         for x in &binders {
             self.locals.push(x.name);
@@ -571,7 +571,7 @@ impl<'a> Parser<'a> {
         } else {
             ty = mk_fresh_type_hole();
         }
-        let x = Parameter { name, ty };
+        let x = Local { name, ty };
         self.expect_symbol("|")?;
         self.locals.push(x.name);
         let mut m = self.subterm(0)?;
