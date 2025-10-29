@@ -1047,18 +1047,18 @@ def fst.{u, v} : u × v → u := prod.fst
 def snd.{u, v} : u × v → v := prod.snd
 def pair.{u, v} : u → v → u × v := prod.pair
 
-lemma fst.pair.{u, v} (x : u) (y : v) : fst (pair x y) = x :=
+lemma fst.pair.{u, v} (x : u) (y : v) : (pair x y).0 = x :=
 eq.congr_fun prod.pair.spec
 
-lemma snd.pair.{u, v} (x : u) (y : v) : snd (pair x y) = y :=
+lemma snd.pair.{u, v} (x : u) (y : v) : (pair x y).1 = y :=
 eq.congr_fun prod.pair.spec
 
-lemma prod.eta.{u, v} (p : u × v) : p = pair (fst p) (snd p) :=
-@prod.ind[p, λ p, p = pair (fst p) (snd p)]
+lemma prod.eta.{u, v} (p : u × v) : p = pair p.0 p.1 :=
+@prod.ind[p, λ p, p = pair p.0 p.1]
   (take (a : u),
    take (b : v),
-   calc pair a b = pair (fst (pair a b)) b := eq.transport (eq.symm fst.pair) eq.refl
-        ...      = pair (fst (pair a b)) (snd (pair a b)) := eq.transport (eq.symm snd.pair) eq.refl)
+   calc pair a b = pair (pair a b).0 b := eq.transport (eq.symm fst.pair) eq.refl
+        ...      = pair (pair a b).0 (pair a b).1 := eq.transport (eq.symm snd.pair) eq.refl)
 
 structure total u v := {
   const rel : u → v → Prop
@@ -1076,18 +1076,18 @@ def f.{u, v} : total.el u v → u × total u v := λ (e : total.el u v), prod.pa
 
 lemma f.surjective.{u, v} : surjective f.{u, v} := {
   take (p : u × total u v),
-  have ∃ (y : v), total.rel (snd p) (fst p) y := total.spec,
-  obtain (y : v), total.rel (snd p) (fst p) y := «∃ (y : v), total.rel (snd p) (fst p) y»,
-  have ∃ (e : total.el u v), snd p = total.el.rel e ∧ fst p = total.el.x e ∧ y = total.el.y e :=
-    total.el.abs «total.rel (snd p) (fst p) y»,
-  obtain (e : total.el u v), snd p = total.el.rel e ∧ fst p = total.el.x e ∧ y = total.el.y e :=
-    «∃ (e : total.el u v), snd p = total.el.rel e ∧ fst p = total.el.x e ∧ y = total.el.y e»,
-  have snd p = total.el.rel e := and.left (and.left «snd p = total.el.rel e ∧ fst p = total.el.x e ∧ y = total.el.y e»),
-  have fst p = total.el.x e := and.right (and.left «snd p = total.el.rel e ∧ fst p = total.el.x e ∧ y = total.el.y e»),
+  have ∃ (y : v), total.rel p.1 p.0 y := total.spec,
+  obtain (y : v), total.rel p.1 p.0 y := «∃ (y : v), total.rel p.1 p.0 y»,
+  have ∃ (e : total.el u v), p.1 = total.el.rel e ∧ p.0 = total.el.x e ∧ y = total.el.y e :=
+    total.el.abs «total.rel p.1 p.0 y»,
+  obtain (e : total.el u v), p.1 = total.el.rel e ∧ p.0 = total.el.x e ∧ y = total.el.y e :=
+    «∃ (e : total.el u v), p.1 = total.el.rel e ∧ p.0 = total.el.x e ∧ y = total.el.y e»,
+  have p.1 = total.el.rel e := and.left (and.left «p.1 = total.el.rel e ∧ p.0 = total.el.x e ∧ y = total.el.y e»),
+  have p.0 = total.el.x e := and.right (and.left «p.1 = total.el.rel e ∧ p.0 = total.el.x e ∧ y = total.el.y e»),
   have p = pair (total.el.x e) (total.el.rel e) :=
-    calc p = pair (fst p) (snd p)                    := prod.eta
-         ... = pair (total.el.x e) (snd p)           := eq.transport «fst p = total.el.x e» eq.refl
-         ... = pair (total.el.x e) (total.el.rel e)  := eq.transport «snd p = total.el.rel e» eq.refl,
+    calc p = pair p.0 p.1                    := prod.eta
+         ... = pair (total.el.x e) p.1         := eq.transport «p.0 = total.el.x e» eq.refl
+         ... = pair (total.el.x e) (total.el.rel e)  := eq.transport «p.1 = total.el.rel e» eq.refl,
   @exists.intro[_, e] «p = pair (total.el.x e) (total.el.rel e)»
 }
 
@@ -1097,13 +1097,13 @@ obtain (g : u × total u v → total.el u v), ∀ p, p = f (g p) := surjective.s
   take (x : u),
   have pair x r = f (g (pair x r)) := «∀ p, p = f (g p)»[_],
   have x = total.el.x (g (pair x r)) :=
-    calc x = fst (pair x r)                            := eq.symm fst.pair
-         ... = fst (f (g (pair x r)))                  := eq.congr_arg «pair x r = f (g (pair x r))»
-         ... = total.el.x (g (pair x r))               := fst.pair,
+    calc x = (pair x r).0                            := eq.symm fst.pair
+         ... = (f (g (pair x r))).0                  := eq.congr_arg «pair x r = f (g (pair x r))»
+         ... = total.el.x (g (pair x r))             := fst.pair,
   have r = total.el.rel (g (pair x r)) :=
-    calc r = snd (pair x r)                            := eq.symm snd.pair
-         ... = snd (f (g (pair x r)))                  := eq.congr_arg «pair x r = f (g (pair x r))»
-         ... = total.el.rel (g (pair x r))             := snd.pair,
+    calc r = (pair x r).1                            := eq.symm snd.pair
+         ... = (f (g (pair x r))).1                  := eq.congr_arg «pair x r = f (g (pair x r))»
+         ... = total.el.rel (g (pair x r))           := snd.pair,
   have total.rel r x (total.el.y (g (pair x r))) :=
     eq.transport (eq.symm «r = total.el.rel (g (pair x r))») (eq.transport (eq.symm «x = total.el.x (g (pair x r))») @total.el.spec[g (pair x r)]),
   «total.rel r x (total.el.y (g (pair x r)))»
@@ -1600,7 +1600,7 @@ def nat.divides (a b : ℕ) : Prop := ∃ k, b = a * k
 -- one may write like
 --
 --  type inductive prod (u v : Type) : Type
---  | pair (fst : u) (snd : v) : prod
+--  | pair (x : u) (y : v) : prod
 --
 type inductive unit
 | star : unit
@@ -1660,7 +1660,10 @@ structure W.el u v := {
   axiom branch (l : list u) (a : v) (b : u) : tree l a → f b = a → ∃ a₀, tree (cons b l) a₀
   axiom prefix_closed (l : list u) (x : u) (a : v) : tree (cons x l) a → tree l (f x)
   axiom functional : functional tree
-  axiom well_founded : well_founded (λ (p₁ p₂ : list u × v), tree (fst p₁) (snd p₁) ∧ tree (fst p₂) (snd p₂) ∧ ∃ l a, fst p₂ = cons a l ∧ fst p₁ = l ∧ snd p₂ = f a)
+  axiom well_founded :
+    well_founded
+      (λ (p₁ p₂ : list u × v),
+        tree p₁.0 p₁.1 ∧ tree p₂.0 p₂.1 ∧ ∃ l a, p₂.0 = cons a l ∧ p₁.0 = l ∧ p₂.1 = f a)
 }
 
 -- type infixr × : 35

@@ -19,7 +19,7 @@ use crate::tt::{
 use crate::lex::{Lex, LexError, SourceInfo, Token, TokenKind};
 use anyhow::bail;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::{mem, slice};
 use thiserror::Error;
 
@@ -52,6 +52,7 @@ impl TokenTable {
 enum Led {
     App,
     User(Operator),
+    Proj(Proj),
 }
 
 impl Led {
@@ -59,6 +60,25 @@ impl Led {
         match self {
             Self::App => 1024,
             Self::User(op) => op.prec,
+            Self::Proj(_) => 1025,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Proj {
+    Fst,
+    Snd,
+}
+
+impl Proj {
+    fn name(self) -> QualifiedName {
+        static FST: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("fst"));
+        static SND: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("snd"));
+
+        match self {
+            Self::Fst => FST.clone(),
+            Self::Snd => SND.clone(),
         }
     }
 }
@@ -85,7 +105,11 @@ impl TokenTable {
                 match self.led.get(lit) {
                     Some(op) => Some(Led::User(op.clone())),
                     None => {
-                        if self.get_nud(token).is_some() {
+                        if lit == ".0" {
+                            Some(Led::Proj(Proj::Fst))
+                        } else if lit == ".1" {
+                            Some(Led::Proj(Proj::Snd))
+                        } else if self.get_nud(token).is_some() {
                             Some(Led::App)
                         } else {
                             None
@@ -581,6 +605,16 @@ impl<'a> Parser<'a> {
         Ok(mk_const(qualified, ty_args, instances))
     }
 
+    fn term_proj(&mut self, term: Term, projection: Proj) -> Term {
+        let name = projection.name();
+        let proj = mk_const(
+            name,
+            vec![mk_fresh_type_hole(), mk_fresh_type_hole()],
+            vec![],
+        );
+        proj.apply(vec![term])
+    }
+
     fn subterm(&mut self, rbp: usize) -> Result<Term, ParseError> {
         let token = self.any_token()?;
         // nud
@@ -638,6 +672,10 @@ impl<'a> Parser<'a> {
                     let right = self.subterm(prec)?;
                     fun = fun.apply(vec![left, right]);
                     left = fun;
+                }
+                Led::Proj(projection) => {
+                    self.advance();
+                    left = self.term_proj(left, projection);
                 }
             }
         }

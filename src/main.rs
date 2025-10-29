@@ -28,7 +28,7 @@ fn main() -> anyhow::Result<()> {
     let matches = build_cli().get_matches();
 
     let prelude = include_str!("main.shari");
-    shari::process(&prelude)?;
+    shari::process(prelude)?;
 
     if let Some(path) = matches.get_one::<PathBuf>("file") {
         let user_input = fs::read_to_string(path)

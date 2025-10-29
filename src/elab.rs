@@ -403,7 +403,7 @@ impl<'a> Elaborator<'a> {
                     return Ok(());
                 }
                 self.instance_holes.push((instance.name, class.clone()));
-                let error = Error::Visit(format!("could not synthesize instance"));
+                let error = Error::Visit("could not synthesize instance".to_string());
                 self.class_constraints.push((
                     self.tt_local_env.clone(),
                     instance.name,
