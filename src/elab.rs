@@ -291,7 +291,7 @@ impl<'a> Elaborator<'a> {
                 let TermAbs {
                     metadata: _,
                     binder_type,
-                    binder_name,
+                    binder_name: _,
                     body,
                 } = &**m;
 
@@ -301,7 +301,7 @@ impl<'a> Elaborator<'a> {
                 }
 
                 let x = Local {
-                    name: Name::fresh_from(*binder_name),
+                    name: Name::fresh(),
                     ty: binder_type.clone(),
                 };
                 let body = body.open(&[mk_local(x.name)], 0);
@@ -1516,7 +1516,7 @@ impl<'a> Elaborator<'a> {
                 let TermAbs {
                     metadata: _,
                     binder_type: right_binder_type,
-                    binder_name: right_binder_name,
+                    binder_name: _,
                     body: right_body,
                 } = {
                     let Term::Abs(right_inner) = right else {
@@ -1525,7 +1525,7 @@ impl<'a> Elaborator<'a> {
                     Arc::unwrap_or_clone(right_inner)
                 };
                 let x = Local {
-                    name: Name::fresh_from(right_binder_name),
+                    name: Name::fresh(),
                     ty: right_binder_type,
                 };
                 let right = right_body.open(&[mk_local(x.name)], 0);

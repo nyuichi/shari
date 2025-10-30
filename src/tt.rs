@@ -279,7 +279,7 @@ pub fn mk_type_arrow(dom: Type, cod: Type) -> Type {
 
 #[inline]
 pub fn mk_fresh_type_hole() -> Type {
-    mk_type_hole(Name::fresh_with_name("α"))
+    mk_type_hole(Name::fresh())
 }
 
 #[inline]
