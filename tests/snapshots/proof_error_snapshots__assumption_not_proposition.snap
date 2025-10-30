@@ -5,7 +5,7 @@ expression: formatted
 error chain:
   - command error
   - unification failed: not a proposition: X
-5:17
+tests/proof_errors/assumption_not_proposition.shari:5:17
 
 const bad_type : X
                 ^^

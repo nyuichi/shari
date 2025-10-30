@@ -7,7 +7,7 @@ error chain:
   - unification failed: propositions mismatch in change: pf_bar
 target = foo
 expr_prop = bar
-6:55
+tests/proof_errors/change_proposition_mismatch.shari:6:55
 
 lemma change_proposition_mismatch : foo := change foo, pf_bar
                                                       ^^^^^^^
