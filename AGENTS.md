@@ -21,3 +21,4 @@
 
 - Before editing or creating `.shari` sources, read and follow the guidance in `docs/SHARI_LANGUAGE_GUIDE.md` so generated proofs respect the language grammar and features.
 - When adding or changing Shari language features (syntax, commands, elaboration behavior), update `docs/SHARI_LANGUAGE_GUIDE.md` to keep the reference accurate.
+- If the Shari grammar or keyword set changes, update the VS Code syntax (`editors/shari-vscode/syntaxes/shari.tmLanguage.json`) and the playground highlighter (`shari-playground/public/index.html`) accordingly.
