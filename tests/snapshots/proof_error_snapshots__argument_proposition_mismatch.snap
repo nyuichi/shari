@@ -5,7 +5,7 @@ expression: formatted
 error chain:
   - command error
   - unification failed: argument proposition mismatch: expected foo, but got bar
-10:26
+tests/proof_errors/argument_proposition_mismatch.shari:10:26
 
       (assume foo, «foo») «bar»
                          ^^^^^^

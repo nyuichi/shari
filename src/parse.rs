@@ -926,11 +926,27 @@ impl<'a> Parser<'a> {
                     self.locals.push(name);
                     let p = self.term()?;
                     self.locals.pop();
+                    let alias = self.alias_opt()?;
                     self.expect_symbol(":=")?;
                     let e1 = self.expr()?;
                     self.expect_symbol(",")?;
                     self.locals.push(name);
-                    let e2 = self.expr()?;
+                    if let Some(alias_name) = alias {
+                        self.local_axioms.push(alias_name);
+                    }
+                    let e2 = match self.expr() {
+                        Ok(expr) => expr,
+                        Err(err) => {
+                            if alias.is_some() {
+                                self.local_axioms.pop();
+                            }
+                            self.locals.pop();
+                            return Err(err);
+                        }
+                    };
+                    if alias.is_some() {
+                        self.local_axioms.pop();
+                    }
                     self.locals.pop();
 
                     // Expand[obtain (x : τ), p := e1, e2] := exists.ind.{τ}[_, _] e1 (take (x : τ), assume p, e2)
@@ -942,7 +958,7 @@ impl<'a> Parser<'a> {
                     let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_app(e, e1);
-                    let e_body = mk_expr_assume(p, None, e2);
+                    let e_body = mk_expr_assume(p, alias, e2);
                     let e_body = mk_expr_take(name, ty, e_body);
                     mk_expr_app(e, e_body)
                 }

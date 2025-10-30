@@ -5,7 +5,7 @@ expression: formatted
 error chain:
   - command error
   - unification failed: type mismatch
-4:33
+tests/proof_errors/type_mismatch_term.shari:4:33
 
 def type_mismatch_term : Prop := λ (x : Prop), x
                                 ^^^^^^^^^^^^^^^^

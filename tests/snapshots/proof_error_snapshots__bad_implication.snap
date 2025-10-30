@@ -5,7 +5,7 @@ expression: formatted
 error chain:
   - command error
   - unification failed: proposition mismatch: expected imp foo bar
-8:37
+tests/proof_errors/bad_implication.shari:8:37
 
 lemma bad_implication : foo → bar := assume foo, «foo»
                                     ^^^^^^^^^^^^^^^^^^
