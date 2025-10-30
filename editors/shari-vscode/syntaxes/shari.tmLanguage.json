@@ -96,6 +96,10 @@
       "patterns": [
         {
           "name": "keyword.control.contextual.shari",
+          "match": "\\b(?:have|assume)\\s+as\\b"
+        },
+        {
+          "name": "keyword.control.contextual.shari",
           "match": "\\b(?:have|obtain|assume|change|calc|take)\\b"
         }
       ]
