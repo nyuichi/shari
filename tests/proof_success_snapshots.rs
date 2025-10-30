@@ -2,6 +2,7 @@ use std::{
     ffi::OsStr,
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 fn format_error(err: &anyhow::Error) -> String {
@@ -49,7 +50,8 @@ fn proof_success_snapshots() {
             .expect("fixture without file_stem")
             .to_string_lossy()
             .replace('.', "_");
-        if let Err(err) = shari::process(&input) {
+        let file = Arc::new(shari::File::new(path.display().to_string(), input));
+        if let Err(err) = shari::process(file) {
             panic!(
                 "expected {} to succeed\n{}",
                 path.display(),

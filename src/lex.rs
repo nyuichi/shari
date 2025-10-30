@@ -41,6 +41,10 @@ impl File {
         self.contents.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.contents.is_empty()
+    }
+
     pub fn line_column_at(&self, offset: usize) -> (usize, usize) {
         let offset = offset.min(self.contents.len());
         let line_index = match self.lines.binary_search(&offset) {
@@ -389,7 +393,8 @@ mod tests {
 
     #[test]
     fn dot_followed_by_whitespace_is_invalid() {
-        let mut lex = Lex::new(Arc::new("foo . bar".to_owned()));
+        let file = Arc::new(File::new("<test>", "foo . bar"));
+        let mut lex = Lex::new(file);
         let first = lex
             .next()
             .expect("first token")

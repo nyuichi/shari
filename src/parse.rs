@@ -1766,7 +1766,7 @@ impl<'a> Parser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lex::Lex;
+    use crate::lex::{File, Lex};
     use crate::proof::{ExprApp, ExprAssume, ExprAssumpByName};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -1808,7 +1808,8 @@ mod tests {
 
     fn parse_expr(input: &str) -> Expr {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut lex = Lex::new(Arc::new(input.to_owned()));
+        let file = Arc::new(File::new("<test>", input));
+        let mut lex = Lex::new(file);
         let mut parser = Parser::new(
             &mut lex,
             &tt,
@@ -1826,7 +1827,8 @@ mod tests {
     }
 
     fn parse_qualified(input: &str) -> Result<QualifiedName, ParseError> {
-        let mut lex = Lex::new(Arc::new(input.to_owned()));
+        let file = Arc::new(File::new("<test>", input));
+        let mut lex = Lex::new(file);
         let tt = TokenTable::default();
         let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
         let const_table: HashMap<QualifiedName, Const> = HashMap::new();

@@ -444,3 +444,9 @@ expression: normalized.as_ref()
 [<timestamp> INFO  shari::cmd] + const Join.{u} [has complete_lattice u] : (u → Prop) → u
 [<timestamp> INFO  shari::cmd] + const lfp.{u} [has complete_lattice u] : (u → u) → u
 [<timestamp> INFO  shari::cmd] + const gfp.{u} [has complete_lattice u] : (u → u) → u
+[<timestamp> INFO  shari::cmd] + class is_structure _ _
+[<timestamp> INFO  shari::cmd] + const is_structure.rep.{base, u} [is_structure base u] : u → base
+[<timestamp> INFO  shari::cmd] + const is_structure.spec.{base, u} [is_structure base u] : base → Prop
+[<timestamp> INFO  shari::cmd] + axiom is_structure.comm.{base, u} [is_structure base u] : ∀ x, is_structure.spec (is_structure.rep x)
+[<timestamp> INFO  shari::cmd] + axiom is_structure.abs.{base, u} [is_structure base u] : ∀ y, is_structure.spec y → ∃! x, is_structure.rep x = y
+[<timestamp> INFO  shari::cmd] + axiom is_structure.ext.{base, u} [is_structure base u] : ∀ x₁ x₂, is_structure.rep x₁ = is_structure.rep x₂ → x₁ = x₂
