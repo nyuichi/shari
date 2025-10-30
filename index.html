@@ -157,6 +157,9 @@
 
                 tokenizer: {
                     root: [
+                        // フレーズとして扱うコンテキストキーワード
+                        [/\b(?:have|assume)\s+as\b/, 'keyword'],
+
                         // 識別子
                         [/[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_]*/u, { cases: { '@keywords': 'keyword', '@contextualKeywords': 'keyword', '@default': 'identifier' } }],
 
