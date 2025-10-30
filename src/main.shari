@@ -1806,3 +1806,24 @@ def Join.{u} [has (complete_lattice u)] : sub u → u := complete_lattice.Join s
 
 def lfp.{u} [has (complete_lattice u)] (f : u → u) : u := Meet { x | f x ≤ x }
 def gfp.{u} [has (complete_lattice u)] (f : u → u) : u := Join { x | x ≤ f x }
+
+class structure is_structure base u := {
+  const rep : u → base
+  const spec : base → Prop
+  axiom comm : ∀ x, spec (rep x)
+  axiom abs : ∀ y, spec y → ∃! x, rep x = y
+}
+
+lemma is_structure.ext.{base, u} [is_structure base u] (x₁ x₂ : u) : is_structure.rep.{base, u} x₁ = is_structure.rep x₂ → x₁ = x₂ := {
+  assume is_structure.rep.{base, u} x₁ = is_structure.rep x₂,
+  have is_structure.spec.{base, u} (is_structure.rep x₂) as this := is_structure.comm.{base, u},
+  have ∃! x, is_structure.rep.{base, u} x = is_structure.rep x₂ as this := is_structure.abs.{base, u} this,
+  -- TODO: obtain (x : t), φ as h
+  obtain (x : u), is_structure.rep.{base, u} x = is_structure.rep x₂ ∧ ∀ x', is_structure.rep x' = is_structure.rep x₂ → x = x' := this,
+  have is_structure.rep.{base, u} x = is_structure.rep x₂ := and.left «is_structure.rep.{base, u} x = is_structure.rep x₂ ∧ ∀ x', is_structure.rep.{base, u} x' = is_structure.rep x₂ → x = x'»,
+  have ∀ x', is_structure.rep.{base, u} x' = is_structure.rep x₂ → x = x' := and.right «is_structure.rep.{base, u} x = is_structure.rep x₂ ∧ ∀ x', is_structure.rep.{base, u} x' = is_structure.rep x₂ → x = x'»,
+  have x = x₂ := «∀ x', is_structure.rep.{base, u} x' = is_structure.rep x₂ → x = x'»[_] eq.refl,
+  have x = x₁ := «∀ x', is_structure.rep.{base, u} x' = is_structure.rep x₂ → x = x'»[_] «is_structure.rep.{base, u} x₁ = is_structure.rep x₂»,
+  calc x₁ = x          := eq.symm «x = x₁»
+      ... = x₂         := «x = x₂»
+}
