@@ -78,6 +78,40 @@ impl File {
 }
 
 #[derive(Debug, Clone)]
+pub struct Span {
+    pub file: Arc<File>,
+    pub start: usize,
+    pub end: usize,
+}
+
+impl Span {
+    pub fn new(file: Arc<File>, start: usize, end: usize) -> Self {
+        Self { file, start, end }
+    }
+
+    pub fn to_source_info(&self) -> SourceInfo {
+        SourceInfo {
+            range: self.start..self.end,
+            file: Arc::clone(&self.file),
+        }
+    }
+}
+
+impl std::fmt::Display for Span {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_source_info())
+    }
+}
+
+impl PartialEq for Span {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.file, &other.file) && self.start == other.start && self.end == other.end
+    }
+}
+
+impl Eq for Span {}
+
+#[derive(Debug, Clone)]
 pub struct SourceInfo {
     range: Range<usize>,
     file: Arc<File>,
@@ -227,6 +261,10 @@ impl Lex {
 
     pub fn is_eof(&self) -> bool {
         self.clone().next().is_none()
+    }
+
+    pub fn span_since(&self, start: LexState) -> Span {
+        Span::new(Arc::clone(&self.file), start.position, self.position)
     }
 }
 

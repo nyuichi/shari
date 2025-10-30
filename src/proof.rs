@@ -3,9 +3,12 @@
 use std::sync::LazyLock;
 use std::{collections::HashMap, iter::zip};
 
-use crate::tt::{
-    self, Class, Instance, Local, Name, QualifiedName, Term, Type, mk_abs, mk_const, mk_local,
-    mk_type_const,
+use crate::{
+    lex::Span,
+    tt::{
+        self, Class, Instance, Local, Name, QualifiedName, Term, Type, mk_abs, mk_const, mk_local,
+        mk_type_const,
+    },
 };
 
 pub fn mk_type_prop() -> Type {
@@ -174,6 +177,11 @@ pub fn unguard1(term: &Term) -> Option<(Term, Term)> {
 /// ------------------------
 /// Γ | Φ ⊢ change φ, h : φ
 ///
+#[derive(Debug, Clone, Default)]
+pub struct ExprMetadata {
+    pub span: Option<Span>,
+}
+
 #[derive(Debug, Clone)]
 pub enum Expr {
     Assump(Box<ExprAssump>),
@@ -188,16 +196,19 @@ pub enum Expr {
 
 #[derive(Debug, Clone)]
 pub struct ExprAssump {
+    pub metadata: ExprMetadata,
     pub target: Term,
 }
 
 #[derive(Debug, Clone)]
 pub struct ExprAssumpByName {
+    pub metadata: ExprMetadata,
     pub name: Name,
 }
 
 #[derive(Debug, Clone)]
 pub struct ExprAssume {
+    pub metadata: ExprMetadata,
     pub local_axiom: Term,
     pub alias: Option<Name>,
     pub expr: Expr,
@@ -205,12 +216,14 @@ pub struct ExprAssume {
 
 #[derive(Debug, Clone)]
 pub struct ExprApp {
+    pub metadata: ExprMetadata,
     pub expr1: Expr,
     pub expr2: Expr,
 }
 
 #[derive(Debug, Clone)]
 pub struct ExprTake {
+    pub metadata: ExprMetadata,
     pub name: Name,
     pub ty: Type,
     pub expr: Expr,
@@ -218,12 +231,14 @@ pub struct ExprTake {
 
 #[derive(Debug, Clone)]
 pub struct ExprInst {
+    pub metadata: ExprMetadata,
     pub expr: Expr,
     pub arg: Term,
 }
 
 #[derive(Debug, Clone)]
 pub struct ExprConst {
+    pub metadata: ExprMetadata,
     pub name: QualifiedName,
     pub ty_args: Vec<Type>,
     pub instances: Vec<Instance>,
@@ -231,6 +246,7 @@ pub struct ExprConst {
 
 #[derive(Debug, Clone)]
 pub struct ExprChange {
+    pub metadata: ExprMetadata,
     pub target: Term,
     pub expr: Expr,
 }
@@ -243,15 +259,22 @@ impl Default for Expr {
 }
 
 pub fn mk_expr_assump(m: Term) -> Expr {
-    Expr::Assump(Box::new(ExprAssump { target: m }))
+    Expr::Assump(Box::new(ExprAssump {
+        metadata: ExprMetadata::default(),
+        target: m,
+    }))
 }
 
 pub fn mk_expr_assump_by_name(name: Name) -> Expr {
-    Expr::AssumpByName(Box::new(ExprAssumpByName { name }))
+    Expr::AssumpByName(Box::new(ExprAssumpByName {
+        metadata: ExprMetadata::default(),
+        name,
+    }))
 }
 
 pub fn mk_expr_assume(h: Term, alias: Option<Name>, e: Expr) -> Expr {
     Expr::Assume(Box::new(ExprAssume {
+        metadata: ExprMetadata::default(),
         local_axiom: h,
         alias,
         expr: e,
@@ -260,21 +283,32 @@ pub fn mk_expr_assume(h: Term, alias: Option<Name>, e: Expr) -> Expr {
 
 pub fn mk_expr_app(e1: Expr, e2: Expr) -> Expr {
     Expr::App(Box::new(ExprApp {
+        metadata: ExprMetadata::default(),
         expr1: e1,
         expr2: e2,
     }))
 }
 
 pub fn mk_expr_take(name: Name, ty: Type, e: Expr) -> Expr {
-    Expr::Take(Box::new(ExprTake { name, ty, expr: e }))
+    Expr::Take(Box::new(ExprTake {
+        metadata: ExprMetadata::default(),
+        name,
+        ty,
+        expr: e,
+    }))
 }
 
 pub fn mk_expr_inst(e: Expr, m: Term) -> Expr {
-    Expr::Inst(Box::new(ExprInst { expr: e, arg: m }))
+    Expr::Inst(Box::new(ExprInst {
+        metadata: ExprMetadata::default(),
+        expr: e,
+        arg: m,
+    }))
 }
 
 pub fn mk_expr_const(name: QualifiedName, ty_args: Vec<Type>, instances: Vec<Instance>) -> Expr {
     Expr::Const(Box::new(ExprConst {
+        metadata: ExprMetadata::default(),
         name,
         ty_args,
         instances,
@@ -282,7 +316,11 @@ pub fn mk_expr_const(name: QualifiedName, ty_args: Vec<Type>, instances: Vec<Ins
 }
 
 pub fn mk_expr_change(target: Term, expr: Expr) -> Expr {
-    Expr::Change(Box::new(ExprChange { target, expr }))
+    Expr::Change(Box::new(ExprChange {
+        metadata: ExprMetadata::default(),
+        target,
+        expr,
+    }))
 }
 
 impl std::fmt::Display for Expr {
@@ -402,15 +440,73 @@ impl std::fmt::Display for Expr {
 }
 
 impl Expr {
+    pub fn metadata(&self) -> &ExprMetadata {
+        match self {
+            Expr::Assump(inner) => &inner.metadata,
+            Expr::AssumpByName(inner) => &inner.metadata,
+            Expr::Assume(inner) => &inner.metadata,
+            Expr::App(inner) => &inner.metadata,
+            Expr::Take(inner) => &inner.metadata,
+            Expr::Inst(inner) => &inner.metadata,
+            Expr::Const(inner) => &inner.metadata,
+            Expr::Change(inner) => &inner.metadata,
+        }
+    }
+
+    pub fn span(&self) -> Option<&Span> {
+        self.metadata().span.as_ref()
+    }
+
+    pub fn with_span(self, span: Option<Span>) -> Expr {
+        match self {
+            Expr::Assump(mut inner) => {
+                inner.metadata.span = span;
+                Expr::Assump(inner)
+            }
+            Expr::AssumpByName(mut inner) => {
+                inner.metadata.span = span;
+                Expr::AssumpByName(inner)
+            }
+            Expr::Assume(mut inner) => {
+                inner.metadata.span = span;
+                Expr::Assume(inner)
+            }
+            Expr::App(mut inner) => {
+                inner.metadata.span = span;
+                Expr::App(inner)
+            }
+            Expr::Take(mut inner) => {
+                inner.metadata.span = span;
+                Expr::Take(inner)
+            }
+            Expr::Inst(mut inner) => {
+                inner.metadata.span = span;
+                Expr::Inst(inner)
+            }
+            Expr::Const(mut inner) => {
+                inner.metadata.span = span;
+                Expr::Const(inner)
+            }
+            Expr::Change(mut inner) => {
+                inner.metadata.span = span;
+                Expr::Change(inner)
+            }
+        }
+    }
+
     pub fn is_ground(&self) -> bool {
         match self {
             Expr::Assump(e) => {
-                let ExprAssump { target } = &**e;
+                let ExprAssump {
+                    metadata: _,
+                    target,
+                } = &**e;
                 target.is_ground()
             }
             Expr::AssumpByName(_) => true,
             Expr::Assume(e) => {
                 let ExprAssume {
+                    metadata: _,
                     local_axiom,
                     alias: _,
                     expr,
@@ -418,11 +514,16 @@ impl Expr {
                 local_axiom.is_ground() && expr.is_ground()
             }
             Expr::App(e) => {
-                let ExprApp { expr1, expr2 } = &**e;
+                let ExprApp {
+                    metadata: _,
+                    expr1,
+                    expr2,
+                } = &**e;
                 expr1.is_ground() && expr2.is_ground()
             }
             Expr::Take(e) => {
                 let ExprTake {
+                    metadata: _,
                     name: _,
                     ty: _,
                     expr,
@@ -430,12 +531,20 @@ impl Expr {
                 expr.is_ground()
             }
             Expr::Inst(e) => {
-                let ExprInst { expr, arg } = &**e;
+                let ExprInst {
+                    metadata: _,
+                    expr,
+                    arg,
+                } = &**e;
                 expr.is_ground() && arg.is_ground()
             }
             Expr::Const(_) => true,
             Expr::Change(e) => {
-                let ExprChange { target, expr } = &**e;
+                let ExprChange {
+                    metadata: _,
+                    target,
+                    expr,
+                } = &**e;
                 target.is_ground() && expr.is_ground()
             }
         }
@@ -444,12 +553,16 @@ impl Expr {
     pub fn is_type_ground(&self) -> bool {
         match self {
             Expr::Assump(e) => {
-                let ExprAssump { target } = &**e;
+                let ExprAssump {
+                    metadata: _,
+                    target,
+                } = &**e;
                 target.is_type_ground()
             }
             Expr::AssumpByName(_) => true,
             Expr::Assume(e) => {
                 let ExprAssume {
+                    metadata: _,
                     local_axiom,
                     alias: _,
                     expr,
@@ -457,19 +570,33 @@ impl Expr {
                 local_axiom.is_type_ground() && expr.is_type_ground()
             }
             Expr::App(e) => {
-                let ExprApp { expr1, expr2 } = &**e;
+                let ExprApp {
+                    metadata: _,
+                    expr1,
+                    expr2,
+                } = &**e;
                 expr1.is_type_ground() && expr2.is_type_ground()
             }
             Expr::Take(e) => {
-                let ExprTake { name: _, ty, expr } = &**e;
+                let ExprTake {
+                    metadata: _,
+                    name: _,
+                    ty,
+                    expr,
+                } = &**e;
                 ty.is_ground() && expr.is_type_ground()
             }
             Expr::Inst(e) => {
-                let ExprInst { expr, arg } = &**e;
+                let ExprInst {
+                    metadata: _,
+                    expr,
+                    arg,
+                } = &**e;
                 expr.is_type_ground() && arg.is_ground()
             }
             Expr::Const(e) => {
                 let ExprConst {
+                    metadata: _,
                     name: _,
                     ty_args,
                     instances,
@@ -478,7 +605,11 @@ impl Expr {
                     && instances.iter().all(|i| i.is_type_ground())
             }
             Expr::Change(e) => {
-                let ExprChange { target, expr } = &**e;
+                let ExprChange {
+                    metadata: _,
+                    target,
+                    expr,
+                } = &**e;
                 target.is_type_ground() && expr.is_type_ground()
             }
         }
@@ -487,13 +618,17 @@ impl Expr {
     pub fn subst(&mut self, subst: &[(Name, Term)]) {
         match self {
             Expr::Assump(e) => {
-                let ExprAssump { target } = e.as_mut();
+                let ExprAssump {
+                    metadata: _,
+                    target,
+                } = e.as_mut();
                 let new_target = target.subst(subst);
                 *target = new_target;
             }
             Expr::AssumpByName(_) => {}
             Expr::Assume(e) => {
                 let ExprAssume {
+                    metadata: _,
                     local_axiom,
                     alias: _,
                     expr,
@@ -503,12 +638,17 @@ impl Expr {
                 expr.subst(subst);
             }
             Expr::App(e) => {
-                let ExprApp { expr1, expr2 } = e.as_mut();
+                let ExprApp {
+                    metadata: _,
+                    expr1,
+                    expr2,
+                } = e.as_mut();
                 expr1.subst(subst);
                 expr2.subst(subst);
             }
             Expr::Take(e) => {
                 let ExprTake {
+                    metadata: _,
                     name: _,
                     ty: _,
                     expr,
@@ -516,14 +656,22 @@ impl Expr {
                 expr.subst(subst);
             }
             Expr::Inst(e) => {
-                let ExprInst { expr, arg } = e.as_mut();
+                let ExprInst {
+                    metadata: _,
+                    expr,
+                    arg,
+                } = e.as_mut();
                 expr.subst(subst);
                 let new_arg = arg.subst(subst);
                 *arg = new_arg;
             }
             Expr::Const(_) => {}
             Expr::Change(e) => {
-                let ExprChange { target, expr } = e.as_mut();
+                let ExprChange {
+                    metadata: _,
+                    target,
+                    expr,
+                } = e.as_mut();
                 let new_target = target.subst(subst);
                 *target = new_target;
                 expr.subst(subst);
@@ -537,12 +685,16 @@ impl Expr {
     {
         match self {
             Expr::Assump(e) => {
-                let ExprAssump { target } = e.as_mut();
+                let ExprAssump {
+                    metadata: _,
+                    target,
+                } = e.as_mut();
                 *target = target.replace_hole(f);
             }
             Expr::AssumpByName(_) => {}
             Expr::Assume(e) => {
                 let ExprAssume {
+                    metadata: _,
                     local_axiom,
                     alias: _,
                     expr,
@@ -551,12 +703,17 @@ impl Expr {
                 expr.replace_hole(f);
             }
             Expr::App(e) => {
-                let ExprApp { expr1, expr2 } = e.as_mut();
+                let ExprApp {
+                    metadata: _,
+                    expr1,
+                    expr2,
+                } = e.as_mut();
                 expr1.replace_hole(f);
                 expr2.replace_hole(f);
             }
             Expr::Take(e) => {
                 let ExprTake {
+                    metadata: _,
                     name: _,
                     ty: _,
                     expr,
@@ -564,13 +721,21 @@ impl Expr {
                 expr.replace_hole(f);
             }
             Expr::Inst(e) => {
-                let ExprInst { expr, arg } = e.as_mut();
+                let ExprInst {
+                    metadata: _,
+                    expr,
+                    arg,
+                } = e.as_mut();
                 expr.replace_hole(f);
                 *arg = arg.replace_hole(f);
             }
             Expr::Const(_) => {}
             Expr::Change(e) => {
-                let ExprChange { target, expr } = e.as_mut();
+                let ExprChange {
+                    metadata: _,
+                    target,
+                    expr,
+                } = e.as_mut();
                 *target = target.replace_hole(f);
                 expr.replace_hole(f);
             }
@@ -626,7 +791,10 @@ impl Env<'_> {
     ) -> Term {
         match expr {
             Expr::Assump(e) => {
-                let ExprAssump { target } = &**e;
+                let ExprAssump {
+                    metadata: _,
+                    target,
+                } = &**e;
                 for local_axiom in &local_env.local_axioms {
                     if target.alpha_eq(&local_axiom.prop) {
                         return target.clone();
@@ -635,7 +803,7 @@ impl Env<'_> {
                 panic!("unknown assumption: {}", target);
             }
             Expr::AssumpByName(e) => {
-                let ExprAssumpByName { name } = &**e;
+                let ExprAssumpByName { metadata: _, name } = &**e;
                 for local_axiom in local_env.local_axioms.iter().rev() {
                     if local_axiom.name == Some(*name) {
                         return local_axiom.prop.clone();
@@ -645,6 +813,7 @@ impl Env<'_> {
             }
             Expr::Assume(e) => {
                 let ExprAssume {
+                    metadata: _,
                     local_axiom,
                     alias,
                     expr,
@@ -659,7 +828,11 @@ impl Env<'_> {
                 guard(&target, [p.prop])
             }
             Expr::App(e) => {
-                let ExprApp { expr1, expr2 } = &**e;
+                let ExprApp {
+                    metadata: _,
+                    expr1,
+                    expr2,
+                } = &**e;
                 let target = self.infer_prop(tt_local_env, local_env, expr1);
                 let Some((lhs, rhs)) = unguard1(&target) else {
                     panic!("implication expected, got {}", target);
@@ -668,7 +841,12 @@ impl Env<'_> {
                 rhs
             }
             Expr::Take(e) => {
-                let ExprTake { name, ty, expr } = &**e;
+                let ExprTake {
+                    metadata: _,
+                    name,
+                    ty,
+                    expr,
+                } = &**e;
                 self.tt_env.check_wft(tt_local_env, ty);
                 for c in &local_env.local_axioms {
                     if !c.prop.is_fresh(std::slice::from_ref(name)) {
@@ -686,7 +864,11 @@ impl Env<'_> {
                 generalize(&target, &[x])
             }
             Expr::Inst(e) => {
-                let ExprInst { expr, arg } = &**e;
+                let ExprInst {
+                    metadata: _,
+                    expr,
+                    arg,
+                } = &**e;
                 let target = self.infer_prop(tt_local_env, local_env, expr);
                 let Some((Local { name, ty }, mut body)) = ungeneralize1(&target) else {
                     panic!("∀ expected, got {}", target);
@@ -697,6 +879,7 @@ impl Env<'_> {
             }
             Expr::Const(e) => {
                 let ExprConst {
+                    metadata: _,
                     name,
                     ty_args,
                     instances,
@@ -745,7 +928,11 @@ impl Env<'_> {
                 target
             }
             Expr::Change(e) => {
-                let ExprChange { target, expr } = &**e;
+                let ExprChange {
+                    metadata: _,
+                    target,
+                    expr,
+                } = &**e;
                 self.tt_env.check_wff(tt_local_env, target);
                 let source = self.infer_prop(tt_local_env, local_env, expr);
                 if !self.tt_env.equiv(&source, target) {

@@ -5,4 +5,9 @@ expression: formatted
 error chain:
   - command error
   - unification failed: not an arrow: Prop
+2:12
+
+const foo : Prop
+           ^^^^^
+
 fixture: tests/proof_errors/not_an_arrow.shari

@@ -9,6 +9,7 @@ use std::{
 use anyhow::{bail, ensure};
 
 use crate::{
+    lex::Span,
     proof::{
         self, Axiom, Expr, ExprApp, ExprAssume, ExprAssump, ExprAssumpByName, ExprChange,
         ExprConst, ExprInst, ExprTake, LocalAxiom, generalize, guard, mk_expr_change, mk_type_prop,
@@ -24,8 +25,15 @@ use crate::{
 
 #[derive(Debug, Clone)]
 enum Error {
-    Visit(String),
+    Visit { message: String, span: Option<Span> },
     Join(Arc<(Error, Error)>),
+}
+
+fn visit_error(message: impl Into<String>, span: Option<Span>) -> Error {
+    Error::Visit {
+        message: message.into(),
+        span,
+    }
 }
 
 fn mk_error_join(e1: Error, e2: Error) -> Error {
@@ -35,7 +43,13 @@ fn mk_error_join(e1: Error, e2: Error) -> Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::Visit(s) => write!(f, "{}", s),
+            Error::Visit { message, span } => {
+                if let Some(span) = span {
+                    write!(f, "{}\n{}", message, span)
+                } else {
+                    write!(f, "{}", message)
+                }
+            }
             Error::Join(inner) => write!(f, "{}", inner.0),
         }
     }
@@ -187,7 +201,11 @@ impl<'a> Elaborator<'a> {
                 Ok(kind.clone())
             }
             Type::Arrow(t) => {
-                let TypeArrow { dom, cod } = &**t;
+                let TypeArrow {
+                    metadata: _,
+                    dom,
+                    cod,
+                } = &**t;
                 let dom_kind = self.visit_type(dom)?;
                 if !dom_kind.is_base() {
                     bail!("expected Type, but got {dom_kind}");
@@ -199,7 +217,11 @@ impl<'a> Elaborator<'a> {
                 Ok(Kind::base())
             }
             Type::App(t) => {
-                let TypeApp { fun, arg } = &**t;
+                let TypeApp {
+                    metadata: _,
+                    fun,
+                    arg,
+                } = &**t;
                 let fun_kind = self.visit_type(fun)?;
                 if fun_kind.is_base() {
                     bail!("too many type arguments: {fun} {arg}");
@@ -300,7 +322,8 @@ impl<'a> Elaborator<'a> {
                 let arg_ty = self.visit_term(arg)?;
                 let ret_ty = mk_fresh_type_hole();
 
-                let error = Error::Visit(format!("not an arrow: {}", fun_ty));
+                let error =
+                    visit_error(format!("not an arrow: {}", fun_ty), fun_ty.span().cloned());
                 self.push_type_constraint(fun_ty, mk_type_arrow(arg_ty, ret_ty.clone()), error);
 
                 Ok(ret_ty)
@@ -404,7 +427,7 @@ impl<'a> Elaborator<'a> {
                     return Ok(());
                 }
                 self.instance_holes.push((instance.name, class.clone()));
-                let error = Error::Visit("could not synthesize instance".to_string());
+                let error = visit_error("could not synthesize instance", None);
                 self.class_constraints.push((
                     self.tt_local_env.clone(),
                     instance.name,
@@ -420,10 +443,16 @@ impl<'a> Elaborator<'a> {
     fn visit_expr(&mut self, expr: &mut Expr) -> anyhow::Result<Term> {
         match expr {
             Expr::Assump(expr) => {
-                let ExprAssump { target } = expr.as_mut();
+                let ExprAssump {
+                    metadata: _,
+                    target,
+                } = expr.as_mut();
 
                 let target_ty = self.visit_term(target)?;
-                let error = Error::Visit(format!("not a proposition: {}", target_ty));
+                let error = visit_error(
+                    format!("not a proposition: {}", target_ty),
+                    target_ty.span().cloned(),
+                );
                 self.push_type_constraint(target_ty, mk_type_prop(), error);
 
                 let mut found = false;
@@ -441,7 +470,7 @@ impl<'a> Elaborator<'a> {
                 Ok(target.clone())
             }
             Expr::AssumpByName(expr) => {
-                let ExprAssumpByName { name } = expr.as_ref();
+                let ExprAssumpByName { metadata: _, name } = expr.as_ref();
 
                 for local in self.local_axioms.iter().rev() {
                     if local.name == Some(*name) {
@@ -453,13 +482,17 @@ impl<'a> Elaborator<'a> {
             }
             Expr::Assume(expr) => {
                 let ExprAssume {
+                    metadata: _,
                     local_axiom,
                     alias,
                     expr: inner,
                 } = expr.as_mut();
 
                 let local_axiom_ty = self.visit_term(local_axiom)?;
-                let error = Error::Visit(format!("not a proposition: {}", local_axiom_ty));
+                let error = visit_error(
+                    format!("not a proposition: {}", local_axiom_ty),
+                    local_axiom_ty.span().cloned(),
+                );
                 self.push_type_constraint(local_axiom_ty, mk_type_prop(), error);
 
                 self.local_axioms.push(LocalAxiom {
@@ -473,16 +506,23 @@ impl<'a> Elaborator<'a> {
                 Ok(target)
             }
             Expr::App(expr) => {
-                let ExprApp { expr1, expr2 } = expr.as_mut();
+                let ExprApp {
+                    metadata: _,
+                    expr1,
+                    expr2,
+                } = expr.as_mut();
 
                 let fun = self.visit_expr(expr1)?;
                 let arg = self.visit_expr(expr2)?;
 
                 if let Some((lhs, rhs)) = unguard1(&fun) {
-                    let error = Error::Visit(format!(
-                        "argument proposition mismatch: expected {}, but got {}",
-                        lhs, arg
-                    ));
+                    let error = visit_error(
+                        format!(
+                            "argument proposition mismatch: expected {}, but got {}",
+                            lhs, arg
+                        ),
+                        expr2.span().cloned(),
+                    );
                     self.push_term_constraint(self.tt_local_env.clone(), lhs.clone(), arg, error);
 
                     *expr2 = mk_expr_change(lhs, mem::take(expr2));
@@ -498,7 +538,10 @@ impl<'a> Elaborator<'a> {
                     self.tt_local_env.clone(),
                     fun,
                     target.clone(),
-                    Error::Visit(format!("not an implication: {}", expr1)),
+                    visit_error(
+                        format!("not an implication: {}", expr1),
+                        expr1.span().cloned(),
+                    ),
                 );
 
                 *expr1 = mk_expr_change(target, mem::take(expr1));
@@ -507,6 +550,7 @@ impl<'a> Elaborator<'a> {
             }
             Expr::Take(expr) => {
                 let ExprTake {
+                    metadata: _,
                     name,
                     ty,
                     expr: inner,
@@ -531,16 +575,23 @@ impl<'a> Elaborator<'a> {
                 Ok(target)
             }
             Expr::Inst(expr) => {
-                let ExprInst { expr: inner, arg } = expr.as_mut();
+                let ExprInst {
+                    metadata: _,
+                    expr: inner,
+                    arg,
+                } = expr.as_mut();
 
                 let forall = self.visit_expr(inner)?;
                 let arg_ty = self.visit_term(arg)?;
 
                 if let Some((binder, mut body)) = ungeneralize1(&forall) {
-                    let error = Error::Visit(format!(
-                        "type argument mismatch: expected {}, but got {}",
-                        binder.ty, arg_ty
-                    ));
+                    let error = visit_error(
+                        format!(
+                            "type argument mismatch: expected {}, but got {}",
+                            binder.ty, arg_ty
+                        ),
+                        arg.span().cloned(),
+                    );
                     self.push_type_constraint(binder.ty, arg_ty, error);
                     body = body.subst(&[(binder.name, arg.clone())]);
                     return Ok(body);
@@ -566,7 +617,7 @@ impl<'a> Elaborator<'a> {
                     self.tt_local_env.clone(),
                     forall,
                     target.clone(),
-                    Error::Visit(format!("not a forall: {}", inner)),
+                    visit_error(format!("not a forall: {}", inner), inner.span().cloned()),
                 );
 
                 *inner = mk_expr_change(target, mem::take(inner));
@@ -613,22 +664,29 @@ impl<'a> Elaborator<'a> {
             }
             Expr::Change(expr) => {
                 let ExprChange {
+                    metadata: _,
                     target,
                     expr: inner,
                 } = expr.as_mut();
 
                 let target_ty = self.visit_term(target)?;
-                let error = Error::Visit(format!("not a proposition: {}", target_ty));
+                let error = visit_error(
+                    format!("not a proposition: {}", target_ty),
+                    target_ty.span().cloned(),
+                );
                 self.push_type_constraint(target_ty, mk_type_prop(), error);
                 let expr_prop = self.visit_expr(inner)?;
                 self.push_term_constraint(
                     self.tt_local_env.clone(),
                     expr_prop.clone(),
                     target.clone(),
-                    Error::Visit(format!(
-                        "propositions mismatch in change: {}\ntarget = {}\nexpr_prop = {}",
-                        inner, target, expr_prop
-                    )),
+                    visit_error(
+                        format!(
+                            "propositions mismatch in change: {}\ntarget = {}\nexpr_prop = {}",
+                            inner, target, expr_prop
+                        ),
+                        inner.span().cloned(),
+                    ),
                 );
 
                 Ok(target.clone())
@@ -1002,12 +1060,16 @@ impl<'a> Elaborator<'a> {
     fn fully_inst_expr(&self, expr: &mut Expr) {
         match expr {
             Expr::Assump(expr) => {
-                let ExprAssump { target } = expr.as_mut();
+                let ExprAssump {
+                    metadata: _,
+                    target,
+                } = expr.as_mut();
                 *target = self.fully_inst(target);
             }
             Expr::AssumpByName(_) => {}
             Expr::Assume(expr) => {
                 let ExprAssume {
+                    metadata: _,
                     local_axiom,
                     alias: _,
                     expr: inner,
@@ -1016,12 +1078,17 @@ impl<'a> Elaborator<'a> {
                 self.fully_inst_expr(inner);
             }
             Expr::App(expr) => {
-                let ExprApp { expr1, expr2 } = expr.as_mut();
+                let ExprApp {
+                    metadata: _,
+                    expr1,
+                    expr2,
+                } = expr.as_mut();
                 self.fully_inst_expr(expr1);
                 self.fully_inst_expr(expr2);
             }
             Expr::Take(expr) => {
                 let ExprTake {
+                    metadata: _,
                     name: _,
                     ty,
                     expr: inner,
@@ -1030,12 +1097,17 @@ impl<'a> Elaborator<'a> {
                 self.fully_inst_expr(inner);
             }
             Expr::Inst(expr) => {
-                let ExprInst { expr: inner, arg } = expr.as_mut();
+                let ExprInst {
+                    metadata: _,
+                    expr: inner,
+                    arg,
+                } = expr.as_mut();
                 self.fully_inst_expr(inner);
                 *arg = self.fully_inst(arg);
             }
             Expr::Const(expr) => {
                 let ExprConst {
+                    metadata: _,
                     name: _,
                     ty_args,
                     instances,
@@ -1057,6 +1129,7 @@ impl<'a> Elaborator<'a> {
             }
             Expr::Change(expr) => {
                 let ExprChange {
+                    metadata: _,
                     target,
                     expr: inner,
                 } = expr.as_mut();
@@ -2277,7 +2350,7 @@ pub fn elaborate_term(
     let mut elab = Elaborator::new(proof_env, local_env, vec![]);
 
     let t = elab.visit_term(target)?;
-    let error = Error::Visit("type mismatch".to_string());
+    let error = visit_error("type mismatch", target.span().cloned());
     elab.push_type_constraint(t, ty.clone(), error);
 
     if let Err(error) = elab.solve() {
@@ -2326,7 +2399,10 @@ pub fn elaborate_expr(
         elab.tt_local_env.clone(),
         p,
         prop.clone(),
-        Error::Visit(format!("proposition mismatch: expected {prop}")),
+        visit_error(
+            format!("proposition mismatch: expected {prop}"),
+            e.span().cloned(),
+        ),
     );
 
     if let Err(error) = elab.solve() {
@@ -2497,7 +2573,7 @@ mod tests {
         println!("left: {left}");
         println!("right: {right}");
 
-        let error = Error::Visit("expected failure".to_string());
+        let error = visit_error("expected failure", None);
         elab.push_term_constraint(local_env.clone(), left, right, error);
 
         let result = elab.solve();

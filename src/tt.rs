@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::iter::zip;
@@ -5,7 +6,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::vec;
 
-use crate::proof::mk_type_prop;
+use crate::{lex::Span, proof::mk_type_prop};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
 pub struct Name(usize);
@@ -151,6 +152,31 @@ impl Kind {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct TypeMetadata {
+    pub span: Option<Span>,
+}
+
+impl PartialEq for TypeMetadata {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for TypeMetadata {}
+
+impl PartialOrd for TypeMetadata {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TypeMetadata {
+    fn cmp(&self, _: &Self) -> Ordering {
+        Ordering::Equal
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd)]
 pub enum Type {
     Const(Arc<TypeConst>),
@@ -162,28 +188,33 @@ pub enum Type {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct TypeConst {
+    pub metadata: TypeMetadata,
     pub name: QualifiedName,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct TypeArrow {
+    pub metadata: TypeMetadata,
     pub dom: Type,
     pub cod: Type,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct TypeApp {
+    pub metadata: TypeMetadata,
     pub fun: Type,
     pub arg: Type,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct TypeLocal {
+    pub metadata: TypeMetadata,
     pub name: Name,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct TypeHole {
+    pub metadata: TypeMetadata,
     pub name: Name,
 }
 
@@ -239,7 +270,11 @@ impl Display for Type {
 
 #[inline]
 pub fn mk_type_arrow(dom: Type, cod: Type) -> Type {
-    Type::Arrow(Arc::new(TypeArrow { dom, cod }))
+    Type::Arrow(Arc::new(TypeArrow {
+        metadata: TypeMetadata::default(),
+        dom,
+        cod,
+    }))
 }
 
 #[inline]
@@ -249,26 +284,83 @@ pub fn mk_fresh_type_hole() -> Type {
 
 #[inline]
 pub fn mk_type_hole(name: Name) -> Type {
-    Type::Hole(Arc::new(TypeHole { name }))
+    Type::Hole(Arc::new(TypeHole {
+        metadata: TypeMetadata::default(),
+        name,
+    }))
 }
 
 #[inline]
 pub fn mk_type_local(name: Name) -> Type {
-    Type::Local(Arc::new(TypeLocal { name }))
+    Type::Local(Arc::new(TypeLocal {
+        metadata: TypeMetadata::default(),
+        name,
+    }))
 }
 
 #[inline]
 pub fn mk_type_const(name: QualifiedName) -> Type {
-    Type::Const(Arc::new(TypeConst { name }))
+    Type::Const(Arc::new(TypeConst {
+        metadata: TypeMetadata::default(),
+        name,
+    }))
 }
 
 #[inline]
 pub fn mk_type_app(fun: Type, arg: Type) -> Type {
-    Type::App(Arc::new(TypeApp { fun, arg }))
+    Type::App(Arc::new(TypeApp {
+        metadata: TypeMetadata::default(),
+        fun,
+        arg,
+    }))
 }
 
 /// See [Barendregt+, 06](https://ftp.science.ru.nl/CSI/CompMath.Found/I.pdf).
 impl Type {
+    pub fn metadata(&self) -> &TypeMetadata {
+        match self {
+            Type::Const(inner) => &inner.metadata,
+            Type::Arrow(inner) => &inner.metadata,
+            Type::App(inner) => &inner.metadata,
+            Type::Local(inner) => &inner.metadata,
+            Type::Hole(inner) => &inner.metadata,
+        }
+    }
+
+    pub fn span(&self) -> Option<&Span> {
+        self.metadata().span.as_ref()
+    }
+
+    pub fn with_span(self, span: Option<Span>) -> Type {
+        match self {
+            Type::Const(inner) => {
+                let mut inner = Arc::unwrap_or_clone(inner);
+                inner.metadata.span = span;
+                Type::Const(Arc::new(inner))
+            }
+            Type::Arrow(inner) => {
+                let mut inner = Arc::unwrap_or_clone(inner);
+                inner.metadata.span = span;
+                Type::Arrow(Arc::new(inner))
+            }
+            Type::App(inner) => {
+                let mut inner = Arc::unwrap_or_clone(inner);
+                inner.metadata.span = span;
+                Type::App(Arc::new(inner))
+            }
+            Type::Local(inner) => {
+                let mut inner = Arc::unwrap_or_clone(inner);
+                inner.metadata.span = span;
+                Type::Local(Arc::new(inner))
+            }
+            Type::Hole(inner) => {
+                let mut inner = Arc::unwrap_or_clone(inner);
+                inner.metadata.span = span;
+                Type::Hole(Arc::new(inner))
+            }
+        }
+    }
+
     /// t.arrow([t1, t2]) // => t1 → t2 → t
     pub fn arrow(&self, cs: impl IntoIterator<Item = Type>) -> Type {
         let mut cod = self.clone();
@@ -797,17 +889,30 @@ impl Instance {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct TermMetadata {
+    pub span: Option<Span>,
     pub is_closed: bool,
     pub bound: usize,
     pub has_const: bool,
     pub has_hole: bool,
 }
 
+impl PartialEq for TermMetadata {
+    fn eq(&self, other: &Self) -> bool {
+        self.is_closed == other.is_closed
+            && self.bound == other.bound
+            && self.has_const == other.has_const
+            && self.has_hole == other.has_hole
+    }
+}
+
+impl Eq for TermMetadata {}
+
 impl Default for TermMetadata {
     fn default() -> Self {
         TermMetadata {
+            span: None,
             is_closed: true,
             bound: 0,
             has_const: false,
@@ -960,7 +1065,8 @@ impl Display for Term {
 }
 
 pub fn mk_abs(binder_name: Name, binder_type: Type, body: Term) -> Term {
-    let body_meta = *body.metadata();
+    let mut body_meta = body.metadata().clone();
+    body_meta.span = None;
     Term::Abs(Arc::new(TermAbs {
         metadata: body_meta,
         binder_type,
@@ -970,9 +1076,10 @@ pub fn mk_abs(binder_name: Name, binder_type: Type, body: Term) -> Term {
 }
 
 pub fn mk_app(fun: Term, arg: Term) -> Term {
-    let lhs = *fun.metadata();
-    let rhs = *arg.metadata();
+    let lhs = fun.metadata().clone();
+    let rhs = arg.metadata().clone();
     let metadata = TermMetadata {
+        span: None,
         is_closed: lhs.is_closed && rhs.is_closed,
         bound: lhs.bound.max(rhs.bound),
         has_const: lhs.has_const || rhs.has_const,
@@ -983,6 +1090,7 @@ pub fn mk_app(fun: Term, arg: Term) -> Term {
 
 pub fn mk_var(index: usize) -> Term {
     let metadata = TermMetadata {
+        span: None,
         is_closed: true,
         bound: index + 1,
         has_const: false,
@@ -993,6 +1101,7 @@ pub fn mk_var(index: usize) -> Term {
 
 pub fn mk_const(name: QualifiedName, ty_args: Vec<Type>, instances: Vec<Instance>) -> Term {
     let metadata = TermMetadata {
+        span: None,
         is_closed: true,
         bound: 0,
         has_const: true,
@@ -1008,6 +1117,7 @@ pub fn mk_const(name: QualifiedName, ty_args: Vec<Type>, instances: Vec<Instance
 
 pub fn mk_local(name: Name) -> Term {
     let metadata = TermMetadata {
+        span: None,
         is_closed: false,
         bound: 0,
         has_const: false,
@@ -1022,6 +1132,7 @@ pub fn mk_fresh_hole() -> Term {
 
 pub fn mk_hole(name: Name) -> Term {
     let metadata = TermMetadata {
+        span: None,
         is_closed: true,
         bound: 0,
         has_const: false,
@@ -1072,6 +1183,45 @@ impl Term {
             Term::Local(inner) => &inner.metadata,
             Term::Const(inner) => &inner.metadata,
             Term::Hole(inner) => &inner.metadata,
+        }
+    }
+
+    pub fn span(&self) -> Option<&Span> {
+        self.metadata().span.as_ref()
+    }
+
+    pub fn with_span(self, span: Option<Span>) -> Term {
+        match self {
+            Term::Var(inner) => {
+                let mut inner = Arc::unwrap_or_clone(inner);
+                inner.metadata.span = span;
+                Term::Var(Arc::new(inner))
+            }
+            Term::Abs(inner) => {
+                let mut inner = Arc::unwrap_or_clone(inner);
+                inner.metadata.span = span;
+                Term::Abs(Arc::new(inner))
+            }
+            Term::App(inner) => {
+                let mut inner = Arc::unwrap_or_clone(inner);
+                inner.metadata.span = span;
+                Term::App(Arc::new(inner))
+            }
+            Term::Local(inner) => {
+                let mut inner = Arc::unwrap_or_clone(inner);
+                inner.metadata.span = span;
+                Term::Local(Arc::new(inner))
+            }
+            Term::Const(inner) => {
+                let mut inner = Arc::unwrap_or_clone(inner);
+                inner.metadata.span = span;
+                Term::Const(Arc::new(inner))
+            }
+            Term::Hole(inner) => {
+                let mut inner = Arc::unwrap_or_clone(inner);
+                inner.metadata.span = span;
+                Term::Hole(Arc::new(inner))
+            }
         }
     }
 

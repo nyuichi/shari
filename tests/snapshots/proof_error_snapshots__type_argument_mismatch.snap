@@ -5,4 +5,9 @@ expression: formatted
 error chain:
   - command error
   - unification failed: type argument mismatch: expected Prop, but got (Prop → Prop) → Prop → Prop
+9:48
+
+lemma type_argument_mismatch : foo := @general[λ (x : Prop → Prop), x]
+                                               ^^^^^^^^^^^^^^^^^^^^^^
+
 fixture: tests/proof_errors/type_argument_mismatch.shari

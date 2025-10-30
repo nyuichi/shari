@@ -5,4 +5,9 @@ expression: formatted
 error chain:
   - command error
   - unification failed: not a proposition: Prop → Prop
+3:12
+
+const bad : Prop → Prop
+           ^^^^^^^^^^^^
+
 fixture: tests/proof_errors/change_target_not_proposition.shari

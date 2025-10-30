@@ -5,4 +5,9 @@ expression: formatted
 error chain:
   - command error
   - unification failed: not a forall: trivial
+6:28
+
+lemma not_a_forall : foo := @trivial[foo]
+                           ^^^^^^^^^
+
 fixture: tests/proof_errors/not_a_forall.shari

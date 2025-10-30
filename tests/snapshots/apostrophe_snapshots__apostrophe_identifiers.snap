@@ -1,6 +1,5 @@
 ---
 source: tests/apostrophe_snapshots.rs
-assertion_line: 50
 expression: report
 ---
 const_with_apostrophe:

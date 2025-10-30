@@ -7,7 +7,7 @@
  - [x] structures and instances
  - [x] type class
  - [x] calc environment
- - [ ] improved error reporting
+ - [x] improved error reporting
  - [ ] coercion
  - [ ] namespace
  - [ ] let expr

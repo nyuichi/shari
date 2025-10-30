@@ -16,7 +16,7 @@ use crate::tt::{
     mk_fresh_type_hole, mk_instance_hole, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
 };
 
-use crate::lex::{Lex, LexError, SourceInfo, Token, TokenKind};
+use crate::lex::{Lex, LexError, LexState, SourceInfo, Span, Token, TokenKind};
 use anyhow::bail;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -201,6 +201,22 @@ impl<'a> Parser<'a> {
             local_axioms: vec![],
             holes: vec![],
         }
+    }
+
+    fn span_since(&self, start: LexState) -> Span {
+        self.lex.span_since(start)
+    }
+
+    fn term_with_span(&mut self, start: LexState, term: Term) -> Term {
+        term.with_span(Some(self.span_since(start)))
+    }
+
+    fn type_with_span(&mut self, start: LexState, ty: Type) -> Type {
+        ty.with_span(Some(self.span_since(start)))
+    }
+
+    fn expr_with_span(&mut self, start: LexState, expr: Expr) -> Expr {
+        expr.with_span(Some(self.span_since(start)))
     }
 
     fn fail<R>(token: Token, message: impl Into<String>) -> Result<R, ParseError> {
@@ -412,7 +428,9 @@ impl<'a> Parser<'a> {
     }
 
     fn subty(&mut self, rbp: usize) -> Result<Type, ParseError> {
+        let start = self.lex.save();
         let mut t = self.type_primary()?;
+        t = self.type_with_span(start, t);
         while let Some(token) = self.peek_opt() {
             if token.is_symbol() && token.as_str() == "→" {
                 // type infixr → : 25
@@ -420,7 +438,9 @@ impl<'a> Parser<'a> {
                     break;
                 }
                 self.advance();
-                t = mk_type_arrow(t, self.subty(24)?);
+                let rhs = self.subty(24)?;
+                t = mk_type_arrow(t, rhs);
+                t = self.type_with_span(start, t);
             } else if token.is_symbol() && token.as_str() == "×" {
                 // type infixr × : 35
                 if rbp >= 35 {
@@ -429,6 +449,7 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let s = self.subty(34)?;
                 t = mk_type_const(QualifiedName::intern("prod")).apply([t, s]);
+                t = self.type_with_span(start, t);
             } else if token.is_ident()
                 || (token.is_symbol() && token.as_str() == "(")
                 || (token.is_symbol() && token.as_str() == "${")
@@ -436,7 +457,9 @@ impl<'a> Parser<'a> {
                 if rbp >= 1024 {
                     break;
                 }
-                t = t.apply([self.subty(1024)?]);
+                let arg = self.subty(1024)?;
+                t = t.apply([arg]);
+                t = self.type_with_span(start, t);
             } else {
                 break;
             }
@@ -659,6 +682,7 @@ impl<'a> Parser<'a> {
     }
 
     fn subterm(&mut self, rbp: usize) -> Result<Term, ParseError> {
+        let start = self.lex.save();
         let token = self.any_token()?;
         // nud
         let nud = match self.tt.get_nud(&token) {
@@ -691,6 +715,7 @@ impl<'a> Parser<'a> {
             Nud::Brace => self.term_sep(token)?,
             Nud::Pair => self.term_pair(token)?,
         };
+        left = self.term_with_span(start, left);
         while let Some(token) = self.peek_opt() {
             let led = match self.tt.get_led(&token) {
                 None => break,
@@ -704,6 +729,7 @@ impl<'a> Parser<'a> {
                 Led::App => {
                     let right = self.subterm(led.prec())?;
                     left = left.apply(vec![right]);
+                    left = self.term_with_span(start, left);
                 }
                 Led::User(op) => {
                     let prec = match op.fixity {
@@ -715,11 +741,12 @@ impl<'a> Parser<'a> {
                     let mut fun = self.term_var(token, Some(op.entity.clone()))?;
                     let right = self.subterm(prec)?;
                     fun = fun.apply(vec![left, right]);
-                    left = fun;
+                    left = self.term_with_span(start, fun);
                 }
                 Led::Proj(projection) => {
                     self.advance();
                     left = self.term_proj(left, projection);
+                    left = self.term_with_span(start, left);
                 }
             }
         }
@@ -802,6 +829,7 @@ impl<'a> Parser<'a> {
     }
 
     fn subexpr(&mut self, rbp: usize) -> Result<Expr, ParseError> {
+        let start = self.lex.save();
         // nud
         let mut left = 'left: {
             if let Some(_token) = self.expect_symbol_opt("(") {
@@ -987,6 +1015,7 @@ impl<'a> Parser<'a> {
                 }
             }
         };
+        left = self.expr_with_span(start, left);
         while let Some(token) = self.peek_opt() {
             enum ExprLed {
                 App,
@@ -1012,6 +1041,7 @@ impl<'a> Parser<'a> {
                 ExprLed::App => {
                     let right = self.subexpr(1024)?;
                     left = mk_expr_app(left, right);
+                    left = self.expr_with_span(start, left);
                 }
                 ExprLed::Inst => {
                     self.advance();
@@ -1026,11 +1056,13 @@ impl<'a> Parser<'a> {
                     let mut e = left;
                     for arg in args {
                         e = mk_expr_inst(e, arg);
+                        e = self.expr_with_span(start, e);
                     }
                     left = e;
                 }
             }
         }
+        left = self.expr_with_span(start, left);
         Ok(left)
     }
 
@@ -1855,6 +1887,7 @@ mod tests {
         };
 
         let ExprAssume {
+            metadata: _,
             local_axiom,
             alias,
             expr: body,
@@ -1866,7 +1899,7 @@ mod tests {
         let Expr::AssumpByName(assump) = body else {
             panic!("expected body to reference assumption alias");
         };
-        let ExprAssumpByName { name } = *assump;
+        let ExprAssumpByName { metadata: _, name } = *assump;
         assert_eq!(name, Name::intern("this"));
     }
 
@@ -1878,6 +1911,7 @@ mod tests {
         };
 
         let ExprAssume {
+            metadata: _,
             local_axiom: outer_axiom,
             alias: outer_alias,
             expr: outer_body,
@@ -1889,12 +1923,17 @@ mod tests {
         let Expr::App(app) = outer_body else {
             panic!("expected have expansion to be an application");
         };
-        let ExprApp { expr1, expr2 } = *app;
+        let ExprApp {
+            metadata: _,
+            expr1,
+            expr2,
+        } = *app;
 
         let Expr::Assume(inner_assume) = expr1 else {
             panic!("expected inner assume for have");
         };
         let ExprAssume {
+            metadata: _,
             local_axiom: inner_axiom,
             alias: inner_alias,
             expr: inner_body,
@@ -1904,13 +1943,19 @@ mod tests {
         let Expr::AssumpByName(inner_assump) = inner_body else {
             panic!("expected have body to reference alias");
         };
-        let ExprAssumpByName { name: inner_name } = *inner_assump;
+        let ExprAssumpByName {
+            metadata: _,
+            name: inner_name,
+        } = *inner_assump;
         assert_eq!(inner_name, Name::intern("this"));
 
         let Expr::AssumpByName(have_arg) = expr2 else {
             panic!("expected have argument to reference outer alias");
         };
-        let ExprAssumpByName { name: outer_name } = *have_arg;
+        let ExprAssumpByName {
+            metadata: _,
+            name: outer_name,
+        } = *have_arg;
         assert_eq!(outer_name, Name::intern("hp"));
     }
 

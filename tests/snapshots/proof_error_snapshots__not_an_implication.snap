@@ -5,4 +5,9 @@ expression: formatted
 error chain:
   - command error
   - unification failed: not an implication: «foo»
+6:52
+
+lemma not_an_implication : foo → foo := assume foo, «foo» «foo»
+                                                   ^^^^^^
+
 fixture: tests/proof_errors/not_an_implication.shari
