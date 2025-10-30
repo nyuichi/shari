@@ -1,10 +1,12 @@
 use log::{LevelFilter, Log, Metadata, Record};
-use shari::process;
+use shari::{process, File};
 use wasm_bindgen::prelude::*;
+use std::sync::Arc;
 
 #[wasm_bindgen]
 pub fn run_process(input: &str) -> String {
-    match process(input) {
+    let file = Arc::new(File::new("<playground>", input.to_owned()));
+    match process(file) {
         Ok(()) => "Success".to_string(),
         Err(e) => format!("Error: {:#}", e),
     }

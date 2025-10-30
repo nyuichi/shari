@@ -1,4 +1,4 @@
-use std::fmt::Write as _;
+use std::{fmt::Write as _, sync::Arc};
 
 fn format_error(err: &anyhow::Error) -> String {
     let mut lines = vec!["error chain:".to_string()];
@@ -33,7 +33,8 @@ fn apostrophe_identifiers_snapshot() {
 
     for (name, input) in cases {
         writeln!(report, "{name}:").expect("write succeeds");
-        match shari::process(input) {
+        let file = Arc::new(shari::File::new(format!("{name}.shari"), input.to_owned()));
+        match shari::process(file) {
             Ok(()) => {
                 writeln!(report, "  ok").expect("write succeeds");
             }

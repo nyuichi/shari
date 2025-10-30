@@ -1,6 +1,6 @@
 use anyhow::Context;
 use clap::{Arg, ArgAction, Command, ValueHint, value_parser};
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, sync::Arc};
 
 fn build_cli() -> Command {
     Command::new("shari")
@@ -28,12 +28,15 @@ fn main() -> anyhow::Result<()> {
     let matches = build_cli().get_matches();
 
     let prelude = include_str!("main.shari");
-    shari::process(prelude)?;
+    let prelude_file = Arc::new(shari::File::new("src/main.shari", prelude.to_owned()));
+    shari::process(prelude_file)?;
 
     if let Some(path) = matches.get_one::<PathBuf>("file") {
         let user_input = fs::read_to_string(path)
             .with_context(|| format!("failed to read `{}`", path.display()))?;
-        shari::process(&user_input)?;
+        let file_name = path.display().to_string();
+        let user_file = Arc::new(shari::File::new(file_name, user_input));
+        shari::process(user_file)?;
     }
 
     Ok(())

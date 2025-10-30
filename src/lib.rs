@@ -12,10 +12,12 @@ mod print;
 mod proof;
 mod tt;
 
-pub fn process(input: &str) -> anyhow::Result<()> {
+pub use lex::File;
+
+pub fn process(file: Arc<File>) -> anyhow::Result<()> {
     let mut eval = cmd::Eval::default();
 
-    let mut lex = Lex::new(Arc::new(input.to_owned()));
+    let mut lex = Lex::new(file);
 
     while !lex.is_eof() {
         let cmd = match Parser::new(

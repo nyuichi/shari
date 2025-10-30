@@ -5,63 +5,114 @@ use std::sync::{Arc, LazyLock};
 use regex::Regex;
 use thiserror::Error;
 
-#[derive(Debug, Clone)]
-pub struct SourceInfo {
-    line: usize,   // 1-origin
-    column: usize, // 1-origin
-    range: Range<usize>,
-    input: Arc<String>,
+#[derive(Debug)]
+pub struct File {
+    name: String,
+    contents: String,
+    lines: Vec<usize>,
 }
 
-impl SourceInfo {
-    pub fn eof(input: Arc<String>) -> Self {
-        let range = {
-            let last = input.chars().count();
-            last - 1..last
-        };
-        let (line, column) = {
-            let line = input.lines().count();
-            let last_line = input.lines().last().unwrap();
-            let column = last_line.chars().count() + 1;
-            (line, column)
-        };
+impl File {
+    pub fn new(name: impl Into<String>, contents: impl Into<String>) -> Self {
+        let name = name.into();
+        let contents = contents.into();
+        let mut lines = vec![0];
+        for (idx, ch) in contents.char_indices() {
+            if ch == '\n' {
+                lines.push(idx + ch.len_utf8());
+            }
+        }
         Self {
-            range,
-            input,
-            line,
-            column,
+            name,
+            contents,
+            lines,
         }
     }
 
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn contents(&self) -> &str {
+        &self.contents
+    }
+
+    pub fn len(&self) -> usize {
+        self.contents.len()
+    }
+
+    pub fn line_column_at(&self, offset: usize) -> (usize, usize) {
+        let offset = offset.min(self.contents.len());
+        let line_index = match self.lines.binary_search(&offset) {
+            Ok(index) => index,
+            Err(index) => index.saturating_sub(1),
+        };
+        let line_start = *self
+            .lines
+            .get(line_index)
+            .expect("at least one line start is recorded");
+        let column = self.contents[line_start..offset].chars().count() + 1;
+        (line_index + 1, column)
+    }
+
+    pub fn line(&self, line: usize) -> &str {
+        if line == 0 || line > self.lines.len() {
+            return "";
+        }
+        let start = self.lines[line - 1];
+        let end = if let Some(next_start) = self.lines.get(line) {
+            let mut end = *next_start;
+            if end > start && self.contents.as_bytes()[end - 1] == b'\n' {
+                end -= 1;
+            }
+            end
+        } else {
+            self.contents.len()
+        };
+        &self.contents[start..end]
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SourceInfo {
+    range: Range<usize>,
+    file: Arc<File>,
+}
+
+impl SourceInfo {
+    pub fn new(file: Arc<File>, range: Range<usize>) -> Self {
+        Self { range, file }
+    }
+
+    pub fn eof(file: Arc<File>) -> Self {
+        let len = file.len();
+        let start = len.saturating_sub(1);
+        Self::new(file, start..len)
+    }
+
     fn as_str(&self) -> &str {
-        self.input
+        self.file
+            .contents()
             .get(self.range.clone())
             .expect("invalid token position")
+    }
+
+    pub fn line_column(&self) -> (usize, usize) {
+        self.file.line_column_at(self.range.start)
     }
 }
 
 impl std::fmt::Display for SourceInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}:{}\n\n", self.line, self.column)?;
-        writeln!(
-            f,
-            "{}",
-            self.input
-                .lines()
-                .nth(self.line - 1)
-                .expect("invalid line number")
-        )?;
+        let (line, column) = self.line_column();
+        writeln!(f, "{}:{}:{}\n", self.file.name(), line, column)?;
+        let line_text = self.file.line(line);
+        writeln!(f, "{}", line_text)?;
         writeln!(
             f,
             "{}{}",
-            " ".repeat(self.column - 1),
-            "^".repeat(
-                self.input
-                    .get(self.range.clone())
-                    .unwrap_or("")
-                    .chars()
-                    .count()
-            )
+            " ".repeat(column - 1),
+            "^".repeat(std::cmp::max(1, self.as_str().chars().count()))
         )
     }
 }
@@ -111,80 +162,62 @@ impl std::fmt::Display for Token {
 
 #[derive(Debug, Clone)]
 pub struct Lex {
-    input: Arc<String>,
+    file: Arc<File>,
     position: usize,
-    line: usize,
-    column: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct LexState {
     position: usize,
-    line: usize,
-    column: usize,
 }
 
 #[derive(Debug, Clone, Error)]
-#[error("unrecognizable character at line {line}, column {column}")]
+#[error("unrecognizable character at {source_info}")]
 pub struct LexError {
-    line: usize,
-    column: usize,
+    source_info: SourceInfo,
 }
 
 impl From<Lex> for LexError {
     fn from(lex: Lex) -> Self {
+        let start = std::cmp::min(lex.position, lex.file.len());
+        let end = if start < lex.file.len() {
+            let rest = &lex.file.contents()[start..];
+            rest.chars()
+                .next()
+                .map(|c| start + c.len_utf8())
+                .unwrap_or(start)
+        } else {
+            start
+        };
         Self {
-            line: lex.line,
-            column: lex.column,
+            source_info: SourceInfo::new(lex.file, start..end),
         }
     }
 }
 
 impl Lex {
-    pub fn new(input: Arc<String>) -> Self {
-        Self {
-            input,
-            position: 0,
-            line: 1,
-            column: 1,
-        }
+    pub fn new(file: Arc<File>) -> Self {
+        Self { file, position: 0 }
     }
 
-    pub fn input(&self) -> &Arc<String> {
-        &self.input
+    pub fn input(&self) -> &Arc<File> {
+        &self.file
     }
 
     pub fn save(&self) -> LexState {
         LexState {
             position: self.position,
-            line: self.line,
-            column: self.column,
         }
     }
 
     pub fn restore(&mut self, state: LexState) {
         self.position = state.position;
-        self.line = state.line;
-        self.column = state.column;
     }
 
     fn advance(&mut self, bytes: usize) -> SourceInfo {
-        let source_info = SourceInfo {
-            range: self.position..self.position + bytes,
-            line: self.line,
-            column: self.column,
-            input: Arc::clone(&self.input),
-        };
-        let text = &self.input[self.position..self.position + bytes];
+        let source_info =
+            SourceInfo::new(Arc::clone(&self.file), self.position..self.position + bytes);
         self.position += bytes;
-        for c in text.chars() {
-            if c == '\n' {
-                self.line += 1;
-                self.column = 1;
-            } else {
-                self.column += 1;
-            }
-        }
         source_info
     }
 
@@ -234,11 +267,11 @@ impl Iterator for Lex {
             LazyLock::new(|| regex::Regex::new("^(?s:.*?)(?:(?P<start>/-)|(?P<end>-/))").unwrap());
 
         loop {
-            if self.input.len() == self.position {
+            if self.file.len() == self.position {
                 return None;
             }
-            let input = Arc::clone(&self.input);
-            let cap = match RE.captures(&input[self.position..]) {
+            let input = Arc::clone(&self.file);
+            let cap = match RE.captures(&input.contents()[self.position..]) {
                 None => return Some(Err(LexError::from(self.clone()))),
                 Some(cap) => cap,
             };
@@ -249,10 +282,12 @@ impl Iterator for Lex {
                 if m.as_str() == "/-" {
                     let mut nest = 1;
                     while nest != 0 {
-                        if self.input.len() == self.position {
+                        if self.file.len() == self.position {
                             return None;
                         }
-                        let cap = match RE_BLOCK_COMMENT.captures(&self.input[self.position..]) {
+                        let cap = match RE_BLOCK_COMMENT
+                            .captures(&self.file.contents()[self.position..])
+                        {
                             None => return Some(Err(LexError::from(self.clone()))),
                             Some(cap) => cap,
                         };
@@ -308,7 +343,8 @@ mod tests {
     use super::*;
 
     fn tokenize(input: &str) -> Vec<Token> {
-        Lex::new(Arc::new(input.to_owned()))
+        let file = Arc::new(File::new("<test>", input.to_owned()));
+        Lex::new(file)
             .map(|token| token.expect("lexing failed"))
             .collect()
     }

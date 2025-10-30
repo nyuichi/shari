@@ -16,7 +16,7 @@ const_starting_with_apostrophe:
   error
     error chain:
       - parse error
-      - parse error: expected identifier at 2:7
+      - parse error: expected identifier at const_starting_with_apostrophe.shari:2:7
     
     const 'x : Prop
           ^
