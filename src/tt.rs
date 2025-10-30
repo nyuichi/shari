@@ -85,6 +85,11 @@ impl Name {
         };
         n == *self
     }
+
+    // TODO: 自動生成されたNameに対してas_strできないようにする
+    pub fn as_str(&self) -> String {
+        self.nickname().unwrap_or_else(|| format!("{}", self))
+    }
 }
 
 impl Display for QualifiedName {
@@ -107,6 +112,18 @@ impl QualifiedName {
 
     pub fn as_str(&self) -> &str {
         self.0.as_str()
+    }
+
+    pub fn extend(&self, suffix: impl AsRef<str>) -> QualifiedName {
+        let suffix = suffix.as_ref();
+        if suffix.is_empty() {
+            return self.clone();
+        }
+        let mut value = String::with_capacity(self.as_str().len() + 1 + suffix.len());
+        value.push_str(self.as_str());
+        value.push('.');
+        value.push_str(suffix);
+        QualifiedName::intern(&value)
     }
 }
 

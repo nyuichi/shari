@@ -68,7 +68,8 @@ impl std::fmt::Display for SourceInfo {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
-    Ident,   // e.g. "foo", "α", "Prop", "foo.bar.baz"
+    Ident,   // e.g. "foo", "α", "Prop"
+    Field,   // e.g. ".foo", ".α"
     Symbol,  // e.g. "+", ":", "λ", ",", "_", "..."
     NumLit,  // e.g. "0", "42"
     Keyword, // e.g. "infixr", "def", "lemma"
@@ -200,6 +201,7 @@ impl Iterator for Lex {
         enum Kind {
             Space,
             Ident,
+            Field,
             Symbol,
             NumLit,
         }
@@ -209,7 +211,11 @@ impl Iterator for Lex {
                 (Kind::Space, r"\s+|--.*|/-"),
                 (
                     Kind::Ident,
-                    r"[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_']*(\.[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_']*)*",
+                    r"[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_']*",
+                ),
+                (
+                    Kind::Field,
+                    r"\.[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_']*",
                 ),
                 (
                     Kind::Symbol,
@@ -282,6 +288,8 @@ impl Iterator for Lex {
                         kind = TokenKind::Ident;
                     }
                 }
+            } else if cap.name(&format!("{:?}", Kind::Field)).is_some() {
+                kind = TokenKind::Field;
             } else if cap.name(&format!("{:?}", Kind::NumLit)).is_some() {
                 kind = TokenKind::NumLit;
             } else {
@@ -314,11 +322,45 @@ mod tests {
     }
 
     #[test]
+    fn dotted_ident_is_split_into_segments() {
+        let tokens = tokenize("foo.bar");
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, TokenKind::Ident);
+        assert_eq!(tokens[0].as_str(), "foo");
+        assert_eq!(tokens[1].kind, TokenKind::Field);
+        assert_eq!(tokens[1].as_str(), ".bar");
+    }
+
+    #[test]
+    fn dotted_ident_allows_whitespace_before_segment() {
+        let tokens = tokenize("foo .bar");
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, TokenKind::Ident);
+        assert_eq!(tokens[0].as_str(), "foo");
+        assert_eq!(tokens[1].kind, TokenKind::Field);
+        assert_eq!(tokens[1].as_str(), ".bar");
+    }
+
+    #[test]
     fn dotted_ident_with_apostrophe() {
         let tokens = tokenize("foo.bar'");
-        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens.len(), 2);
         assert_eq!(tokens[0].kind, TokenKind::Ident);
-        assert_eq!(tokens[0].as_str(), "foo.bar'");
+        assert_eq!(tokens[0].as_str(), "foo");
+        assert_eq!(tokens[1].kind, TokenKind::Field);
+        assert_eq!(tokens[1].as_str(), ".bar'");
+    }
+
+    #[test]
+    fn dot_followed_by_whitespace_is_invalid() {
+        let mut lex = Lex::new(Arc::new("foo . bar".to_owned()));
+        let first = lex
+            .next()
+            .expect("first token")
+            .expect("lexing first token");
+        assert_eq!(first.kind, TokenKind::Ident);
+        assert_eq!(first.as_str(), "foo");
+        assert!(matches!(lex.next(), Some(Err(_))));
     }
 
     #[test]

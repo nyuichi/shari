@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 use std::{collections::HashMap, iter::zip};
 
 use crate::tt::{
-    self, Class, Instance, Name, Local, QualifiedName, Term, Type, mk_abs, mk_const, mk_local,
+    self, Class, Instance, Local, Name, QualifiedName, Term, Type, mk_abs, mk_const, mk_local,
     mk_type_const,
 };
 
