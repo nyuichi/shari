@@ -16,7 +16,7 @@ use crate::tt::{
     mk_fresh_type_hole, mk_instance_hole, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
 };
 
-use crate::lex::{Lex, LexError, LexState, SourceInfo, Span, Token, TokenKind};
+use crate::lex::{Lex, LexError, LexState, Span, Token, TokenKind};
 use anyhow::bail;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -155,13 +155,10 @@ pub enum ParseError {
         #[from]
         lex_error: LexError,
     },
-    #[error("parse error: {message} at {source_info}")]
-    Parse {
-        message: String,
-        source_info: SourceInfo,
-    },
-    #[error("unexpected end of input at {source_info}")]
-    Eof { source_info: SourceInfo },
+    #[error("parse error: {message} at {span}")]
+    Parse { message: String, span: Span },
+    #[error("unexpected end of input at {span}")]
+    Eof { span: Span },
 }
 
 // TODO: instance lemma の中で hole を作ると引数にそれまでの instance def が入っちゃって後々 elab で const に置き換えられるので無駄。あと instance 自体の引数が2回ぐらい hole の引数に入ってしまうバグがありそう。
@@ -222,13 +219,13 @@ impl<'a> Parser<'a> {
     fn fail<R>(token: Token, message: impl Into<String>) -> Result<R, ParseError> {
         Err(ParseError::Parse {
             message: message.into(),
-            source_info: token.source_info,
+            span: token.span,
         })
     }
 
     fn eof_error(&self) -> ParseError {
         ParseError::Eof {
-            source_info: SourceInfo::eof(Arc::clone(self.lex.input())),
+            span: Span::eof(Arc::clone(self.lex.input())),
         }
     }
 
