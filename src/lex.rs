@@ -1,5 +1,4 @@
 use std::iter::FusedIterator;
-use std::ops::Range;
 use std::sync::{Arc, LazyLock};
 
 use regex::Regex;
@@ -89,59 +88,26 @@ impl Span {
         Self { file, start, end }
     }
 
-    pub fn to_source_info(&self) -> SourceInfo {
-        SourceInfo {
-            range: self.start..self.end,
-            file: Arc::clone(&self.file),
-        }
+    pub fn eof(file: Arc<File>) -> Self {
+        let len = file.len();
+        let start = len.saturating_sub(1);
+        Self::new(file, start, len)
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.file
+            .contents()
+            .get(self.start..self.end)
+            .expect("invalid token position")
+    }
+
+    pub fn line_column(&self) -> (usize, usize) {
+        self.file.line_column_at(self.start)
     }
 }
 
 impl std::fmt::Display for Span {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_source_info())
-    }
-}
-
-impl PartialEq for Span {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.file, &other.file) && self.start == other.start && self.end == other.end
-    }
-}
-
-impl Eq for Span {}
-
-#[derive(Debug, Clone)]
-pub struct SourceInfo {
-    range: Range<usize>,
-    file: Arc<File>,
-}
-
-impl SourceInfo {
-    pub fn new(file: Arc<File>, range: Range<usize>) -> Self {
-        Self { range, file }
-    }
-
-    pub fn eof(file: Arc<File>) -> Self {
-        let len = file.len();
-        let start = len.saturating_sub(1);
-        Self::new(file, start..len)
-    }
-
-    fn as_str(&self) -> &str {
-        self.file
-            .contents()
-            .get(self.range.clone())
-            .expect("invalid token position")
-    }
-
-    pub fn line_column(&self) -> (usize, usize) {
-        self.file.line_column_at(self.range.start)
-    }
-}
-
-impl std::fmt::Display for SourceInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let (line, column) = self.line_column();
         writeln!(f, "{}:{}:{}\n", self.file.name(), line, column)?;
         let line_text = self.file.line(line);
@@ -155,6 +121,14 @@ impl std::fmt::Display for SourceInfo {
     }
 }
 
+impl PartialEq for Span {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.file, &other.file) && self.start == other.start && self.end == other.end
+    }
+}
+
+impl Eq for Span {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
     Ident,   // e.g. "foo", "α", "Prop"
@@ -167,7 +141,7 @@ pub enum TokenKind {
 #[derive(Debug, Clone)]
 pub struct Token {
     pub kind: TokenKind,
-    pub source_info: SourceInfo,
+    pub span: Span,
 }
 
 impl Token {
@@ -188,13 +162,13 @@ impl Token {
     }
 
     pub fn as_str(&self) -> &str {
-        self.source_info.as_str()
+        self.span.as_str()
     }
 }
 
 impl std::fmt::Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:?} {}\n{}", self.kind, self.as_str(), self.source_info)
+        write!(f, "{:?} {}\n{}", self.kind, self.as_str(), self.span)
     }
 }
 
@@ -210,9 +184,9 @@ pub struct LexState {
 }
 
 #[derive(Debug, Clone, Error)]
-#[error("unrecognizable character at {source_info}")]
+#[error("unrecognizable character at {span}")]
 pub struct LexError {
-    source_info: SourceInfo,
+    span: Span,
 }
 
 impl From<Lex> for LexError {
@@ -228,7 +202,7 @@ impl From<Lex> for LexError {
             start
         };
         Self {
-            source_info: SourceInfo::new(lex.file, start..end),
+            span: Span::new(lex.file, start, end),
         }
     }
 }
@@ -252,11 +226,10 @@ impl Lex {
         self.position = state.position;
     }
 
-    fn advance(&mut self, bytes: usize) -> SourceInfo {
-        let source_info =
-            SourceInfo::new(Arc::clone(&self.file), self.position..self.position + bytes);
+    fn advance(&mut self, bytes: usize) -> Span {
+        let span = Span::new(Arc::clone(&self.file), self.position, self.position + bytes);
         self.position += bytes;
-        source_info
+        span
     }
 
     pub fn is_eof(&self) -> bool {
@@ -347,8 +320,8 @@ impl Iterator for Lex {
             }
 
             // change the position of the cursor
-            let source_info = self.advance(cap.get(0).unwrap().range().count());
-            let text = source_info.as_str();
+            let span = self.advance(cap.get(0).unwrap().range().count());
+            let text = span.as_str();
 
             let kind;
             if cap.name(&format!("{:?}", Kind::Ident)).is_some() {
@@ -373,7 +346,7 @@ impl Iterator for Lex {
                 assert!(cap.name(&format!("{:?}", Kind::Symbol)).is_some());
                 kind = TokenKind::Symbol;
             };
-            return Some(Ok(Token { kind, source_info }));
+            return Some(Ok(Token { kind, span }));
         }
     }
 }
