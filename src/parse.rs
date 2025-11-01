@@ -2,9 +2,9 @@ use crate::cmd::{
     ClassInstanceDef, ClassInstanceField, ClassInstanceLemma, ClassStructureAxiom,
     ClassStructureConst, ClassStructureField, Cmd, CmdAxiom, CmdClassInstance, CmdClassStructure,
     CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdInstance, CmdLemma,
-    CmdLocalTypeConst, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive,
-    Constructor, DataConstructor, Fixity, InstanceDef, InstanceField, InstanceLemma, Operator,
-    StructureAxiom, StructureConst, StructureField,
+    CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive, Constructor,
+    DataConstructor, Fixity, InstanceDef, InstanceField, InstanceLemma, Operator, StructureAxiom,
+    StructureConst, StructureField,
 };
 use crate::proof::{
     Axiom, Expr, count_forall, generalize, mk_expr_app, mk_expr_assume, mk_expr_assump,
@@ -184,7 +184,6 @@ impl<'a> Parser<'a> {
         const_table: &'a HashMap<QualifiedName, Const>,
         axiom_table: &'a HashMap<QualifiedName, Axiom>,
         class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
-        type_variables: Vec<Name>,
     ) -> Self {
         Self {
             lex,
@@ -193,7 +192,7 @@ impl<'a> Parser<'a> {
             const_table,
             axiom_table,
             class_predicate_table,
-            type_locals: type_variables,
+            type_locals: vec![],
             locals: vec![],
             local_axioms: vec![],
             holes: vec![],
@@ -339,14 +338,6 @@ impl<'a> Parser<'a> {
         Ok(token)
     }
 
-    fn expect_keyword(&mut self, kw: &str) -> Result<(), ParseError> {
-        let token = self.any_token()?;
-        if token.kind == TokenKind::Keyword && token.as_str() == kw {
-            return Ok(());
-        }
-        Self::fail(token, format!("expected keyword '{}'", kw))
-    }
-
     fn name(&mut self) -> Result<Name, ParseError> {
         Ok(Name::intern(self.ident()?.as_str()))
     }
@@ -465,15 +456,12 @@ impl<'a> Parser<'a> {
     }
 
     /// e.g. `"(x y : T)"`
-    fn typed_parameter(&mut self, _token: Token) -> Result<(Vec<(Name, Span)>, Type), ParseError> {
+    fn typed_parameter(&mut self, _token: Token) -> Result<(Vec<Name>, Type), ParseError> {
         let mut idents = vec![];
         // needs at least one parameter
-        let token = self.ident()?;
-        let name = Name::intern(token.as_str());
-        idents.push((name, token.span.clone()));
-        while let Some(token) = self.ident_opt() {
-            let name = Name::intern(token.as_str());
-            idents.push((name, token.span.clone()));
+        idents.push(self.name()?);
+        while let Some(name) = self.name_opt() {
+            idents.push(name);
         }
         self.expect_symbol(":")?;
         let t = self.ty()?;
@@ -486,7 +474,7 @@ impl<'a> Parser<'a> {
         let mut params = vec![];
         while let Some(token) = self.expect_symbol_opt("(") {
             let (names, ty) = self.typed_parameter(token)?;
-            for (name, _) in names {
+            for name in names {
                 params.push(Local {
                     name,
                     ty: ty.clone(),
@@ -496,17 +484,16 @@ impl<'a> Parser<'a> {
         Ok(params)
     }
 
-    fn parameters(&mut self) -> Result<Vec<(Name, Option<Type>, Span)>, ParseError> {
+    fn parameters(&mut self) -> Result<Vec<(Name, Option<Type>)>, ParseError> {
         let mut params = vec![];
         loop {
             if let Some(token) = self.expect_symbol_opt("(") {
                 let (names, t) = self.typed_parameter(token)?;
-                for (name, span) in names {
-                    params.push((name, Some(t.clone()), span));
+                for name in names {
+                    params.push((name, Some(t.clone())));
                 }
-            } else if let Some(token) = self.ident_opt() {
-                let name = Name::intern(token.as_str());
-                params.push((name, None, token.span.clone()));
+            } else if let Some(name) = self.name_opt() {
+                params.push((name, None));
             } else {
                 break;
             }
@@ -556,10 +543,10 @@ impl<'a> Parser<'a> {
             return Self::fail(token, "empty binding");
         }
         let mut binders = vec![];
-        for (name, ty, span) in params {
+        for (name, ty) in params {
             let ty = match ty {
                 Some(ty) => ty,
-                None => mk_fresh_type_hole().with_span(Some(span)),
+                None => mk_fresh_type_hole(),
             };
             binders.push(Local { name, ty });
         }
@@ -579,10 +566,10 @@ impl<'a> Parser<'a> {
             return Self::fail(token, "empty binding");
         }
         let mut binders = vec![];
-        for (name, ty, span) in params {
+        for (name, ty) in params {
             let ty = match ty {
                 Some(ty) => ty,
-                None => mk_fresh_type_hole().with_span(Some(span)),
+                None => mk_fresh_type_hole(),
             };
             binders.push(Local { name, ty });
         }
@@ -601,13 +588,12 @@ impl<'a> Parser<'a> {
     }
 
     fn term_sep(&mut self, _token: Token) -> Result<Term, ParseError> {
-        let token = self.ident()?;
-        let name = Name::intern(token.as_str());
+        let name = self.name()?;
         let ty;
         if let Some(_token) = self.expect_symbol_opt(":") {
             ty = self.ty()?;
         } else {
-            ty = mk_fresh_type_hole().with_span(Some(token.span.clone()));
+            ty = mk_fresh_type_hole();
         }
         let x = Local { name, ty };
         self.expect_symbol("|")?;
@@ -626,10 +612,7 @@ impl<'a> Parser<'a> {
         self.expect_symbol("⟩")?;
         let pair = mk_const(
             QualifiedName::intern("pair"),
-            vec![
-                mk_fresh_type_hole().with_span(fst.span().cloned()),
-                mk_fresh_type_hole().with_span(snd.span().cloned()),
-            ],
+            vec![mk_fresh_type_hole(), mk_fresh_type_hole()],
             vec![],
         );
         Ok(pair.apply(vec![fst, snd]))
@@ -638,10 +621,7 @@ impl<'a> Parser<'a> {
     fn term_proj(&mut self, term: Term, proj: Proj) -> Term {
         let proj = mk_const(
             proj.name(),
-            vec![
-                mk_fresh_type_hole().with_span(term.span().cloned()),
-                mk_fresh_type_hole().with_span(term.span().cloned()),
-            ],
+            vec![mk_fresh_type_hole(), mk_fresh_type_hole()],
             vec![],
         );
         proj.apply(vec![term])
@@ -679,7 +659,7 @@ impl<'a> Parser<'a> {
             }
         } else {
             for _ in 0..const_info.local_types.len() {
-                ty_args.push(mk_fresh_type_hole().with_span(Some(token.span.clone())));
+                ty_args.push(mk_fresh_type_hole());
             }
         }
         let mut instances = vec![];
@@ -719,7 +699,7 @@ impl<'a> Parser<'a> {
                 Fixity::Infix | Fixity::Infixl | Fixity::Infixr => unreachable!(),
             },
             Nud::NumLit => Self::fail(token, "numeric literal is unsupported")?,
-            Nud::Hole => self.mk_term_hole(Some(token.span.clone())),
+            Nud::Hole => self.mk_term_hole(),
             Nud::Brace => self.term_sep(token)?,
             Nud::Pair => self.term_pair(token)?,
         };
@@ -762,16 +742,12 @@ impl<'a> Parser<'a> {
     }
 
     // Returns (?M l₁ ⋯ lₙ) where ?M is fresh and l₁ ⋯ lₙ are the context in place.
-    fn mk_term_hole(&mut self, span: Option<Span>) -> Term {
+    fn mk_term_hole(&mut self) -> Term {
         let mut hole = mk_fresh_hole();
         let Term::Hole(inner) = &hole else {
             unreachable!()
         };
-        self.holes.push((
-            inner.name,
-            mk_fresh_type_hole().with_span(span.as_ref().cloned()),
-        ));
-        hole = hole.with_span(span);
+        self.holes.push((inner.name, mk_fresh_type_hole()));
         hole = hole.apply(self.locals.iter().map(|name| mk_local(*name)));
 
         hole
@@ -799,7 +775,7 @@ impl<'a> Parser<'a> {
             }
         } else {
             for _ in 0..axiom_info.local_types.len() {
-                ty_args.push(mk_fresh_type_hole().with_span(Some(token.span.clone())));
+                ty_args.push(mk_fresh_type_hole());
             }
         }
         let mut instances = vec![];
@@ -809,7 +785,7 @@ impl<'a> Parser<'a> {
         let mut expr = mk_expr_const(name.clone(), ty_args, instances);
         if auto_inst {
             for _ in 0..count_forall(&axiom_info.target) {
-                expr = mk_expr_inst(expr, self.mk_term_hole(Some(token.span.clone())));
+                expr = mk_expr_inst(expr, self.mk_term_hole());
             }
         }
         Ok(expr)
@@ -822,9 +798,7 @@ impl<'a> Parser<'a> {
     fn mk_eq(lhs: Term, rhs: Term) -> Term {
         let mut eq = mk_const(
             QualifiedName::intern("eq"),
-            vec![
-                mk_fresh_type_hole().with_span(lhs.span().cloned().or_else(|| rhs.span().cloned())),
-            ],
+            vec![mk_fresh_type_hole()],
             vec![],
         );
         eq = eq.apply([lhs, rhs]);
@@ -833,13 +807,11 @@ impl<'a> Parser<'a> {
 
     fn mk_eq_trans(&mut self, e1: Expr, e2: Expr) -> Expr {
         let name = QualifiedName::intern("eq.trans");
-        let ty_args =
-            vec![mk_fresh_type_hole().with_span(e1.span().cloned().or_else(|| e2.span().cloned()))];
+        let ty_args = vec![mk_fresh_type_hole()];
         let instances = vec![];
         let mut eq_trans = mk_expr_const(name, ty_args, instances);
         for _ in 0..3 {
-            let span = e1.span().cloned().or_else(|| e2.span().cloned());
-            eq_trans = mk_expr_inst(eq_trans, self.mk_term_hole(span));
+            eq_trans = mk_expr_inst(eq_trans, self.mk_term_hole());
         }
         mk_expr_app(mk_expr_app(eq_trans, e1), e2)
     }
@@ -971,8 +943,8 @@ impl<'a> Parser<'a> {
                         vec![ty.clone()],
                         vec![],
                     );
-                    let e = mk_expr_inst(e, self.mk_term_hole(Some(token.span.clone())));
-                    let e = mk_expr_inst(e, self.mk_term_hole(Some(token.span.clone())));
+                    let e = mk_expr_inst(e, self.mk_term_hole());
+                    let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_app(e, e1);
                     let e_body = mk_expr_assume(p, alias, e2);
                     let e_body = mk_expr_take(name, ty, e_body);
@@ -1169,10 +1141,6 @@ impl<'a> Parser<'a> {
                         let type_const_cmd = self.type_const_cmd(keyword)?;
                         Cmd::TypeConst(type_const_cmd)
                     }
-                    "variable" => {
-                        let local_type_const_cmd = self.local_type_const_cmd(keyword)?;
-                        Cmd::LocalTypeConst(local_type_const_cmd)
-                    }
                     "inductive" => {
                         let type_inductive_cmd = self.type_inductive_cmd(keyword)?;
                         Cmd::TypeInductive(type_inductive_cmd)
@@ -1209,12 +1177,6 @@ impl<'a> Parser<'a> {
                         return Self::fail(keyword, "unknown command");
                     }
                 }
-            }
-            "local" => {
-                self.expect_keyword("type")?;
-                self.expect_keyword("const")?;
-                let local_type_const_cmd = self.local_type_const_cmd(keyword)?;
-                Cmd::LocalTypeConst(local_type_const_cmd)
             }
             _ => {
                 return Self::fail(keyword, "expected command");
@@ -1428,14 +1390,6 @@ impl<'a> Parser<'a> {
         self.expect_symbol(":")?;
         let kind = self.kind()?;
         Ok(CmdTypeConst { name, kind })
-    }
-
-    fn local_type_const_cmd(&mut self, _token: Token) -> Result<CmdLocalTypeConst, ParseError> {
-        let mut variables = vec![];
-        while let Some(name) = self.name_opt() {
-            variables.push(name);
-        }
-        Ok(CmdLocalTypeConst { variables })
     }
 
     fn type_inductive_cmd(&mut self, _token: Token) -> Result<CmdTypeInductive, ParseError> {
@@ -1881,29 +1835,12 @@ mod tests {
             &consts,
             &axioms,
             &class_predicates,
-            vec![],
         );
         assert!(
             parser.const_table.contains_key(&QualifiedName::intern("p")),
             "const table missing p"
         );
         parser.expr().expect("expression parses")
-    }
-
-    fn parse_term(input: &str) -> Term {
-        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let file = Arc::new(File::new("<test>", input));
-        let mut lex = Lex::new(file);
-        let mut parser = Parser::new(
-            &mut lex,
-            &tt,
-            &type_consts,
-            &consts,
-            &axioms,
-            &class_predicates,
-            vec![],
-        );
-        parser.term().expect("term parses")
     }
 
     fn parse_qualified(input: &str) -> Result<QualifiedName, ParseError> {
@@ -1921,29 +1858,9 @@ mod tests {
             &const_table,
             &axiom_table,
             &class_predicate_table,
-            vec![],
         );
         let ident = parser.ident()?;
         Ok(parser.qualified_name(&ident))
-    }
-
-    #[test]
-    fn lambda_parameter_hole_has_variable_span() {
-        let term = parse_term("λ x, x");
-        let Term::Abs(abs) = term else {
-            panic!("expected lambda abstraction");
-        };
-        let Type::Hole(hole) = &abs.binder_type else {
-            panic!("expected binder type to be a hole");
-        };
-        let span = hole
-            .metadata
-            .span
-            .clone()
-            .expect("binder hole should record span");
-        let (line, column) = span.line_column();
-        assert_eq!(line, 1);
-        assert_eq!(column, 3);
     }
 
     #[test]

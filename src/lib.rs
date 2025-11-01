@@ -27,7 +27,6 @@ pub fn process(file: Arc<File>) -> anyhow::Result<()> {
             &eval.const_table,
             &eval.axiom_table,
             &eval.class_predicate_table,
-            eval.local_type_consts.clone(),
         )
         .cmd()
         {
