@@ -6,8 +6,8 @@ use std::{collections::HashMap, iter::zip};
 use crate::{
     lex::Span,
     tt::{
-        self, Class, Instance, Local, Name, QualifiedName, Term, Type, mk_abs, mk_const, mk_local,
-        mk_type_const,
+        self, Class, Id, Instance, Local, Name, QualifiedName, Term, Type, mk_abs, mk_const,
+        mk_local, mk_type_const,
     },
 };
 
@@ -46,10 +46,10 @@ pub fn count_forall(term: &Term) -> usize {
 pub fn generalize(term: &Term, xs: &[Local]) -> Term {
     static FORALL: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("forall"));
 
-    let locals = xs.iter().map(|x| x.name).collect::<Vec<_>>();
+    let locals = xs.iter().map(|x| x.id).collect::<Vec<_>>();
     let mut result = term.close(&locals, 0);
     for x in xs.iter().rev() {
-        result = mk_abs(x.name, x.ty.clone(), result);
+        result = mk_abs(x.id, x.ty.clone(), result);
         let mut c = mk_const(FORALL.clone(), vec![x.ty.clone()], vec![]);
         c = c.apply([result]);
         result = c;
@@ -85,13 +85,13 @@ pub fn ungeneralize1(term: &Term) -> Option<(Local, Term)> {
     let tt::TermAbs {
         metadata: _,
         binder_type,
-        binder_name,
+        binder_id,
         body,
     } = &**abs;
-    let name = Name::fresh_from(*binder_name);
-    let body = body.open(&[mk_local(name)], 0);
+    let id = Id::fresh_from(*binder_id);
+    let body = body.open(&[mk_local(id)], 0);
     let binder = Local {
-        name,
+        id,
         ty: binder_type.clone(),
     };
     Some((binder, body))
@@ -203,14 +203,14 @@ pub struct ExprAssump {
 #[derive(Debug, Clone)]
 pub struct ExprAssumpByName {
     pub metadata: ExprMetadata,
-    pub name: Name,
+    pub id: Id,
 }
 
 #[derive(Debug, Clone)]
 pub struct ExprAssume {
     pub metadata: ExprMetadata,
     pub local_axiom: Term,
-    pub alias: Option<Name>,
+    pub alias: Option<Id>,
     pub expr: Expr,
 }
 
@@ -224,7 +224,7 @@ pub struct ExprApp {
 #[derive(Debug, Clone)]
 pub struct ExprTake {
     pub metadata: ExprMetadata,
-    pub name: Name,
+    pub id: Id,
     pub ty: Type,
     pub expr: Expr,
 }
@@ -265,14 +265,14 @@ pub fn mk_expr_assump(m: Term) -> Expr {
     }))
 }
 
-pub fn mk_expr_assump_by_name(name: Name) -> Expr {
+pub fn mk_expr_assump_by_name(id: Id) -> Expr {
     Expr::AssumpByName(Box::new(ExprAssumpByName {
         metadata: ExprMetadata::default(),
-        name,
+        id,
     }))
 }
 
-pub fn mk_expr_assume(h: Term, alias: Option<Name>, e: Expr) -> Expr {
+pub fn mk_expr_assume(h: Term, alias: Option<Id>, e: Expr) -> Expr {
     Expr::Assume(Box::new(ExprAssume {
         metadata: ExprMetadata::default(),
         local_axiom: h,
@@ -289,10 +289,10 @@ pub fn mk_expr_app(e1: Expr, e2: Expr) -> Expr {
     }))
 }
 
-pub fn mk_expr_take(name: Name, ty: Type, e: Expr) -> Expr {
+pub fn mk_expr_take(id: Id, ty: Type, e: Expr) -> Expr {
     Expr::Take(Box::new(ExprTake {
         metadata: ExprMetadata::default(),
-        name,
+        id,
         ty,
         expr: e,
     }))
@@ -366,7 +366,7 @@ impl std::fmt::Display for Expr {
                     write!(f, "«{}»", e.target)?;
                 }
                 Expr::AssumpByName(e) => {
-                    write!(f, "{}", e.name)?;
+                    write!(f, "{}", e.id)?;
                 }
                 Expr::Assume(e) => {
                     write!(f, "assume {}", e.local_axiom)?;
@@ -382,7 +382,7 @@ impl std::fmt::Display for Expr {
                     fmt_expr(&e.expr2, f, PREC_INST)?;
                 }
                 Expr::Take(e) => {
-                    write!(f, "take ({} : {}), ", e.name, e.ty)?;
+                    write!(f, "take ({} : {}), ", e.id, e.ty)?;
                     fmt_expr(&e.expr, f, PREC_LOWEST)?;
                 }
                 Expr::Inst(_) => {
@@ -524,7 +524,7 @@ impl Expr {
             Expr::Take(e) => {
                 let ExprTake {
                     metadata: _,
-                    name: _,
+                    id: _,
                     ty: _,
                     expr,
                 } = &**e;
@@ -580,7 +580,7 @@ impl Expr {
             Expr::Take(e) => {
                 let ExprTake {
                     metadata: _,
-                    name: _,
+                    id: _,
                     ty,
                     expr,
                 } = &**e;
@@ -615,7 +615,7 @@ impl Expr {
         }
     }
 
-    pub fn subst(&mut self, subst: &[(Name, Term)]) {
+    pub fn subst(&mut self, subst: &[(Id, Term)]) {
         match self {
             Expr::Assump(e) => {
                 let ExprAssump {
@@ -649,7 +649,7 @@ impl Expr {
             Expr::Take(e) => {
                 let ExprTake {
                     metadata: _,
-                    name: _,
+                    id: _,
                     ty: _,
                     expr,
                 } = e.as_mut();
@@ -681,7 +681,7 @@ impl Expr {
 
     pub fn replace_hole<F>(&mut self, f: &F)
     where
-        F: Fn(Name) -> Option<Term>,
+        F: Fn(Id) -> Option<Term>,
     {
         match self {
             Expr::Assump(e) => {
@@ -714,7 +714,7 @@ impl Expr {
             Expr::Take(e) => {
                 let ExprTake {
                     metadata: _,
-                    name: _,
+                    id: _,
                     ty: _,
                     expr,
                 } = e.as_mut();
@@ -759,7 +759,7 @@ pub struct Env<'a> {
 
 #[derive(Debug, Clone)]
 pub struct LocalAxiom {
-    pub name: Option<Name>,
+    pub name: Option<Id>,
     pub prop: Term,
 }
 
@@ -803,13 +803,13 @@ impl Env<'_> {
                 panic!("unknown assumption: {}", target);
             }
             Expr::AssumpByName(e) => {
-                let ExprAssumpByName { metadata: _, name } = &**e;
+                let ExprAssumpByName { metadata: _, id } = &**e;
                 for local_axiom in local_env.local_axioms.iter().rev() {
-                    if local_axiom.name == Some(*name) {
+                    if local_axiom.name == Some(*id) {
                         return local_axiom.prop.clone();
                     }
                 }
-                panic!("unknown assumption alias: {}", name);
+                panic!("unknown assumption alias: {}", id);
             }
             Expr::Assume(e) => {
                 let ExprAssume {
@@ -843,19 +843,19 @@ impl Env<'_> {
             Expr::Take(e) => {
                 let ExprTake {
                     metadata: _,
-                    name,
+                    id,
                     ty,
                     expr,
                 } = &**e;
                 self.tt_env.check_wft(tt_local_env, ty);
                 for c in &local_env.local_axioms {
-                    if !c.prop.is_fresh(std::slice::from_ref(name)) {
+                    if !c.prop.is_fresh(std::slice::from_ref(id)) {
                         // eigenvariable condition fails
                         panic!("eigenvariable condition violated by {}", c.prop);
                     }
                 }
                 let param = Local {
-                    name: *name,
+                    id: *id,
                     ty: ty.clone(),
                 };
                 tt_local_env.locals.push(param);
@@ -870,11 +870,11 @@ impl Env<'_> {
                     arg,
                 } = &**e;
                 let target = self.infer_prop(tt_local_env, local_env, expr);
-                let Some((Local { name, ty }, mut body)) = ungeneralize1(&target) else {
+                let Some((Local { id, ty }, mut body)) = ungeneralize1(&target) else {
                     panic!("∀ expected, got {}", target);
                 };
                 self.tt_env.check_type(tt_local_env, arg, &ty);
-                body = body.subst(&[(name, arg.clone())]);
+                body = body.subst(&[(id, arg.clone())]);
                 body
             }
             Expr::Const(e) => {
@@ -903,9 +903,9 @@ impl Env<'_> {
                 for ty_arg in ty_args {
                     self.tt_env.check_wft(tt_local_env, ty_arg);
                 }
-                let mut type_subst = vec![];
-                for (&x, t) in zip(local_types, ty_args) {
-                    type_subst.push((x, t.clone()))
+                let mut type_subst = Vec::with_capacity(local_types.len());
+                for (x, t) in zip(local_types, ty_args) {
+                    type_subst.push((x.clone(), t.clone()))
                 }
                 if local_classes.len() != instances.len() {
                     panic!(

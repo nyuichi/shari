@@ -1,7 +1,7 @@
 use crate::{
     cmd::{Fixity, Operator},
     proof::Axiom,
-    tt::{Class, ClassType, Const, Ctor, Kind, Name, QualifiedName, Term, Type},
+    tt::{Class, ClassType, Const, Ctor, Id, Kind, QualifiedName, Term, Type},
 };
 
 use anyhow::bail;
@@ -26,15 +26,16 @@ impl OpTable {
     }
 }
 
-fn uniquify_binder_name(binder_name: Name, body: &Term, local_names: &[String]) -> String {
+fn uniquify_binder_name(binder_id: Id, body: &Term, local_names: &[String]) -> String {
     const DEFAULT_NAME: &str = "x";
     const SUBSCRIPT_DIGITS: [char; 10] = ['₀', '₁', '₂', '₃', '₄', '₅', '₆', '₇', '₈', '₉'];
 
     // avoid empty names, default to "x". this choice is arbitrary.
-    let nickname = binder_name
-        .nickname()
+    let name = binder_id
+        .name()
+        .map(|name| name.as_str().to_owned())
         .unwrap_or_else(|| DEFAULT_NAME.to_string());
-    let mut x = nickname.clone();
+    let mut x = name.clone();
     'refresh: for refresh_index in 0.. {
         if refresh_index > 0 {
             let mut n = refresh_index;
@@ -44,7 +45,7 @@ fn uniquify_binder_name(binder_name: Name, body: &Term, local_names: &[String]) 
                 chars.push(SUBSCRIPT_DIGITS[d]);
                 n /= 10;
             }
-            x = format!("{}{}", nickname, chars.iter().rev().collect::<String>());
+            x = format!("{}{}", name, chars.iter().rev().collect::<String>());
         }
         // TODO: ensure also that x is not used as a global name
         for (i, local_name) in local_names.iter().rev().enumerate() {
@@ -79,7 +80,7 @@ impl<'a> Printer<'a> {
     ) -> (Vec<(String, Type)>, Term) {
         let mut binders = Vec::new();
         while let Term::Abs(inner) = &term {
-            let binder = uniquify_binder_name(inner.binder_name, &inner.body, local_names);
+            let binder = uniquify_binder_name(inner.binder_id, &inner.body, local_names);
             binders.push((binder.clone(), inner.binder_type.clone()));
             local_names.push(binder);
             term = inner.body.clone();
@@ -96,7 +97,7 @@ impl<'a> Printer<'a> {
         let mut binders = Vec::new();
         loop {
             while let Term::Abs(inner) = &term {
-                let binder = uniquify_binder_name(inner.binder_name, &inner.body, local_names);
+                let binder = uniquify_binder_name(inner.binder_id, &inner.body, local_names);
                 binders.push((binder.clone(), inner.binder_type.clone()));
                 local_names.push(binder);
                 term = inner.body.clone();
@@ -309,10 +310,10 @@ impl<'a> Printer<'a> {
                 }
             }
             Term::Local(inner) => {
-                write!(f, "{}", inner.name)
+                write!(f, "{}", inner.id)
             }
             Term::Hole(inner) => {
-                write!(f, "?{}", inner.name)
+                write!(f, "?{}", inner.id)
             }
             Term::Const(inner) => {
                 write!(f, "{}", inner.name)?;
@@ -399,7 +400,7 @@ impl<'a> Printer<'a> {
                 }
                 Ok(())
             }
-            Type::Hole(inner) => write!(f, "{}", inner.name),
+            Type::Hole(inner) => write!(f, "{}", inner.id),
             Type::Local(inner) => write!(f, "{}", inner.name),
         }
     }

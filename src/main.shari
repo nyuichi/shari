@@ -1670,11 +1670,14 @@ structure W.el u v := {
 }
 
 -- type infixr × : 35
+
+local type const u v
+
 -- TODO: use namespace
 def star : unit := unit.star
 -- def inl : u → sum u v := sum.inl
 -- def inr : v → sum u v := sum.inr
-def none.{u} : option u := option.none
+def none : option u := option.none
 -- def some : u → option u := option.some
 
 lemma unit.eta_expand (x : unit) : x = star :=
