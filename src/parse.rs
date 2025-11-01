@@ -758,7 +758,7 @@ impl<'a> Parser<'a> {
         let Term::Hole(inner) = &hole else {
             unreachable!()
         };
-        self.holes.push((inner.name, mk_fresh_type_hole()));
+        self.holes.push((inner.id, mk_fresh_type_hole()));
         hole = hole.apply(self.locals.iter().map(|name| mk_local(*name)));
 
         hole
@@ -1423,7 +1423,7 @@ impl<'a> Parser<'a> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
         let local_type_name = Name::intern(name.as_str());
-        let local_name = Id::from_name(local_type_name.clone());
+        let local_id = Id::from_name(local_type_name.clone());
         self.type_locals.push(local_type_name.clone());
 
         let mut local_types = vec![];
@@ -1457,7 +1457,7 @@ impl<'a> Parser<'a> {
         self.type_locals.pop();
         Ok(CmdTypeInductive {
             name,
-            local_name,
+            local_id,
             local_types,
             ctors,
         })
@@ -1466,8 +1466,8 @@ impl<'a> Parser<'a> {
     fn inductive_cmd(&mut self, _token: Token) -> Result<CmdInductive, ParseError> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
-        let local_name = Id::from_name(Name::intern(name.as_str()));
-        self.locals.push(local_name);
+        let local_id = Id::from_name(Name::intern(name.as_str()));
+        self.locals.push(local_id);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.type_locals.push(ty.clone());
@@ -1507,7 +1507,7 @@ impl<'a> Parser<'a> {
             .truncate(self.type_locals.len() - local_types.len());
         Ok(CmdInductive {
             name,
-            local_name,
+            local_id,
             local_types,
             ctors,
             params,
@@ -1910,8 +1910,8 @@ mod tests {
         let Expr::AssumpByName(assump) = body else {
             panic!("expected body to reference assumption alias");
         };
-        let ExprAssumpByName { metadata: _, name } = *assump;
-        assert_eq!(name, Id::from_name(Name::intern("this")));
+        let ExprAssumpByName { metadata: _, id } = *assump;
+        assert_eq!(id, Id::from_name(Name::intern("this")));
     }
 
     #[test]
@@ -1956,18 +1956,18 @@ mod tests {
         };
         let ExprAssumpByName {
             metadata: _,
-            name: inner_name,
+            id: inner_id,
         } = *inner_assump;
-        assert_eq!(inner_name, Id::from_name(Name::intern("this")));
+        assert_eq!(inner_id, Id::from_name(Name::intern("this")));
 
         let Expr::AssumpByName(have_arg) = expr2 else {
             panic!("expected have argument to reference outer alias");
         };
         let ExprAssumpByName {
             metadata: _,
-            name: outer_name,
+            id: outer_id,
         } = *have_arg;
-        assert_eq!(outer_name, Id::from_name(Name::intern("hp")));
+        assert_eq!(outer_id, Id::from_name(Name::intern("hp")));
     }
 
     #[test]

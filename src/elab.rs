@@ -268,17 +268,17 @@ impl<'a> Elaborator<'a> {
     fn visit_term(&mut self, m: &Term) -> anyhow::Result<Type> {
         match m {
             Term::Local(inner) => {
-                let name = inner.name;
+                let id = inner.id;
                 for local in &self.tt_local_env.locals {
-                    if local.id == name {
+                    if local.id == id {
                         return Ok(local.ty.clone());
                     }
                 }
-                bail!("unknown local variable: {name}");
+                bail!("unknown local variable: {id}");
             }
             Term::Hole(inner) => {
                 for (local, ty) in &self.term_holes {
-                    if *local == inner.name {
+                    if *local == inner.id {
                         return Ok(ty.clone());
                     }
                 }
@@ -291,7 +291,7 @@ impl<'a> Elaborator<'a> {
                 let TermAbs {
                     metadata: _,
                     binder_type,
-                    binder_name: _,
+                    binder_id: _,
                     body,
                 } = &**m;
 
@@ -419,18 +419,18 @@ impl<'a> Elaborator<'a> {
                 if let Some((_, c)) = self
                     .instance_holes
                     .iter()
-                    .find(|&&(hole, _)| hole == instance.name)
+                    .find(|&&(hole, _)| hole == instance.id)
                 {
                     if c != class {
                         bail!("class mismatch");
                     }
                     return Ok(());
                 }
-                self.instance_holes.push((instance.name, class.clone()));
+                self.instance_holes.push((instance.id, class.clone()));
                 let error = visit_error("could not synthesize instance", None);
                 self.class_constraints.push((
                     self.tt_local_env.clone(),
-                    instance.name,
+                    instance.id,
                     class.clone(),
                     error,
                 ));
@@ -470,15 +470,15 @@ impl<'a> Elaborator<'a> {
                 Ok(target.clone())
             }
             Expr::AssumpByName(expr) => {
-                let ExprAssumpByName { metadata: _, name } = expr.as_ref();
+                let ExprAssumpByName { metadata: _, id } = expr.as_ref();
 
                 for local in self.local_axioms.iter().rev() {
-                    if local.name == Some(*name) {
+                    if local.name == Some(*id) {
                         return Ok(local.prop.clone());
                     }
                 }
 
-                bail!("assumption alias not found: {name}");
+                bail!("assumption alias not found: {id}");
             }
             Expr::Assume(expr) => {
                 let ExprAssume {
@@ -551,21 +551,18 @@ impl<'a> Elaborator<'a> {
             Expr::Take(expr) => {
                 let ExprTake {
                     metadata: _,
-                    name,
+                    id,
                     ty,
                     expr: inner,
                 } = expr.as_mut();
-                let name = *name;
+                let id = *id;
 
                 let ty_kind = self.visit_type(ty)?;
                 if !ty_kind.is_base() {
                     bail!("expected Type, but got {ty_kind}");
                 }
 
-                let x = Local {
-                    id: name,
-                    ty: ty.clone(),
-                };
+                let x = Local { id, ty: ty.clone() };
                 self.tt_local_env.locals.push(x);
                 let mut target = self.visit_expr(inner)?;
                 let x = self.tt_local_env.locals.pop().unwrap();
@@ -784,18 +781,18 @@ impl<'a> Elaborator<'a> {
 
     fn watch(&mut self, c: Rc<EqConstraint>) {
         if let Term::Hole(left_head) = c.left.head() {
-            let hole = left_head.name;
+            let hole = left_head.id;
             self.watch_list.entry(hole).or_default().push(c.clone());
         }
         if let Term::Hole(right_head) = c.right.head() {
-            let hole = right_head.name;
+            let hole = right_head.id;
             self.watch_list.entry(hole).or_default().push(c.clone());
         }
     }
 
     fn unwatch(&mut self, c: &Rc<EqConstraint>) {
         if let Term::Hole(left_head) = c.left.head() {
-            let hole = left_head.name;
+            let hole = left_head.id;
             let watch_list = self.watch_list.get_mut(&hole).unwrap();
             let mut index = 0;
             for i in (0..watch_list.len()).rev() {
@@ -807,7 +804,7 @@ impl<'a> Elaborator<'a> {
             watch_list.swap_remove(index);
         }
         if let Term::Hole(right_head) = c.right.head() {
-            let hole = right_head.name;
+            let hole = right_head.id;
             let watch_list = self.watch_list.get_mut(&hole).unwrap();
             let mut index = 0;
             for i in (0..watch_list.len()).rev() {
@@ -847,7 +844,7 @@ impl<'a> Elaborator<'a> {
             && let Instance::Hole(hole) = &left_head.instances[0]
         {
             self.instance_watch_list
-                .entry(hole.name)
+                .entry(hole.id)
                 .or_default()
                 .push(c.clone());
             // we don't need to watch the right head.
@@ -858,7 +855,7 @@ impl<'a> Elaborator<'a> {
             && let Instance::Hole(hole) = &right_head.instances[0]
         {
             self.instance_watch_list
-                .entry(hole.name)
+                .entry(hole.id)
                 .or_default()
                 .push(c.clone());
         }
@@ -869,8 +866,8 @@ impl<'a> Elaborator<'a> {
             && self.proof_env.tt_env.has_kappa(left_head.name.clone())
             && let Instance::Hole(hole) = &left_head.instances[0]
         {
-            let hole_name = hole.name;
-            let instance_watch_list = self.instance_watch_list.get_mut(&hole_name).unwrap();
+            let hole_id = hole.id;
+            let instance_watch_list = self.instance_watch_list.get_mut(&hole_id).unwrap();
             let mut index = 0;
             for i in (0..instance_watch_list.len()).rev() {
                 if Rc::ptr_eq(&instance_watch_list[i], c) {
@@ -885,8 +882,8 @@ impl<'a> Elaborator<'a> {
             && self.proof_env.tt_env.has_kappa(right_head.name.clone())
             && let Instance::Hole(hole) = &right_head.instances[0]
         {
-            let hole_name = hole.name;
-            let instance_watch_list = self.instance_watch_list.get_mut(&hole_name).unwrap();
+            let hole_id = hole.id;
+            let instance_watch_list = self.instance_watch_list.get_mut(&hole_id).unwrap();
             let mut index = 0;
             for i in (0..instance_watch_list.len()).rev() {
                 if Rc::ptr_eq(&instance_watch_list[i], c) {
@@ -906,10 +903,10 @@ impl<'a> Elaborator<'a> {
             Term::Local(_) => true,
             Term::Const(_) => true,
             Term::Hole(inner) => {
-                if inner.name == hole {
+                if inner.id == hole {
                     return false;
                 }
-                let Some(target) = self.subst_map.get(&inner.name) else {
+                let Some(target) = self.subst_map.get(&inner.id) else {
                     return true;
                 };
                 self.occur_check(target, hole)
@@ -924,16 +921,16 @@ impl<'a> Elaborator<'a> {
             let Term::Hole(head) = head else {
                 return None;
             };
-            let target = self.subst_map.get(&head.name)?;
+            let target = self.subst_map.get(&head.id)?;
             Some(target.clone())
         })
     }
 
     fn inst_type_head(&self, ty: &Type) -> Option<Type> {
-        let Type::Hole(name) = ty else {
+        let Type::Hole(hole) = ty else {
             return None;
         };
-        self.type_subst_map.get(&name.name).cloned()
+        self.type_subst_map.get(&hole.id).cloned()
     }
 
     fn inst_recv(&self, m: &Term) -> Option<Term> {
@@ -950,7 +947,7 @@ impl<'a> Elaborator<'a> {
             let Instance::Hole(hole) = &head_const.instances[0] else {
                 return None;
             };
-            let instance = self.instance_subst_map.get(&hole.name).cloned()?;
+            let instance = self.instance_subst_map.get(&hole.id).cloned()?;
             let mut instances = head_const.instances.clone();
             instances[0] = instance;
             Some(mk_const(
@@ -980,15 +977,15 @@ impl<'a> Elaborator<'a> {
     }
 
     fn fully_inst(&self, m: &Term) -> Term {
-        m.replace_hole(&|name| self.subst_map.get(&name).map(|m| self.fully_inst(m)))
+        m.replace_hole(&|id| self.subst_map.get(&id).map(|m| self.fully_inst(m)))
             .replace_type(&|ty| self.fully_inst_type(ty))
             .replace_instance(&|instance| self.fully_inst_instance(instance))
     }
 
     fn fully_inst_type(&self, t: &Type) -> Type {
-        t.replace_hole(&|name| {
+        t.replace_hole(&|id| {
             self.type_subst_map
-                .get(&name)
+                .get(&id)
                 .map(|ty| self.fully_inst_type(ty))
         })
     }
@@ -1049,7 +1046,7 @@ impl<'a> Elaborator<'a> {
                 }
             }
             Instance::Hole(hole) => {
-                let Some(target) = self.instance_subst_map.get(&hole.name) else {
+                let Some(target) = self.instance_subst_map.get(&hole.id) else {
                     return instance.clone();
                 };
                 self.fully_inst_instance(target)
@@ -1089,7 +1086,7 @@ impl<'a> Elaborator<'a> {
             Expr::Take(expr) => {
                 let ExprTake {
                     metadata: _,
-                    name: _,
+                    id: _,
                     ty,
                     expr: inner,
                 } = expr.as_mut();
@@ -1279,12 +1276,12 @@ impl<'a> Elaborator<'a> {
                 // skip constraints already resolved anyway
                 if c.left.head().alpha_eq(&mk_hole(id)) {
                     if let Term::Hole(right_hole) = c.right.head()
-                        && self.subst_map.contains_key(&right_hole.name)
+                        && self.subst_map.contains_key(&right_hole.id)
                     {
                         continue;
                     }
                 } else if let Term::Hole(left_hole) = c.left.head()
-                    && self.subst_map.contains_key(&left_hole.name)
+                    && self.subst_map.contains_key(&left_hole.id)
                 {
                     continue;
                 }
@@ -1401,8 +1398,8 @@ impl<'a> Elaborator<'a> {
                 self.push_type_constraint(inner1.fun, inner2.fun, error.clone());
                 self.push_type_constraint(inner1.arg, inner2.arg, error);
             }
-            (Type::Hole(name), t) | (t, Type::Hole(name)) => {
-                let hole_name = name.name;
+            (Type::Hole(hole), t) | (t, Type::Hole(hole)) => {
+                let hole_name = hole.id;
                 let t = self.fully_inst_type(&t); // TODO: avoid instantiation
                 if t.contains_hole(hole_name) {
                     return Some(error);
@@ -1510,7 +1507,7 @@ impl<'a> Elaborator<'a> {
                 let TermAbs {
                     metadata: _,
                     binder_type: right_binder_type,
-                    binder_name: _,
+                    binder_id: _,
                     body: right_body,
                 } = {
                     let Term::Abs(right_inner) = right else {
@@ -1533,7 +1530,7 @@ impl<'a> Elaborator<'a> {
         }
         // then each of the heads can be a local, a const, or a hole
         if let Term::Hole(right_head) = right.head() {
-            let right_head = right_head.name;
+            let right_head = right_head.id;
             right = self.inst_arg_head(&right);
             if let Some(args) = right.is_pattern()
                 && self.occur_check(&left, right_head)
@@ -1552,7 +1549,7 @@ impl<'a> Elaborator<'a> {
             }
         }
         if let Term::Hole(left_head) = left.head() {
-            let left_head = left_head.name;
+            let left_head = left_head.id;
             left = self.inst_arg_head(&left);
             if let Some(args) = left.is_pattern()
                 && self.occur_check(&right, left_head)
@@ -1576,7 +1573,7 @@ impl<'a> Elaborator<'a> {
         }
         // then each of the heads can be a local or a const.
         if let (Term::Local(left_head), Term::Local(right_head)) = (left.head(), right.head()) {
-            if left_head.name != right_head.name {
+            if left_head.id != right_head.id {
                 return Some(error);
             }
             let left_args = left.args();
@@ -1611,7 +1608,7 @@ impl<'a> Elaborator<'a> {
                     return None;
                 }
             }
-            if !right.contains_local(left_head.name) {
+            if !right.contains_local(left_head.id) {
                 return Some(error);
             }
             if let Some(new_right) = self.proof_env.tt_env.unfold_head(&right) {
@@ -1970,7 +1967,7 @@ impl<'a> Elaborator<'a> {
         let Term::Hole(left_head) = c.left.head() else {
             panic!()
         };
-        let left_head = left_head.name;
+        let left_head = left_head.id;
         let left_args = c.left.args();
         let right_args = c.right.args();
         let right_head = c.right.head();
@@ -2164,12 +2161,12 @@ impl<'a> Elaborator<'a> {
 
     fn is_resolved_constraint(&self, c: &EqConstraint) -> bool {
         if let Term::Hole(right_head) = c.right.head()
-            && self.subst_map.contains_key(&right_head.name)
+            && self.subst_map.contains_key(&right_head.id)
         {
             return true;
         }
         if let Term::Hole(left_head) = c.left.head()
-            && self.subst_map.contains_key(&left_head.name)
+            && self.subst_map.contains_key(&left_head.id)
         {
             return true;
         }

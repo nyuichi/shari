@@ -26,12 +26,12 @@ impl OpTable {
     }
 }
 
-fn uniquify_binder_name(binder_name: Id, body: &Term, local_names: &[String]) -> String {
+fn uniquify_binder_name(binder_id: Id, body: &Term, local_names: &[String]) -> String {
     const DEFAULT_NAME: &str = "x";
     const SUBSCRIPT_DIGITS: [char; 10] = ['₀', '₁', '₂', '₃', '₄', '₅', '₆', '₇', '₈', '₉'];
 
     // avoid empty names, default to "x". this choice is arbitrary.
-    let name = binder_name
+    let name = binder_id
         .name()
         .map(|name| name.as_str().to_owned())
         .unwrap_or_else(|| DEFAULT_NAME.to_string());
@@ -80,7 +80,7 @@ impl<'a> Printer<'a> {
     ) -> (Vec<(String, Type)>, Term) {
         let mut binders = Vec::new();
         while let Term::Abs(inner) = &term {
-            let binder = uniquify_binder_name(inner.binder_name, &inner.body, local_names);
+            let binder = uniquify_binder_name(inner.binder_id, &inner.body, local_names);
             binders.push((binder.clone(), inner.binder_type.clone()));
             local_names.push(binder);
             term = inner.body.clone();
@@ -97,7 +97,7 @@ impl<'a> Printer<'a> {
         let mut binders = Vec::new();
         loop {
             while let Term::Abs(inner) = &term {
-                let binder = uniquify_binder_name(inner.binder_name, &inner.body, local_names);
+                let binder = uniquify_binder_name(inner.binder_id, &inner.body, local_names);
                 binders.push((binder.clone(), inner.binder_type.clone()));
                 local_names.push(binder);
                 term = inner.body.clone();
@@ -310,10 +310,10 @@ impl<'a> Printer<'a> {
                 }
             }
             Term::Local(inner) => {
-                write!(f, "{}", inner.name)
+                write!(f, "{}", inner.id)
             }
             Term::Hole(inner) => {
-                write!(f, "?{}", inner.name)
+                write!(f, "?{}", inner.id)
             }
             Term::Const(inner) => {
                 write!(f, "{}", inner.name)?;
@@ -400,7 +400,7 @@ impl<'a> Printer<'a> {
                 }
                 Ok(())
             }
-            Type::Hole(inner) => write!(f, "{}", inner.name),
+            Type::Hole(inner) => write!(f, "{}", inner.id),
             Type::Local(inner) => write!(f, "{}", inner.name),
         }
     }
