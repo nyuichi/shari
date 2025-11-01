@@ -330,8 +330,8 @@ impl Iterator for Lex {
                         kind = TokenKind::Symbol;
                     }
                     "infixr" | "nofix" | "infixl" | "infix" | "prefix" | "axiom" | "def"
-                    | "lemma" | "const" | "type" | "local" | "inductive" | "structure"
-                    | "instance" | "class" | "as" => {
+                    | "lemma" | "const" | "type" | "inductive" | "structure" | "instance"
+                    | "class" | "as" => {
                         kind = TokenKind::Keyword;
                     }
                     _ => {
