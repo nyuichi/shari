@@ -1,0 +1,9 @@
+type const Prop : Type
+local type const u
+const imp : Prop → Prop → Prop
+infixr → : 25 := imp
+const forall.{u} : (u → Prop) → Prop
+const foo : Prop
+
+def type_hole_def_forall_nested : Prop :=
+  ∀ x y, foo

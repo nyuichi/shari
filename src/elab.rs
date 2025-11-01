@@ -2,11 +2,12 @@ use std::{
     collections::{HashMap, VecDeque},
     iter::{repeat_n, zip},
     mem,
+    ops::ControlFlow,
     rc::Rc,
     sync::Arc,
 };
 
-use anyhow::{bail, ensure};
+use anyhow::{anyhow, bail, ensure};
 
 use crate::{
     lex::Span,
@@ -2332,6 +2333,18 @@ pub fn elaborate_type(
     let elab = Elaborator::new(proof_env, local_env, vec![]);
     let k = elab.visit_type(target)?;
     ensure!(k == kind);
+    let mut break_on_type_hole = |ty: &Type| match ty {
+        Type::Hole(inner) => ControlFlow::Break(inner.metadata.span.clone()),
+        _ => ControlFlow::Continue(()),
+    };
+    if let ControlFlow::Break(span) = target.visit_type(&mut break_on_type_hole) {
+        let error = if let Some(span) = span {
+            anyhow!("type hole remains after elaboration\n{span}")
+        } else {
+            anyhow!("type hole remains after elaboration")
+        };
+        return Err(error);
+    }
     ensure!(target.is_ground());
     Ok(())
 }
@@ -2359,6 +2372,18 @@ pub fn elaborate_term(
 
     *target = elab.fully_inst(target);
 
+    let mut break_on_type_hole = |ty: &Type| match ty {
+        Type::Hole(inner) => ControlFlow::Break(inner.metadata.span.clone()),
+        _ => ControlFlow::Continue(()),
+    };
+    if let ControlFlow::Break(span) = target.visit_type(&mut break_on_type_hole) {
+        let error = if let Some(span) = span {
+            anyhow!("type hole remains after elaboration\n{span}")
+        } else {
+            anyhow!("type hole remains after elaboration")
+        };
+        return Err(error);
+    }
     ensure!(target.is_ground());
     ensure!(target.is_type_ground());
 
@@ -2415,6 +2440,19 @@ pub fn elaborate_expr(
         println!("fully instantiated:\n{e}");
     }
 
+    let mut break_on_type_hole = |ty: &Type| match ty {
+        Type::Hole(inner) => ControlFlow::Break(inner.metadata.span.clone()),
+        _ => ControlFlow::Continue(()),
+    };
+    if let ControlFlow::Break(span) = e.visit_type(&mut break_on_type_hole) {
+        let error = if let Some(span) = span {
+            anyhow!("type hole remains after elaboration\n{span}")
+        } else {
+            anyhow!("type hole remains after elaboration")
+        };
+        return Err(error);
+    }
+
     ensure!(e.is_type_ground());
 
     e.replace_hole(&|name| {
@@ -2458,15 +2496,78 @@ pub fn elaborate_class(
 mod tests {
     use super::*;
     use crate::{
+        lex::{File, Span},
         proof,
         proof::mk_type_prop,
         tt::{
-            self, ClassInstance, ClassType, Const, Delta, Kappa, Kind, Local, Name, mk_abs, mk_app,
-            mk_const, mk_hole, mk_local, mk_type_app, mk_type_arrow, mk_type_const, mk_type_local,
-            mk_var,
+            self, ClassInstance, ClassType, Const, Delta, Kappa, Kind, Local, Name, QualifiedName,
+            mk_abs, mk_app, mk_const, mk_hole, mk_local, mk_type_app, mk_type_arrow, mk_type_const,
+            mk_type_hole, mk_type_local, mk_var,
         },
     };
-    use std::collections::HashMap;
+    use std::{collections::HashMap, sync::Arc};
+
+    #[test]
+    fn elaborate_term_reports_type_hole_location() {
+        let contents = "λ x, x";
+        let file = Arc::new(File::new("<test>", contents.to_string()));
+        let binder_index = contents
+            .char_indices()
+            .find(|&(_, ch)| ch == 'x')
+            .map(|(idx, _)| idx)
+            .expect("binder variable present");
+        let span = Span::new(
+            Arc::clone(&file),
+            binder_index,
+            binder_index + 'x'.len_utf8(),
+        );
+
+        let binder_name = Name::intern("x");
+        let binder_type = mk_type_hole(Name::fresh()).with_span(Some(span.clone()));
+        let body = mk_var(0);
+        let mut term = mk_abs(binder_name, binder_type, body);
+
+        let ty = mk_type_hole(Name::fresh());
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            locals: vec![],
+        };
+
+        let err = elaborate_term(proof_env, &mut local_env, &mut term, &ty)
+            .expect_err("expected elaboration to report remaining type hole");
+        let message = err.to_string();
+        assert!(
+            message.contains("type hole remains after elaboration"),
+            "error message missing hint: {message}"
+        );
+        assert!(
+            message.contains("<test>:1:3"),
+            "error message missing span: {message}"
+        );
+    }
 
     #[test]
     fn unify_fails_for_inhabited_terms() {
