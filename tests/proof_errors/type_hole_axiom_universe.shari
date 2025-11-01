@@ -1,7 +1,0 @@
-type const Prop : Type
-local type const u
-const p : Prop
-axiom foo.{u} : p
-
-lemma type_hole_axiom_universe : p :=
-  foo
