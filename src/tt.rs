@@ -10,87 +10,127 @@ use std::vec;
 use crate::{lex::Span, proof::mk_type_prop};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
-pub struct Name(usize);
+pub struct Id(usize);
+
+#[derive(Debug, Clone, Ord, PartialOrd, Default)]
+pub struct Name(Arc<String>);
 
 #[derive(Debug, Clone, Ord, PartialOrd, Default)]
 pub struct QualifiedName(Arc<String>);
 
-static NAME_COUNTER: AtomicUsize = AtomicUsize::new(0);
-static NAME_TABLE: LazyLock<Mutex<HashMap<String, Name>>> = LazyLock::new(Default::default);
-static NAME_REV_TABLE: LazyLock<Mutex<HashMap<Name, String>>> = LazyLock::new(Default::default);
+static ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
+static ID_TABLE: LazyLock<Mutex<HashMap<Name, Id>>> = LazyLock::new(Default::default);
+static ID_REV_TABLE: LazyLock<Mutex<HashMap<Id, Name>>> = LazyLock::new(Default::default);
 
+static NAME_TABLE: LazyLock<Mutex<HashMap<String, Weak<String>>>> = LazyLock::new(Default::default);
 static QUALIFIED_NAME_TABLE: LazyLock<Mutex<HashMap<String, Weak<String>>>> =
     LazyLock::new(Default::default);
 
-impl Display for Name {
+impl Display for Id {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Some(nickname) = self.nickname() else {
+        let Some(name) = self.name() else {
             return write!(f, "{}", self.0);
         };
-        if self.is_interned() {
-            write!(f, "{}", nickname)
+        if self.is_generated() {
+            write!(f, "{}{}", name, self.0)
         } else {
-            write!(f, "{}{}", nickname, self.0)
+            write!(f, "{}", name)
         }
     }
 }
 
-impl Name {
+impl Id {
     pub fn fresh() -> Self {
-        let id = NAME_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Name(id)
+        let id = ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Id(id)
     }
 
-    pub fn fresh_from(name: Name) -> Self {
-        let value = NAME_REV_TABLE.lock().unwrap().get(&name).cloned();
-        let new_name = Name::fresh();
+    pub fn fresh_from(id: Id) -> Self {
+        let value = ID_REV_TABLE.lock().unwrap().get(&id).cloned();
+        let new_id = Id::fresh();
         if let Some(value) = value {
-            NAME_REV_TABLE.lock().unwrap().insert(new_name, value);
+            ID_REV_TABLE.lock().unwrap().insert(new_id, value);
         }
-        new_name
+        new_id
     }
 
-    pub fn fresh_with_name(name: &str) -> Self {
-        let value = name.to_owned();
-        let new_name = Name::fresh();
-        NAME_REV_TABLE.lock().unwrap().insert(new_name, value);
-        new_name
+    pub fn fresh_with_name(name: Name) -> Self {
+        let new_id = Id::fresh();
+        ID_REV_TABLE.lock().unwrap().insert(new_id, name);
+        new_id
     }
 
-    pub fn intern(value: &str) -> Name {
-        let mut name_table = NAME_TABLE.lock().unwrap();
-        if let Some(&name) = name_table.get(value) {
-            return name;
+    pub fn from_name(name: Name) -> Id {
+        let mut id_table = ID_TABLE.lock().unwrap();
+        if let Some(&id) = id_table.get(&name) {
+            return id;
         }
-        let name = Name::fresh();
-        name_table.insert(value.to_owned(), name);
-        drop(name_table);
-        // This can be put here outside the critical section of NAME_TABLE
-        // because no one but this function knows of the value of `name`.
-        NAME_REV_TABLE
-            .lock()
-            .unwrap()
-            .insert(name, value.to_owned());
-        name
+
+        let id = Id::fresh();
+        id_table.insert(name.clone(), id);
+        drop(id_table);
+        // This can be put here outside the critical section of ID_TABLE
+        // because no one but this function knows of the value of `id`.
+        ID_REV_TABLE.lock().unwrap().insert(id, name);
+        id
     }
 
-    pub fn nickname(&self) -> Option<String> {
-        NAME_REV_TABLE.lock().unwrap().get(self).cloned()
+    pub fn name(&self) -> Option<Name> {
+        ID_REV_TABLE.lock().unwrap().get(self).cloned()
     }
 
-    pub fn is_interned(&self) -> bool {
-        let Some(nickname) = self.nickname() else {
-            return false;
+    pub fn is_generated(&self) -> bool {
+        let Some(name) = self.name() else {
+            return true;
         };
-        let Some(n) = NAME_TABLE.lock().unwrap().get(&nickname).copied() else {
-            return false;
+        let Some(&id) = ID_TABLE.lock().unwrap().get(&name) else {
+            return true;
         };
-        n == *self
+        id != *self
     }
 
-    // TODO: 自動生成されたNameに対してas_strできないようにする
+    // TODO: 自動生成されたIdに対してas_strできないようにする
     pub fn as_str(&self) -> String {
-        self.nickname().unwrap_or_else(|| format!("{}", self))
+        self.name()
+            .map(|name| name.as_str().to_owned())
+            .unwrap_or_else(|| format!("{}", self))
+    }
+}
+
+impl Display for Name {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Name {
+    pub fn intern(value: &str) -> Name {
+        let mut table = NAME_TABLE.lock().unwrap();
+        if let Some(existing) = table.get(value).and_then(|weak| weak.upgrade()) {
+            return Name(existing);
+        }
+
+        let owned = Arc::new(value.to_owned());
+        table.insert(value.to_owned(), Arc::downgrade(&owned));
+        Name(owned)
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl PartialEq for Name {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for Name {}
+
+impl Hash for Name {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Arc::as_ptr(&self.0).hash(state);
     }
 }
 
@@ -230,12 +270,12 @@ pub struct TypeLocal {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct TypeHole {
     pub metadata: TypeMetadata,
-    pub name: Name,
+    pub id: Id,
 }
 
 impl Default for Type {
     fn default() -> Self {
-        mk_type_hole(Name::default())
+        mk_type_hole(Id::default())
     }
 }
 
@@ -275,7 +315,7 @@ impl Display for Type {
                     Ok(())
                 }
                 Type::Local(inner) => write!(f, "${}", inner.name),
-                Type::Hole(inner) => write!(f, "?{}", inner.name),
+                Type::Hole(inner) => write!(f, "?{}", inner.id),
             }
         }
 
@@ -294,14 +334,14 @@ pub fn mk_type_arrow(dom: Type, cod: Type) -> Type {
 
 #[inline]
 pub fn mk_fresh_type_hole() -> Type {
-    mk_type_hole(Name::fresh())
+    mk_type_hole(Id::fresh())
 }
 
 #[inline]
-pub fn mk_type_hole(name: Name) -> Type {
+pub fn mk_type_hole(id: Id) -> Type {
     Type::Hole(Arc::new(TypeHole {
         metadata: TypeMetadata::default(),
-        name,
+        id,
     }))
 }
 
@@ -420,10 +460,10 @@ impl Type {
         match self {
             Type::Const(_) => self.clone(),
             Type::Local(x) => {
-                let name = x.name;
+                let name = &x.name;
                 subst
                     .iter()
-                    .find(|(y, _)| *y == name)
+                    .find(|(y, _)| y == name)
                     .map(|(_, t)| t.clone())
                     .unwrap_or_else(|| self.clone())
             }
@@ -460,27 +500,27 @@ impl Type {
         }
     }
 
-    pub fn contains_local(&self, name: Name) -> bool {
+    pub fn contains_local(&self, name: &Name) -> bool {
         match self {
             Type::Const(_) => false,
             Type::Arrow(t) => t.dom.contains_local(name) || t.cod.contains_local(name),
             Type::App(t) => t.fun.contains_local(name) || t.arg.contains_local(name),
-            Type::Local(t) => t.name == name,
+            Type::Local(t) => &t.name == name,
             Type::Hole(_) => false,
         }
     }
 
-    pub fn contains_hole(&self, name: Name) -> bool {
+    pub fn contains_hole(&self, hole_id: Id) -> bool {
         match self {
             Type::Const(_) => false,
-            Type::Arrow(t) => t.dom.contains_hole(name) || t.cod.contains_hole(name),
-            Type::App(t) => t.fun.contains_hole(name) || t.arg.contains_hole(name),
+            Type::Arrow(t) => t.dom.contains_hole(hole_id) || t.cod.contains_hole(hole_id),
+            Type::App(t) => t.fun.contains_hole(hole_id) || t.arg.contains_hole(hole_id),
             Type::Local(_) => false,
-            Type::Hole(n) => n.name == name,
+            Type::Hole(n) => n.id == hole_id,
         }
     }
 
-    pub fn replace_hole(&self, f: &impl Fn(Name) -> Option<Type>) -> Type {
+    pub fn replace_hole(&self, f: &impl Fn(Id) -> Option<Type>) -> Type {
         match self {
             Type::Const(_) => self.clone(),
             Type::Arrow(inner) => {
@@ -502,9 +542,9 @@ impl Type {
                 }
             }
             Type::Local(_) => self.clone(),
-            Type::Hole(name) => {
-                let hole_name = name.name;
-                if let Some(replacement) = f(hole_name) {
+            Type::Hole(hole) => {
+                let hole_id = hole.id;
+                if let Some(replacement) = f(hole_id) {
                     replacement.replace_hole(f)
                 } else {
                     self.clone()
@@ -552,7 +592,7 @@ impl Type {
         }
     }
 
-    fn matches_help(&self, pattern: &Type, subst: &mut Vec<(Name, Type)>) -> bool {
+    fn matches_help(&self, pattern: &Type, subst: &mut Vec<(Id, Type)>) -> bool {
         match pattern {
             Type::Const(_) => self == pattern,
             Type::Arrow(pattern) => {
@@ -571,18 +611,18 @@ impl Type {
             }
             Type::Local(_) => self == pattern,
             Type::Hole(pattern) => {
-                let pattern = pattern.name;
-                if let Some((_, t)) = subst.iter().find(|&&(x, _)| x == pattern) {
+                let pattern_id = pattern.id;
+                if let Some((_, t)) = subst.iter().find(|&&(x, _)| x == pattern_id) {
                     self.matches_help(&t.clone(), subst)
                 } else {
-                    subst.push((pattern, self.clone()));
+                    subst.push((pattern_id, self.clone()));
                     true
                 }
             }
         }
     }
 
-    fn holes(&self, buf: &mut Vec<Name>) {
+    fn holes(&self, buf: &mut Vec<Id>) {
         match self {
             Type::Const(_) => {}
             Type::Arrow(inner) => {
@@ -594,21 +634,21 @@ impl Type {
                 inner.arg.holes(buf);
             }
             Type::Local(_) => {}
-            Type::Hole(name) => {
-                buf.push(name.name);
+            Type::Hole(hole) => {
+                buf.push(hole.id);
             }
         }
     }
 
-    pub fn inst(&self, subst: &[(Name, Type)]) -> Type {
+    pub fn inst(&self, subst: &[(Id, Type)]) -> Type {
         match self {
             Type::Const(_) => self.clone(),
             Type::Local(_) => self.clone(),
             Type::Hole(x) => {
-                let name = x.name;
+                let id = x.id;
                 subst
                     .iter()
-                    .find(|(y, _)| *y == name)
+                    .find(|(y, _)| *y == id)
                     .map(|(_, t)| t.clone())
                     .unwrap_or_else(|| self.clone())
             }
@@ -656,6 +696,10 @@ impl Display for Class {
 }
 
 impl Class {
+    pub fn contains_local(&self, name: &Name) -> bool {
+        self.args.iter().any(|t| t.contains_local(name))
+    }
+
     pub fn subst(&self, subst: &[(Name, Type)]) -> Class {
         let mut changed = false;
         let args: Vec<Type> = self
@@ -683,7 +727,7 @@ impl Class {
         self.args.iter().all(|t| t.is_ground())
     }
 
-    pub fn matches(&self, pattern: &Class) -> Option<Vec<(Name, Type)>> {
+    pub fn matches(&self, pattern: &Class) -> Option<Vec<(Id, Type)>> {
         if self.name != pattern.name || self.args.len() != pattern.args.len() {
             return None;
         }
@@ -696,7 +740,7 @@ impl Class {
         Some(subst)
     }
 
-    pub fn holes(&self) -> Vec<Name> {
+    pub fn holes(&self) -> Vec<Id> {
         let mut holes = vec![];
         for t in &self.args {
             t.holes(&mut holes);
@@ -719,7 +763,7 @@ pub struct InstanceLocal {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceHole {
-    pub name: Name,
+    pub id: Id,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -761,7 +805,7 @@ impl Display for Instance {
                 }
                 Ok(())
             }
-            Instance::Hole(name) => write!(f, "?{}", name.name),
+            Instance::Hole(hole) => write!(f, "?{}", hole.id),
         }
     }
 }
@@ -782,8 +826,8 @@ pub fn mk_instance_global(
     }))
 }
 
-pub fn mk_instance_hole(name: Name) -> Instance {
-    Instance::Hole(Arc::new(InstanceHole { name }))
+pub fn mk_instance_hole(id: Id) -> Instance {
+    Instance::Hole(Arc::new(InstanceHole { id }))
 }
 
 impl Instance {
@@ -829,6 +873,17 @@ impl Instance {
                 }
             }
             Instance::Hole(_) => self.clone(),
+        }
+    }
+
+    fn contains_local_type(&self, name: &Name) -> bool {
+        match self {
+            Instance::Local(c) => c.class.contains_local(name),
+            Instance::Global(i) => {
+                i.ty_args.iter().any(|t| t.contains_local(name))
+                    || i.args.iter().any(|i| i.contains_local_type(name))
+            }
+            Instance::Hole(_) => false,
         }
     }
 
@@ -944,8 +999,8 @@ pub struct TermAbs {
     pub metadata: TermMetadata,
     pub binder_type: Type,
     // for pretty-printing
-    // TODO: generated name は受け付けないようにする。そもそも Name ではなく String の方が(効率はさておき)意味論的には適切。
-    pub binder_name: Name,
+    // TODO: generated name は受け付けないようにする。そもそも Id ではなく String の方が(効率はさておき)意味論的には適切。
+    pub binder_id: Id,
     pub body: Term,
 }
 
@@ -959,7 +1014,7 @@ pub struct TermApp {
 #[derive(Clone, Debug)]
 pub struct TermLocal {
     pub metadata: TermMetadata,
-    pub name: Name,
+    pub id: Id,
 }
 
 #[derive(Clone, Debug)]
@@ -973,7 +1028,7 @@ pub struct TermConst {
 #[derive(Clone, Debug)]
 pub struct TermHole {
     pub metadata: TermMetadata,
-    pub name: Name,
+    pub id: Id,
 }
 
 impl TermConst {
@@ -1011,7 +1066,7 @@ impl Display for Term {
                     if needs_paren {
                         write!(f, "(")?;
                     }
-                    write!(f, "λ{}:{}. ", inner.binder_name, inner.binder_type)?;
+                    write!(f, "λ{}:{}. ", inner.binder_id, inner.binder_type)?;
                     fmt_term(&inner.body, f, TERM_PREC_LAM)?;
                     if needs_paren {
                         write!(f, ")")?;
@@ -1031,7 +1086,7 @@ impl Display for Term {
                     }
                     Ok(())
                 }
-                Term::Local(inner) => write!(f, "${}", inner.name),
+                Term::Local(inner) => write!(f, "${}", inner.id),
                 Term::Const(inner) => {
                     write!(f, "{}", inner.name)?;
                     if !inner.ty_args.is_empty() {
@@ -1056,7 +1111,7 @@ impl Display for Term {
                     }
                     Ok(())
                 }
-                Term::Hole(inner) => write!(f, "?{}", inner.name),
+                Term::Hole(inner) => write!(f, "?{}", inner.id),
             }
         }
 
@@ -1064,13 +1119,13 @@ impl Display for Term {
     }
 }
 
-pub fn mk_abs(binder_name: Name, binder_type: Type, body: Term) -> Term {
+pub fn mk_abs(binder_id: Id, binder_type: Type, body: Term) -> Term {
     let mut body_meta = body.metadata().clone();
     body_meta.span = None;
     Term::Abs(Arc::new(TermAbs {
         metadata: body_meta,
         binder_type,
-        binder_name,
+        binder_id,
         body,
     }))
 }
@@ -1115,7 +1170,7 @@ pub fn mk_const(name: QualifiedName, ty_args: Vec<Type>, instances: Vec<Instance
     }))
 }
 
-pub fn mk_local(name: Name) -> Term {
+pub fn mk_local(id: Id) -> Term {
     let metadata = TermMetadata {
         span: None,
         is_closed: false,
@@ -1123,14 +1178,14 @@ pub fn mk_local(name: Name) -> Term {
         has_const: false,
         has_hole: false,
     };
-    Term::Local(Arc::new(TermLocal { metadata, name }))
+    Term::Local(Arc::new(TermLocal { metadata, id }))
 }
 
 pub fn mk_fresh_hole() -> Term {
-    mk_hole(Name::fresh())
+    mk_hole(Id::fresh())
 }
 
-pub fn mk_hole(name: Name) -> Term {
+pub fn mk_hole(id: Id) -> Term {
     let metadata = TermMetadata {
         span: None,
         is_closed: true,
@@ -1138,7 +1193,7 @@ pub fn mk_hole(name: Name) -> Term {
         has_const: false,
         has_hole: true,
     };
-    Term::Hole(Arc::new(TermHole { metadata, name }))
+    Term::Hole(Arc::new(TermHole { metadata, id }))
 }
 
 #[derive(Debug, Clone)]
@@ -1169,7 +1224,7 @@ impl TryFrom<Term> for Ctor {
 
 #[derive(Debug, Clone)]
 pub struct Local {
-    pub name: Name,
+    pub id: Id,
     pub ty: Type,
 }
 
@@ -1258,7 +1313,7 @@ impl Term {
                 if inner.body.ptr_eq(&body) {
                     self.clone()
                 } else {
-                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
+                    mk_abs(inner.binder_id, inner.binder_type.clone(), body)
                 }
             }
             Self::App(inner) => {
@@ -1276,15 +1331,15 @@ impl Term {
     }
 
     /// self.close([x, y], k) == [k+1/x, k/y]self
-    pub fn close(&self, xs: &[Name], level: usize) -> Term {
+    pub fn close(&self, xs: &[Id], level: usize) -> Term {
         if self.metadata().is_closed {
             return self.clone();
         }
         match self {
             Self::Local(inner) => {
-                let name = inner.name;
+                let id = inner.id;
                 for (i, &x) in xs.iter().rev().enumerate() {
-                    if name == x {
+                    if id == x {
                         return mk_var(level + i);
                     }
                 }
@@ -1296,7 +1351,7 @@ impl Term {
                 if inner.body.ptr_eq(&body) {
                     self.clone()
                 } else {
-                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
+                    mk_abs(inner.binder_id, inner.binder_type.clone(), body)
                 }
             }
             Self::App(inner) => {
@@ -1313,7 +1368,7 @@ impl Term {
         }
     }
 
-    pub fn replace_local(&self, f: &impl Fn(Name) -> Option<Term>) -> Term {
+    pub fn replace_local(&self, f: &impl Fn(Id) -> Option<Term>) -> Term {
         if self.metadata().is_closed {
             return self.clone();
         }
@@ -1324,7 +1379,7 @@ impl Term {
                 if inner.body.ptr_eq(&body) {
                     self.clone()
                 } else {
-                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
+                    mk_abs(inner.binder_id, inner.binder_type.clone(), body)
                 }
             }
             Term::App(inner) => {
@@ -1337,7 +1392,7 @@ impl Term {
                 }
             }
             Term::Local(inner) => {
-                if let Some(m) = f(inner.name) {
+                if let Some(m) = f(inner.id) {
                     m
                 } else {
                     self.clone()
@@ -1348,7 +1403,7 @@ impl Term {
         }
     }
 
-    pub fn replace_hole(&self, f: &impl Fn(Name) -> Option<Term>) -> Term {
+    pub fn replace_hole(&self, f: &impl Fn(Id) -> Option<Term>) -> Term {
         match self {
             Term::Var(_) => self.clone(),
             Term::Abs(inner) => {
@@ -1356,7 +1411,7 @@ impl Term {
                 if inner.body.ptr_eq(&body) {
                     self.clone()
                 } else {
-                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
+                    mk_abs(inner.binder_id, inner.binder_type.clone(), body)
                 }
             }
             Term::App(inner) => {
@@ -1371,7 +1426,7 @@ impl Term {
             Term::Local(_) => self.clone(),
             Term::Const(_) => self.clone(),
             Term::Hole(inner) => {
-                if let Some(m) = f(inner.name) {
+                if let Some(m) = f(inner.id) {
                     m
                 } else {
                     self.clone()
@@ -1391,7 +1446,7 @@ impl Term {
                 if inner.body.ptr_eq(&body) {
                     self.clone()
                 } else {
-                    mk_abs(inner.binder_name, inner.binder_type.clone(), body)
+                    mk_abs(inner.binder_id, inner.binder_type.clone(), body)
                 }
             }
             Term::App(inner) => {
@@ -1436,7 +1491,7 @@ impl Term {
                 if inner.binder_type.ptr_eq(&binder_type) && inner.body.ptr_eq(&body) {
                     self.clone()
                 } else {
-                    mk_abs(inner.binder_name, binder_type, body)
+                    mk_abs(inner.binder_id, binder_type, body)
                 }
             }
             Term::App(inner) => {
@@ -1491,7 +1546,7 @@ impl Term {
         self.replace_type(&|t| t.subst(subst))
     }
 
-    pub fn subst(&self, subst: &[(Name, Term)]) -> Term {
+    pub fn subst(&self, subst: &[(Id, Term)]) -> Term {
         self.replace_local(&|x| {
             for (y, m) in subst {
                 if *y == x {
@@ -1503,9 +1558,9 @@ impl Term {
     }
 
     /// {x₁, ⋯, xₙ} # self <==> ∀ i, xᵢ ∉ FV(self)
-    pub fn is_fresh(&self, free_list: &[Name]) -> bool {
+    pub fn is_fresh(&self, free_list: &[Id]) -> bool {
         match self {
-            Self::Local(inner) => !free_list.contains(&inner.name),
+            Self::Local(inner) => !free_list.contains(&inner.id),
             Self::Var(_) => true,
             Self::Abs(inner) => inner.body.is_fresh(free_list),
             Self::App(inner) => inner.fun.is_fresh(free_list) && inner.arg.is_fresh(free_list),
@@ -1516,9 +1571,9 @@ impl Term {
 
     /// FV(self) ⊆ {x₁, ⋯, xₙ}
     /// The term is borrowed from nominal set theory.
-    pub fn is_supported_by(&self, free_list: &[Name]) -> bool {
+    pub fn is_supported_by(&self, free_list: &[Id]) -> bool {
         match self {
-            Self::Local(inner) => free_list.contains(&inner.name),
+            Self::Local(inner) => free_list.contains(&inner.id),
             Self::Var(_) => true,
             Self::Abs(inner) => inner.body.is_supported_by(free_list),
             Self::App(inner) => {
@@ -1607,7 +1662,7 @@ impl Term {
     }
 
     /// Checks if self ≡ (?M l₁ ⋯ lₙ) where l₁ ⋯ lₙ are pairwise distinct locals.
-    pub fn is_pattern(&self) -> Option<Vec<Name>> {
+    pub fn is_pattern(&self) -> Option<Vec<Id>> {
         let mut arg_locals = vec![];
         if !self.head().is_hole() {
             return None;
@@ -1617,11 +1672,11 @@ impl Term {
                 return None;
             };
             for a in &arg_locals {
-                if *a == arg.name {
+                if *a == arg.id {
                     return None;
                 }
             }
-            arg_locals.push(arg.name);
+            arg_locals.push(arg.id);
         }
         Some(arg_locals)
     }
@@ -1638,6 +1693,20 @@ impl Term {
         true
     }
 
+    pub fn contains_local_type(&self, name: &Name) -> bool {
+        match self {
+            Term::Var(_) => false,
+            Term::Abs(m) => m.binder_type.contains_local(name) || m.body.contains_local_type(name),
+            Term::App(m) => m.fun.contains_local_type(name) || m.arg.contains_local_type(name),
+            Term::Local(_) => false,
+            Term::Const(m) => {
+                m.ty_args.iter().any(|t| t.contains_local(name))
+                    || m.instances.iter().any(|i| i.contains_local_type(name))
+            }
+            Term::Hole(_) => false,
+        }
+    }
+
     /// Returns the application `self l₁ ⋯ lₙ`.
     pub fn apply(&self, args: impl IntoIterator<Item = Term>) -> Term {
         let mut fun = self.clone();
@@ -1649,10 +1718,10 @@ impl Term {
 
     /// Returns the abstraction `λ xs, self`.
     pub fn abs(&self, xs: &[Local]) -> Term {
-        let locals = xs.iter().map(|x| x.name).collect::<Vec<_>>();
+        let locals = xs.iter().map(|x| x.id).collect::<Vec<_>>();
         let mut m = self.close(&locals, 0);
         for x in xs.iter().rev() {
-            m = mk_abs(x.name, x.ty.clone(), m);
+            m = mk_abs(x.id, x.ty.clone(), m);
         }
         m
     }
@@ -1692,9 +1761,9 @@ impl Term {
             (Term::App(inner1), Term::App(inner2)) => {
                 inner1.fun.alpha_eq(&inner2.fun) && inner1.arg.alpha_eq(&inner2.arg)
             }
-            (Term::Local(name1), Term::Local(name2)) => name1.name == name2.name,
+            (Term::Local(name1), Term::Local(name2)) => name1.id == name2.id,
             (Term::Const(inner1), Term::Const(inner2)) => inner1.alpha_eq(inner2),
-            (Term::Hole(name1), Term::Hole(name2)) => name1.name == name2.name,
+            (Term::Hole(name1), Term::Hole(name2)) => name1.id == name2.id,
             _ => false,
         }
     }
@@ -1706,9 +1775,9 @@ impl Term {
             (Term::App(inner1), Term::App(inner2)) => {
                 inner1.fun.maybe_alpha_eq(&inner2.fun) && inner1.arg.maybe_alpha_eq(&inner2.arg)
             }
-            (Term::Local(name1), Term::Local(name2)) => name1.name == name2.name,
+            (Term::Local(name1), Term::Local(name2)) => name1.id == name2.id,
             (Term::Const(inner1), Term::Const(inner2)) => inner1.name == inner2.name,
-            (Term::Hole(name1), Term::Hole(name2)) => name1.name == name2.name,
+            (Term::Hole(name1), Term::Hole(name2)) => name1.id == name2.id,
             _ => false,
         }
     }
@@ -1728,12 +1797,12 @@ impl Term {
         }
     }
 
-    pub fn contains_local(&self, name: Name) -> bool {
+    pub fn contains_local(&self, id: Id) -> bool {
         match self {
             Term::Var(_) => false,
-            Term::Abs(m) => m.body.contains_local(name),
-            Term::App(m) => m.fun.contains_local(name) || m.arg.contains_local(name),
-            Term::Local(inner) => inner.name == name,
+            Term::Abs(m) => m.body.contains_local(id),
+            Term::App(m) => m.fun.contains_local(id) || m.arg.contains_local(id),
+            Term::Local(inner) => inner.id == id,
             Term::Const(_) => false,
             Term::Hole(_) => false,
         }
@@ -1748,9 +1817,9 @@ pub struct LocalEnv {
 }
 
 impl LocalEnv {
-    pub fn get_local(&self, name: Name) -> Option<&Type> {
+    pub fn get_local(&self, id: Id) -> Option<&Type> {
         self.locals.iter().rev().find_map(|local| {
-            if local.name == name {
+            if local.id == id {
                 Some(&local.ty)
             } else {
                 None
@@ -1915,9 +1984,9 @@ impl Env<'_> {
                 for ty_arg in ty_args {
                     self.check_wft(local_env, ty_arg);
                 }
-                let mut type_subst = vec![];
-                for (&x, t) in zip(local_types, ty_args) {
-                    type_subst.push((x, t.clone()));
+                let mut type_subst = Vec::with_capacity(local_types.len());
+                for (x, t) in zip(local_types, ty_args) {
+                    type_subst.push((x.clone(), t.clone()));
                 }
                 if local_classes.len() != args.len() {
                     panic!(
@@ -1951,10 +2020,10 @@ impl Env<'_> {
             Term::Abs(m) => {
                 self.check_wft(local_env, &m.binder_type);
                 let x = Local {
-                    name: Name::fresh_from(m.binder_name),
+                    id: Id::fresh_from(m.binder_id),
                     ty: m.binder_type.clone(),
                 };
-                let n = m.body.open(&[mk_local(x.name)], 0);
+                let n = m.body.open(&[mk_local(x.id)], 0);
                 local_env.locals.push(x);
                 let target = self.infer_type(local_env, &n);
                 let x = local_env.locals.pop().unwrap();
@@ -1975,11 +2044,11 @@ impl Env<'_> {
             }
             Term::Local(inner) => {
                 for y in local_env.locals.iter().rev() {
-                    if inner.name == y.name {
+                    if inner.id == y.id {
                         return y.ty.clone();
                     }
                 }
-                panic!("unbound local term: {:?}", inner.name);
+                panic!("unbound local term: {:?}", inner.id);
             }
             Term::Const(m) => {
                 let Const {
@@ -2001,9 +2070,9 @@ impl Env<'_> {
                 for ty_arg in &m.ty_args {
                     self.check_wft(local_env, ty_arg);
                 }
-                let mut type_subst = vec![];
-                for (&x, t) in zip(local_types, &m.ty_args) {
-                    type_subst.push((x, t.clone()));
+                let mut type_subst = Vec::with_capacity(local_types.len());
+                for (x, t) in zip(local_types, &m.ty_args) {
+                    type_subst.push((x.clone(), t.clone()));
                 }
                 if local_classes.len() != m.instances.len() {
                     panic!(
@@ -2053,8 +2122,8 @@ impl Env<'_> {
             height: _,
         } = self.delta_table.get(&n.name)?;
         let mut type_subst = Vec::with_capacity(local_types.len());
-        for (&x, t) in zip(local_types, &n.ty_args) {
-            type_subst.push((x, t.clone()));
+        for (x, t) in zip(local_types, &n.ty_args) {
+            type_subst.push((x.clone(), t.clone()));
         }
         let mut instance_subst = Vec::with_capacity(local_classes.len());
         for (local_class, instance) in zip(local_classes, &n.instances) {
@@ -2094,8 +2163,8 @@ impl Env<'_> {
         } = self.class_instance_table.get(name)?;
         let target = method_table.get(&n.name)?;
         let mut type_subst = Vec::with_capacity(local_types.len());
-        for (&x, t) in zip(local_types, ty_args) {
-            type_subst.push((x, t.clone()));
+        for (x, t) in zip(local_types, ty_args) {
+            type_subst.push((x.clone(), t.clone()));
         }
         let mut instance_subst = Vec::with_capacity(local_classes.len());
         for (local_class, instance) in zip(local_classes, args) {
@@ -2192,7 +2261,7 @@ impl Env<'_> {
 
         loop {
             if let (Term::Abs(inner1), Term::Abs(inner2)) = (&m1, &m2) {
-                let x = Name::fresh();
+                let x = Id::fresh();
                 let local = mk_local(x);
                 m1 = inner1.body.open(std::slice::from_ref(&local), 0);
                 m2 = inner2.body.open(&[local], 0);
@@ -2217,7 +2286,7 @@ impl Env<'_> {
                     return true;
                 }
                 if let (Term::Abs(inner1), Term::Abs(inner2)) = (&m1, &m2) {
-                    let x = Name::fresh();
+                    let x = Id::fresh();
                     let local = mk_local(x);
                     m1 = inner1.body.open(std::slice::from_ref(&local), 0);
                     m2 = inner2.body.open(&[local], 0);
@@ -2247,7 +2316,7 @@ impl Env<'_> {
             let head1 = m1.head();
             let head2 = m2.head();
             if let (Term::Local(head1_inner), Term::Local(head2_inner)) = (head1, head2) {
-                if head1_inner.name != head2_inner.name {
+                if head1_inner.id != head2_inner.id {
                     return false;
                 }
                 let args1 = m1.args();
@@ -2433,7 +2502,7 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let x = Name::intern("x");
+        let x = Id::from_name(Name::intern("x"));
         let a = QualifiedName::intern("a");
         let body = mk_var(0);
         let lambda = mk_abs(x, mk_type_prop(), body);
