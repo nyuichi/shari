@@ -119,7 +119,7 @@ pub struct CmdLocalTypeConst {
 #[derive(Clone, Debug)]
 pub struct CmdTypeInductive {
     pub name: QualifiedName,
-    pub local_name: Id,
+    pub local_id: Id,
     pub local_types: Vec<Name>,
     pub ctors: Vec<DataConstructor>,
 }
@@ -133,7 +133,7 @@ pub struct DataConstructor {
 #[derive(Clone, Debug)]
 pub struct CmdInductive {
     pub name: QualifiedName,
-    pub local_name: Id,
+    pub local_id: Id,
     pub local_types: Vec<Name>,
     pub params: Vec<Local>,
     pub target_ty: Type,
@@ -1064,11 +1064,11 @@ impl Eval {
     fn run_type_inductive_cmd(&mut self, cmd: CmdTypeInductive) -> anyhow::Result<()> {
         let CmdTypeInductive {
             name,
-            local_name,
+            local_id,
             local_types,
             ctors,
         } = cmd;
-        let local_type_name = local_name
+        let local_type_name = local_id
             .name()
             .expect("type inductive binder should have a name");
         if self.has_type_const(&name) {
@@ -1372,7 +1372,7 @@ impl Eval {
         //
         let CmdInductive {
             name,
-            local_name,
+            local_id,
             mut local_types,
             params,
             target_ty,
@@ -1433,7 +1433,7 @@ impl Eval {
         local_env.locals.insert(
             0,
             Local {
-                id: local_name,
+                id: local_id,
                 ty: target_ty.clone(),
             },
         );
@@ -1452,13 +1452,13 @@ impl Eval {
             ctor_params_list.push(ctor_params.clone());
             let (ctor_args, m) = unguard(&m);
             ctor_args_list.push(ctor_args.clone());
-            if !m.head().alpha_eq(&mk_local(local_name)) {
+            if !m.head().alpha_eq(&mk_local(local_id)) {
                 bail!(
                     "invalid constructor. Currently only Horn clauses are supported in inductive clauses: {m}"
                 );
             }
             for a in m.args() {
-                if a.contains_local(local_name) {
+                if a.contains_local(local_id) {
                     bail!("invalid target");
                 }
             }
@@ -1474,12 +1474,12 @@ impl Eval {
                     }
                     current = next;
                 }
-                if current.contains_local(local_name) {
-                    if !current.head().alpha_eq(&mk_local(local_name)) {
+                if current.contains_local(local_id) {
+                    if !current.head().alpha_eq(&mk_local(local_id)) {
                         bail!("invalid target");
                     }
                     for a in current.args() {
-                        if a.contains_local(local_name) {
+                        if a.contains_local(local_id) {
                             bail!("invalid target");
                         }
                     }
@@ -1520,7 +1520,7 @@ impl Eval {
                 vec![],
             );
             stash = stash.apply(params.iter().map(|param| mk_local(param.id)));
-            let subst = [(local_name, stash)];
+            let subst = [(local_id, stash)];
             let new_target = target.subst(&subst);
             target = new_target;
             target = generalize(&target, &params);
@@ -1553,7 +1553,7 @@ impl Eval {
             zip(ctor_args_list, zip(ctor_target_list, ctor_ind_args_list)),
         ) {
             // P ↦ C
-            let subst_with_motive = [(local_name, mk_local(motive.id))];
+            let subst_with_motive = [(local_id, mk_local(motive.id))];
 
             let mut guard_term = ctor_target;
 
@@ -1578,7 +1578,7 @@ impl Eval {
                 vec![],
             );
             stash = stash.apply(params.iter().map(|param| mk_local(param.id)));
-            let subst = [(local_name, stash)];
+            let subst = [(local_id, stash)];
 
             // φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
             for ctor_arg in &mut ctor_args {

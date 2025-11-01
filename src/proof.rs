@@ -85,10 +85,10 @@ pub fn ungeneralize1(term: &Term) -> Option<(Local, Term)> {
     let tt::TermAbs {
         metadata: _,
         binder_type,
-        binder_name,
+        binder_id,
         body,
     } = &**abs;
-    let id = Id::fresh_from(*binder_name);
+    let id = Id::fresh_from(*binder_id);
     let body = body.open(&[mk_local(id)], 0);
     let binder = Local {
         id,
@@ -203,7 +203,7 @@ pub struct ExprAssump {
 #[derive(Debug, Clone)]
 pub struct ExprAssumpByName {
     pub metadata: ExprMetadata,
-    pub name: Id,
+    pub id: Id,
 }
 
 #[derive(Debug, Clone)]
@@ -224,7 +224,7 @@ pub struct ExprApp {
 #[derive(Debug, Clone)]
 pub struct ExprTake {
     pub metadata: ExprMetadata,
-    pub name: Id,
+    pub id: Id,
     pub ty: Type,
     pub expr: Expr,
 }
@@ -265,10 +265,10 @@ pub fn mk_expr_assump(m: Term) -> Expr {
     }))
 }
 
-pub fn mk_expr_assump_by_name(name: Id) -> Expr {
+pub fn mk_expr_assump_by_name(id: Id) -> Expr {
     Expr::AssumpByName(Box::new(ExprAssumpByName {
         metadata: ExprMetadata::default(),
-        name,
+        id,
     }))
 }
 
@@ -289,10 +289,10 @@ pub fn mk_expr_app(e1: Expr, e2: Expr) -> Expr {
     }))
 }
 
-pub fn mk_expr_take(name: Id, ty: Type, e: Expr) -> Expr {
+pub fn mk_expr_take(id: Id, ty: Type, e: Expr) -> Expr {
     Expr::Take(Box::new(ExprTake {
         metadata: ExprMetadata::default(),
-        name,
+        id,
         ty,
         expr: e,
     }))
@@ -366,7 +366,7 @@ impl std::fmt::Display for Expr {
                     write!(f, "«{}»", e.target)?;
                 }
                 Expr::AssumpByName(e) => {
-                    write!(f, "{}", e.name)?;
+                    write!(f, "{}", e.id)?;
                 }
                 Expr::Assume(e) => {
                     write!(f, "assume {}", e.local_axiom)?;
@@ -382,7 +382,7 @@ impl std::fmt::Display for Expr {
                     fmt_expr(&e.expr2, f, PREC_INST)?;
                 }
                 Expr::Take(e) => {
-                    write!(f, "take ({} : {}), ", e.name, e.ty)?;
+                    write!(f, "take ({} : {}), ", e.id, e.ty)?;
                     fmt_expr(&e.expr, f, PREC_LOWEST)?;
                 }
                 Expr::Inst(_) => {
@@ -524,7 +524,7 @@ impl Expr {
             Expr::Take(e) => {
                 let ExprTake {
                     metadata: _,
-                    name: _,
+                    id: _,
                     ty: _,
                     expr,
                 } = &**e;
@@ -580,7 +580,7 @@ impl Expr {
             Expr::Take(e) => {
                 let ExprTake {
                     metadata: _,
-                    name: _,
+                    id: _,
                     ty,
                     expr,
                 } = &**e;
@@ -649,7 +649,7 @@ impl Expr {
             Expr::Take(e) => {
                 let ExprTake {
                     metadata: _,
-                    name: _,
+                    id: _,
                     ty: _,
                     expr,
                 } = e.as_mut();
@@ -714,7 +714,7 @@ impl Expr {
             Expr::Take(e) => {
                 let ExprTake {
                     metadata: _,
-                    name: _,
+                    id: _,
                     ty: _,
                     expr,
                 } = e.as_mut();
@@ -803,13 +803,13 @@ impl Env<'_> {
                 panic!("unknown assumption: {}", target);
             }
             Expr::AssumpByName(e) => {
-                let ExprAssumpByName { metadata: _, name } = &**e;
+                let ExprAssumpByName { metadata: _, id } = &**e;
                 for local_axiom in local_env.local_axioms.iter().rev() {
-                    if local_axiom.name == Some(*name) {
+                    if local_axiom.name == Some(*id) {
                         return local_axiom.prop.clone();
                     }
                 }
-                panic!("unknown assumption alias: {}", name);
+                panic!("unknown assumption alias: {}", id);
             }
             Expr::Assume(e) => {
                 let ExprAssume {
@@ -843,19 +843,19 @@ impl Env<'_> {
             Expr::Take(e) => {
                 let ExprTake {
                     metadata: _,
-                    name,
+                    id,
                     ty,
                     expr,
                 } = &**e;
                 self.tt_env.check_wft(tt_local_env, ty);
                 for c in &local_env.local_axioms {
-                    if !c.prop.is_fresh(std::slice::from_ref(name)) {
+                    if !c.prop.is_fresh(std::slice::from_ref(id)) {
                         // eigenvariable condition fails
                         panic!("eigenvariable condition violated by {}", c.prop);
                     }
                 }
                 let param = Local {
-                    id: *name,
+                    id: *id,
                     ty: ty.clone(),
                 };
                 tt_local_env.locals.push(param);
