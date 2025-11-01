@@ -999,7 +999,7 @@ pub struct TermAbs {
     pub metadata: TermMetadata,
     pub binder_type: Type,
     // for pretty-printing
-    // TODO: generated name は受け付けないようにする。そもそも Id ではなく Option<Name> の方が意味論的には適切。
+    // TODO: generated name は受け付けないようにする。そもそも Id ではなく String の方が(効率はさておき)意味論的には適切。
     pub binder_name: Id,
     pub body: Term,
 }

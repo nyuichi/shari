@@ -114,9 +114,9 @@ enum Record {
     AddEqConstraint(Rc<EqConstraint>),
     AddMethodConstraint(Rc<MethodConstraint>),
     AddClassConstraint(Rc<ClassConstraint>),
-    AddSubst { name: Id },
-    AddTypeSubst { name: Id },
-    AddInstanceSubst { name: Id },
+    AddSubst { id: Id },
+    AddTypeSubst { id: Id },
+    AddInstanceSubst { id: Id },
     RemoveEqConstraint(Rc<EqConstraint>),
 }
 
@@ -1265,19 +1265,19 @@ impl<'a> Elaborator<'a> {
         self.watch_type(&c);
     }
 
-    fn add_subst(&mut self, name: Id, m: Term, error: Error) {
+    fn add_subst(&mut self, id: Id, m: Term, error: Error) {
         if log::log_enabled!(log::Level::Debug) {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
-            println!("{sp}new subst {name} := {m}");
+            println!("{sp}new subst {id} := {m}");
         }
 
-        self.subst_map.insert(name, m.clone());
-        self.trail.push(Record::AddSubst { name });
+        self.subst_map.insert(id, m.clone());
+        self.trail.push(Record::AddSubst { id });
 
-        if let Some(constraints) = self.watch_list.get(&name) {
+        if let Some(constraints) = self.watch_list.get(&id) {
             for c in constraints {
                 // skip constraints already resolved anyway
-                if c.left.head().alpha_eq(&mk_hole(name)) {
+                if c.left.head().alpha_eq(&mk_hole(id)) {
                     if let Term::Hole(right_hole) = c.right.head()
                         && self.subst_map.contains_key(&right_hole.name)
                     {
@@ -1303,16 +1303,16 @@ impl<'a> Elaborator<'a> {
         }
     }
 
-    fn add_type_subst(&mut self, name: Id, ty: Type, error: Error) {
+    fn add_type_subst(&mut self, id: Id, ty: Type, error: Error) {
         if log::log_enabled!(log::Level::Debug) {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
-            println!("{sp}new type subst {name} := {ty}");
+            println!("{sp}new type subst {id} := {ty}");
         }
 
-        self.type_subst_map.insert(name, ty.clone());
-        self.trail.push(Record::AddTypeSubst { name });
+        self.type_subst_map.insert(id, ty.clone());
+        self.trail.push(Record::AddTypeSubst { id });
 
-        if let Some(constraints) = self.type_watch_list.get(&name) {
+        if let Some(constraints) = self.type_watch_list.get(&id) {
             for c in constraints {
                 let c = (**c).clone();
                 self.class_constraints.push((
@@ -1325,16 +1325,16 @@ impl<'a> Elaborator<'a> {
         }
     }
 
-    fn add_instance_subst(&mut self, name: Id, instance: Instance, error: Error) {
+    fn add_instance_subst(&mut self, id: Id, instance: Instance, error: Error) {
         if log::log_enabled!(log::Level::Debug) {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
-            println!("{sp}new instance subst {name} := {instance}");
+            println!("{sp}new instance subst {id} := {instance}");
         }
 
-        self.instance_subst_map.insert(name, instance.clone());
-        self.trail.push(Record::AddInstanceSubst { name });
+        self.instance_subst_map.insert(id, instance.clone());
+        self.trail.push(Record::AddInstanceSubst { id });
 
-        if let Some(constraints) = self.instance_watch_list.get(&name) {
+        if let Some(constraints) = self.instance_watch_list.get(&id) {
             for c in constraints {
                 let c = (**c).clone();
                 if log::log_enabled!(log::Level::Debug) {
@@ -1351,15 +1351,15 @@ impl<'a> Elaborator<'a> {
         }
     }
 
-    fn get_hole_type(&self, name: Id) -> Option<&Type> {
+    fn get_hole_type(&self, id: Id) -> Option<&Type> {
         self.term_holes
             .iter()
-            .find(|&&(n, _)| n == name)
+            .find(|&&(n, _)| n == id)
             .map(|(_, t)| t)
     }
 
-    fn add_hole_type(&mut self, name: Id, ty: Type) {
-        self.term_holes.push((name, ty));
+    fn add_hole_type(&mut self, id: Id, ty: Type) {
+        self.term_holes.push((id, ty));
     }
 
     fn find_conflict_in_types(
@@ -1871,14 +1871,14 @@ impl<'a> Elaborator<'a> {
                     self.queue_class.pop_back();
                     self.unwatch_type(&c);
                 }
-                Record::AddSubst { name } => {
-                    self.subst_map.remove(&name);
+                Record::AddSubst { id } => {
+                    self.subst_map.remove(&id);
                 }
-                Record::AddTypeSubst { name } => {
-                    self.type_subst_map.remove(&name);
+                Record::AddTypeSubst { id } => {
+                    self.type_subst_map.remove(&id);
                 }
-                Record::AddInstanceSubst { name } => {
-                    self.instance_subst_map.remove(&name);
+                Record::AddInstanceSubst { id } => {
+                    self.instance_subst_map.remove(&id);
                 }
                 Record::RemoveEqConstraint(c) => match c.kind {
                     ConstraintKind::Delta => {
