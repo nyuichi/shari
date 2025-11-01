@@ -5,7 +5,11 @@ use crate::{
 };
 
 use anyhow::bail;
-use std::{collections::HashMap, fmt::Display};
+use std::{collections::HashMap, fmt::Display, sync::LazyLock};
+
+static FORALL: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("forall"));
+static EXISTS: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("exists"));
+static UEXISTS: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("uexists"));
 
 #[derive(Debug, Default, Clone)]
 pub struct OpTable {
@@ -215,84 +219,69 @@ impl<'a> Printer<'a> {
                 }
             }
             let name = head.name.clone();
-            // TODO: don't use to_string. this is inefficient. Use LazyLock to cache QualifiedName instances of "forall", "exists", "uexists".
-            match name.to_string().as_str() {
-                "forall" => {
-                    if args.len() == 1 {
-                        let arg = args.pop().unwrap();
-                        let arg_copy = arg.clone();
-                        let snapshot = local_names.len();
-                        let (binders, body) =
-                            self.collect_ctor_binders(arg, name.clone(), local_names);
-                        if binders.is_empty() {
-                            local_names.truncate(snapshot);
-                            args.push(arg_copy);
-                        } else {
-                            if !allow_lambda {
-                                write!(f, "(")?;
-                            }
-                            self.fmt_binder_prefix(f, "∀", &binders)?;
-                            let res = self.fmt_term_help(&body, 0, true, local_names, f);
-                            local_names.truncate(snapshot);
-                            res?;
-                            if !allow_lambda {
-                                write!(f, ")")?;
-                            }
-                            return Ok(());
-                        }
+            if name == *FORALL && args.len() == 1 {
+                let arg = args.pop().unwrap();
+                let arg_copy = arg.clone();
+                let snapshot = local_names.len();
+                let (binders, body) = self.collect_ctor_binders(arg, name.clone(), local_names);
+                if binders.is_empty() {
+                    local_names.truncate(snapshot);
+                    args.push(arg_copy);
+                } else {
+                    if !allow_lambda {
+                        write!(f, "(")?;
                     }
-                }
-                "exists" => {
-                    if args.len() == 1 {
-                        let arg = args.pop().unwrap();
-                        let arg_copy = arg.clone();
-                        let snapshot = local_names.len();
-                        let (binders, body) =
-                            self.collect_ctor_binders(arg, name.clone(), local_names);
-                        if binders.is_empty() {
-                            local_names.truncate(snapshot);
-                            args.push(arg_copy);
-                        } else {
-                            if !allow_lambda {
-                                write!(f, "(")?;
-                            }
-                            self.fmt_binder_prefix(f, "∃", &binders)?;
-                            let res = self.fmt_term_help(&body, 0, true, local_names, f);
-                            local_names.truncate(snapshot);
-                            res?;
-                            if !allow_lambda {
-                                write!(f, ")")?;
-                            }
-                            return Ok(());
-                        }
+                    self.fmt_binder_prefix(f, "∀", &binders)?;
+                    let res = self.fmt_term_help(&body, 0, true, local_names, f);
+                    local_names.truncate(snapshot);
+                    res?;
+                    if !allow_lambda {
+                        write!(f, ")")?;
                     }
+                    return Ok(());
                 }
-                "uexists" => {
-                    if args.len() == 1 {
-                        let arg = args.pop().unwrap();
-                        let arg_copy = arg.clone();
-                        let snapshot = local_names.len();
-                        let (binders, body) =
-                            self.collect_ctor_binders(arg, name.clone(), local_names);
-                        if binders.is_empty() {
-                            local_names.truncate(snapshot);
-                            args.push(arg_copy);
-                        } else {
-                            if !allow_lambda {
-                                write!(f, "(")?;
-                            }
-                            self.fmt_binder_prefix(f, "∃!", &binders)?;
-                            let res = self.fmt_term_help(&body, 0, true, local_names, f);
-                            local_names.truncate(snapshot);
-                            res?;
-                            if !allow_lambda {
-                                write!(f, ")")?;
-                            }
-                            return Ok(());
-                        }
+            } else if name == *EXISTS && args.len() == 1 {
+                let arg = args.pop().unwrap();
+                let arg_copy = arg.clone();
+                let snapshot = local_names.len();
+                let (binders, body) = self.collect_ctor_binders(arg, name.clone(), local_names);
+                if binders.is_empty() {
+                    local_names.truncate(snapshot);
+                    args.push(arg_copy);
+                } else {
+                    if !allow_lambda {
+                        write!(f, "(")?;
                     }
+                    self.fmt_binder_prefix(f, "∃", &binders)?;
+                    let res = self.fmt_term_help(&body, 0, true, local_names, f);
+                    local_names.truncate(snapshot);
+                    res?;
+                    if !allow_lambda {
+                        write!(f, ")")?;
+                    }
+                    return Ok(());
                 }
-                _ => {}
+            } else if name == *UEXISTS && args.len() == 1 {
+                let arg = args.pop().unwrap();
+                let arg_copy = arg.clone();
+                let snapshot = local_names.len();
+                let (binders, body) = self.collect_ctor_binders(arg, name.clone(), local_names);
+                if binders.is_empty() {
+                    local_names.truncate(snapshot);
+                    args.push(arg_copy);
+                } else {
+                    if !allow_lambda {
+                        write!(f, "(")?;
+                    }
+                    self.fmt_binder_prefix(f, "∃!", &binders)?;
+                    let res = self.fmt_term_help(&body, 0, true, local_names, f);
+                    local_names.truncate(snapshot);
+                    res?;
+                    if !allow_lambda {
+                        write!(f, ")")?;
+                    }
+                    return Ok(());
+                }
             }
         };
 
