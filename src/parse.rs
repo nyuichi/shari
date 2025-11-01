@@ -2,9 +2,9 @@ use crate::cmd::{
     ClassInstanceDef, ClassInstanceField, ClassInstanceLemma, ClassStructureAxiom,
     ClassStructureConst, ClassStructureField, Cmd, CmdAxiom, CmdClassInstance, CmdClassStructure,
     CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdInstance, CmdLemma,
-    CmdLocalTypeConst, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive,
-    Constructor, DataConstructor, Fixity, InstanceDef, InstanceField, InstanceLemma, Operator,
-    StructureAxiom, StructureConst, StructureField,
+    CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive, Constructor,
+    DataConstructor, Fixity, InstanceDef, InstanceField, InstanceLemma, Operator, StructureAxiom,
+    StructureConst, StructureField,
 };
 use crate::proof::{
     Axiom, Expr, count_forall, generalize, mk_expr_app, mk_expr_assume, mk_expr_assump,
@@ -184,7 +184,6 @@ impl<'a> Parser<'a> {
         const_table: &'a HashMap<QualifiedName, Const>,
         axiom_table: &'a HashMap<QualifiedName, Axiom>,
         class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
-        type_variables: Vec<Name>,
     ) -> Self {
         Self {
             lex,
@@ -193,7 +192,7 @@ impl<'a> Parser<'a> {
             const_table,
             axiom_table,
             class_predicate_table,
-            type_locals: type_variables,
+            type_locals: vec![],
             locals: vec![],
             local_axioms: vec![],
             holes: vec![],
@@ -337,14 +336,6 @@ impl<'a> Parser<'a> {
             return Self::fail(token, "expected keyword");
         }
         Ok(token)
-    }
-
-    fn expect_keyword(&mut self, kw: &str) -> Result<(), ParseError> {
-        let token = self.any_token()?;
-        if token.kind == TokenKind::Keyword && token.as_str() == kw {
-            return Ok(());
-        }
-        Self::fail(token, format!("expected keyword '{}'", kw))
     }
 
     fn name(&mut self) -> Result<Name, ParseError> {
@@ -1150,10 +1141,6 @@ impl<'a> Parser<'a> {
                         let type_const_cmd = self.type_const_cmd(keyword)?;
                         Cmd::TypeConst(type_const_cmd)
                     }
-                    "variable" => {
-                        let local_type_const_cmd = self.local_type_const_cmd(keyword)?;
-                        Cmd::LocalTypeConst(local_type_const_cmd)
-                    }
                     "inductive" => {
                         let type_inductive_cmd = self.type_inductive_cmd(keyword)?;
                         Cmd::TypeInductive(type_inductive_cmd)
@@ -1190,12 +1177,6 @@ impl<'a> Parser<'a> {
                         return Self::fail(keyword, "unknown command");
                     }
                 }
-            }
-            "local" => {
-                self.expect_keyword("type")?;
-                self.expect_keyword("const")?;
-                let local_type_const_cmd = self.local_type_const_cmd(keyword)?;
-                Cmd::LocalTypeConst(local_type_const_cmd)
             }
             _ => {
                 return Self::fail(keyword, "expected command");
@@ -1409,14 +1390,6 @@ impl<'a> Parser<'a> {
         self.expect_symbol(":")?;
         let kind = self.kind()?;
         Ok(CmdTypeConst { name, kind })
-    }
-
-    fn local_type_const_cmd(&mut self, _token: Token) -> Result<CmdLocalTypeConst, ParseError> {
-        let mut variables = vec![];
-        while let Some(name) = self.name_opt() {
-            variables.push(name);
-        }
-        Ok(CmdLocalTypeConst { variables })
     }
 
     fn type_inductive_cmd(&mut self, _token: Token) -> Result<CmdTypeInductive, ParseError> {
@@ -1862,7 +1835,6 @@ mod tests {
             &consts,
             &axioms,
             &class_predicates,
-            vec![],
         );
         assert!(
             parser.const_table.contains_key(&QualifiedName::intern("p")),
@@ -1886,7 +1858,6 @@ mod tests {
             &const_table,
             &axiom_table,
             &class_predicate_table,
-            vec![],
         );
         let ident = parser.ident()?;
         Ok(parser.qualified_name(&ident))

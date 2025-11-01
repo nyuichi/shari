@@ -5,7 +5,7 @@ This document summarizes the surface syntax, proof language, and module system o
 ## Lexical conventions
 - **Whitespace and comments** – Lexing skips Unicode whitespace, line comments starting with `--`, and nested block comments delimited by `/-` … `-/`.
 - **Tokens** – Tokens are classified as identifiers, symbols, numeral literals, or keywords according to the rules in the lexer. Identifiers may contain Unicode letters, digits, underscores, apostrophes, and dot-separated namespaces. Symbols cover operators such as `:=`, `∃!`, `${`, `.{`, parentheses, and punctuation.
-- **Keywords** – Reserved words recognized by the lexer are `infixr`, `infixl`, `infix`, `nofix`, `prefix`, `def`, `axiom`, `lemma`, `const`, `type`, `local`, `inductive`, `structure`, `instance`, and `class`. The bare glyphs `λ` and `_` are treated as symbols, not identifiers.
+- **Keywords** – Reserved words recognized by the lexer are `infixr`, `infixl`, `infix`, `nofix`, `prefix`, `def`, `axiom`, `lemma`, `const`, `type`, `inductive`, `structure`, `instance`, and `class`. The bare glyphs `λ` and `_` are treated as symbols, not identifiers.
 
 ## Type grammar
 - **Primary forms** – A type primary can be a local type variable, a registered type constant, the special keyword `sub` (expanding to an arrow into `Prop`), the numeral type `ℕ` (desugaring to `nat`), or a parenthesized type.
@@ -35,11 +35,10 @@ The `cmd` dispatcher recognizes the following keywords. Each command builds a st
 - **Definitions** – `def name.{tyvars} [class params] (args : τ) : σ := t` declares computable constants. Types are generalized over parameters before being stored.
 - **Axioms and lemmas** – `axiom` and `lemma` share parameter syntax; lemmas additionally require a proof script and record any metavariable holes for later solving.
 - **Constants** – `const` introduces noncomputable constants with optional local type/class parameters.
-- **Type layer** – `type const`, `type variable`, and `type inductive` manage type constructors, scoped type variables, and inductive type families.
+- **Type layer** – `type const` and `type inductive` manage type constructors and inductive type families.
 - **Inductive propositions** – `inductive` declares propositional inductives with parameters and constructor blocks separated by `|`. Constructor targets are automatically generalized over constructor parameters.
 - **Structures and instances** – `structure` declares record-like bundles of constants and axioms; `instance` supplies implementations of those fields for a target type, including derived lemmas.
 - **Type classes** – `class structure` and `class instance` mirror structures/instances but live in the class namespace and accept class arguments on fields.
-- **Local type constants** – `local type const α β` (or `type variable`) pushes new type variables into scope for subsequent commands.
 
 ## Type classes and implicit arguments
 - Class parameters `[C]` record constraints that become implicit instance arguments when using the resulting constants or lemmas.

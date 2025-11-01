@@ -656,10 +656,6 @@ impl Display for Class {
 }
 
 impl Class {
-    pub fn contains_local(&self, name: Name) -> bool {
-        self.args.iter().any(|t| t.contains_local(name))
-    }
-
     pub fn subst(&self, subst: &[(Name, Type)]) -> Class {
         let mut changed = false;
         let args: Vec<Type> = self
@@ -833,17 +829,6 @@ impl Instance {
                 }
             }
             Instance::Hole(_) => self.clone(),
-        }
-    }
-
-    fn contains_local_type(&self, name: Name) -> bool {
-        match self {
-            Instance::Local(c) => c.class.contains_local(name),
-            Instance::Global(i) => {
-                i.ty_args.iter().any(|t| t.contains_local(name))
-                    || i.args.iter().any(|i| i.contains_local_type(name))
-            }
-            Instance::Hole(_) => false,
         }
     }
 
@@ -1651,20 +1636,6 @@ impl Term {
             };
         }
         true
-    }
-
-    pub fn contains_local_type(&self, name: Name) -> bool {
-        match self {
-            Term::Var(_) => false,
-            Term::Abs(m) => m.binder_type.contains_local(name) || m.body.contains_local_type(name),
-            Term::App(m) => m.fun.contains_local_type(name) || m.arg.contains_local_type(name),
-            Term::Local(_) => false,
-            Term::Const(m) => {
-                m.ty_args.iter().any(|t| t.contains_local(name))
-                    || m.instances.iter().any(|i| i.contains_local_type(name))
-            }
-            Term::Hole(_) => false,
-        }
     }
 
     /// Returns the application `self l₁ ⋯ lₙ`.

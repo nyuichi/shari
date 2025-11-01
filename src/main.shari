@@ -1670,9 +1670,6 @@ structure W.el u v := {
 }
 
 -- type infixr × : 35
-
-local type const u v
-
 -- TODO: use namespace
 def star : unit := unit.star
 -- def inl : u → sum u v := sum.inl

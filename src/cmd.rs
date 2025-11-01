@@ -26,7 +26,6 @@ pub enum Cmd {
     Lemma(CmdLemma),
     Const(CmdConst),
     TypeConst(CmdTypeConst),
-    LocalTypeConst(CmdLocalTypeConst),
     TypeInductive(CmdTypeInductive),
     Inductive(CmdInductive),
     Structure(CmdStructure),
@@ -108,11 +107,6 @@ pub struct CmdConst {
 pub struct CmdTypeConst {
     pub name: QualifiedName,
     pub kind: Kind,
-}
-
-#[derive(Clone, Debug)]
-pub struct CmdLocalTypeConst {
-    pub variables: Vec<Name>,
 }
 
 #[derive(Clone, Debug)]
@@ -311,15 +305,6 @@ impl std::fmt::Display for Cmd {
                 cmd.ty
             ),
             Cmd::TypeConst(cmd) => write!(f, "type const {} : {}", cmd.name, cmd.kind),
-            Cmd::LocalTypeConst(cmd) => write!(
-                f,
-                "local type const {}",
-                cmd.variables
-                    .iter()
-                    .map(|n| n.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            ),
             Cmd::TypeInductive(cmd) => write!(
                 f,
                 "inductive {}.{{{}}} {{\n{}\n}}",
@@ -475,7 +460,6 @@ fn generate_fresh_local_type(local_types: &Vec<Name>) -> Name {
 pub struct Eval {
     pub tt: TokenTable,
     pub pp: OpTable,
-    pub local_type_consts: Vec<Name>,
     pub type_const_table: HashMap<QualifiedName, Kind>,
     pub const_table: HashMap<QualifiedName, Const>,
     pub axiom_table: HashMap<QualifiedName, Axiom>,
@@ -839,7 +823,7 @@ impl Eval {
             Cmd::Def(inner) => {
                 let CmdDef {
                     name,
-                    mut local_types,
+                    local_types,
                     local_classes,
                     ty,
                     mut target,
@@ -853,21 +837,6 @@ impl Eval {
                             bail!("duplicate type variables");
                         }
                     }
-                }
-                for &local_type_const in self.local_type_consts.iter().rev() {
-                    if local_types.contains(&local_type_const) {
-                        // shadowed by the .{} binder
-                        continue;
-                    }
-                    if !local_classes
-                        .iter()
-                        .any(|local_class| local_class.contains_local(local_type_const))
-                        && !ty.contains_local(local_type_const)
-                    {
-                        // unused
-                        continue;
-                    }
-                    local_types.insert(0, local_type_const);
                 }
                 let mut local_env = LocalEnv {
                     local_types: local_types.clone(),
@@ -893,7 +862,7 @@ impl Eval {
             Cmd::Axiom(inner) => {
                 let CmdAxiom {
                     name,
-                    mut local_types,
+                    local_types,
                     local_classes,
                     mut target,
                 } = inner;
@@ -906,21 +875,6 @@ impl Eval {
                             bail!("duplicate type variables");
                         }
                     }
-                }
-                for &local_type_const in self.local_type_consts.iter().rev() {
-                    if local_types.contains(&local_type_const) {
-                        // shadowed by the .{} binder
-                        continue;
-                    }
-                    if !local_classes
-                        .iter()
-                        .any(|local_class| local_class.contains_local(local_type_const))
-                        && !target.contains_local_type(local_type_const)
-                    {
-                        // unused
-                        continue;
-                    }
-                    local_types.insert(0, local_type_const);
                 }
                 let mut local_env = LocalEnv {
                     local_types: local_types.clone(),
@@ -939,7 +893,7 @@ impl Eval {
             Cmd::Lemma(inner) => {
                 let CmdLemma {
                     name,
-                    mut local_types,
+                    local_types,
                     local_classes,
                     mut target,
                     holes,
@@ -954,21 +908,6 @@ impl Eval {
                             bail!("duplicate type variables");
                         }
                     }
-                }
-                for &local_type_const in self.local_type_consts.iter().rev() {
-                    if local_types.contains(&local_type_const) {
-                        // shadowed by the .{} binder
-                        continue;
-                    }
-                    if !local_classes
-                        .iter()
-                        .any(|local_class| local_class.contains_local(local_type_const))
-                        && !target.contains_local_type(local_type_const)
-                    {
-                        // unused
-                        continue;
-                    }
-                    local_types.insert(0, local_type_const);
                 }
                 let mut local_env = LocalEnv {
                     local_types: local_types.clone(),
@@ -993,7 +932,7 @@ impl Eval {
             Cmd::Const(inner) => {
                 let CmdConst {
                     name,
-                    mut local_types,
+                    local_types,
                     local_classes,
                     ty,
                 } = inner;
@@ -1006,21 +945,6 @@ impl Eval {
                             bail!("duplicate type variables");
                         }
                     }
-                }
-                for &local_type_const in self.local_type_consts.iter().rev() {
-                    if local_types.contains(&local_type_const) {
-                        // shadowed by the .{} binder
-                        continue;
-                    }
-                    if !local_classes
-                        .iter()
-                        .any(|local_class| local_class.contains_local(local_type_const))
-                        && !ty.contains_local(local_type_const)
-                    {
-                        // unused
-                        continue;
-                    }
-                    local_types.insert(0, local_type_const);
                 }
                 let mut local_env = LocalEnv {
                     local_types: local_types.clone(),
@@ -1041,23 +965,6 @@ impl Eval {
                     bail!("already defined");
                 }
                 self.add_type_const(name, kind);
-                Ok(())
-            }
-            Cmd::LocalTypeConst(inner) => {
-                let CmdLocalTypeConst { variables } = inner;
-                for i in 0..variables.len() {
-                    for j in i + 1..variables.len() {
-                        if variables[i] == variables[j] {
-                            bail!("duplicate type variables");
-                        }
-                    }
-                }
-                for v in &variables {
-                    if self.local_type_consts.contains(v) {
-                        bail!("type variable already defined");
-                    }
-                }
-                self.local_type_consts.extend(variables);
                 Ok(())
             }
             Cmd::TypeInductive(cmd) => self.run_type_inductive_cmd(cmd),
@@ -1375,7 +1282,7 @@ impl Eval {
         let CmdInductive {
             name,
             local_name,
-            mut local_types,
+            local_types,
             params,
             target_ty,
             mut ctors,
@@ -1389,21 +1296,6 @@ impl Eval {
                     bail!("duplicate type variables");
                 }
             }
-        }
-        for &local_type_const in self.local_type_consts.iter().rev() {
-            if local_types.contains(&local_type_const) {
-                // shadowed by the .{} binder
-                continue;
-            }
-            if !params
-                .iter()
-                .any(|param| param.ty.contains_local(local_type_const))
-                && !target_ty.contains_local(local_type_const)
-            {
-                // unused
-                continue;
-            }
-            local_types.insert(0, local_type_const);
         }
         let mut local_env = LocalEnv {
             local_types: local_types.clone(),
@@ -1896,7 +1788,7 @@ impl Eval {
         //
         let CmdInstance {
             name,
-            mut local_types,
+            local_types,
             local_classes,
             params,
             target_ty,
@@ -1911,24 +1803,6 @@ impl Eval {
                     bail!("duplicate type variables");
                 }
             }
-        }
-        for &local_type_const in self.local_type_consts.iter().rev() {
-            if local_types.contains(&local_type_const) {
-                // shadowed by the .{} binder
-                continue;
-            }
-            if !local_classes
-                .iter()
-                .any(|local_class| local_class.contains_local(local_type_const))
-                && !params
-                    .iter()
-                    .any(|param| param.ty.contains_local(local_type_const))
-                && !target_ty.contains_local(local_type_const)
-            {
-                // unused
-                continue;
-            }
-            local_types.insert(0, local_type_const);
         }
         let mut local_env = LocalEnv {
             local_types: local_types.clone(),
