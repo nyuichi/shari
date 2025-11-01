@@ -88,13 +88,6 @@ impl Span {
         Self { file, start, end }
     }
 
-    pub fn to_source_info(&self) -> SourceInfo {
-        SourceInfo {
-            range: self.start..self.end,
-            file: Arc::clone(&self.file),
-        }
-    }
-
     pub fn eof(file: Arc<File>) -> Self {
         let len = file.len();
         let start = len.saturating_sub(1);
@@ -115,7 +108,16 @@ impl Span {
 
 impl std::fmt::Display for Span {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_source_info())
+        let (line, column) = self.line_column();
+        writeln!(f, "{}:{}:{}\n", self.file.name(), line, column)?;
+        let line_text = self.file.line(line);
+        writeln!(f, "{}", line_text)?;
+        writeln!(
+            f,
+            "{}{}",
+            " ".repeat(column - 1),
+            "^".repeat(std::cmp::max(1, self.as_str().chars().count()))
+        )
     }
 }
 

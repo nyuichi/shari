@@ -149,7 +149,7 @@ impl TokenTable {
 }
 
 fn duplicate_span(span: Option<&Span>) -> Option<Span> {
-    span.map(|span| span.to_source_info().span())
+    span.cloned()
 }
 
 #[derive(Debug, Error)]
@@ -474,10 +474,10 @@ impl<'a> Parser<'a> {
         // needs at least one parameter
         let token = self.ident()?;
         let name = Name::intern(token.as_str());
-        idents.push((name, token.source_info.span()));
+        idents.push((name, token.span.clone()));
         while let Some(token) = self.ident_opt() {
             let name = Name::intern(token.as_str());
-            idents.push((name, token.source_info.span()));
+            idents.push((name, token.span.clone()));
         }
         self.expect_symbol(":")?;
         let t = self.ty()?;
@@ -510,7 +510,7 @@ impl<'a> Parser<'a> {
                 }
             } else if let Some(token) = self.ident_opt() {
                 let name = Name::intern(token.as_str());
-                params.push((name, None, token.source_info.span()));
+                params.push((name, None, token.span.clone()));
             } else {
                 break;
             }
@@ -611,7 +611,7 @@ impl<'a> Parser<'a> {
         if let Some(_token) = self.expect_symbol_opt(":") {
             ty = self.ty()?;
         } else {
-            ty = mk_fresh_type_hole().with_span(Some(token.source_info.span()));
+            ty = mk_fresh_type_hole().with_span(Some(token.span.clone()));
         }
         let x = Local { name, ty };
         self.expect_symbol("|")?;
@@ -683,7 +683,7 @@ impl<'a> Parser<'a> {
             }
         } else {
             for _ in 0..const_info.local_types.len() {
-                ty_args.push(mk_fresh_type_hole().with_span(Some(token.source_info.span())));
+                ty_args.push(mk_fresh_type_hole().with_span(Some(token.span.clone())));
             }
         }
         let mut instances = vec![];
@@ -723,7 +723,7 @@ impl<'a> Parser<'a> {
                 Fixity::Infix | Fixity::Infixl | Fixity::Infixr => unreachable!(),
             },
             Nud::NumLit => Self::fail(token, "numeric literal is unsupported")?,
-            Nud::Hole => self.mk_term_hole(Some(token.source_info.span())),
+            Nud::Hole => self.mk_term_hole(Some(token.span.clone())),
             Nud::Brace => self.term_sep(token)?,
             Nud::Pair => self.term_pair(token)?,
         };
@@ -803,7 +803,7 @@ impl<'a> Parser<'a> {
             }
         } else {
             for _ in 0..axiom_info.local_types.len() {
-                ty_args.push(mk_fresh_type_hole().with_span(Some(token.source_info.span())));
+                ty_args.push(mk_fresh_type_hole().with_span(Some(token.span.clone())));
             }
         }
         let mut instances = vec![];
@@ -813,7 +813,7 @@ impl<'a> Parser<'a> {
         let mut expr = mk_expr_const(name.clone(), ty_args, instances);
         if auto_inst {
             for _ in 0..count_forall(&axiom_info.target) {
-                expr = mk_expr_inst(expr, self.mk_term_hole(Some(token.source_info.span())));
+                expr = mk_expr_inst(expr, self.mk_term_hole(Some(token.span.clone())));
             }
         }
         Ok(expr)
@@ -978,8 +978,8 @@ impl<'a> Parser<'a> {
                         vec![ty.clone()],
                         vec![],
                     );
-                    let e = mk_expr_inst(e, self.mk_term_hole(Some(token.source_info.span())));
-                    let e = mk_expr_inst(e, self.mk_term_hole(Some(token.source_info.span())));
+                    let e = mk_expr_inst(e, self.mk_term_hole(Some(token.span.clone())));
+                    let e = mk_expr_inst(e, self.mk_term_hole(Some(token.span.clone())));
                     let e = mk_expr_app(e, e1);
                     let e_body = mk_expr_assume(p, alias, e2);
                     let e_body = mk_expr_take(name, ty, e_body);
@@ -1948,7 +1948,7 @@ mod tests {
             .span
             .clone()
             .expect("binder hole should record span");
-        let (line, column) = span.to_source_info().line_column();
+        let (line, column) = span.line_column();
         assert_eq!(line, 1);
         assert_eq!(column, 3);
     }
