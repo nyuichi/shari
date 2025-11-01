@@ -89,6 +89,7 @@ pub struct CmdAxiom {
 #[derive(Clone, Debug)]
 pub struct CmdLemma {
     pub name: QualifiedName,
+    // TODO: Vec<Id>にする。generate_flesh_local_typeで使っているtype localはIdを自動生成するようにして、printのところで頑張る
     pub local_types: Vec<Name>,
     pub local_classes: Vec<Class>,
     pub target: Term,
