@@ -1,7 +1,7 @@
 //! Prove by type synthesis.
 
 use std::sync::LazyLock;
-use std::{collections::HashMap, iter::zip};
+use std::{collections::HashMap, iter::zip, ops::ControlFlow};
 
 use crate::{
     lex::Span,
@@ -491,6 +491,48 @@ impl Expr {
                 inner.metadata.span = span;
                 Expr::Change(inner)
             }
+        }
+    }
+
+    pub fn visit_type<B>(&self, f: &mut impl FnMut(&Type) -> ControlFlow<B>) -> ControlFlow<B> {
+        match self {
+            Expr::Assump(assump) => assump.target.visit_type(f),
+            Expr::AssumpByName(_) => ControlFlow::Continue(()),
+            Expr::Assume(assume) => match assume.local_axiom.visit_type(f) {
+                ControlFlow::Break(break_value) => ControlFlow::Break(break_value),
+                ControlFlow::Continue(()) => assume.expr.visit_type(f),
+            },
+            Expr::App(app) => match app.expr1.visit_type(f) {
+                ControlFlow::Break(break_value) => ControlFlow::Break(break_value),
+                ControlFlow::Continue(()) => app.expr2.visit_type(f),
+            },
+            Expr::Take(take) => match take.ty.visit_type(f) {
+                ControlFlow::Break(break_value) => ControlFlow::Break(break_value),
+                ControlFlow::Continue(()) => take.expr.visit_type(f),
+            },
+            Expr::Inst(inst) => match inst.expr.visit_type(f) {
+                ControlFlow::Break(break_value) => ControlFlow::Break(break_value),
+                ControlFlow::Continue(()) => inst.arg.visit_type(f),
+            },
+            Expr::Const(const_expr) => {
+                for ty in &const_expr.ty_args {
+                    match ty.visit_type(f) {
+                        ControlFlow::Break(break_value) => return ControlFlow::Break(break_value),
+                        ControlFlow::Continue(()) => {}
+                    }
+                }
+                for instance in &const_expr.instances {
+                    match instance.visit_type(f) {
+                        ControlFlow::Break(break_value) => return ControlFlow::Break(break_value),
+                        ControlFlow::Continue(()) => {}
+                    }
+                }
+                ControlFlow::Continue(())
+            }
+            Expr::Change(change) => match change.target.visit_type(f) {
+                ControlFlow::Break(break_value) => ControlFlow::Break(break_value),
+                ControlFlow::Continue(()) => change.expr.visit_type(f),
+            },
         }
     }
 
