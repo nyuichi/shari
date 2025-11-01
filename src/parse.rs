@@ -148,10 +148,6 @@ impl TokenTable {
     }
 }
 
-fn duplicate_span(span: Option<&Span>) -> Option<Span> {
-    span.cloned()
-}
-
 #[derive(Debug, Error)]
 pub enum ParseError {
     #[error("tokenize error")]
@@ -631,8 +627,8 @@ impl<'a> Parser<'a> {
         let pair = mk_const(
             QualifiedName::intern("pair"),
             vec![
-                mk_fresh_type_hole().with_span(duplicate_span(fst.span())),
-                mk_fresh_type_hole().with_span(duplicate_span(snd.span())),
+                mk_fresh_type_hole().with_span(fst.span().cloned()),
+                mk_fresh_type_hole().with_span(snd.span().cloned()),
             ],
             vec![],
         );
@@ -643,8 +639,8 @@ impl<'a> Parser<'a> {
         let proj = mk_const(
             proj.name(),
             vec![
-                mk_fresh_type_hole().with_span(duplicate_span(term.span())),
-                mk_fresh_type_hole().with_span(duplicate_span(term.span())),
+                mk_fresh_type_hole().with_span(term.span().cloned()),
+                mk_fresh_type_hole().with_span(term.span().cloned()),
             ],
             vec![],
         );
@@ -773,7 +769,7 @@ impl<'a> Parser<'a> {
         };
         self.holes.push((
             inner.name,
-            mk_fresh_type_hole().with_span(duplicate_span(span.as_ref())),
+            mk_fresh_type_hole().with_span(span.as_ref().cloned()),
         ));
         hole = hole.with_span(span);
         hole = hole.apply(self.locals.iter().map(|name| mk_local(*name)));
@@ -827,8 +823,7 @@ impl<'a> Parser<'a> {
         let mut eq = mk_const(
             QualifiedName::intern("eq"),
             vec![
-                mk_fresh_type_hole()
-                    .with_span(duplicate_span(lhs.span()).or_else(|| duplicate_span(rhs.span()))),
+                mk_fresh_type_hole().with_span(lhs.span().cloned().or_else(|| rhs.span().cloned())),
             ],
             vec![],
         );
@@ -838,14 +833,12 @@ impl<'a> Parser<'a> {
 
     fn mk_eq_trans(&mut self, e1: Expr, e2: Expr) -> Expr {
         let name = QualifiedName::intern("eq.trans");
-        let ty_args = vec![
-            mk_fresh_type_hole()
-                .with_span(duplicate_span(e1.span()).or_else(|| duplicate_span(e2.span()))),
-        ];
+        let ty_args =
+            vec![mk_fresh_type_hole().with_span(e1.span().cloned().or_else(|| e2.span().cloned()))];
         let instances = vec![];
         let mut eq_trans = mk_expr_const(name, ty_args, instances);
         for _ in 0..3 {
-            let span = duplicate_span(e1.span()).or_else(|| duplicate_span(e2.span()));
+            let span = e1.span().cloned().or_else(|| e2.span().cloned());
             eq_trans = mk_expr_inst(eq_trans, self.mk_term_hole(span));
         }
         mk_expr_app(mk_expr_app(eq_trans, e1), e2)
