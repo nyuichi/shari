@@ -1,0 +1,6 @@
+type const Prop : Type
+local type const u
+const foo.{u} : Prop
+
+def type_hole_def_universe : Prop :=
+  foo
