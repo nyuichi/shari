@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::hash::{Hash, Hasher};
 use std::iter::zip;
 use std::ops::ControlFlow;
 use std::sync::atomic::AtomicUsize;
@@ -12,7 +13,7 @@ use crate::{lex::Span, proof::mk_type_prop};
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
 pub struct Name(usize);
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
+#[derive(Debug, Clone, Ord, PartialOrd, Default)]
 pub struct QualifiedName(Arc<String>);
 
 static NAME_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -126,6 +127,20 @@ impl QualifiedName {
         value.push('.');
         value.push_str(suffix);
         QualifiedName::intern(&value)
+    }
+}
+
+impl PartialEq for QualifiedName {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for QualifiedName {}
+
+impl Hash for QualifiedName {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Arc::as_ptr(&self.0).hash(state);
     }
 }
 
@@ -280,7 +295,7 @@ pub fn mk_type_arrow(dom: Type, cod: Type) -> Type {
 
 #[inline]
 pub fn mk_fresh_type_hole() -> Type {
-    mk_type_hole(Name::fresh_with_name("α"))
+    mk_type_hole(Name::fresh())
 }
 
 #[inline]
