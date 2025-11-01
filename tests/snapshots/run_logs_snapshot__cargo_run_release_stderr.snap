@@ -395,7 +395,7 @@ expression: normalized.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom W.el.abs.{u, v} : ∀ f tree, (∃ a, tree nil a) → (∀ l a b, tree l a → f b = a → ∃ a₀, tree (cons b l) a₀) → (∀ l x a, tree (cons x l) a → tree l (f x)) → functional tree → well_founded (λ p₁ p₂, tree (fst p₁) (snd p₁) ∧ tree (fst p₂) (snd p₂) ∧ ∃ l a, fst p₂ = cons a l ∧ fst p₁ = l ∧ snd p₂ = f a) → ∃ this, and (f = W.el.f this) (tree = W.el.tree this)
 [<timestamp> INFO  shari::cmd] + axiom W.el.ext.{u, v} : ∀ this₁ this₂, W.el.f this₁ = W.el.f this₂ → W.el.tree this₁ = W.el.tree this₂ → this₁ = this₂
 [<timestamp> INFO  shari::cmd] + const star : unit
-[<timestamp> INFO  shari::cmd] + const none : option u
+[<timestamp> INFO  shari::cmd] + const none.{u} : option u
 [<timestamp> INFO  shari::cmd] + axiom unit.eta_expand : ∀ x, x = star
 [<timestamp> INFO  shari::cmd] + axiom unit.eta_reduce : ∀ x, star = x
 [<timestamp> INFO  shari::cmd] + axiom unit_ext : ∀ x₁ x₂, x₁ = x₂
