@@ -1,0 +1,13 @@
+---
+source: tests/proof_error_snapshots.rs
+expression: formatted
+---
+error chain:
+  - command error
+  - type hole remains after elaboration
+tests/proof_errors/type_hole_axiom_universe.shari:7:3
+
+  foo
+  ^^^
+
+fixture: tests/proof_errors/type_hole_axiom_universe.shari

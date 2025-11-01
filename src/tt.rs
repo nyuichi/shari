@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::iter::zip;
+use std::ops::ControlFlow;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::vec;
@@ -361,6 +362,23 @@ impl Type {
         }
     }
 
+    pub fn visit_type<B>(&self, f: &mut impl FnMut(&Type) -> ControlFlow<B>) -> ControlFlow<B> {
+        if let ControlFlow::Break(break_value) = f(self) {
+            return ControlFlow::Break(break_value);
+        }
+        match self {
+            Type::Const(_) | Type::Local(_) | Type::Hole(_) => ControlFlow::Continue(()),
+            Type::Arrow(inner) => match inner.dom.visit_type(f) {
+                ControlFlow::Break(break_value) => ControlFlow::Break(break_value),
+                ControlFlow::Continue(()) => inner.cod.visit_type(f),
+            },
+            Type::App(inner) => match inner.fun.visit_type(f) {
+                ControlFlow::Break(break_value) => ControlFlow::Break(break_value),
+                ControlFlow::Continue(()) => inner.arg.visit_type(f),
+            },
+        }
+    }
+
     /// t.arrow([t1, t2]) // => t1 → t2 → t
     pub fn arrow(&self, cs: impl IntoIterator<Item = Type>) -> Type {
         let mut cod = self.clone();
@@ -645,6 +663,16 @@ impl Class {
         self.args.iter().any(|t| t.contains_local(name))
     }
 
+    pub fn visit_type<B>(&self, f: &mut impl FnMut(&Type) -> ControlFlow<B>) -> ControlFlow<B> {
+        for arg in &self.args {
+            match arg.visit_type(f) {
+                ControlFlow::Break(break_value) => return ControlFlow::Break(break_value),
+                ControlFlow::Continue(()) => {}
+            }
+        }
+        ControlFlow::Continue(())
+    }
+
     pub fn subst(&self, subst: &[(Name, Type)]) -> Class {
         let mut changed = false;
         let args: Vec<Type> = self
@@ -829,6 +857,28 @@ impl Instance {
                     || i.args.iter().any(|i| i.contains_local_type(name))
             }
             Instance::Hole(_) => false,
+        }
+    }
+
+    pub fn visit_type<B>(&self, f: &mut impl FnMut(&Type) -> ControlFlow<B>) -> ControlFlow<B> {
+        match self {
+            Instance::Local(local) => local.class.visit_type(f),
+            Instance::Global(global) => {
+                for ty in &global.ty_args {
+                    match ty.visit_type(f) {
+                        ControlFlow::Break(break_value) => return ControlFlow::Break(break_value),
+                        ControlFlow::Continue(()) => {}
+                    }
+                }
+                for arg in &global.args {
+                    match arg.visit_type(f) {
+                        ControlFlow::Break(break_value) => return ControlFlow::Break(break_value),
+                        ControlFlow::Continue(()) => {}
+                    }
+                }
+                ControlFlow::Continue(())
+            }
+            Instance::Hole(_) => ControlFlow::Continue(()),
         }
     }
 
@@ -1221,6 +1271,35 @@ impl Term {
                 let mut inner = Arc::unwrap_or_clone(inner);
                 inner.metadata.span = span;
                 Term::Hole(Arc::new(inner))
+            }
+        }
+    }
+
+    pub fn visit_type<B>(&self, f: &mut impl FnMut(&Type) -> ControlFlow<B>) -> ControlFlow<B> {
+        match self {
+            Term::Var(_) | Term::Local(_) | Term::Hole(_) => ControlFlow::Continue(()),
+            Term::Abs(inner) => match inner.binder_type.visit_type(f) {
+                ControlFlow::Break(break_value) => ControlFlow::Break(break_value),
+                ControlFlow::Continue(()) => inner.body.visit_type(f),
+            },
+            Term::App(inner) => match inner.fun.visit_type(f) {
+                ControlFlow::Break(break_value) => ControlFlow::Break(break_value),
+                ControlFlow::Continue(()) => inner.arg.visit_type(f),
+            },
+            Term::Const(inner) => {
+                for ty in &inner.ty_args {
+                    match ty.visit_type(f) {
+                        ControlFlow::Break(break_value) => return ControlFlow::Break(break_value),
+                        ControlFlow::Continue(()) => {}
+                    }
+                }
+                for instance in &inner.instances {
+                    match instance.visit_type(f) {
+                        ControlFlow::Break(break_value) => return ControlFlow::Break(break_value),
+                        ControlFlow::Continue(()) => {}
+                    }
+                }
+                ControlFlow::Continue(())
             }
         }
     }

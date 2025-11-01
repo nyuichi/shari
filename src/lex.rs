@@ -122,6 +122,10 @@ impl SourceInfo {
         Self { range, file }
     }
 
+    pub fn span(&self) -> Span {
+        Span::new(Arc::clone(&self.file), self.range.start, self.range.end)
+    }
+
     pub fn eof(file: Arc<File>) -> Self {
         let len = file.len();
         let start = len.saturating_sub(1);
