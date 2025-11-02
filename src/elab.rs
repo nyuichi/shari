@@ -605,7 +605,7 @@ impl<'a> Elaborator<'a> {
                 pred = pred.abs(&[x]);
 
                 let mut target = mk_const(
-                    QualifiedName::intern("forall"),
+                    QualifiedName::from_str("forall"),
                     vec![arg_ty.clone()],
                     vec![],
                 );
@@ -2279,12 +2279,12 @@ impl<'a> Elaborator<'a> {
         if let Some(instance) = self.resolve_class(
             self.tt_local_env,
             &Class {
-                name: QualifiedName::intern("default"),
+                name: QualifiedName::from_str("default"),
                 args: vec![goal.clone()],
             },
         ) {
             let mut m = mk_const(
-                QualifiedName::intern("default.value"),
+                QualifiedName::from_str("default.value"),
                 vec![goal.clone()],
                 vec![instance],
             );
@@ -2461,13 +2461,13 @@ mod tests {
 
     #[test]
     fn unify_fails_for_inhabited_terms() {
-        let name_u = Name::intern("u");
+        let name_u = Name::from_str("u");
         let ty_u = mk_type_local(name_u.clone());
-        let name_is_inhabited = QualifiedName::intern("is_inhabited");
+        let name_is_inhabited = QualifiedName::from_str("is_inhabited");
         let ty_is_inhabited_u = mk_type_app(mk_type_const(name_is_inhabited.clone()), ty_u.clone());
         let ty_u_to_prop = mk_type_arrow(ty_u.clone(), mk_type_prop());
 
-        let hole_id = Id::from_name(Name::intern("46380"));
+        let hole_id = Id::from_name(Name::from_str("46380"));
         let hole_type = mk_type_arrow(
             ty_is_inhabited_u.clone(),
             mk_type_arrow(
@@ -2479,11 +2479,11 @@ mod tests {
             ),
         );
 
-        let h_id = Id::from_name(Name::intern("h"));
-        let x_id = Id::from_name(Name::intern("x46373"));
+        let h_id = Id::from_name(Name::from_str("h"));
+        let x_id = Id::from_name(Name::from_str("x46373"));
 
         let rep_term = mk_const(
-            QualifiedName::intern("is_inhabited.inhab.rep"),
+            QualifiedName::from_str("is_inhabited.inhab.rep"),
             vec![ty_u.clone()],
             vec![],
         );
@@ -2498,19 +2498,19 @@ mod tests {
             mk_var(0),
         );
         let body = mk_app(mk_var(2), hole_applied);
-        let lambda = mk_abs(Id::from_name(Name::intern("46379")), ty_u.clone(), body);
+        let lambda = mk_abs(Id::from_name(Name::from_str("46379")), ty_u.clone(), body);
         let lambda = mk_abs(
-            Id::from_name(Name::intern("46378")),
+            Id::from_name(Name::from_str("46378")),
             ty_is_inhabited_u.clone(),
             lambda,
         );
         let lambda = mk_abs(
-            Id::from_name(Name::intern("46377")),
+            Id::from_name(Name::from_str("46377")),
             ty_u_to_prop.clone(),
             lambda,
         );
         let lambda = mk_abs(
-            Id::from_name(Name::intern("46376")),
+            Id::from_name(Name::from_str("46376")),
             ty_is_inhabited_u.clone(),
             lambda,
         );
@@ -2523,7 +2523,7 @@ mod tests {
             mk_local(x_id),
         );
 
-        let in_term = mk_const(QualifiedName::intern("in"), vec![ty_u.clone()], vec![]);
+        let in_term = mk_const(QualifiedName::from_str("in"), vec![ty_u.clone()], vec![]);
         let right = mk_app(mk_app(in_term, mk_local(x_id)), rep_applied.clone());
 
         let locals = vec![
@@ -2544,7 +2544,7 @@ mod tests {
         };
         let mut tt_local_env = local_env.clone();
 
-        let name_prop = QualifiedName::intern("Prop");
+        let name_prop = QualifiedName::from_str("Prop");
 
         let type_const_table: HashMap<QualifiedName, Kind> = HashMap::from([
             (name_prop.clone(), Kind::base()),

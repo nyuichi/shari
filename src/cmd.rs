@@ -454,7 +454,7 @@ fn generate_fresh_local_type(local_types: &Vec<Name>) -> Name {
         }
         break;
     }
-    Name::intern(&x)
+    Name::from_str(&x)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1076,7 +1076,7 @@ impl Eval {
         //           P zero →
         //           P α
         let motive = Local {
-            id: Id::fresh_with_name(Name::intern("motive")),
+            id: Id::fresh_with_name(Name::from_str("motive")),
             ty: mk_type_arrow(target_ty.clone(), mk_type_prop()),
         };
         let mut guards = vec![];
@@ -1130,7 +1130,7 @@ impl Eval {
         }
         // ∀ x P, {guards} → P x
         let x = Local {
-            id: Id::fresh_with_name(Name::intern("x")),
+            id: Id::fresh_with_name(Name::from_str("x")),
             ty: target_ty.clone(),
         };
         let mut target = mk_local(motive.id);
@@ -1169,7 +1169,7 @@ impl Eval {
         }
         let mut cont_params = vec![];
         for _ in &ctors {
-            cont_params.push(Id::fresh_with_name(Name::intern("k")));
+            cont_params.push(Id::fresh_with_name(Name::from_str("k")));
         }
         let mut cont_param_tys = vec![];
         let mut rhs_bodies = vec![];
@@ -1254,7 +1254,7 @@ impl Eval {
 
             let eq_ty = mk_type_local(rec_ty_var.clone()).arrow(cont_param_tys.clone());
 
-            let mut spec = mk_const(QualifiedName::intern("eq"), vec![eq_ty], vec![]);
+            let mut spec = mk_const(QualifiedName::from_str("eq"), vec![eq_ty], vec![]);
             spec = spec.apply([lhs, rhs]);
             spec = generalize(&spec, &ctor_params);
 
@@ -1432,7 +1432,7 @@ impl Eval {
             })
             .collect::<Vec<_>>();
         let motive = Local {
-            id: Id::fresh_with_name(Name::intern("motive")),
+            id: Id::fresh_with_name(Name::from_str("motive")),
             ty: target_ty.clone(),
         };
         // C w
@@ -1598,7 +1598,7 @@ impl Eval {
 
         // inhab u
         let this = Local {
-            id: Id::fresh_with_name(Name::intern("this")),
+            id: Id::fresh_with_name(Name::from_str("this")),
             ty: {
                 mk_type_const(name.clone()).apply(local_types.iter().cloned().map(mk_type_local))
             },
@@ -1710,8 +1710,11 @@ impl Eval {
                     rhs = rhs.apply([mk_local(this.id)]);
 
                     // s = inhab.rep this
-                    let mut char =
-                        mk_const(QualifiedName::intern("eq"), vec![field_ty.clone()], vec![]);
+                    let mut char = mk_const(
+                        QualifiedName::from_str("eq"),
+                        vec![field_ty.clone()],
+                        vec![],
+                    );
                     char = char.apply([mk_local(param.id), rhs]);
                     chars.push(char);
 
@@ -1729,7 +1732,7 @@ impl Eval {
             }
         }
         let mut abs = mk_const(
-            QualifiedName::intern("exists"),
+            QualifiedName::from_str("exists"),
             vec![this.ty.clone()],
             vec![],
         );
@@ -1737,11 +1740,11 @@ impl Eval {
             let mut char = chars
                 .into_iter()
                 .reduce(|left, right| {
-                    let mut conj = mk_const(QualifiedName::intern("and"), vec![], vec![]);
+                    let mut conj = mk_const(QualifiedName::from_str("and"), vec![], vec![]);
                     conj = conj.apply([left, right]);
                     conj
                 })
-                .unwrap_or_else(|| mk_const(QualifiedName::intern("true"), vec![], vec![]));
+                .unwrap_or_else(|| mk_const(QualifiedName::from_str("true"), vec![], vec![]));
             char = char.abs(slice::from_ref(&this));
             char
         }]);
@@ -1752,11 +1755,11 @@ impl Eval {
         // generate extensionality
         // axiom inhab.ext.{u} (this₁ this₂ : inhab u) : inhab.rep this₁ = inhab.rep this₂ → this₁ = this₂
         let this1 = Local {
-            id: Id::fresh_with_name(Name::intern("this₁")),
+            id: Id::fresh_with_name(Name::from_str("this₁")),
             ty: this.ty.clone(),
         };
         let this2 = Local {
-            id: Id::fresh_with_name(Name::intern("this₂")),
+            id: Id::fresh_with_name(Name::from_str("this₂")),
             ty: this.ty.clone(),
         };
         let mut guards = vec![];
@@ -1773,11 +1776,15 @@ impl Eval {
             let mut rhs = proj;
             rhs = rhs.apply([mk_local(this2.id)]);
 
-            let mut guard = mk_const(QualifiedName::intern("eq"), vec![field.ty.clone()], vec![]);
+            let mut guard = mk_const(
+                QualifiedName::from_str("eq"),
+                vec![field.ty.clone()],
+                vec![],
+            );
             guard = guard.apply([lhs, rhs]);
             guards.push(guard);
         }
-        let mut target = mk_const(QualifiedName::intern("eq"), vec![this.ty.clone()], vec![]);
+        let mut target = mk_const(QualifiedName::from_str("eq"), vec![this.ty.clone()], vec![]);
         target = target.apply([mk_local(this1.id), mk_local(this2.id)]);
         target = guard(&target, guards);
         target = generalize(&target, &[this1, this2]);
@@ -2038,7 +2045,7 @@ impl Eval {
             target
         }]);
         let f = Local {
-            id: Id::fresh_with_name(Name::intern("f")),
+            id: Id::fresh_with_name(Name::from_str("f")),
             ty: mk_type_local(ret_ty.clone()).arrow(fields.iter().filter_map(
                 |field| match field {
                     InstanceField::Def(field) => Some(field.ty.clone()),
@@ -2061,7 +2068,7 @@ impl Eval {
         }));
         right = right.abs(slice::from_ref(&f));
         let mut target = mk_const(
-            QualifiedName::intern("eq"),
+            QualifiedName::from_str("eq"),
             vec![{ mk_type_local(ret_ty.clone()).arrow([f.ty.clone()]) }],
             vec![],
         );

@@ -33,7 +33,7 @@ impl Display for Name {
 }
 
 impl Name {
-    pub fn intern(value: &str) -> Name {
+    pub fn from_str(value: &str) -> Name {
         let mut table = NAME_TABLE.lock().unwrap();
         if let Some(existing) = table.get(value).and_then(|weak| weak.upgrade()) {
             return Name(existing);
@@ -70,7 +70,7 @@ impl Display for QualifiedName {
 }
 
 impl QualifiedName {
-    pub fn intern(value: &str) -> QualifiedName {
+    pub fn from_str(value: &str) -> QualifiedName {
         let mut table = QUALIFIED_NAME_TABLE.lock().unwrap();
         if let Some(existing) = table.get(value).and_then(|weak| weak.upgrade()) {
             return QualifiedName(existing);
@@ -94,7 +94,7 @@ impl QualifiedName {
         value.push_str(self.as_str());
         value.push('.');
         value.push_str(suffix);
-        QualifiedName::intern(&value)
+        QualifiedName::from_str(&value)
     }
 }
 
@@ -2462,7 +2462,7 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let c = QualifiedName::intern("c");
+        let c = QualifiedName::from_str("c");
         let left = mk_const(c.clone(), vec![], vec![]);
         let right = mk_const(c, vec![], vec![]);
 
@@ -2474,8 +2474,8 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let x = Id::from_name(Name::intern("x"));
-        let a = QualifiedName::intern("a");
+        let x = Id::from_name(Name::from_str("x"));
+        let a = QualifiedName::from_str("a");
         let body = mk_var(0);
         let lambda = mk_abs(x, mk_type_prop(), body);
         let arg = mk_const(a.clone(), vec![], vec![]);
@@ -2486,8 +2486,8 @@ mod tests {
 
     #[test]
     fn equiv_delta_unfolds_constant() {
-        let c = QualifiedName::intern("c");
-        let d = QualifiedName::intern("d");
+        let c = QualifiedName::from_str("c");
+        let d = QualifiedName::from_str("d");
 
         let delta = Delta {
             local_types: vec![],
@@ -2510,8 +2510,8 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let c = QualifiedName::intern("c");
-        let d = QualifiedName::intern("d");
+        let c = QualifiedName::from_str("c");
+        let d = QualifiedName::from_str("d");
         let left = mk_const(c, vec![], vec![]);
         let right = mk_const(d, vec![], vec![]);
 
@@ -2523,9 +2523,9 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let f = QualifiedName::intern("f");
-        let a = QualifiedName::intern("a");
-        let b = QualifiedName::intern("b");
+        let f = QualifiedName::from_str("f");
+        let a = QualifiedName::from_str("a");
+        let b = QualifiedName::from_str("b");
 
         let fun = mk_const(f, vec![], vec![]);
         let left = mk_app(fun.clone(), mk_const(a, vec![], vec![]));

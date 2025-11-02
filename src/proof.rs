@@ -12,12 +12,13 @@ use crate::{
 };
 
 pub fn mk_type_prop() -> Type {
-    static T_PROP: LazyLock<Type> = LazyLock::new(|| mk_type_const(QualifiedName::intern("Prop")));
+    static T_PROP: LazyLock<Type> =
+        LazyLock::new(|| mk_type_const(QualifiedName::from_str("Prop")));
     T_PROP.clone()
 }
 
 pub fn count_forall(term: &Term) -> usize {
-    static FORALL: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("forall"));
+    static FORALL: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::from_str("forall"));
 
     let mut count = 0;
     let mut current = term;
@@ -44,7 +45,7 @@ pub fn count_forall(term: &Term) -> usize {
 }
 
 pub fn generalize(term: &Term, xs: &[Local]) -> Term {
-    static FORALL: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("forall"));
+    static FORALL: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::from_str("forall"));
 
     let locals = xs.iter().map(|x| x.id).collect::<Vec<_>>();
     let mut result = term.close(&locals, 0);
@@ -68,7 +69,7 @@ pub fn ungeneralize(term: &Term) -> (Vec<Local>, Term) {
 }
 
 pub fn ungeneralize1(term: &Term) -> Option<(Local, Term)> {
-    static FORALL: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("forall"));
+    static FORALL: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::from_str("forall"));
 
     let Term::App(m) = term else {
         return None;
@@ -102,7 +103,7 @@ pub fn guard(term: &Term, guards: impl IntoIterator<Item = Term>) -> Term {
 }
 
 fn guard_help(target: Term, mut guards: impl Iterator<Item = Term>) -> Term {
-    static IMP: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("imp"));
+    static IMP: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::from_str("imp"));
 
     if let Some(guard_term) = guards.next() {
         let inner = guard_help(target, guards);
@@ -125,7 +126,7 @@ pub fn unguard(term: &Term) -> (Vec<Term>, Term) {
 }
 
 pub fn unguard1(term: &Term) -> Option<(Term, Term)> {
-    static IMP: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("imp"));
+    static IMP: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::from_str("imp"));
 
     let Term::App(m) = term else {
         return None;
