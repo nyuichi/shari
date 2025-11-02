@@ -759,7 +759,7 @@ pub struct Env<'a> {
 
 #[derive(Debug, Clone)]
 pub struct LocalAxiom {
-    pub name: Option<Id>,
+    pub alias_id: Option<Id>,
     pub prop: Term,
 }
 
@@ -805,7 +805,7 @@ impl Env<'_> {
             Expr::AssumpByName(e) => {
                 let ExprAssumpByName { metadata: _, id } = &**e;
                 for local_axiom in local_env.local_axioms.iter().rev() {
-                    if local_axiom.name == Some(*id) {
+                    if local_axiom.alias_id == Some(*id) {
                         return local_axiom.prop.clone();
                     }
                 }
@@ -820,7 +820,7 @@ impl Env<'_> {
                 } = &**e;
                 self.tt_env.check_wff(tt_local_env, local_axiom);
                 local_env.local_axioms.push(LocalAxiom {
-                    name: *alias,
+                    alias_id: *alias,
                     prop: local_axiom.clone(),
                 });
                 let target = self.infer_prop(tt_local_env, local_env, expr);

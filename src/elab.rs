@@ -473,7 +473,7 @@ impl<'a> Elaborator<'a> {
                 let ExprAssumpByName { metadata: _, id } = expr.as_ref();
 
                 for local in self.local_axioms.iter().rev() {
-                    if local.name == Some(*id) {
+                    if local.alias_id == Some(*id) {
                         return Ok(local.prop.clone());
                     }
                 }
@@ -496,7 +496,7 @@ impl<'a> Elaborator<'a> {
                 self.push_type_constraint(local_axiom_ty, mk_type_prop(), error);
 
                 self.local_axioms.push(LocalAxiom {
-                    name: *alias,
+                    alias_id: *alias,
                     prop: local_axiom.clone(),
                 });
                 let mut target = self.visit_expr(inner)?;
@@ -1399,12 +1399,12 @@ impl<'a> Elaborator<'a> {
                 self.push_type_constraint(inner1.arg, inner2.arg, error);
             }
             (Type::Hole(hole), t) | (t, Type::Hole(hole)) => {
-                let hole_name = hole.id;
+                let hole_id = hole.id;
                 let t = self.fully_inst_type(&t); // TODO: avoid instantiation
-                if t.contains_hole(hole_name) {
+                if t.contains_hole(hole_id) {
                     return Some(error);
                 }
-                self.add_type_subst(hole_name, t, error);
+                self.add_type_subst(hole_id, t, error);
             }
             (_, _) => {
                 return Some(error);
@@ -2467,7 +2467,7 @@ mod tests {
         let ty_is_inhabited_u = mk_type_app(mk_type_const(name_is_inhabited.clone()), ty_u.clone());
         let ty_u_to_prop = mk_type_arrow(ty_u.clone(), mk_type_prop());
 
-        let hole_name = Id::from_name(Name::intern("46380"));
+        let hole_id = Id::from_name(Name::intern("46380"));
         let hole_type = mk_type_arrow(
             ty_is_inhabited_u.clone(),
             mk_type_arrow(
@@ -2479,17 +2479,17 @@ mod tests {
             ),
         );
 
-        let name_h = Id::from_name(Name::intern("h"));
-        let name_x = Id::from_name(Name::intern("x46373"));
+        let h_id = Id::from_name(Name::intern("h"));
+        let x_id = Id::from_name(Name::intern("x46373"));
 
         let rep_term = mk_const(
             QualifiedName::intern("is_inhabited.inhab.rep"),
             vec![ty_u.clone()],
             vec![],
         );
-        let rep_applied = mk_app(rep_term, mk_local(name_h));
+        let rep_applied = mk_app(rep_term, mk_local(h_id));
 
-        let hole = mk_hole(hole_name);
+        let hole = mk_hole(hole_id);
         let hole_applied = mk_app(
             mk_app(
                 mk_app(mk_app(hole.clone(), mk_var(3)), mk_var(2)),
@@ -2517,22 +2517,22 @@ mod tests {
 
         let left = mk_app(
             mk_app(
-                mk_app(mk_app(lambda, mk_local(name_h)), rep_applied.clone()),
-                mk_local(name_h),
+                mk_app(mk_app(lambda, mk_local(h_id)), rep_applied.clone()),
+                mk_local(h_id),
             ),
-            mk_local(name_x),
+            mk_local(x_id),
         );
 
         let in_term = mk_const(QualifiedName::intern("in"), vec![ty_u.clone()], vec![]);
-        let right = mk_app(mk_app(in_term, mk_local(name_x)), rep_applied.clone());
+        let right = mk_app(mk_app(in_term, mk_local(x_id)), rep_applied.clone());
 
         let locals = vec![
             Local {
-                id: name_h,
+                id: h_id,
                 ty: ty_is_inhabited_u.clone(),
             },
             Local {
-                id: name_x,
+                id: x_id,
                 ty: ty_u.clone(),
             },
         ];
@@ -2570,7 +2570,7 @@ mod tests {
             axiom_table: &axiom_table,
         };
 
-        let term_holes = vec![(hole_name, hole_type)];
+        let term_holes = vec![(hole_id, hole_type)];
         let mut elab = Elaborator::new(proof_env, &mut tt_local_env, term_holes);
 
         println!("left: {left}");

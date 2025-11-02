@@ -484,12 +484,9 @@ impl<'a> Parser<'a> {
     fn typed_parameters(&mut self) -> Result<Vec<Local>, ParseError> {
         let mut params = vec![];
         while let Some(token) = self.expect_symbol_opt("(") {
-            let (names, ty) = self.typed_parameter(token)?;
-            for name in names {
-                params.push(Local {
-                    id: name,
-                    ty: ty.clone(),
-                });
+            let (ids, ty) = self.typed_parameter(token)?;
+            for id in ids {
+                params.push(Local { id, ty: ty.clone() });
             }
         }
         Ok(params)
@@ -499,9 +496,9 @@ impl<'a> Parser<'a> {
         let mut params = vec![];
         loop {
             if let Some(token) = self.expect_symbol_opt("(") {
-                let (names, t) = self.typed_parameter(token)?;
-                for name in names {
-                    params.push((name, Some(t.clone())));
+                let (ids, t) = self.typed_parameter(token)?;
+                for id in ids {
+                    params.push((id, Some(t.clone())));
                 }
             } else if let Some(name) = self.name_opt() {
                 params.push((Id::from_name(name), None));
@@ -554,12 +551,12 @@ impl<'a> Parser<'a> {
             return Self::fail(token, "empty binding");
         }
         let mut binders = vec![];
-        for (name, ty) in params {
+        for (id, ty) in params {
             let ty = match ty {
                 Some(ty) => ty,
                 None => mk_fresh_type_hole(),
             };
-            binders.push(Local { id: name, ty });
+            binders.push(Local { id, ty });
         }
         for x in &binders {
             self.locals.push(x.id);
@@ -577,12 +574,12 @@ impl<'a> Parser<'a> {
             return Self::fail(token, "empty binding");
         }
         let mut binders = vec![];
-        for (name, ty) in params {
+        for (id, ty) in params {
             let ty = match ty {
                 Some(ty) => ty,
                 None => mk_fresh_type_hole(),
             };
-            binders.push(Local { id: name, ty });
+            binders.push(Local { id, ty });
         }
         for x in &binders {
             self.locals.push(x.id);
@@ -599,14 +596,14 @@ impl<'a> Parser<'a> {
     }
 
     fn term_sep(&mut self, _token: Token) -> Result<Term, ParseError> {
-        let name = Id::from_name(self.name()?);
+        let binder_id = Id::from_name(self.name()?);
         let ty;
         if let Some(_token) = self.expect_symbol_opt(":") {
             ty = self.ty()?;
         } else {
             ty = mk_fresh_type_hole();
         }
-        let x = Local { id: name, ty };
+        let x = Local { id: binder_id, ty };
         self.expect_symbol("|")?;
         self.locals.push(x.id);
         let mut m = self.subterm(0)?;
@@ -857,8 +854,8 @@ impl<'a> Parser<'a> {
                     let m = self.term()?;
                     let alias = self.alias_opt()?;
                     self.expect_symbol(",")?;
-                    if let Some(name) = alias {
-                        self.local_axioms.push(name);
+                    if let Some(alias_id) = alias {
+                        self.local_axioms.push(alias_id);
                     }
                     let expr = match self.expr() {
                         Ok(expr) => expr,
@@ -876,15 +873,15 @@ impl<'a> Parser<'a> {
                 }
                 "take" => {
                     self.expect_symbol("(")?;
-                    let name = Id::from_name(self.name()?);
+                    let local_id = Id::from_name(self.name()?);
                     self.expect_symbol(":")?;
                     let ty = self.ty()?;
                     self.expect_symbol(")")?;
                     self.expect_symbol(",")?;
-                    self.locals.push(name);
+                    self.locals.push(local_id);
                     let e = self.expr()?;
                     self.locals.pop();
-                    mk_expr_take(name, ty, e)
+                    mk_expr_take(local_id, ty, e)
                 }
                 "change" => {
                     let m = self.term()?;
@@ -898,8 +895,8 @@ impl<'a> Parser<'a> {
                     self.expect_symbol(":=")?;
                     let e1 = self.expr()?;
                     self.expect_symbol(",")?;
-                    if let Some(name) = alias {
-                        self.local_axioms.push(name);
+                    if let Some(alias_id) = alias {
+                        self.local_axioms.push(alias_id);
                     }
                     let e2 = match self.expr() {
                         Ok(expr) => expr,
@@ -917,21 +914,21 @@ impl<'a> Parser<'a> {
                 }
                 "obtain" => {
                     self.expect_symbol("(")?;
-                    let name = Id::from_name(self.name()?);
+                    let local_id = Id::from_name(self.name()?);
                     self.expect_symbol(":")?;
                     let ty = self.ty()?;
                     self.expect_symbol(")")?;
                     self.expect_symbol(",")?;
-                    self.locals.push(name);
+                    self.locals.push(local_id);
                     let p = self.term()?;
                     self.locals.pop();
                     let alias = self.alias_opt()?;
                     self.expect_symbol(":=")?;
                     let e1 = self.expr()?;
                     self.expect_symbol(",")?;
-                    self.locals.push(name);
-                    if let Some(alias_name) = alias {
-                        self.local_axioms.push(alias_name);
+                    self.locals.push(local_id);
+                    if let Some(alias_id) = alias {
+                        self.local_axioms.push(alias_id);
                     }
                     let e2 = match self.expr() {
                         Ok(expr) => expr,
@@ -958,7 +955,7 @@ impl<'a> Parser<'a> {
                     let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_app(e, e1);
                     let e_body = mk_expr_assume(p, alias, e2);
-                    let e_body = mk_expr_take(name, ty, e_body);
+                    let e_body = mk_expr_take(local_id, ty, e_body);
                     mk_expr_app(e, e_body)
                 }
                 "calc" => {
@@ -1021,9 +1018,14 @@ impl<'a> Parser<'a> {
                     body
                 }
                 _ => {
-                    let name = Id::from_name(Name::intern(token.as_str()));
-                    if self.local_axioms.iter().rev().any(|alias| *alias == name) {
-                        mk_expr_assump_by_name(name)
+                    let alias_id = Id::from_name(Name::intern(token.as_str()));
+                    if self
+                        .local_axioms
+                        .iter()
+                        .rev()
+                        .any(|candidate_id| *candidate_id == alias_id)
+                    {
+                        mk_expr_assump_by_name(alias_id)
                     } else {
                         self.expr_const(token, true)?
                     }
@@ -1814,6 +1816,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    #[allow(clippy::type_complexity)]
     fn setup_tables() -> (
         TokenTable,
         HashMap<QualifiedName, Kind>,
