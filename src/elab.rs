@@ -473,7 +473,7 @@ impl<'a> Elaborator<'a> {
                 let ExprAssumpByName { metadata: _, id } = expr.as_ref();
 
                 for local in self.local_axioms.iter().rev() {
-                    if local.alias_id == Some(*id) {
+                    if local.alias == Some(*id) {
                         return Ok(local.prop.clone());
                     }
                 }
@@ -496,7 +496,7 @@ impl<'a> Elaborator<'a> {
                 self.push_type_constraint(local_axiom_ty, mk_type_prop(), error);
 
                 self.local_axioms.push(LocalAxiom {
-                    alias_id: *alias,
+                    alias: *alias,
                     prop: local_axiom.clone(),
                 });
                 let mut target = self.visit_expr(inner)?;
