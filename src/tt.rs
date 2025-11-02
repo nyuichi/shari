@@ -146,6 +146,7 @@ impl Id {
         new_id
     }
 
+    // TODO: &Name を受け取るようにする
     pub fn from_name(name: Name) -> Id {
         let mut id_table = ID_TABLE.lock().unwrap();
         if let Some(&id) = id_table.get(&name) {

@@ -166,14 +166,14 @@ pub enum ParseError {
 pub struct Parser<'a> {
     lex: &'a mut Lex,
     tt: &'a TokenTable,
-    // TODO: change Id and QualifiedName below to String to avoid intern cost
     type_const_table: &'a HashMap<QualifiedName, Kind>,
     const_table: &'a HashMap<QualifiedName, Const>,
     axiom_table: &'a HashMap<QualifiedName, Axiom>,
     class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
-    type_locals: Vec<Name>,
+    local_types: Vec<Name>,
+    // TODO: Vec<Name>にする
     locals: Vec<Id>,
-    local_axioms: Vec<Id>,
+    local_axioms: Vec<Name>,
     holes: Vec<(Id, Type)>,
 }
 
@@ -193,7 +193,7 @@ impl<'a> Parser<'a> {
             const_table,
             axiom_table,
             class_predicate_table,
-            type_locals: vec![],
+            local_types: vec![],
             locals: vec![],
             local_axioms: vec![],
             holes: vec![],
@@ -365,14 +365,14 @@ impl<'a> Parser<'a> {
         name
     }
 
-    fn alias_opt(&mut self) -> Result<Option<Id>, ParseError> {
+    fn alias_opt(&mut self) -> Result<Option<Name>, ParseError> {
         if let Some(token) = self.peek_opt()
             && token.kind == TokenKind::Keyword
             && token.as_str() == "as"
         {
             self.advance();
             let name = self.name()?;
-            return Ok(Some(Id::from_name(name)));
+            return Ok(Some(name));
         }
         Ok(None)
     }
@@ -392,7 +392,7 @@ impl<'a> Parser<'a> {
         if token.is_ident() {
             let path = self.qualified_name(&token);
             let type_name = Name::intern(path.as_str());
-            if self.type_locals.iter().any(|x| x == &type_name) {
+            if self.local_types.iter().any(|x| x == &type_name) {
                 Ok(mk_type_local(type_name))
             } else if self.type_const_table.contains_key(&path) {
                 Ok(mk_type_const(path))
@@ -845,8 +845,8 @@ impl<'a> Parser<'a> {
                     let m = self.term()?;
                     let alias = self.alias_opt()?;
                     self.expect_symbol(",")?;
-                    if let Some(alias_id) = alias {
-                        self.local_axioms.push(alias_id);
+                    if let Some(alias_name) = &alias {
+                        self.local_axioms.push(alias_name.clone());
                     }
                     let expr = match self.expr() {
                         Ok(expr) => expr,
@@ -860,7 +860,7 @@ impl<'a> Parser<'a> {
                     if alias.is_some() {
                         self.local_axioms.pop();
                     }
-                    mk_expr_assume(m, alias, expr)
+                    mk_expr_assume(m, alias.map(|name| Id::from_name(name)), expr)
                 }
                 "take" => {
                     self.expect_symbol("(")?;
@@ -886,8 +886,8 @@ impl<'a> Parser<'a> {
                     self.expect_symbol(":=")?;
                     let e1 = self.expr()?;
                     self.expect_symbol(",")?;
-                    if let Some(alias_id) = alias {
-                        self.local_axioms.push(alias_id);
+                    if let Some(alias_name) = &alias {
+                        self.local_axioms.push(alias_name.clone());
                     }
                     let e2 = match self.expr() {
                         Ok(expr) => expr,
@@ -901,7 +901,7 @@ impl<'a> Parser<'a> {
                     if alias.is_some() {
                         self.local_axioms.pop();
                     }
-                    Self::mk_have(m, alias, e1, e2)
+                    Self::mk_have(m, alias.map(|name| Id::from_name(name)), e1, e2)
                 }
                 "obtain" => {
                     self.expect_symbol("(")?;
@@ -918,8 +918,8 @@ impl<'a> Parser<'a> {
                     let e1 = self.expr()?;
                     self.expect_symbol(",")?;
                     self.locals.push(local_id);
-                    if let Some(alias_id) = alias {
-                        self.local_axioms.push(alias_id);
+                    if let Some(alias_name) = &alias {
+                        self.local_axioms.push(alias_name.clone());
                     }
                     let e2 = match self.expr() {
                         Ok(expr) => expr,
@@ -945,7 +945,7 @@ impl<'a> Parser<'a> {
                     let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_app(e, e1);
-                    let e_body = mk_expr_assume(p, alias, e2);
+                    let e_body = mk_expr_assume(p, alias.map(|name| Id::from_name(name)), e2);
                     let e_body = mk_expr_take(local_id, ty, e_body);
                     mk_expr_app(e, e_body)
                 }
@@ -1009,14 +1009,9 @@ impl<'a> Parser<'a> {
                     body
                 }
                 _ => {
-                    let alias_id = Id::from_name(Name::intern(token.as_str()));
-                    if self
-                        .local_axioms
-                        .iter()
-                        .rev()
-                        .any(|candidate_id| *candidate_id == alias_id)
-                    {
-                        mk_expr_assump_by_name(alias_id)
+                    let name = Name::intern(token.as_str());
+                    if self.local_axioms.iter().rev().any(|n| n == &name) {
+                        mk_expr_assump_by_name(Id::from_name(name))
                     } else {
                         self.expr_const(token, true)?
                     }
@@ -1275,7 +1270,7 @@ impl<'a> Parser<'a> {
         let name = self.qualified_name(&ident);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
-            self.type_locals.push(ty.clone());
+            self.local_types.push(ty.clone());
         }
         let local_classes = self.local_class_parameters()?;
         let params = self.typed_parameters()?;
@@ -1288,8 +1283,8 @@ impl<'a> Parser<'a> {
         let mut m = self.term()?;
         // Parsing finished.
         self.locals.truncate(self.locals.len() - params.len());
-        self.type_locals
-            .truncate(self.type_locals.len() - local_types.len());
+        self.local_types
+            .truncate(self.local_types.len() - local_types.len());
         for param in params.into_iter().rev() {
             t = t.arrow([param.ty.clone()]);
             m = m.abs(&[param]);
@@ -1308,7 +1303,7 @@ impl<'a> Parser<'a> {
         let name = self.qualified_name(&ident);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
-            self.type_locals.push(ty.clone());
+            self.local_types.push(ty.clone());
         }
         let local_classes = self.local_class_parameters()?;
         let params = self.typed_parameters()?;
@@ -1319,8 +1314,8 @@ impl<'a> Parser<'a> {
         let mut target = self.term()?;
         // Parsing finished.
         self.locals.truncate(self.locals.len() - params.len());
-        self.type_locals
-            .truncate(self.type_locals.len() - local_types.len());
+        self.local_types
+            .truncate(self.local_types.len() - local_types.len());
         target = generalize(&target, &params);
         Ok(CmdAxiom {
             name,
@@ -1335,7 +1330,7 @@ impl<'a> Parser<'a> {
         let name = self.qualified_name(&ident);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
-            self.type_locals.push(ty.clone());
+            self.local_types.push(ty.clone());
         }
         let local_classes = self.local_class_parameters()?;
         let params = self.typed_parameters()?;
@@ -1348,8 +1343,8 @@ impl<'a> Parser<'a> {
         let mut e = self.expr()?;
         // Parsing finished.
         self.locals.truncate(self.locals.len() - params.len());
-        self.type_locals
-            .truncate(self.type_locals.len() - local_types.len());
+        self.local_types
+            .truncate(self.local_types.len() - local_types.len());
         p = generalize(&p, &params);
         for param in params.into_iter().rev() {
             e = mk_expr_take(param.id, param.ty, e);
@@ -1370,14 +1365,14 @@ impl<'a> Parser<'a> {
         let name = self.qualified_name(&ident);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
-            self.type_locals.push(ty.clone());
+            self.local_types.push(ty.clone());
         }
         let local_classes = self.local_class_parameters()?;
         self.expect_symbol(":")?;
         let t = self.ty()?;
         // Parsing finished.
-        self.type_locals
-            .truncate(self.type_locals.len() - local_types.len());
+        self.local_types
+            .truncate(self.local_types.len() - local_types.len());
         Ok(CmdConst {
             name,
             local_types,
@@ -1399,7 +1394,7 @@ impl<'a> Parser<'a> {
         let name = self.qualified_name(&ident);
         let local_type_name = Name::intern(name.as_str());
         let local_id = Id::from_name(local_type_name.clone());
-        self.type_locals.push(local_type_name.clone());
+        self.local_types.push(local_type_name.clone());
 
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
@@ -1408,7 +1403,7 @@ impl<'a> Parser<'a> {
                 return Self::fail(token, "duplicate type variable")?;
             }
             local_types.push(tv.clone());
-            self.type_locals.push(tv);
+            self.local_types.push(tv);
         }
         let mut ctors: Vec<DataConstructor> = vec![];
         while let Some(_token) = self.expect_symbol_opt("|") {
@@ -1427,9 +1422,9 @@ impl<'a> Parser<'a> {
             })
         }
         // Parsing finished. We can now safaly tear off.
-        self.type_locals
-            .truncate(self.type_locals.len() - local_types.len());
-        self.type_locals.pop();
+        self.local_types
+            .truncate(self.local_types.len() - local_types.len());
+        self.local_types.pop();
         Ok(CmdTypeInductive {
             name,
             local_id,
@@ -1445,7 +1440,7 @@ impl<'a> Parser<'a> {
         self.locals.push(local_id);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
-            self.type_locals.push(ty.clone());
+            self.local_types.push(ty.clone());
         }
         let params = self.typed_parameters()?;
         for param in &params {
@@ -1478,8 +1473,8 @@ impl<'a> Parser<'a> {
         // Parsing finished.
         self.locals.truncate(self.locals.len() - params.len());
         self.locals.pop();
-        self.type_locals
-            .truncate(self.type_locals.len() - local_types.len());
+        self.local_types
+            .truncate(self.local_types.len() - local_types.len());
         Ok(CmdInductive {
             name,
             local_id,
@@ -1500,7 +1495,7 @@ impl<'a> Parser<'a> {
                 return Self::fail(token, "duplicate type variable")?;
             }
             local_types.push(tv.clone());
-            self.type_locals.push(tv);
+            self.local_types.push(tv);
         }
         self.expect_symbol(":=")?;
         self.expect_symbol("{")?;
@@ -1543,8 +1538,8 @@ impl<'a> Parser<'a> {
             }
         }
         self.locals.truncate(self.locals.len() - num_consts);
-        self.type_locals
-            .truncate(self.type_locals.len() - local_types.len());
+        self.local_types
+            .truncate(self.local_types.len() - local_types.len());
         Ok(CmdStructure {
             name,
             local_types,
@@ -1557,7 +1552,7 @@ impl<'a> Parser<'a> {
         let name = self.qualified_name(&ident);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
-            self.type_locals.push(ty.clone());
+            self.local_types.push(ty.clone());
         }
         let local_classes = self.local_class_parameters()?;
         let params = self.typed_parameters()?;
@@ -1629,8 +1624,8 @@ impl<'a> Parser<'a> {
         // parsing finished.
         self.locals.truncate(self.locals.len() - num_defs);
         self.locals.truncate(self.locals.len() - params.len());
-        self.type_locals
-            .truncate(self.type_locals.len() - local_types.len());
+        self.local_types
+            .truncate(self.local_types.len() - local_types.len());
         Ok(CmdInstance {
             name,
             local_types,
@@ -1651,7 +1646,7 @@ impl<'a> Parser<'a> {
                 return Self::fail(token, "duplicate type variable")?;
             }
             local_types.push(tv.clone());
-            self.type_locals.push(tv);
+            self.local_types.push(tv);
         }
         self.expect_symbol(":=")?;
         self.expect_symbol("{")?;
@@ -1694,8 +1689,8 @@ impl<'a> Parser<'a> {
             }
         }
         self.locals.truncate(self.locals.len() - num_consts);
-        self.type_locals
-            .truncate(self.type_locals.len() - local_types.len());
+        self.local_types
+            .truncate(self.local_types.len() - local_types.len());
         Ok(CmdClassStructure {
             name,
             local_types,
@@ -1708,7 +1703,7 @@ impl<'a> Parser<'a> {
         let name = self.qualified_name(&ident);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
-            self.type_locals.push(ty.clone());
+            self.local_types.push(ty.clone());
         }
         let local_classes = self.local_class_parameters()?;
         self.expect_symbol(":")?;
@@ -1769,8 +1764,8 @@ impl<'a> Parser<'a> {
             }
         }
         // parsing finished.
-        self.type_locals
-            .truncate(self.type_locals.len() - local_types.len());
+        self.local_types
+            .truncate(self.local_types.len() - local_types.len());
         Ok(CmdClassInstance {
             name,
             local_types,
