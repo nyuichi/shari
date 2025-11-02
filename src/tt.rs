@@ -9,93 +9,22 @@ use std::vec;
 
 use crate::{lex::Span, proof::mk_type_prop};
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
-pub struct Id(usize);
-
 #[derive(Debug, Clone, Ord, PartialOrd, Default)]
 pub struct Name(Arc<String>);
 
 #[derive(Debug, Clone, Ord, PartialOrd, Default)]
 pub struct QualifiedName(Arc<String>);
 
-static ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
-static ID_TABLE: LazyLock<Mutex<HashMap<Name, Id>>> = LazyLock::new(Default::default);
-static ID_REV_TABLE: LazyLock<Mutex<HashMap<Id, Name>>> = LazyLock::new(Default::default);
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
+pub struct Id(usize);
 
 static NAME_TABLE: LazyLock<Mutex<HashMap<String, Weak<String>>>> = LazyLock::new(Default::default);
 static QUALIFIED_NAME_TABLE: LazyLock<Mutex<HashMap<String, Weak<String>>>> =
     LazyLock::new(Default::default);
 
-impl Display for Id {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Some(name) = self.name() else {
-            return write!(f, "{}", self.0);
-        };
-        if self.is_generated() {
-            write!(f, "{}{}", name, self.0)
-        } else {
-            write!(f, "{}", name)
-        }
-    }
-}
-
-impl Id {
-    pub fn fresh() -> Self {
-        let id = ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Id(id)
-    }
-
-    pub fn fresh_from(id: Id) -> Self {
-        let value = ID_REV_TABLE.lock().unwrap().get(&id).cloned();
-        let new_id = Id::fresh();
-        if let Some(value) = value {
-            ID_REV_TABLE.lock().unwrap().insert(new_id, value);
-        }
-        new_id
-    }
-
-    pub fn fresh_with_name(name: Name) -> Self {
-        let new_id = Id::fresh();
-        ID_REV_TABLE.lock().unwrap().insert(new_id, name);
-        new_id
-    }
-
-    pub fn from_name(name: Name) -> Id {
-        let mut id_table = ID_TABLE.lock().unwrap();
-        if let Some(&id) = id_table.get(&name) {
-            return id;
-        }
-
-        let id = Id::fresh();
-        id_table.insert(name.clone(), id);
-        drop(id_table);
-        // This can be put here outside the critical section of ID_TABLE
-        // because no one but this function knows of the value of `id`.
-        ID_REV_TABLE.lock().unwrap().insert(id, name);
-        id
-    }
-
-    pub fn name(&self) -> Option<Name> {
-        ID_REV_TABLE.lock().unwrap().get(self).cloned()
-    }
-
-    pub fn is_generated(&self) -> bool {
-        let Some(name) = self.name() else {
-            return true;
-        };
-        let Some(&id) = ID_TABLE.lock().unwrap().get(&name) else {
-            return true;
-        };
-        id != *self
-    }
-
-    // TODO: 自動生成されたIdに対してas_strできないようにする
-    pub fn as_str(&self) -> String {
-        self.name()
-            .map(|name| name.as_str().to_owned())
-            .unwrap_or_else(|| format!("{}", self))
-    }
-}
+static ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
+static ID_TABLE: LazyLock<Mutex<HashMap<Name, Id>>> = LazyLock::new(Default::default);
+static ID_REV_TABLE: LazyLock<Mutex<HashMap<Id, Name>>> = LazyLock::new(Default::default);
 
 impl Display for Name {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -180,6 +109,77 @@ impl Eq for QualifiedName {}
 impl Hash for QualifiedName {
     fn hash<H: Hasher>(&self, state: &mut H) {
         Arc::as_ptr(&self.0).hash(state);
+    }
+}
+
+impl Display for Id {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Some(name) = self.name() else {
+            return write!(f, "{}", self.0);
+        };
+        if self.is_generated() {
+            write!(f, "{}{}", name, self.0)
+        } else {
+            write!(f, "{}", name)
+        }
+    }
+}
+
+impl Id {
+    pub fn fresh() -> Self {
+        let id = ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Id(id)
+    }
+
+    pub fn fresh_from(id: Id) -> Self {
+        let value = ID_REV_TABLE.lock().unwrap().get(&id).cloned();
+        let new_id = Id::fresh();
+        if let Some(value) = value {
+            ID_REV_TABLE.lock().unwrap().insert(new_id, value);
+        }
+        new_id
+    }
+
+    pub fn fresh_with_name(name: Name) -> Self {
+        let new_id = Id::fresh();
+        ID_REV_TABLE.lock().unwrap().insert(new_id, name);
+        new_id
+    }
+
+    pub fn from_name(name: Name) -> Id {
+        let mut id_table = ID_TABLE.lock().unwrap();
+        if let Some(&id) = id_table.get(&name) {
+            return id;
+        }
+
+        let id = Id::fresh();
+        id_table.insert(name.clone(), id);
+        drop(id_table);
+        // This can be put here outside the critical section of ID_TABLE
+        // because no one but this function knows of the value of `id`.
+        ID_REV_TABLE.lock().unwrap().insert(id, name);
+        id
+    }
+
+    pub fn name(&self) -> Option<Name> {
+        ID_REV_TABLE.lock().unwrap().get(self).cloned()
+    }
+
+    pub fn is_generated(&self) -> bool {
+        let Some(name) = self.name() else {
+            return true;
+        };
+        let Some(&id) = ID_TABLE.lock().unwrap().get(&name) else {
+            return true;
+        };
+        id != *self
+    }
+
+    // TODO: 自動生成されたIdに対してas_strできないようにする
+    pub fn as_str(&self) -> String {
+        self.name()
+            .map(|name| name.as_str().to_owned())
+            .unwrap_or_else(|| format!("{}", self))
     }
 }
 
