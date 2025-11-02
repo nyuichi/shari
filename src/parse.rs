@@ -74,8 +74,8 @@ enum Proj {
 
 impl Proj {
     fn name(self) -> QualifiedName {
-        static FST: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("fst"));
-        static SND: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::intern("snd"));
+        static FST: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::from_str("fst"));
+        static SND: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::from_str("snd"));
 
         match self {
             Self::Fst => FST.clone(),
@@ -340,15 +340,15 @@ impl<'a> Parser<'a> {
     }
 
     fn name(&mut self) -> Result<Name, ParseError> {
-        Ok(Name::intern(self.ident()?.as_str()))
+        Ok(Name::from_str(self.ident()?.as_str()))
     }
 
     fn name_opt(&mut self) -> Option<Name> {
-        self.ident_opt().map(|token| Name::intern(token.as_str()))
+        self.ident_opt().map(|token| Name::from_str(token.as_str()))
     }
 
     fn qualified_name(&mut self, token: &Token) -> QualifiedName {
-        let mut name = QualifiedName::intern(token.as_str());
+        let mut name = QualifiedName::from_str(token.as_str());
         while let Some(field) = self.peek_opt() {
             if field.kind != TokenKind::Field {
                 break;
@@ -391,7 +391,7 @@ impl<'a> Parser<'a> {
         let token = self.any_token()?;
         if token.is_ident() {
             let path = self.qualified_name(&token);
-            let type_name = Name::intern(path.as_str());
+            let type_name = Name::from_str(path.as_str());
             if self.local_types.iter().any(|x| x == &type_name) {
                 Ok(mk_type_local(type_name))
             } else if self.type_const_table.contains_key(&path) {
@@ -400,7 +400,7 @@ impl<'a> Parser<'a> {
                 let t = self.subty(1024)?;
                 Ok(mk_type_arrow(t, mk_type_prop()))
             } else if path.as_str() == "ℕ" {
-                Ok(mk_type_const(QualifiedName::intern("nat")))
+                Ok(mk_type_const(QualifiedName::from_str("nat")))
             } else {
                 Self::fail(token, "unknown type constant")
             }
@@ -438,7 +438,7 @@ impl<'a> Parser<'a> {
                 }
                 self.advance();
                 let s = self.subty(34)?;
-                t = mk_type_const(QualifiedName::intern("prod")).apply([t, s]);
+                t = mk_type_const(QualifiedName::from_str("prod")).apply([t, s]);
                 t = self.type_with_span(start, t);
             } else if token.is_ident()
                 || (token.is_symbol() && token.as_str() == "(")
@@ -580,7 +580,7 @@ impl<'a> Parser<'a> {
         for x in binders.into_iter().rev() {
             m = m.abs(slice::from_ref(&x));
             let f = mem::take(&mut m);
-            m = mk_const(QualifiedName::intern(binder), vec![x.ty], vec![]);
+            m = mk_const(QualifiedName::from_str(binder), vec![x.ty], vec![]);
             m = m.apply(vec![f]);
         }
         Ok(m)
@@ -610,7 +610,7 @@ impl<'a> Parser<'a> {
         let snd = self.subterm(0)?;
         self.expect_symbol("⟩")?;
         let pair = mk_const(
-            QualifiedName::intern("pair"),
+            QualifiedName::from_str("pair"),
             vec![mk_fresh_type_hole(), mk_fresh_type_hole()],
             vec![],
         );
@@ -635,7 +635,7 @@ impl<'a> Parser<'a> {
             Some(entity) => entity,
             None => {
                 let name = self.qualified_name(&token);
-                let local = Id::from_name(Name::intern(name.as_str()));
+                let local = Id::from_name(Name::from_str(name.as_str()));
                 if self.locals.iter().rev().any(|x| x == &local) {
                     return Ok(mk_local(local));
                 }
@@ -796,7 +796,7 @@ impl<'a> Parser<'a> {
 
     fn mk_eq(lhs: Term, rhs: Term) -> Term {
         let mut eq = mk_const(
-            QualifiedName::intern("eq"),
+            QualifiedName::from_str("eq"),
             vec![mk_fresh_type_hole()],
             vec![],
         );
@@ -805,7 +805,7 @@ impl<'a> Parser<'a> {
     }
 
     fn mk_eq_trans(&mut self, e1: Expr, e2: Expr) -> Expr {
-        let name = QualifiedName::intern("eq.trans");
+        let name = QualifiedName::from_str("eq.trans");
         let ty_args = vec![mk_fresh_type_hole()];
         let instances = vec![];
         let mut eq_trans = mk_expr_const(name, ty_args, instances);
@@ -938,7 +938,7 @@ impl<'a> Parser<'a> {
 
                     // Expand[obtain (x : τ), p := e1, e2] := exists.ind.{τ}[_, _] e1 (take (x : τ), assume p, e2)
                     let e = mk_expr_const(
-                        QualifiedName::intern("exists.ind"),
+                        QualifiedName::from_str("exists.ind"),
                         vec![ty.clone()],
                         vec![],
                     );
@@ -1009,7 +1009,7 @@ impl<'a> Parser<'a> {
                     body
                 }
                 _ => {
-                    let name = Name::intern(token.as_str());
+                    let name = Name::from_str(token.as_str());
                     if self.local_axioms.iter().rev().any(|n| n == &name) {
                         mk_expr_assump_by_name(Id::from_name(name))
                     } else {
@@ -1075,7 +1075,7 @@ impl<'a> Parser<'a> {
             if self.expect_symbol_opt("}").is_none() {
                 loop {
                     let token = self.ident()?;
-                    let tv = Name::intern(token.as_str());
+                    let tv = Name::from_str(token.as_str());
                     if local_types.iter().any(|v| v == &tv) {
                         return Self::fail(token, "duplicate type variable")?;
                     }
@@ -1392,13 +1392,13 @@ impl<'a> Parser<'a> {
     fn type_inductive_cmd(&mut self, _token: Token) -> Result<CmdTypeInductive, ParseError> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
-        let local_type_name = Name::intern(name.as_str());
+        let local_type_name = Name::from_str(name.as_str());
         let local_id = Id::from_name(local_type_name.clone());
         self.local_types.push(local_type_name.clone());
 
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
-            let tv = Name::intern(token.as_str());
+            let tv = Name::from_str(token.as_str());
             if local_types.iter().any(|v| v == &tv) {
                 return Self::fail(token, "duplicate type variable")?;
             }
@@ -1436,7 +1436,7 @@ impl<'a> Parser<'a> {
     fn inductive_cmd(&mut self, _token: Token) -> Result<CmdInductive, ParseError> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
-        let local_id = Id::from_name(Name::intern(name.as_str()));
+        let local_id = Id::from_name(Name::from_str(name.as_str()));
         self.locals.push(local_id);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
@@ -1490,7 +1490,7 @@ impl<'a> Parser<'a> {
         let name = self.qualified_name(&ident);
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
-            let tv = Name::intern(token.as_str());
+            let tv = Name::from_str(token.as_str());
             if local_types.iter().any(|v| v == &tv) {
                 return Self::fail(token, "duplicate type variable")?;
             }
@@ -1641,7 +1641,7 @@ impl<'a> Parser<'a> {
         let name = self.qualified_name(&ident);
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
-            let tv = Name::intern(token.as_str());
+            let tv = Name::from_str(token.as_str());
             if local_types.iter().any(|v| v == &tv) {
                 return Self::fail(token, "duplicate type variable")?;
             }
@@ -1798,10 +1798,10 @@ mod tests {
         let axiom_table = HashMap::new();
         let class_predicate_table = HashMap::new();
 
-        let prop = QualifiedName::intern("Prop");
+        let prop = QualifiedName::from_str("Prop");
         type_const_table.insert(prop.clone(), Kind(0));
 
-        let p = QualifiedName::intern("p");
+        let p = QualifiedName::from_str("p");
         const_table.insert(
             p,
             Const {
@@ -1833,7 +1833,9 @@ mod tests {
             &class_predicates,
         );
         assert!(
-            parser.const_table.contains_key(&QualifiedName::intern("p")),
+            parser
+                .const_table
+                .contains_key(&QualifiedName::from_str("p")),
             "const table missing p"
         );
         parser.expr().expect("expression parses")
@@ -1872,15 +1874,15 @@ mod tests {
             alias,
             expr: body,
         } = *assume;
-        assert_eq!(alias, Some(Id::from_name(Name::intern("this"))));
-        let expected = mk_const(QualifiedName::intern("p"), vec![], vec![]);
+        assert_eq!(alias, Some(Id::from_name(Name::from_str("this"))));
+        let expected = mk_const(QualifiedName::from_str("p"), vec![], vec![]);
         assert!(local_axiom.alpha_eq(&expected));
 
         let Expr::AssumpByName(assump) = body else {
             panic!("expected body to reference assumption alias");
         };
         let ExprAssumpByName { metadata: _, id } = *assump;
-        assert_eq!(id, Id::from_name(Name::intern("this")));
+        assert_eq!(id, Id::from_name(Name::from_str("this")));
     }
 
     #[test]
@@ -1896,8 +1898,8 @@ mod tests {
             alias: outer_alias,
             expr: outer_body,
         } = *outer;
-        assert_eq!(outer_alias, Some(Id::from_name(Name::intern("hp"))));
-        let expected = mk_const(QualifiedName::intern("p"), vec![], vec![]);
+        assert_eq!(outer_alias, Some(Id::from_name(Name::from_str("hp"))));
+        let expected = mk_const(QualifiedName::from_str("p"), vec![], vec![]);
         assert!(outer_axiom.alpha_eq(&expected));
 
         let Expr::App(app) = outer_body else {
@@ -1918,7 +1920,7 @@ mod tests {
             alias: inner_alias,
             expr: inner_body,
         } = *inner_assume;
-        assert_eq!(inner_alias, Some(Id::from_name(Name::intern("this"))));
+        assert_eq!(inner_alias, Some(Id::from_name(Name::from_str("this"))));
         assert!(inner_axiom.alpha_eq(&expected));
         let Expr::AssumpByName(inner_assump) = inner_body else {
             panic!("expected have body to reference alias");
@@ -1927,7 +1929,7 @@ mod tests {
             metadata: _,
             id: inner_id,
         } = *inner_assump;
-        assert_eq!(inner_id, Id::from_name(Name::intern("this")));
+        assert_eq!(inner_id, Id::from_name(Name::from_str("this")));
 
         let Expr::AssumpByName(have_arg) = expr2 else {
             panic!("expected have argument to reference outer alias");
@@ -1936,7 +1938,7 @@ mod tests {
             metadata: _,
             id: outer_id,
         } = *have_arg;
-        assert_eq!(outer_id, Id::from_name(Name::intern("hp")));
+        assert_eq!(outer_id, Id::from_name(Name::from_str("hp")));
     }
 
     #[test]
