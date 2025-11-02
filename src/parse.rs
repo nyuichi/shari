@@ -860,7 +860,7 @@ impl<'a> Parser<'a> {
                     if alias.is_some() {
                         self.local_axioms.pop();
                     }
-                    mk_expr_assume(m, alias.map(|name| Id::from_name(name)), expr)
+                    mk_expr_assume(m, alias.map(Id::from_name), expr)
                 }
                 "take" => {
                     self.expect_symbol("(")?;
@@ -901,7 +901,7 @@ impl<'a> Parser<'a> {
                     if alias.is_some() {
                         self.local_axioms.pop();
                     }
-                    Self::mk_have(m, alias.map(|name| Id::from_name(name)), e1, e2)
+                    Self::mk_have(m, alias.map(Id::from_name), e1, e2)
                 }
                 "obtain" => {
                     self.expect_symbol("(")?;
@@ -945,7 +945,7 @@ impl<'a> Parser<'a> {
                     let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_app(e, e1);
-                    let e_body = mk_expr_assume(p, alias.map(|name| Id::from_name(name)), e2);
+                    let e_body = mk_expr_assume(p, alias.map(Id::from_name), e2);
                     let e_body = mk_expr_take(local_id, ty, e_body);
                     mk_expr_app(e, e_body)
                 }

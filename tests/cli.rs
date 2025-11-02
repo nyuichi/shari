@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use std::time::{Duration, Instant};
 
 fn version_output() -> String {
     format!("shari {}\n", env!("CARGO_PKG_VERSION"))
@@ -68,5 +69,27 @@ fn running_with_missing_file_returns_error() {
     assert!(
         stderr.contains("failed to read `tests/does-not-exist.shari`"),
         "stderr was: {stderr}"
+    );
+}
+
+#[test]
+fn running_sample_file_finishes_quickly() {
+    let mut command = Command::cargo_bin("shari").expect("binary exists");
+    let start = Instant::now();
+
+    command
+        .arg("tests/perf/regression_sample.shari")
+        .assert()
+        .success()
+        .stdout("")
+        .stderr("");
+
+    let elapsed = start.elapsed();
+    let limit = Duration::from_secs(12);
+    assert!(
+        elapsed < limit,
+        "running shari on regression_sample.shari took {:?}, exceeding {:?}",
+        elapsed,
+        limit
     );
 }

@@ -1,0 +1,19 @@
+type const Prop : Type
+const imp : Prop → Prop → Prop
+infixr → : 25 := imp
+const p : Prop
+const q : Prop
+
+lemma alias.chain : p → q → q :=
+assume p as hp,
+assume q as hq,
+hq
+
+lemma alias.retain : p → p :=
+assume p as hp,
+hp
+
+lemma alias.swap : p → q → p :=
+assume p as hp,
+assume q as hq,
+hp
