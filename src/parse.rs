@@ -175,7 +175,7 @@ pub struct Parser<'a> {
     locals: Vec<Id>,
     local_axioms: Vec<Name>,
     self_ref: Option<(QualifiedName, Id)>,
-    type_self_ref: Option<(QualifiedName, Name)>,
+    type_self_ref: Option<(QualifiedName, Id)>,
     holes: Vec<(Id, Type)>,
 }
 
@@ -399,7 +399,7 @@ impl<'a> Parser<'a> {
         if token.is_ident() {
             let name = self.qualified_name(&token);
             if name.prefix().is_none() && self.local_types.iter().any(|x| x == &name.name()) {
-                Ok(mk_type_local(name.name()))
+                Ok(mk_type_local(Id::from_name(name.name())))
             } else if let Some(stash) =
                 self.type_self_ref.as_ref().and_then(|(self_name, stash)| {
                     if self_name == &name {
@@ -1319,7 +1319,7 @@ impl<'a> Parser<'a> {
         }
         Ok(CmdDef {
             name,
-            local_types,
+            local_types: local_types.into_iter().map(Id::from_name).collect(),
             local_classes,
             ty: t,
             target: m,
@@ -1347,7 +1347,7 @@ impl<'a> Parser<'a> {
         target = generalize(&target, &params);
         Ok(CmdAxiom {
             name,
-            local_types,
+            local_types: local_types.into_iter().map(Id::from_name).collect(),
             local_classes,
             target,
         })
@@ -1380,7 +1380,7 @@ impl<'a> Parser<'a> {
         let holes = self.holes.drain(..).collect();
         Ok(CmdLemma {
             name,
-            local_types,
+            local_types: local_types.into_iter().map(Id::from_name).collect(),
             local_classes,
             target: p,
             holes,
@@ -1403,7 +1403,7 @@ impl<'a> Parser<'a> {
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdConst {
             name,
-            local_types,
+            local_types: local_types.into_iter().map(Id::from_name).collect(),
             local_classes,
             ty: t,
         })
@@ -1420,12 +1420,12 @@ impl<'a> Parser<'a> {
     fn type_inductive_cmd(&mut self, _token: Token) -> Result<CmdTypeInductive, ParseError> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
-        let self_name = Name::from_str(name.as_str());
+        let self_id = Id::fresh();
         debug_assert!(
             self.type_self_ref.is_none(),
             "nested type inductive definitions are not supported"
         );
-        self.type_self_ref = Some((name.clone(), self_name.clone()));
+        self.type_self_ref = Some((name.clone(), self_id.clone()));
 
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
@@ -1458,8 +1458,8 @@ impl<'a> Parser<'a> {
         self.type_self_ref = None;
         Ok(CmdTypeInductive {
             name,
-            self_name,
-            local_types,
+            self_id,
+            local_types: local_types.into_iter().map(Id::from_name).collect(),
             ctors,
         })
     }
@@ -1513,7 +1513,7 @@ impl<'a> Parser<'a> {
         Ok(CmdInductive {
             name,
             self_id,
-            local_types,
+            local_types: local_types.into_iter().map(Id::from_name).collect(),
             ctors,
             params,
             target_ty,
@@ -1577,7 +1577,7 @@ impl<'a> Parser<'a> {
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdStructure {
             name,
-            local_types,
+            local_types: local_types.into_iter().map(Id::from_name).collect(),
             fields,
         })
     }
@@ -1663,7 +1663,7 @@ impl<'a> Parser<'a> {
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdInstance {
             name,
-            local_types,
+            local_types: local_types.into_iter().map(Id::from_name).collect(),
             local_classes,
             params,
             target_ty,
@@ -1728,7 +1728,7 @@ impl<'a> Parser<'a> {
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdClassStructure {
             name,
-            local_types,
+            local_types: local_types.into_iter().map(Id::from_name).collect(),
             fields,
         })
     }
@@ -1803,7 +1803,7 @@ impl<'a> Parser<'a> {
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdClassInstance {
             name,
-            local_types,
+            local_types: local_types.into_iter().map(Id::from_name).collect(),
             local_classes,
             target,
             fields,

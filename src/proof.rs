@@ -6,8 +6,8 @@ use std::{collections::HashMap, iter::zip};
 use crate::{
     lex::Span,
     tt::{
-        self, Class, Id, Instance, Local, Name, QualifiedName, Term, Type, mk_abs, mk_const,
-        mk_local, mk_type_const,
+        self, Class, Id, Instance, Local, QualifiedName, Term, Type, mk_abs, mk_const, mk_local,
+        mk_type_const,
     },
 };
 
@@ -746,7 +746,7 @@ impl Expr {
 
 #[derive(Debug, Clone)]
 pub struct Axiom {
-    pub local_types: Vec<Name>,
+    pub local_types: Vec<Id>,
     pub local_classes: Vec<Class>,
     pub target: Term,
 }

@@ -282,7 +282,7 @@ pub struct TypeApp {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct TypeLocal {
     pub metadata: TypeMetadata,
-    pub name: Name,
+    pub id: Id,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -332,7 +332,7 @@ impl Display for Type {
                     }
                     Ok(())
                 }
-                Type::Local(inner) => write!(f, "${}", inner.name),
+                Type::Local(inner) => write!(f, "${}", inner.id),
                 Type::Hole(inner) => write!(f, "?{}", inner.id),
             }
         }
@@ -364,10 +364,10 @@ pub fn mk_type_hole(id: Id) -> Type {
 }
 
 #[inline]
-pub fn mk_type_local(name: Name) -> Type {
+pub fn mk_type_local(id: Id) -> Type {
     Type::Local(Arc::new(TypeLocal {
         metadata: TypeMetadata::default(),
-        name,
+        id,
     }))
 }
 
@@ -474,14 +474,14 @@ impl Type {
     }
 
     /// Simultaneously substitute `t₁ ⋯ tₙ` for locals with names `x₁ ⋯ xₙ`.
-    pub fn subst(&self, subst: &[(Name, Type)]) -> Type {
+    pub fn subst(&self, subst: &[(Id, Type)]) -> Type {
         match self {
             Type::Const(_) => self.clone(),
             Type::Local(x) => {
-                let name = &x.name;
+                let id = &x.id;
                 subst
                     .iter()
-                    .find(|(y, _)| y == name)
+                    .find(|(y, _)| y == id)
                     .map(|(_, t)| t.clone())
                     .unwrap_or_else(|| self.clone())
             }
@@ -518,12 +518,12 @@ impl Type {
         }
     }
 
-    pub fn contains_local(&self, name: &Name) -> bool {
+    pub fn contains_local(&self, id: Id) -> bool {
         match self {
             Type::Const(_) => false,
-            Type::Arrow(t) => t.dom.contains_local(name) || t.cod.contains_local(name),
-            Type::App(t) => t.fun.contains_local(name) || t.arg.contains_local(name),
-            Type::Local(t) => &t.name == name,
+            Type::Arrow(t) => t.dom.contains_local(id) || t.cod.contains_local(id),
+            Type::App(t) => t.fun.contains_local(id) || t.arg.contains_local(id),
+            Type::Local(t) => t.id == id,
             Type::Hole(_) => false,
         }
     }
@@ -714,7 +714,7 @@ impl Display for Class {
 }
 
 impl Class {
-    pub fn subst(&self, subst: &[(Name, Type)]) -> Class {
+    pub fn subst(&self, subst: &[(Id, Type)]) -> Class {
         let mut changed = false;
         let args: Vec<Type> = self
             .args
@@ -1545,7 +1545,7 @@ impl Term {
         self.replace_instance(&|i| i.subst(subst))
     }
 
-    pub fn subst_type(&self, subst: &[(Name, Type)]) -> Term {
+    pub fn subst_type(&self, subst: &[(Id, Type)]) -> Term {
         self.replace_type(&|t| t.subst(subst))
     }
 
@@ -1800,7 +1800,7 @@ impl Term {
 
 #[derive(Debug, Default, Clone)]
 pub struct LocalEnv {
-    pub local_types: Vec<Name>,
+    pub local_types: Vec<Id>,
     pub local_classes: Vec<Class>,
     pub locals: Vec<Local>,
 }
@@ -1819,14 +1819,14 @@ impl LocalEnv {
 
 #[derive(Debug, Clone)]
 pub struct Const {
-    pub local_types: Vec<Name>,
+    pub local_types: Vec<Id>,
     pub local_classes: Vec<Class>,
     pub ty: Type,
 }
 
 #[derive(Debug, Clone)]
 pub struct Delta {
-    pub local_types: Vec<Name>,
+    pub local_types: Vec<Id>,
     pub local_classes: Vec<Class>,
     pub target: Term,
     // equal to height(target)
@@ -1838,7 +1838,7 @@ pub struct Kappa;
 
 #[derive(Debug, Clone)]
 pub struct ClassInstance {
-    pub local_types: Vec<Name>,
+    pub local_types: Vec<Id>,
     pub local_classes: Vec<Class>,
     pub target: Class,
     pub method_table: HashMap<QualifiedName, Term>,
@@ -1895,11 +1895,11 @@ impl Env<'_> {
             }
             Type::Local(x) => {
                 for local_type in &local_env.local_types {
-                    if *local_type == x.name {
+                    if *local_type == x.id {
                         return Kind::base();
                     }
                 }
-                panic!("unbound local type: {:?}", x.name);
+                panic!("unbound local type: {:?}", x.id);
             }
             Type::Hole(_) => panic!("cannot infer kind of a hole"),
         }

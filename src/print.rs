@@ -62,14 +62,16 @@ struct Printer<'a> {
     op_table: &'a OpTable,
     print_type_args: bool,
     print_binder_types: bool,
+    local_type_names: &'a HashMap<Id, String>,
 }
 
 impl<'a> Printer<'a> {
-    fn new(op_table: &'a OpTable) -> Self {
+    fn new(op_table: &'a OpTable, local_type_names: &'a HashMap<Id, String>) -> Self {
         Printer {
             op_table,
             print_type_args: false,
             print_binder_types: false,
+            local_type_names,
         }
     }
 
@@ -401,7 +403,13 @@ impl<'a> Printer<'a> {
                 Ok(())
             }
             Type::Hole(inner) => write!(f, "{}", inner.id),
-            Type::Local(inner) => write!(f, "{}", inner.name),
+            Type::Local(inner) => {
+                if let Some(name) = self.local_type_names.get(&inner.id) {
+                    write!(f, "{}", name)
+                } else {
+                    write!(f, "{}", inner.id)
+                }
+            }
         }
     }
 
@@ -418,6 +426,59 @@ impl<'a> Printer<'a> {
 }
 
 #[derive(Debug)]
+pub struct PrettyInner<'a, T> {
+    op_table: &'a OpTable,
+    local_type_names: &'a HashMap<Id, String>,
+    data: T,
+}
+
+impl<'a, T> PrettyInner<'a, T> {
+    pub fn new(op_table: &'a OpTable, local_type_names: &'a HashMap<Id, String>, data: T) -> Self {
+        PrettyInner {
+            op_table,
+            local_type_names,
+            data,
+        }
+    }
+}
+
+impl Display for PrettyInner<'_, &Type> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        Printer::new(self.op_table, self.local_type_names).fmt_type(f, self.data)
+    }
+}
+
+impl Display for PrettyInner<'_, Type> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        Printer::new(self.op_table, self.local_type_names).fmt_type(f, &self.data)
+    }
+}
+
+impl Display for PrettyInner<'_, &Term> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        Printer::new(self.op_table, self.local_type_names).fmt_term(self.data, f)
+    }
+}
+
+impl Display for PrettyInner<'_, Term> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        Printer::new(self.op_table, self.local_type_names).fmt_term(&self.data, f)
+    }
+}
+
+impl Display for PrettyInner<'_, &Class> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        Printer::new(self.op_table, self.local_type_names).fmt_class(f, self.data)
+    }
+}
+
+impl Display for PrettyInner<'_, Class> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        Printer::new(self.op_table, self.local_type_names).fmt_class(f, &self.data)
+    }
+}
+
+#[derive(Debug)]
 pub struct Pretty<'a, T> {
     op_table: &'a OpTable,
     data: T,
@@ -429,40 +490,47 @@ impl<'a, T> Pretty<'a, T> {
     }
 }
 
-impl Display for Pretty<'_, &Type> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        Printer::new(self.op_table).fmt_type(f, self.data)
+fn generate_fresh_local_type(local_types: &Vec<String>) -> String {
+    const DEFAULT_NAME: &str = "u";
+    const SUBSCRIPT_DIGITS: [char; 10] = ['₀', '₁', '₂', '₃', '₄', '₅', '₆', '₇', '₈', '₉'];
+
+    let mut x = DEFAULT_NAME.to_string();
+    'refresh: for refresh_index in 0.. {
+        if refresh_index > 0 {
+            let mut n = refresh_index;
+            let mut chars = Vec::new();
+            while n > 0 {
+                let d = (n % 10) as usize;
+                chars.push(SUBSCRIPT_DIGITS[d]);
+                n /= 10;
+            }
+            x = format!("{DEFAULT_NAME}{}", chars.iter().rev().collect::<String>());
+        }
+        for local_type in local_types {
+            if local_type.as_str() == x {
+                continue 'refresh;
+            }
+        }
+        break;
     }
+    x
 }
 
-impl Display for Pretty<'_, Type> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        Printer::new(self.op_table).fmt_type(f, &self.data)
+fn create_local_type_name(local_types: &Vec<Id>) -> HashMap<Id, String> {
+    let mut local_type_names = HashMap::new();
+    let mut local_type_list = Vec::new();
+    for local_type in local_types {
+        if local_type.is_generated() {
+            let name = generate_fresh_local_type(&local_type_list);
+            local_type_list.push(name.clone());
+            local_type_names.insert(*local_type, name);
+        } else {
+            let name = local_type.name().unwrap().to_string();
+            local_type_list.push(name.clone());
+            local_type_names.insert(*local_type, name);
+        }
     }
-}
-
-impl Display for Pretty<'_, &Term> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        Printer::new(self.op_table).fmt_term(self.data, f)
-    }
-}
-
-impl Display for Pretty<'_, Term> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        Printer::new(self.op_table).fmt_term(&self.data, f)
-    }
-}
-
-impl Display for Pretty<'_, &Class> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        Printer::new(self.op_table).fmt_class(f, self.data)
-    }
-}
-
-impl Display for Pretty<'_, Class> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        Printer::new(self.op_table).fmt_class(f, &self.data)
-    }
+    local_type_names
 }
 
 impl Display for Pretty<'_, (&QualifiedName, &Const)> {
@@ -475,6 +543,7 @@ impl Display for Pretty<'_, (&QualifiedName, &Const)> {
                 ty,
             },
         ) = self.data;
+        let local_type_names = create_local_type_name(local_types);
         write!(f, "const {}", name)?;
         if !local_types.is_empty() {
             write!(f, ".{{")?;
@@ -483,15 +552,23 @@ impl Display for Pretty<'_, (&QualifiedName, &Const)> {
                 if !first {
                     write!(f, ", ")?;
                 }
-                write!(f, "{}", local_type)?;
+                write!(f, "{}", local_type_names.get(&local_type).unwrap())?;
                 first = false;
             }
             write!(f, "}}")?;
         }
         for local_class in local_classes {
-            write!(f, " [{}]", Pretty::new(self.op_table, local_class))?;
+            write!(
+                f,
+                " [{}]",
+                PrettyInner::new(self.op_table, &local_type_names, local_class)
+            )?;
         }
-        write!(f, " : {}", Pretty::new(self.op_table, ty))?;
+        write!(
+            f,
+            " : {}",
+            PrettyInner::new(self.op_table, &local_type_names, ty)
+        )?;
         Ok(())
     }
 }
@@ -506,6 +583,7 @@ impl Display for Pretty<'_, (&QualifiedName, &Axiom)> {
                 target,
             },
         ) = self.data;
+        let local_type_names = create_local_type_name(local_types);
         write!(f, "axiom {}", name)?;
         if !local_types.is_empty() {
             write!(f, ".{{")?;
@@ -514,15 +592,23 @@ impl Display for Pretty<'_, (&QualifiedName, &Axiom)> {
                 if !first {
                     write!(f, ", ")?;
                 }
-                write!(f, "{}", local_type)?;
+                write!(f, "{}", local_type_names.get(&local_type).unwrap())?;
                 first = false;
             }
             write!(f, "}}")?;
         }
         for local_class in local_classes {
-            write!(f, " [{}]", Pretty::new(self.op_table, local_class))?;
+            write!(
+                f,
+                " [{}]",
+                PrettyInner::new(self.op_table, &local_type_names, local_class)
+            )?;
         }
-        write!(f, " : {}", Pretty::new(self.op_table, target))?;
+        write!(
+            f,
+            " : {}",
+            PrettyInner::new(self.op_table, &local_type_names, target)
+        )?;
         Ok(())
     }
 }

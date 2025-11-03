@@ -234,11 +234,11 @@ impl<'a> Elaborator<'a> {
             }
             Type::Local(t) => {
                 for local_type in self.tt_local_env.local_types.iter().rev() {
-                    if *local_type == t.name {
+                    if *local_type == t.id {
                         return Ok(Kind::base());
                     }
                 }
-                bail!("unbound local type: {}", t.name);
+                bail!("unbound local type: {}", t.id);
             }
             // no higher-kinded polymorphism
             Type::Hole(_) => Ok(Kind::base()),
@@ -2462,7 +2462,7 @@ mod tests {
     #[test]
     fn unify_fails_for_inhabited_terms() {
         let name_u = Name::from_str("u");
-        let ty_u = mk_type_local(name_u.clone());
+        let ty_u = mk_type_local(Id::from_name(name_u.clone()));
         let name_is_inhabited = QualifiedName::from_str("is_inhabited");
         let ty_is_inhabited_u = mk_type_app(mk_type_const(name_is_inhabited.clone()), ty_u.clone());
         let ty_u_to_prop = mk_type_arrow(ty_u.clone(), mk_type_prop());
@@ -2540,7 +2540,7 @@ mod tests {
         ];
 
         let local_env = tt::LocalEnv {
-            local_types: vec![name_u.clone()],
+            local_types: vec![Id::from_name(name_u.clone())],
             local_classes: vec![],
             locals,
         };

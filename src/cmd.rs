@@ -71,7 +71,7 @@ pub struct CmdNofix {
 #[derive(Clone, Debug)]
 pub struct CmdDef {
     pub name: QualifiedName,
-    pub local_types: Vec<Name>,
+    pub local_types: Vec<Id>,
     pub local_classes: Vec<Class>,
     pub ty: Type,
     pub target: Term,
@@ -80,7 +80,7 @@ pub struct CmdDef {
 #[derive(Clone, Debug)]
 pub struct CmdAxiom {
     pub name: QualifiedName,
-    pub local_types: Vec<Name>,
+    pub local_types: Vec<Id>,
     pub local_classes: Vec<Class>,
     pub target: Term,
 }
@@ -88,8 +88,7 @@ pub struct CmdAxiom {
 #[derive(Clone, Debug)]
 pub struct CmdLemma {
     pub name: QualifiedName,
-    // TODO: Vec<Id>にする。generate_fresh_local_typeで使っているtype localはIdを自動生成するようにして、printのところで頑張る
-    pub local_types: Vec<Name>,
+    pub local_types: Vec<Id>,
     pub local_classes: Vec<Class>,
     pub target: Term,
     pub holes: Vec<(Id, Type)>,
@@ -100,7 +99,7 @@ pub struct CmdLemma {
 pub struct CmdConst {
     pub name: QualifiedName,
     pub local_classes: Vec<Class>,
-    pub local_types: Vec<Name>,
+    pub local_types: Vec<Id>,
     pub ty: Type,
 }
 
@@ -113,8 +112,8 @@ pub struct CmdTypeConst {
 #[derive(Clone, Debug)]
 pub struct CmdTypeInductive {
     pub name: QualifiedName,
-    pub self_name: Name,
-    pub local_types: Vec<Name>,
+    pub self_id: Id,
+    pub local_types: Vec<Id>,
     pub ctors: Vec<DataConstructor>,
 }
 
@@ -128,7 +127,7 @@ pub struct DataConstructor {
 pub struct CmdInductive {
     pub name: QualifiedName,
     pub self_id: Id,
-    pub local_types: Vec<Name>,
+    pub local_types: Vec<Id>,
     pub params: Vec<Local>,
     pub target_ty: Type,
     pub ctors: Vec<Constructor>,
@@ -143,7 +142,7 @@ pub struct Constructor {
 #[derive(Clone, Debug)]
 pub struct CmdStructure {
     pub name: QualifiedName,
-    pub local_types: Vec<Name>,
+    pub local_types: Vec<Id>,
     pub fields: Vec<StructureField>,
 }
 
@@ -168,7 +167,7 @@ pub struct StructureAxiom {
 #[derive(Debug, Clone)]
 pub struct CmdInstance {
     pub name: QualifiedName,
-    pub local_types: Vec<Name>,
+    pub local_types: Vec<Id>,
     pub local_classes: Vec<Class>,
     pub params: Vec<Local>,
     pub target_ty: Type,
@@ -199,7 +198,7 @@ pub struct InstanceLemma {
 #[derive(Debug, Clone)]
 pub struct CmdClassStructure {
     pub name: QualifiedName,
-    pub local_types: Vec<Name>,
+    pub local_types: Vec<Id>,
     pub fields: Vec<ClassStructureField>,
 }
 
@@ -224,7 +223,7 @@ pub struct ClassStructureAxiom {
 #[derive(Debug, Clone)]
 pub struct CmdClassInstance {
     pub name: QualifiedName,
-    pub local_types: Vec<Name>,
+    pub local_types: Vec<Id>,
     pub local_classes: Vec<Class>,
     pub target: Class,
     pub fields: Vec<ClassInstanceField>,
@@ -431,32 +430,6 @@ impl std::fmt::Display for Cmd {
     }
 }
 
-fn generate_fresh_local_type(local_types: &Vec<Name>) -> Name {
-    const DEFAULT_NAME: &str = "u";
-    const SUBSCRIPT_DIGITS: [char; 10] = ['₀', '₁', '₂', '₃', '₄', '₅', '₆', '₇', '₈', '₉'];
-
-    let mut x = DEFAULT_NAME.to_string();
-    'refresh: for refresh_index in 0.. {
-        if refresh_index > 0 {
-            let mut n = refresh_index;
-            let mut chars = Vec::new();
-            while n > 0 {
-                let d = (n % 10) as usize;
-                chars.push(SUBSCRIPT_DIGITS[d]);
-                n /= 10;
-            }
-            x = format!("{DEFAULT_NAME}{}", chars.iter().rev().collect::<String>());
-        }
-        for local_type in local_types {
-            if local_type.as_str() == x {
-                continue 'refresh;
-            }
-        }
-        break;
-    }
-    Name::from_str(&x)
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct Eval {
     pub tt: TokenTable,
@@ -493,7 +466,7 @@ impl Eval {
     fn add_const(
         &mut self,
         name: QualifiedName,
-        local_types: Vec<Name>,
+        local_types: Vec<Id>,
         local_classes: Vec<Class>,
         ty: Type,
     ) {
@@ -535,7 +508,7 @@ impl Eval {
     fn add_axiom(
         &mut self,
         name: QualifiedName,
-        local_types: Vec<Name>,
+        local_types: Vec<Id>,
         local_classes: Vec<Class>,
         target: Term,
     ) {
@@ -602,7 +575,7 @@ impl Eval {
     fn add_class_instance(
         &mut self,
         name: QualifiedName,
-        local_types: Vec<Name>,
+        local_types: Vec<Id>,
         local_classes: Vec<Class>,
         target: Class,
         method_table: HashMap<QualifiedName, Term>,
@@ -971,7 +944,7 @@ impl Eval {
     fn run_type_inductive_cmd(&mut self, cmd: CmdTypeInductive) -> anyhow::Result<()> {
         let CmdTypeInductive {
             name,
-            self_name,
+            self_id,
             local_types,
             ctors,
         } = cmd;
@@ -990,7 +963,7 @@ impl Eval {
             local_classes: vec![],
             locals: vec![],
         };
-        local_env.local_types.insert(0, self_name.clone());
+        local_env.local_types.insert(0, self_id.clone());
         for i in 0..ctors.len() {
             for j in i + 1..ctors.len() {
                 if ctors[i].name == ctors[j].name {
@@ -1009,17 +982,17 @@ impl Eval {
             }
             self.elaborate_type(&mut local_env, &ctor.ty, Kind::base())?;
             let (args, target) = ctor.ty.unarrow();
-            if target != mk_type_local(self_name.clone()) {
+            if target != mk_type_local(self_id.clone()) {
                 bail!("invalid constructor: {}", ctor.ty);
             }
             for a in args {
                 let (xs, head) = a.unarrow();
                 for x in &xs {
-                    if x.contains_local(&self_name) {
+                    if x.contains_local(self_id) {
                         bail!("constructor violates strict positivity");
                     }
                 }
-                if head != mk_type_local(self_name.clone()) && head.contains_local(&self_name) {
+                if head != mk_type_local(self_id.clone()) && head.contains_local(self_id) {
                     bail!("nested inductive type is unsupported");
                 }
             }
@@ -1043,7 +1016,7 @@ impl Eval {
             mk_type_const(name.clone()).apply(local_types.iter().cloned().map(mk_type_local))
         };
         // Foo ↦ Foo u v
-        let subst = [(self_name.clone(), target_ty.clone())];
+        let subst = [(self_id.clone(), target_ty.clone())];
         let mut cs = vec![];
         for ctor in &ctors {
             let ctor_name = name.append(&ctor.name);
@@ -1095,7 +1068,7 @@ impl Eval {
                         ty: x,
                     })
                     .collect();
-                if head != mk_type_local(self_name.clone()) {
+                if head != mk_type_local(self_id.clone()) {
                     continue;
                 }
                 // ∀ xs, P (a xs)
@@ -1146,7 +1119,7 @@ impl Eval {
         //   rec (succ α) ≡ λ k₁ k₂ k₃, k₂ α (rec α k₁ k₂ k₃)
         //   rec zero ≡ λ k₁ k₂ k₃, k₃
         //
-        let rec_ty_var = generate_fresh_local_type(&local_types);
+        let rec_ty_var = Id::fresh_with_name(Name::from_str("u"));
         let mut rec_local_types = local_types.clone();
         rec_local_types.push(rec_ty_var.clone());
         let mut ctor_params_list = vec![];
@@ -1185,10 +1158,10 @@ impl Eval {
             let (ctor_arg_tys, _) = ctor.ty.unarrow();
             for (ctor_arg, param) in zip(ctor_arg_tys, ctor_params) {
                 let (arg_tys, ctor_arg_target) = ctor_arg.unarrow();
-                if ctor_arg_target != mk_type_local(self_name.clone()) {
+                if ctor_arg_target != mk_type_local(self_id.clone()) {
                     continue;
                 }
-                let t = ctor_arg.subst(&[(self_name.clone(), mk_type_local(rec_ty_var.clone()))]);
+                let t = ctor_arg.subst(&[(self_id.clone(), mk_type_local(rec_ty_var.clone()))]);
                 cont_arg_tys.push(t);
 
                 let binders: Vec<_> = arg_tys
@@ -1401,7 +1374,7 @@ impl Eval {
                 name.clone(),
                 local_types
                     .iter()
-                    .map(|name| mk_type_local(name.clone()))
+                    .map(|id| mk_type_local(id.clone()))
                     .collect(),
                 vec![],
             );
@@ -1459,7 +1432,7 @@ impl Eval {
                 name.clone(),
                 local_types
                     .iter()
-                    .map(|name| mk_type_local(name.clone()))
+                    .map(|id| mk_type_local(id.clone()))
                     .collect(),
                 vec![],
             );
@@ -1484,7 +1457,7 @@ impl Eval {
             name.clone(),
             local_types
                 .iter()
-                .map(|name| mk_type_local(name.clone()))
+                .map(|id| mk_type_local(id.clone()))
                 .collect(),
             vec![],
         );
@@ -1614,7 +1587,7 @@ impl Eval {
 
         // generate recursor
         //   rec.{u, α} : inhab u → (set u → α) → α
-        let ret_ty = generate_fresh_local_type(&local_types);
+        let ret_ty = Id::fresh_with_name(Name::from_str("u"));
         let mut rec_local_types = local_types.clone();
         rec_local_types.push(ret_ty.clone());
         let rec_ty = mk_type_local(ret_ty.clone()).arrow(vec![
@@ -2015,7 +1988,7 @@ impl Eval {
 
         // generate spec
         //   axiom power.inhab.spec.{u, α} (A : set u) : inhab.rec.{set u, α} (power.inhab A) = λ (f : set (set u) → α), f (power.inhab.rep A)
-        let ret_ty = generate_fresh_local_type(&local_types);
+        let ret_ty = Id::fresh_with_name(Name::from_str("u"));
         let mut left = mk_const(
             structure_name.extend("rec"),
             target_ty
@@ -2230,8 +2203,8 @@ impl Eval {
         for instance in self.class_instance_table.values() {
             let instance_target = {
                 let mut type_subst = Vec::with_capacity(instance.local_types.len());
-                for name in &instance.local_types {
-                    type_subst.push((name.clone(), mk_fresh_type_hole()));
+                for id in &instance.local_types {
+                    type_subst.push((id.clone(), mk_fresh_type_hole()));
                 }
                 instance.target.subst(&type_subst)
             };
