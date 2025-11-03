@@ -13,14 +13,21 @@ use crate::{lex::Span, proof::mk_type_prop};
 pub struct Name(Arc<String>);
 
 #[derive(Debug, Clone, Ord, PartialOrd, Default)]
-pub struct QualifiedName(Arc<String>);
+pub struct QualifiedName(Arc<QualifiedNameInner>);
+
+#[derive(Debug, Clone, PartialEq, Eq, Ord, Hash, PartialOrd, Default)]
+struct QualifiedNameInner {
+    prefix: Option<QualifiedName>,
+    name: Name,
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
 pub struct Id(usize);
 
 static NAME_TABLE: LazyLock<Mutex<HashMap<String, Weak<String>>>> = LazyLock::new(Default::default);
-static QUALIFIED_NAME_TABLE: LazyLock<Mutex<HashMap<String, Weak<String>>>> =
-    LazyLock::new(Default::default);
+static QUALIFIED_NAME_TABLE: LazyLock<
+    Mutex<HashMap<QualifiedNameInner, Weak<QualifiedNameInner>>>,
+> = LazyLock::new(Default::default);
 
 static ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static ID_TABLE: LazyLock<Mutex<HashMap<Name, Id>>> = LazyLock::new(Default::default);
@@ -65,53 +72,52 @@ impl Hash for Name {
 
 impl Display for QualifiedName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        match self.prefix() {
+            Some(prefix) => write!(f, "{}.{}", prefix, self.name()),
+            None => write!(f, "{}", self.name()),
+        }
     }
 }
 
 impl QualifiedName {
-    pub fn from_str(value: &str) -> QualifiedName {
+    pub fn from_parts(prefix: Option<QualifiedName>, name: Name) -> QualifiedName {
+        let value = QualifiedNameInner { prefix, name };
+
         let mut table = QUALIFIED_NAME_TABLE.lock().unwrap();
-        if let Some(existing) = table.get(value).and_then(|weak| weak.upgrade()) {
+        if let Some(existing) = table.get(&value).and_then(|weak| weak.upgrade()) {
             return QualifiedName(existing);
         }
 
-        let owned = Arc::new(value.to_owned());
+        let owned = Arc::new(value.clone());
         table.insert(value.to_owned(), Arc::downgrade(&owned));
         QualifiedName(owned)
     }
 
-    pub fn as_str(&self) -> &str {
-        self.0.as_str()
+    // TODO: deprecate this method in favor of from_parts
+    pub fn from_str(value: &str) -> QualifiedName {
+        Self::from_parts(None, Name::from_str(value))
     }
 
-    pub fn name(&self) -> Name {
-        match self.0.rsplit_once('.') {
-            Some((_, name)) => Name::from_str(name),
-            None => Name::from_str(self.0.as_str()),
-        }
+    pub fn name(&self) -> &Name {
+        &self.0.name
     }
 
-    pub fn prefix(&self) -> Option<QualifiedName> {
-        self.0
-            .rsplit_once('.')
-            .map(|(prefix, _)| QualifiedName::from_str(prefix))
+    pub fn prefix(&self) -> Option<&QualifiedName> {
+        self.0.prefix.as_ref()
     }
 
-    pub fn append(&self, suffix: &Self) -> QualifiedName {
-        self.extend(suffix.as_str())
+    pub fn append(&self, suffix: &QualifiedName) -> QualifiedName {
+        let prefix = match suffix.prefix() {
+            Some(prefix) => self.append(prefix),
+            None => self.clone(),
+        };
+        Self::from_parts(Some(prefix), suffix.name().clone())
     }
 
+    // TODO: deprecate this method in favor of append
     pub fn extend(&self, suffix: impl AsRef<str>) -> QualifiedName {
-        let suffix = suffix.as_ref();
-        if suffix.is_empty() {
-            return self.clone();
-        }
-        let mut value = String::with_capacity(self.0.as_str().len() + 1 + suffix.len());
-        value.push_str(self.0.as_str());
-        value.push('.');
-        value.push_str(suffix);
-        QualifiedName::from_str(&value)
+        let name = Name::from_str(suffix.as_ref());
+        Self::from_parts(Some(self.clone()), name)
     }
 }
 
@@ -154,10 +160,9 @@ impl Id {
         new_id
     }
 
-    // TODO: &Name を受け取るようにする
-    pub fn from_name(name: Name) -> Id {
+    pub fn from_name(name: &Name) -> Id {
         let mut id_table = ID_TABLE.lock().unwrap();
-        if let Some(&id) = id_table.get(&name) {
+        if let Some(&id) = id_table.get(name) {
             return id;
         }
 
@@ -166,7 +171,7 @@ impl Id {
         drop(id_table);
         // This can be put here outside the critical section of ID_TABLE
         // because no one but this function knows of the value of `id`.
-        ID_REV_TABLE.lock().unwrap().insert(id, name);
+        ID_REV_TABLE.lock().unwrap().insert(id, name.clone());
         id
     }
 

@@ -1510,7 +1510,7 @@ impl Eval {
                     const_field_names.push(field_name.clone());
                     self.elaborate_type(&mut local_env, field_ty, Kind::base())?;
                     local_env.locals.push(Local {
-                        id: Id::from_name(field_name.clone()),
+                        id: Id::from_name(&field_name),
                         ty: field_ty.clone(),
                     });
                 }
@@ -1604,12 +1604,12 @@ impl Eval {
                         vec![],
                     );
                     target = target.apply([mk_local(this.id), {
-                        let mut target = mk_local(Id::from_name(field_name.clone()));
+                        let mut target = mk_local(Id::from_name(&field_name));
                         target = target.abs(
                             const_fields
                                 .iter()
                                 .map(|f| Local {
-                                    id: Id::from_name(f.name.clone()),
+                                    id: Id::from_name(&f.name),
                                     ty: f.ty.clone(),
                                 })
                                 .collect::<Vec<_>>()
@@ -1627,7 +1627,7 @@ impl Eval {
                         vec![],
                     );
                     target = target.apply([mk_local(this.id)]);
-                    subst.push((Id::from_name(field_name.clone()), target));
+                    subst.push((Id::from_name(&field_name), target));
                 }
                 StructureField::Axiom(StructureAxiom {
                     name: field_name,
@@ -1679,7 +1679,7 @@ impl Eval {
                     chars.push(char);
 
                     // rep ↦ s
-                    subst.push((Id::from_name(field_name.clone()), mk_local(param.id)));
+                    subst.push((Id::from_name(&field_name), mk_local(param.id)));
 
                     params.push(param);
                 }
@@ -1848,7 +1848,7 @@ impl Eval {
                         bail!("type mismatch");
                     }
                     local_env.locals.push(Local {
-                        id: Id::from_name(field_name),
+                        id: Id::from_name(&field_name),
                         ty: ty.clone(),
                     });
                     num_consts += 1;
@@ -1938,7 +1938,7 @@ impl Eval {
                             .collect(),
                     );
                     target = target.apply(params.iter().map(|param| mk_local(param.id)));
-                    subst.push((Id::from_name(field_name.clone()), target));
+                    subst.push((Id::from_name(&field_name), target));
                 }
                 InstanceField::Lemma(InstanceLemma {
                     name: field_name,
@@ -2078,7 +2078,7 @@ impl Eval {
                     const_field_names.push(field_name.clone());
                     self.elaborate_type(&mut local_env, field_ty, Kind::base())?;
                     local_env.locals.push(Local {
-                        id: Id::from_name(field_name.clone()),
+                        id: Id::from_name(&field_name),
                         ty: field_ty.clone(),
                     });
                 }
@@ -2140,7 +2140,7 @@ impl Eval {
                         local_types.iter().cloned().map(mk_type_local).collect(),
                         vec![this_instance.clone()],
                     );
-                    subst.push((Id::from_name(field_name.clone()), target));
+                    subst.push((Id::from_name(&field_name), target));
                 }
                 ClassStructureField::Axiom(ClassStructureAxiom {
                     name: field_name,
@@ -2236,7 +2236,7 @@ impl Eval {
                         bail!("type mismatch");
                     }
                     self.elaborate_term(&mut local_env, target, ty)?;
-                    subst.push((Id::from_name(field_name.clone()), target.clone()));
+                    subst.push((Id::from_name(&field_name), target.clone()));
                 }
                 (ClassStructureField::Const(_), _) => {
                     bail!("definition expected");

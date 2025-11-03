@@ -398,7 +398,7 @@ impl<'a> Parser<'a> {
         let token = self.any_token()?;
         if token.is_ident() {
             let name = self.qualified_name(&token);
-            if name.prefix().is_none() && self.local_types.iter().any(|x| x == &name.name()) {
+            if name.prefix().is_none() && self.local_types.iter().any(|x| x == name.name()) {
                 Ok(mk_type_local(Id::from_name(name.name())))
             } else if let Some(stash) =
                 self.type_self_ref.as_ref().and_then(|(self_name, stash)| {
@@ -477,9 +477,9 @@ impl<'a> Parser<'a> {
     fn typed_parameter(&mut self, _token: Token) -> Result<(Vec<Id>, Type), ParseError> {
         let mut idents = vec![];
         // needs at least one parameter
-        idents.push(Id::from_name(self.name()?));
+        idents.push(Id::from_name(&self.name()?));
         while let Some(name) = self.name_opt() {
-            idents.push(Id::from_name(name));
+            idents.push(Id::from_name(&name));
         }
         self.expect_symbol(":")?;
         let t = self.ty()?;
@@ -508,7 +508,7 @@ impl<'a> Parser<'a> {
                     params.push((id, Some(t.clone())));
                 }
             } else if let Some(name) = self.name_opt() {
-                params.push((Id::from_name(name), None));
+                params.push((Id::from_name(&name), None));
             } else {
                 break;
             }
@@ -603,7 +603,7 @@ impl<'a> Parser<'a> {
     }
 
     fn term_sep(&mut self, _token: Token) -> Result<Term, ParseError> {
-        let binder_id = Id::from_name(self.name()?);
+        let binder_id = Id::from_name(&self.name()?);
         let ty;
         if let Some(_token) = self.expect_symbol_opt(":") {
             ty = self.ty()?;
@@ -653,7 +653,7 @@ impl<'a> Parser<'a> {
                 let name = self.qualified_name(&token);
                 if name.prefix().is_none()
                     && self.locals.iter().rev().any(|x| {
-                        x.name().expect("locals are all internalized names") == name.name()
+                        x.name().expect("locals are all internalized names") == *name.name()
                     })
                 {
                     return Ok(mk_local(Id::from_name(name.name())));
@@ -888,11 +888,11 @@ impl<'a> Parser<'a> {
                     if alias.is_some() {
                         self.local_axioms.pop();
                     }
-                    mk_expr_assume(m, alias.map(Id::from_name), expr)
+                    mk_expr_assume(m, alias.as_ref().map(Id::from_name), expr)
                 }
                 "take" => {
                     self.expect_symbol("(")?;
-                    let local_id = Id::from_name(self.name()?);
+                    let local_id = Id::from_name(&self.name()?);
                     self.expect_symbol(":")?;
                     let ty = self.ty()?;
                     self.expect_symbol(")")?;
@@ -929,11 +929,11 @@ impl<'a> Parser<'a> {
                     if alias.is_some() {
                         self.local_axioms.pop();
                     }
-                    Self::mk_have(m, alias.map(Id::from_name), e1, e2)
+                    Self::mk_have(m, alias.as_ref().map(Id::from_name), e1, e2)
                 }
                 "obtain" => {
                     self.expect_symbol("(")?;
-                    let local_id = Id::from_name(self.name()?);
+                    let local_id = Id::from_name(&self.name()?);
                     self.expect_symbol(":")?;
                     let ty = self.ty()?;
                     self.expect_symbol(")")?;
@@ -973,7 +973,7 @@ impl<'a> Parser<'a> {
                     let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_app(e, e1);
-                    let e_body = mk_expr_assume(p, alias.map(Id::from_name), e2);
+                    let e_body = mk_expr_assume(p, alias.as_ref().map(Id::from_name), e2);
                     let e_body = mk_expr_take(local_id, ty, e_body);
                     mk_expr_app(e, e_body)
                 }
@@ -1039,7 +1039,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     let name = Name::from_str(token.as_str());
                     if self.local_axioms.iter().rev().any(|n| n == &name) {
-                        mk_expr_assump_by_name(Id::from_name(name))
+                        mk_expr_assump_by_name(Id::from_name(&name))
                     } else {
                         self.expr_const(token, true)?
                     }
@@ -1319,7 +1319,7 @@ impl<'a> Parser<'a> {
         }
         Ok(CmdDef {
             name,
-            local_types: local_types.into_iter().map(Id::from_name).collect(),
+            local_types: local_types.iter().map(Id::from_name).collect(),
             local_classes,
             ty: t,
             target: m,
@@ -1347,7 +1347,7 @@ impl<'a> Parser<'a> {
         target = generalize(&target, &params);
         Ok(CmdAxiom {
             name,
-            local_types: local_types.into_iter().map(Id::from_name).collect(),
+            local_types: local_types.iter().map(Id::from_name).collect(),
             local_classes,
             target,
         })
@@ -1380,7 +1380,7 @@ impl<'a> Parser<'a> {
         let holes = self.holes.drain(..).collect();
         Ok(CmdLemma {
             name,
-            local_types: local_types.into_iter().map(Id::from_name).collect(),
+            local_types: local_types.iter().map(Id::from_name).collect(),
             local_classes,
             target: p,
             holes,
@@ -1403,7 +1403,7 @@ impl<'a> Parser<'a> {
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdConst {
             name,
-            local_types: local_types.into_iter().map(Id::from_name).collect(),
+            local_types: local_types.iter().map(Id::from_name).collect(),
             local_classes,
             ty: t,
         })
@@ -1459,7 +1459,7 @@ impl<'a> Parser<'a> {
         Ok(CmdTypeInductive {
             name,
             self_id,
-            local_types: local_types.into_iter().map(Id::from_name).collect(),
+            local_types: local_types.iter().map(Id::from_name).collect(),
             ctors,
         })
     }
@@ -1513,7 +1513,7 @@ impl<'a> Parser<'a> {
         Ok(CmdInductive {
             name,
             self_id,
-            local_types: local_types.into_iter().map(Id::from_name).collect(),
+            local_types: local_types.iter().map(Id::from_name).collect(),
             ctors,
             params,
             target_ty,
@@ -1541,7 +1541,7 @@ impl<'a> Parser<'a> {
             match keyword.as_str() {
                 "const" => {
                     let field_name = self.name()?;
-                    let field_id = Id::from_name(field_name.clone());
+                    let field_id = Id::from_name(&field_name);
                     self.expect_symbol(":")?;
                     let field_ty = self.ty()?;
                     fields.push(StructureField::Const(StructureConst {
@@ -1577,7 +1577,7 @@ impl<'a> Parser<'a> {
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdStructure {
             name,
-            local_types: local_types.into_iter().map(Id::from_name).collect(),
+            local_types: local_types.iter().map(Id::from_name).collect(),
             fields,
         })
     }
@@ -1606,7 +1606,7 @@ impl<'a> Parser<'a> {
                 "def" => {
                     // TODO: allow to refer to preceding definitions in the same instance.
                     let field_name = self.name()?;
-                    let field_id = Id::from_name(field_name.clone());
+                    let field_id = Id::from_name(&field_name);
                     let field_params = self.typed_parameters()?;
                     for field_param in &field_params {
                         self.locals.push(field_param.id);
@@ -1663,7 +1663,7 @@ impl<'a> Parser<'a> {
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdInstance {
             name,
-            local_types: local_types.into_iter().map(Id::from_name).collect(),
+            local_types: local_types.iter().map(Id::from_name).collect(),
             local_classes,
             params,
             target_ty,
@@ -1692,7 +1692,7 @@ impl<'a> Parser<'a> {
             match keyword.as_str() {
                 "const" => {
                     let field_name = self.name()?;
-                    let field_id = Id::from_name(field_name.clone());
+                    let field_id = Id::from_name(&field_name);
                     self.expect_symbol(":")?;
                     let field_ty = self.ty()?;
                     fields.push(ClassStructureField::Const(ClassStructureConst {
@@ -1728,7 +1728,7 @@ impl<'a> Parser<'a> {
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdClassStructure {
             name,
-            local_types: local_types.into_iter().map(Id::from_name).collect(),
+            local_types: local_types.iter().map(Id::from_name).collect(),
             fields,
         })
     }
@@ -1803,7 +1803,7 @@ impl<'a> Parser<'a> {
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdClassInstance {
             name,
-            local_types: local_types.into_iter().map(Id::from_name).collect(),
+            local_types: local_types.iter().map(Id::from_name).collect(),
             local_classes,
             target,
             fields,
@@ -1909,7 +1909,7 @@ mod tests {
             alias,
             expr: body,
         } = *assume;
-        assert_eq!(alias, Some(Id::from_name(Name::from_str("this"))));
+        assert_eq!(alias, Some(Id::from_name(&Name::from_str("this"))));
         let expected = mk_const(QualifiedName::from_str("p"), vec![], vec![]);
         assert!(local_axiom.alpha_eq(&expected));
 
@@ -1917,7 +1917,7 @@ mod tests {
             panic!("expected body to reference assumption alias");
         };
         let ExprAssumpByName { metadata: _, id } = *assump;
-        assert_eq!(id, Id::from_name(Name::from_str("this")));
+        assert_eq!(id, Id::from_name(&Name::from_str("this")));
     }
 
     #[test]
@@ -1933,7 +1933,7 @@ mod tests {
             alias: outer_alias,
             expr: outer_body,
         } = *outer;
-        assert_eq!(outer_alias, Some(Id::from_name(Name::from_str("hp"))));
+        assert_eq!(outer_alias, Some(Id::from_name(&Name::from_str("hp"))));
         let expected = mk_const(QualifiedName::from_str("p"), vec![], vec![]);
         assert!(outer_axiom.alpha_eq(&expected));
 
@@ -1955,7 +1955,7 @@ mod tests {
             alias: inner_alias,
             expr: inner_body,
         } = *inner_assume;
-        assert_eq!(inner_alias, Some(Id::from_name(Name::from_str("this"))));
+        assert_eq!(inner_alias, Some(Id::from_name(&Name::from_str("this"))));
         assert!(inner_axiom.alpha_eq(&expected));
         let Expr::AssumpByName(inner_assump) = inner_body else {
             panic!("expected have body to reference alias");
@@ -1964,7 +1964,7 @@ mod tests {
             metadata: _,
             id: inner_id,
         } = *inner_assump;
-        assert_eq!(inner_id, Id::from_name(Name::from_str("this")));
+        assert_eq!(inner_id, Id::from_name(&Name::from_str("this")));
 
         let Expr::AssumpByName(have_arg) = expr2 else {
             panic!("expected have argument to reference outer alias");
@@ -1973,7 +1973,7 @@ mod tests {
             metadata: _,
             id: outer_id,
         } = *have_arg;
-        assert_eq!(outer_id, Id::from_name(Name::from_str("hp")));
+        assert_eq!(outer_id, Id::from_name(&Name::from_str("hp")));
     }
 
     #[test]
