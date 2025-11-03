@@ -409,7 +409,7 @@ impl<'a> Parser<'a> {
                     }
                 })
             {
-                Ok(mk_type_local(stash.clone()))
+                Ok(mk_type_local(*stash))
             } else if self.type_const_table.contains_key(&name) {
                 Ok(mk_type_const(name))
             } else if name == *SUB_NAME {
@@ -1425,7 +1425,7 @@ impl<'a> Parser<'a> {
             self.type_self_ref.is_none(),
             "nested type inductive definitions are not supported"
         );
-        self.type_self_ref = Some((name.clone(), self_id.clone()));
+        self.type_self_ref = Some((name.clone(), self_id));
 
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {

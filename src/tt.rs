@@ -1968,7 +1968,7 @@ impl Env<'_> {
                 }
                 let mut type_subst = Vec::with_capacity(local_types.len());
                 for (x, t) in zip(local_types, ty_args) {
-                    type_subst.push((x.clone(), t.clone()));
+                    type_subst.push((*x, t.clone()));
                 }
                 if local_classes.len() != args.len() {
                     panic!(
@@ -2054,7 +2054,7 @@ impl Env<'_> {
                 }
                 let mut type_subst = Vec::with_capacity(local_types.len());
                 for (x, t) in zip(local_types, &m.ty_args) {
-                    type_subst.push((x.clone(), t.clone()));
+                    type_subst.push((*x, t.clone()));
                 }
                 if local_classes.len() != m.instances.len() {
                     panic!(
@@ -2105,7 +2105,7 @@ impl Env<'_> {
         } = self.delta_table.get(&n.name)?;
         let mut type_subst = Vec::with_capacity(local_types.len());
         for (x, t) in zip(local_types, &n.ty_args) {
-            type_subst.push((x.clone(), t.clone()));
+            type_subst.push((*x, t.clone()));
         }
         let mut instance_subst = Vec::with_capacity(local_classes.len());
         for (local_class, instance) in zip(local_classes, &n.instances) {
@@ -2146,7 +2146,7 @@ impl Env<'_> {
         let target = method_table.get(&n.name)?;
         let mut type_subst = Vec::with_capacity(local_types.len());
         for (x, t) in zip(local_types, ty_args) {
-            type_subst.push((x.clone(), t.clone()));
+            type_subst.push((*x, t.clone()));
         }
         let mut instance_subst = Vec::with_capacity(local_classes.len());
         for (local_class, instance) in zip(local_classes, args) {

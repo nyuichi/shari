@@ -348,7 +348,7 @@ impl<'a> Elaborator<'a> {
                 }
                 let mut type_subst = Vec::with_capacity(local_types.len());
                 for (x, t) in zip(local_types, &n.ty_args) {
-                    type_subst.push((x.clone(), t.clone()));
+                    type_subst.push((*x, t.clone()));
                 }
                 if local_classes.len() != n.instances.len() {
                     bail!("number of class instances mismatch");
@@ -400,7 +400,7 @@ impl<'a> Elaborator<'a> {
                 }
                 let mut type_subst = Vec::with_capacity(local_types.len());
                 for (x, t) in zip(local_types, ty_args) {
-                    type_subst.push((x.clone(), t.clone()));
+                    type_subst.push((*x, t.clone()));
                 }
                 if args.len() != local_classes.len() {
                     bail!("number of class instances mismatch");
@@ -643,7 +643,7 @@ impl<'a> Elaborator<'a> {
                 }
                 let mut type_subst = Vec::with_capacity(local_types.len());
                 for (x, t) in zip(local_types, &e.ty_args) {
-                    type_subst.push((x.clone(), t.clone()));
+                    type_subst.push((*x, t.clone()));
                 }
                 if local_classes.len() != e.instances.len() {
                     bail!("number of class instances mismatch");
@@ -1736,7 +1736,7 @@ impl<'a> Elaborator<'a> {
             } = instance;
             let mut type_subst = Vec::with_capacity(local_types.len());
             for local_type in local_types.iter() {
-                type_subst.push((local_type.clone(), mk_fresh_type_hole()));
+                type_subst.push((*local_type, mk_fresh_type_hole()));
             }
             let target = target.subst(&type_subst);
             // TODO: C a ?b ⇒ C ?b c ⇒ C a c
@@ -1750,7 +1750,7 @@ impl<'a> Elaborator<'a> {
             let subst = local_types
                 .iter()
                 .zip(&ty_args)
-                .map(|(name, ty)| (name.clone(), ty.clone()))
+                .map(|(name, ty)| (*name, ty.clone()))
                 .collect::<Vec<_>>();
             let mut args = vec![];
             for local_class in local_classes {
@@ -2106,7 +2106,7 @@ impl<'a> Elaborator<'a> {
                     .unwrap();
                 let mut subst = Vec::with_capacity(local_types.len());
                 for (x, t) in zip(local_types, &right_head_inner.ty_args) {
-                    subst.push((x.clone(), t.clone()));
+                    subst.push((*x, t.clone()));
                 }
                 let ty = ty.subst(&subst);
                 self.fully_inst_type(&ty) // TODO: avoid full instantiation

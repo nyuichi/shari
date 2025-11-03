@@ -552,7 +552,7 @@ impl Display for Pretty<'_, (&QualifiedName, &Const)> {
                 if !first {
                     write!(f, ", ")?;
                 }
-                write!(f, "{}", local_type_names.get(&local_type).unwrap())?;
+                write!(f, "{}", local_type_names.get(local_type).unwrap())?;
                 first = false;
             }
             write!(f, "}}")?;
@@ -592,7 +592,7 @@ impl Display for Pretty<'_, (&QualifiedName, &Axiom)> {
                 if !first {
                     write!(f, ", ")?;
                 }
-                write!(f, "{}", local_type_names.get(&local_type).unwrap())?;
+                write!(f, "{}", local_type_names.get(local_type).unwrap())?;
                 first = false;
             }
             write!(f, "}}")?;

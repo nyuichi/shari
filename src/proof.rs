@@ -906,7 +906,7 @@ impl Env<'_> {
                 }
                 let mut type_subst = Vec::with_capacity(local_types.len());
                 for (x, t) in zip(local_types, ty_args) {
-                    type_subst.push((x.clone(), t.clone()))
+                    type_subst.push((*x, t.clone()))
                 }
                 if local_classes.len() != instances.len() {
                     panic!(
