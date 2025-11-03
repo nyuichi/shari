@@ -174,6 +174,8 @@ pub struct Parser<'a> {
     // TODO: Vec<Name>にする
     locals: Vec<Id>,
     local_axioms: Vec<Name>,
+    self_ref: Option<(QualifiedName, Id)>,
+    type_self_ref: Option<(QualifiedName, Name)>,
     holes: Vec<(Id, Type)>,
 }
 
@@ -196,6 +198,8 @@ impl<'a> Parser<'a> {
             local_types: vec![],
             locals: vec![],
             local_axioms: vec![],
+            self_ref: None,
+            type_self_ref: None,
             holes: vec![],
         }
     }
@@ -388,18 +392,30 @@ impl<'a> Parser<'a> {
     }
 
     fn type_primary(&mut self) -> Result<Type, ParseError> {
+        static SUB_NAME: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::from_str("sub"));
+        static NAT_NAME: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::from_str("ℕ"));
+
         let token = self.any_token()?;
         if token.is_ident() {
-            let path = self.qualified_name(&token);
-            let type_name = Name::from_str(path.as_str());
-            if self.local_types.iter().any(|x| x == &type_name) {
-                Ok(mk_type_local(type_name))
-            } else if self.type_const_table.contains_key(&path) {
-                Ok(mk_type_const(path))
-            } else if path.as_str() == "sub" {
+            let name = self.qualified_name(&token);
+            if name.prefix().is_none() && self.local_types.iter().any(|x| x == &name.name()) {
+                Ok(mk_type_local(name.name()))
+            } else if let Some(stash) =
+                self.type_self_ref.as_ref().and_then(|(self_name, stash)| {
+                    if self_name == &name {
+                        Some(stash)
+                    } else {
+                        None
+                    }
+                })
+            {
+                Ok(mk_type_local(stash.clone()))
+            } else if self.type_const_table.contains_key(&name) {
+                Ok(mk_type_const(name))
+            } else if name == *SUB_NAME {
                 let t = self.subty(1024)?;
                 Ok(mk_type_arrow(t, mk_type_prop()))
-            } else if path.as_str() == "ℕ" {
+            } else if name == *NAT_NAME {
                 Ok(mk_type_const(QualifiedName::from_str("nat")))
             } else {
                 Self::fail(token, "unknown type constant")
@@ -558,7 +574,7 @@ impl<'a> Parser<'a> {
         Ok(m)
     }
 
-    fn term_binder(&mut self, token: Token, binder: &str) -> Result<Term, ParseError> {
+    fn term_binder(&mut self, token: Token, binder: &QualifiedName) -> Result<Term, ParseError> {
         let params = self.parameters()?;
         self.expect_symbol(",")?;
         if params.is_empty() {
@@ -580,7 +596,7 @@ impl<'a> Parser<'a> {
         for x in binders.into_iter().rev() {
             m = m.abs(slice::from_ref(&x));
             let f = mem::take(&mut m);
-            m = mk_const(QualifiedName::from_str(binder), vec![x.ty], vec![]);
+            m = mk_const(binder.clone(), vec![x.ty], vec![]);
             m = m.apply(vec![f]);
         }
         Ok(m)
@@ -635,13 +651,25 @@ impl<'a> Parser<'a> {
             Some(entity) => entity,
             None => {
                 let name = self.qualified_name(&token);
-                let local = Id::from_name(Name::from_str(name.as_str()));
-                if self.locals.iter().rev().any(|x| x == &local) {
-                    return Ok(mk_local(local));
+                if name.prefix().is_none()
+                    && self.locals.iter().rev().any(|x| {
+                        x.name().expect("locals are all internalized names") == name.name()
+                    })
+                {
+                    return Ok(mk_local(Id::from_name(name.name())));
                 }
                 name
             }
         };
+        if let Some(stash) = self.self_ref.as_ref().and_then(|(self_name, stash)| {
+            if self_name == &name {
+                Some(stash)
+            } else {
+                None
+            }
+        }) {
+            return Ok(mk_local(*stash));
+        }
         let Some(const_info) = self.const_table.get(&name) else {
             return Self::fail(token, "unknown variable");
         };
@@ -684,9 +712,9 @@ impl<'a> Parser<'a> {
                 self.expect_symbol(")")?;
                 m
             }
-            Nud::Forall => self.term_binder(token, "forall")?,
-            Nud::Exists => self.term_binder(token, "exists")?,
-            Nud::Uexists => self.term_binder(token, "uexists")?,
+            Nud::Forall => self.term_binder(token, &QualifiedName::from_str("forall"))?,
+            Nud::Exists => self.term_binder(token, &QualifiedName::from_str("exists"))?,
+            Nud::Uexists => self.term_binder(token, &QualifiedName::from_str("uexists"))?,
             Nud::User(op) => match op.fixity {
                 Fixity::Nofix => self.term_var(token, Some(op.entity.clone()))?,
                 Fixity::Prefix => {
@@ -805,7 +833,7 @@ impl<'a> Parser<'a> {
     }
 
     fn mk_eq_trans(&mut self, e1: Expr, e2: Expr) -> Expr {
-        let name = QualifiedName::from_str("eq.trans");
+        let name = QualifiedName::from_str("eq").extend("trans");
         let ty_args = vec![mk_fresh_type_hole()];
         let instances = vec![];
         let mut eq_trans = mk_expr_const(name, ty_args, instances);
@@ -938,7 +966,7 @@ impl<'a> Parser<'a> {
 
                     // Expand[obtain (x : τ), p := e1, e2] := exists.ind.{τ}[_, _] e1 (take (x : τ), assume p, e2)
                     let e = mk_expr_const(
-                        QualifiedName::from_str("exists.ind"),
+                        QualifiedName::from_str("exists").extend("ind"),
                         vec![ty.clone()],
                         vec![],
                     );
@@ -1392,9 +1420,12 @@ impl<'a> Parser<'a> {
     fn type_inductive_cmd(&mut self, _token: Token) -> Result<CmdTypeInductive, ParseError> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
-        let local_type_name = Name::from_str(name.as_str());
-        let local_id = Id::from_name(local_type_name.clone());
-        self.local_types.push(local_type_name.clone());
+        let self_name = Name::from_str(name.as_str());
+        debug_assert!(
+            self.type_self_ref.is_none(),
+            "nested type inductive definitions are not supported"
+        );
+        self.type_self_ref = Some((name.clone(), self_name.clone()));
 
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
@@ -1424,10 +1455,10 @@ impl<'a> Parser<'a> {
         // Parsing finished. We can now safaly tear off.
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
-        self.local_types.pop();
+        self.type_self_ref = None;
         Ok(CmdTypeInductive {
             name,
-            local_id,
+            self_name,
             local_types,
             ctors,
         })
@@ -1436,8 +1467,12 @@ impl<'a> Parser<'a> {
     fn inductive_cmd(&mut self, _token: Token) -> Result<CmdInductive, ParseError> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
-        let local_id = Id::from_name(Name::from_str(name.as_str()));
-        self.locals.push(local_id);
+        let self_id = Id::fresh();
+        debug_assert!(
+            self.self_ref.is_none(),
+            "nested inductive definitions are not supported"
+        );
+        self.self_ref = Some((name.clone(), self_id));
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -1472,12 +1507,12 @@ impl<'a> Parser<'a> {
         }
         // Parsing finished.
         self.locals.truncate(self.locals.len() - params.len());
-        self.locals.pop();
+        self.self_ref = None;
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdInductive {
             name,
-            local_id,
+            self_id,
             local_types,
             ctors,
             params,
@@ -1944,7 +1979,7 @@ mod tests {
     #[test]
     fn qualified_name_parses_dotted_segments() {
         let name = parse_qualified("foo.bar").expect("parse failed");
-        assert_eq!(name.as_str(), "foo.bar");
+        assert_eq!(name.to_string(), "foo.bar");
     }
 
     #[test]

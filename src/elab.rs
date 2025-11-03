@@ -2284,7 +2284,7 @@ impl<'a> Elaborator<'a> {
             },
         ) {
             let mut m = mk_const(
-                QualifiedName::from_str("default.value"),
+                QualifiedName::from_str("default").extend("value"),
                 vec![goal.clone()],
                 vec![instance],
             );
@@ -2483,7 +2483,9 @@ mod tests {
         let x_id = Id::from_name(Name::from_str("x46373"));
 
         let rep_term = mk_const(
-            QualifiedName::from_str("is_inhabited.inhab.rep"),
+            QualifiedName::from_str("is_inhabited")
+                .extend("inhab")
+                .extend("rep"),
             vec![ty_u.clone()],
             vec![],
         );

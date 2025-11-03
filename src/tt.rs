@@ -85,13 +85,30 @@ impl QualifiedName {
         self.0.as_str()
     }
 
+    pub fn name(&self) -> Name {
+        match self.0.rsplit_once('.') {
+            Some((_, name)) => Name::from_str(name),
+            None => Name::from_str(self.0.as_str()),
+        }
+    }
+
+    pub fn prefix(&self) -> Option<QualifiedName> {
+        self.0
+            .rsplit_once('.')
+            .map(|(prefix, _)| QualifiedName::from_str(prefix))
+    }
+
+    pub fn append(&self, suffix: &Self) -> QualifiedName {
+        self.extend(suffix.as_str())
+    }
+
     pub fn extend(&self, suffix: impl AsRef<str>) -> QualifiedName {
         let suffix = suffix.as_ref();
         if suffix.is_empty() {
             return self.clone();
         }
-        let mut value = String::with_capacity(self.as_str().len() + 1 + suffix.len());
-        value.push_str(self.as_str());
+        let mut value = String::with_capacity(self.0.as_str().len() + 1 + suffix.len());
+        value.push_str(self.0.as_str());
         value.push('.');
         value.push_str(suffix);
         QualifiedName::from_str(&value)

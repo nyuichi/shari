@@ -88,7 +88,7 @@ pub struct CmdAxiom {
 #[derive(Clone, Debug)]
 pub struct CmdLemma {
     pub name: QualifiedName,
-    // TODO: Vec<Id>にする。generate_flesh_local_typeで使っているtype localはIdを自動生成するようにして、printのところで頑張る
+    // TODO: Vec<Id>にする。generate_fresh_local_typeで使っているtype localはIdを自動生成するようにして、printのところで頑張る
     pub local_types: Vec<Name>,
     pub local_classes: Vec<Class>,
     pub target: Term,
@@ -113,7 +113,7 @@ pub struct CmdTypeConst {
 #[derive(Clone, Debug)]
 pub struct CmdTypeInductive {
     pub name: QualifiedName,
-    pub local_id: Id,
+    pub self_name: Name,
     pub local_types: Vec<Name>,
     pub ctors: Vec<DataConstructor>,
 }
@@ -127,7 +127,7 @@ pub struct DataConstructor {
 #[derive(Clone, Debug)]
 pub struct CmdInductive {
     pub name: QualifiedName,
-    pub local_id: Id,
+    pub self_id: Id,
     pub local_types: Vec<Name>,
     pub params: Vec<Local>,
     pub target_ty: Type,
@@ -971,13 +971,10 @@ impl Eval {
     fn run_type_inductive_cmd(&mut self, cmd: CmdTypeInductive) -> anyhow::Result<()> {
         let CmdTypeInductive {
             name,
-            local_id,
+            self_name,
             local_types,
             ctors,
         } = cmd;
-        let local_type_name = local_id
-            .name()
-            .expect("type inductive binder should have a name");
         if self.has_type_const(&name) {
             bail!("already defined");
         }
@@ -993,7 +990,7 @@ impl Eval {
             local_classes: vec![],
             locals: vec![],
         };
-        local_env.local_types.insert(0, local_type_name.clone());
+        local_env.local_types.insert(0, self_name.clone());
         for i in 0..ctors.len() {
             for j in i + 1..ctors.len() {
                 if ctors[i].name == ctors[j].name {
@@ -1002,7 +999,7 @@ impl Eval {
             }
         }
         for ctor in &ctors {
-            let ctor_name = name.extend(ctor.name.as_str());
+            let ctor_name = name.append(&ctor.name);
             if self.has_const(&ctor_name) {
                 bail!("already defined");
             }
@@ -1012,19 +1009,17 @@ impl Eval {
             }
             self.elaborate_type(&mut local_env, &ctor.ty, Kind::base())?;
             let (args, target) = ctor.ty.unarrow();
-            if target != mk_type_local(local_type_name.clone()) {
+            if target != mk_type_local(self_name.clone()) {
                 bail!("invalid constructor: {}", ctor.ty);
             }
             for a in args {
                 let (xs, head) = a.unarrow();
                 for x in &xs {
-                    if x.contains_local(&local_type_name) {
+                    if x.contains_local(&self_name) {
                         bail!("constructor violates strict positivity");
                     }
                 }
-                if head != mk_type_local(local_type_name.clone())
-                    && head.contains_local(&local_type_name)
-                {
+                if head != mk_type_local(self_name.clone()) && head.contains_local(&self_name) {
                     bail!("nested inductive type is unsupported");
                 }
             }
@@ -1048,10 +1043,10 @@ impl Eval {
             mk_type_const(name.clone()).apply(local_types.iter().cloned().map(mk_type_local))
         };
         // Foo ↦ Foo u v
-        let subst = [(local_type_name.clone(), target_ty.clone())];
+        let subst = [(self_name.clone(), target_ty.clone())];
         let mut cs = vec![];
         for ctor in &ctors {
-            let ctor_name = name.extend(ctor.name.as_str());
+            let ctor_name = name.append(&ctor.name);
             let ty = ctor.ty.subst(&subst);
             cs.push((ctor_name, ty));
         }
@@ -1100,7 +1095,7 @@ impl Eval {
                         ty: x,
                     })
                     .collect();
-                if head != mk_type_local(local_type_name.clone()) {
+                if head != mk_type_local(self_name.clone()) {
                     continue;
                 }
                 // ∀ xs, P (a xs)
@@ -1112,7 +1107,7 @@ impl Eval {
                 ih_list.push(h);
             }
             // ∀ args, {IH} → P (C args)
-            let ctor_name = name.extend(ctor.name.as_str());
+            let ctor_name = name.append(&ctor.name);
             let mut a = mk_const(
                 ctor_name,
                 local_types.iter().cloned().map(mk_type_local).collect(),
@@ -1190,11 +1185,10 @@ impl Eval {
             let (ctor_arg_tys, _) = ctor.ty.unarrow();
             for (ctor_arg, param) in zip(ctor_arg_tys, ctor_params) {
                 let (arg_tys, ctor_arg_target) = ctor_arg.unarrow();
-                if ctor_arg_target != mk_type_local(local_type_name.clone()) {
+                if ctor_arg_target != mk_type_local(self_name.clone()) {
                     continue;
                 }
-                let t =
-                    ctor_arg.subst(&[(local_type_name.clone(), mk_type_local(rec_ty_var.clone()))]);
+                let t = ctor_arg.subst(&[(self_name.clone(), mk_type_local(rec_ty_var.clone()))]);
                 cont_arg_tys.push(t);
 
                 let binders: Vec<_> = arg_tys
@@ -1240,7 +1234,7 @@ impl Eval {
                 rec_local_types.iter().cloned().map(mk_type_local).collect(),
                 vec![],
             );
-            let ctor_name = name.extend(ctor.name.as_str());
+            let ctor_name = name.append(&ctor.name);
             let mut lhs_arg = mk_const(
                 ctor_name.clone(),
                 local_types.iter().cloned().map(mk_type_local).collect(),
@@ -1279,7 +1273,7 @@ impl Eval {
         //
         let CmdInductive {
             name,
-            local_id,
+            self_id,
             local_types,
             params,
             target_ty,
@@ -1325,7 +1319,7 @@ impl Eval {
         local_env.locals.insert(
             0,
             Local {
-                id: local_id,
+                id: self_id,
                 ty: target_ty.clone(),
             },
         );
@@ -1334,7 +1328,7 @@ impl Eval {
         let mut ctor_target_list = vec![];
         let mut ctor_ind_args_list = vec![];
         for ctor in &mut ctors {
-            let ctor_name = name.extend(ctor.name.as_str());
+            let ctor_name = name.append(&ctor.name);
             if self.has_axiom(&ctor_name) {
                 bail!("already defined");
             }
@@ -1344,13 +1338,13 @@ impl Eval {
             ctor_params_list.push(ctor_params.clone());
             let (ctor_args, m) = unguard(&m);
             ctor_args_list.push(ctor_args.clone());
-            if !m.head().alpha_eq(&mk_local(local_id)) {
+            if !m.head().alpha_eq(&mk_local(self_id)) {
                 bail!(
                     "invalid constructor. Currently only Horn clauses are supported in inductive clauses: {m}"
                 );
             }
             for a in m.args() {
-                if a.contains_local(local_id) {
+                if a.contains_local(self_id) {
                     bail!("invalid target");
                 }
             }
@@ -1366,12 +1360,12 @@ impl Eval {
                     }
                     current = next;
                 }
-                if current.contains_local(local_id) {
-                    if !current.head().alpha_eq(&mk_local(local_id)) {
+                if current.contains_local(self_id) {
+                    if !current.head().alpha_eq(&mk_local(self_id)) {
                         bail!("invalid target");
                     }
                     for a in current.args() {
-                        if a.contains_local(local_id) {
+                        if a.contains_local(self_id) {
                             bail!("invalid target");
                         }
                     }
@@ -1400,7 +1394,7 @@ impl Eval {
         // | intro : ∀ y, φ → (∀ z, ψ → P M) → P N
         // ↦ axiom P.intro.{u} (x : τ) : ∀ y, φ → (∀ z, ψ → P.{u} x M) → P.{u} x N
         for ctor in &ctors {
-            let ctor_name = name.extend(ctor.name.as_str());
+            let ctor_name = name.append(&ctor.name);
             let mut target = ctor.target.clone();
             // P.{u} x
             let mut stash = mk_const(
@@ -1412,7 +1406,7 @@ impl Eval {
                 vec![],
             );
             stash = stash.apply(params.iter().map(|param| mk_local(param.id)));
-            let subst = [(local_id, stash)];
+            let subst = [(self_id, stash)];
             let new_target = target.subst(&subst);
             target = new_target;
             target = generalize(&target, &params);
@@ -1445,7 +1439,7 @@ impl Eval {
             zip(ctor_args_list, zip(ctor_target_list, ctor_ind_args_list)),
         ) {
             // P ↦ C
-            let subst_with_motive = [(local_id, mk_local(motive.id))];
+            let subst_with_motive = [(self_id, mk_local(motive.id))];
 
             let mut guard_term = ctor_target;
 
@@ -1470,7 +1464,7 @@ impl Eval {
                 vec![],
             );
             stash = stash.apply(params.iter().map(|param| mk_local(param.id)));
-            let subst = [(local_id, stash)];
+            let subst = [(self_id, stash)];
 
             // φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N
             for ctor_arg in &mut ctor_args {
