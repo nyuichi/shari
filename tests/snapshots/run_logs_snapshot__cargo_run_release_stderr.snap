@@ -1,6 +1,6 @@
 ---
 source: tests/run_logs_snapshot.rs
-expression: normalized.as_ref()
+expression: without_timestamps.as_ref()
 ---
 [<timestamp> INFO  shari::cmd] + type const Prop : Type
 [<timestamp> INFO  shari::cmd] + const imp : Prop → Prop → Prop
@@ -329,8 +329,8 @@ expression: normalized.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom nat.rec.exists.{u} : ∀ n z f, ∃ a, nat.rec.graph z f n a
 [<timestamp> INFO  shari::cmd] + const nat.add : nat → nat → nat
 [<timestamp> INFO  shari::cmd] + const nat.mul : nat → nat → nat
-[<timestamp> INFO  shari::cmd] + const bit<num> : nat → nat
-[<timestamp> INFO  shari::cmd] + const bit<num> : nat → nat
+[<timestamp> INFO  shari::cmd] + const bit0 : nat → nat
+[<timestamp> INFO  shari::cmd] + const bit1 : nat → nat
 [<timestamp> INFO  shari::cmd] + const nat.pred : nat → nat
 [<timestamp> INFO  shari::cmd] + const nat.sub : nat → nat → nat
 [<timestamp> INFO  shari::cmd] + const nat.le : nat → nat → Prop
