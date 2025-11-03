@@ -239,113 +239,115 @@ impl Lex {
     pub fn span_since(&self, start: LexState) -> Span {
         Span::new(Arc::clone(&self.file), start.position, self.position)
     }
+
+    fn skip_block_comment(&mut self) -> Result<(), LexError> {
+        let mut nest = 1;
+        let len = self.file.len();
+
+        while nest != 0 {
+            if self.position >= len {
+                return Err(LexError::from(self.clone()));
+            }
+
+            let rest = &self.file.contents()[self.position..];
+            let bytes = rest.as_bytes();
+            let mut offset = 0;
+            loop {
+                if offset + 1 >= bytes.len() {
+                    return Err(LexError::from(self.clone()));
+                }
+                match (bytes[offset], bytes[offset + 1]) {
+                    (b'/', b'-') => {
+                        self.position += offset + 2;
+                        nest += 1;
+                        break;
+                    }
+                    (b'-', b'/') => {
+                        self.position += offset + 2;
+                        nest -= 1;
+                        break;
+                    }
+                    _ => {
+                        offset += 1;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl Iterator for Lex {
     type Item = std::result::Result<Token, LexError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        #[derive(PartialEq, Eq, Debug)]
-        enum Kind {
-            Space,
-            Ident,
-            Field,
-            Symbol,
-            NumLit,
-        }
-
+        // Avoid capturing because of performance issue
         static RE: LazyLock<Regex> = LazyLock::new(|| {
-            let s = &[
-                (Kind::Space, r"\s+|--.*|/-"),
-                (
-                    Kind::Ident,
-                    r"[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_']*",
-                ),
-                (
-                    Kind::Field,
-                    r"\.[\p{Cased_Letter}_][\p{Cased_Letter}\p{Number}_']*",
-                ),
-                (
-                    Kind::Symbol,
-                    r"[(){}\[\]«»,]|:=|∃!|\.0|\.1|\.\{|\$\{|[\p{Symbol}\p{Punctuation}&&[^(){}\[\]«»,.]]|\.\.\.",
-                ),
-                (Kind::NumLit, r"0|[1-9][0-9]*"),
-            ]
-            .iter()
-            .map(|(kind, re)| format!("(?P<{:?}>{})", kind, re))
-            .collect::<Vec<_>>()
-            .join("|");
-            regex::Regex::new(&format!("^(?:{})", s)).unwrap()
+            regex::Regex::new(concat!(
+                r"^(?:",
+                r"\s+|--.*|/-|", // Whitespace and Comments
+                r"[\p{Alphabetic}_][\p{Alphabetic}\p{Number}_']*|", // Ident
+                r"\.[\p{Alphabetic}_][\p{Alphabetic}\p{Number}_']*|", // Field
+                r"[(){}\[\]«»,]|:=|∃!|\.0|\.1|\.\{|\$\{|[\p{Symbol}\p{Punctuation}&&[^(){}\[\]«»,.]]|\.\.\.|", // Symbol
+                r"0|[1-9][0-9]*", // NumLit
+                r")"
+            ))
+            .unwrap()
         });
-
-        static RE_BLOCK_COMMENT: LazyLock<Regex> =
-            LazyLock::new(|| regex::Regex::new("^(?s:.*?)(?:(?P<start>/-)|(?P<end>-/))").unwrap());
 
         loop {
             if self.file.len() == self.position {
                 return None;
             }
-            let input = Arc::clone(&self.file);
-            let cap = match RE.captures(&input.contents()[self.position..]) {
-                None => return Some(Err(LexError::from(self.clone()))),
-                Some(cap) => cap,
+
+            let contents = self.file.contents();
+            let Some(m) = RE.find(&contents[self.position..]) else {
+                return Some(Err(LexError::from(self.clone())));
             };
 
-            // skip whitespaces
-            if let Some(m) = cap.name(&format!("{:?}", Kind::Space)) {
-                self.advance(m.range().count());
-                if m.as_str() == "/-" {
-                    let mut nest = 1;
-                    while nest != 0 {
-                        if self.file.len() == self.position {
-                            return None;
-                        }
-                        let cap = match RE_BLOCK_COMMENT
-                            .captures(&self.file.contents()[self.position..])
-                        {
-                            None => return Some(Err(LexError::from(self.clone()))),
-                            Some(cap) => cap,
-                        };
-                        if cap.name("start").is_some() {
-                            nest += 1;
-                            self.advance(cap.get(0).unwrap().range().count());
-                        } else {
-                            assert!(cap.name("end").is_some());
-                            nest -= 1;
-                            self.advance(cap.get(0).unwrap().range().count());
-                        }
-                    }
-                }
+            debug_assert_eq!(m.start(), 0);
+            let text = m.as_str();
+
+            if text.chars().next().is_some_and(char::is_whitespace) {
+                self.position += m.end();
                 continue;
             }
 
-            // change the position of the cursor
-            let span = self.advance(cap.get(0).unwrap().range().count());
-            let text = span.as_str();
+            if text.starts_with("--") {
+                self.position += m.end();
+                continue;
+            }
 
-            let kind;
-            if cap.name(&format!("{:?}", Kind::Ident)).is_some() {
+            if text == "/-" {
+                self.position += m.end();
+                match self.skip_block_comment() {
+                    Ok(()) => continue,
+                    Err(err) => return Some(Err(err)),
+                }
+            }
+
+            let first = text.chars().next().expect("token text should not be empty");
+            let kind = if text
+                .strip_prefix('.')
+                .and_then(|rest| rest.chars().next())
+                .is_some_and(|c| c == '_' || c.is_alphabetic())
+            {
+                TokenKind::Field
+            } else if first == '_' || first.is_alphabetic() {
                 match text {
-                    "λ" | "_" => {
-                        kind = TokenKind::Symbol;
-                    }
+                    "λ" | "_" => TokenKind::Symbol,
                     "infixr" | "nofix" | "infixl" | "infix" | "prefix" | "axiom" | "def"
                     | "lemma" | "const" | "type" | "inductive" | "structure" | "instance"
-                    | "class" | "as" => {
-                        kind = TokenKind::Keyword;
-                    }
-                    _ => {
-                        kind = TokenKind::Ident;
-                    }
+                    | "class" | "as" => TokenKind::Keyword,
+                    _ => TokenKind::Ident,
                 }
-            } else if cap.name(&format!("{:?}", Kind::Field)).is_some() {
-                kind = TokenKind::Field;
-            } else if cap.name(&format!("{:?}", Kind::NumLit)).is_some() {
-                kind = TokenKind::NumLit;
+            } else if first.is_ascii_digit() {
+                TokenKind::NumLit
             } else {
-                assert!(cap.name(&format!("{:?}", Kind::Symbol)).is_some());
-                kind = TokenKind::Symbol;
+                TokenKind::Symbol
             };
+            let span = self.advance(m.end());
             return Some(Ok(Token { kind, span }));
         }
     }
