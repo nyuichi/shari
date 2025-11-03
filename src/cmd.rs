@@ -1372,10 +1372,7 @@ impl Eval {
             // P.{u} x
             let mut stash = mk_const(
                 name.clone(),
-                local_types
-                    .iter()
-                    .map(|id| mk_type_local(*id))
-                    .collect(),
+                local_types.iter().map(|id| mk_type_local(*id)).collect(),
                 vec![],
             );
             stash = stash.apply(params.iter().map(|param| mk_local(param.id)));
@@ -1430,10 +1427,7 @@ impl Eval {
             // P ↦ P.{u} x
             let mut stash = mk_const(
                 name.clone(),
-                local_types
-                    .iter()
-                    .map(|id| mk_type_local(*id))
-                    .collect(),
+                local_types.iter().map(|id| mk_type_local(*id)).collect(),
                 vec![],
             );
             stash = stash.apply(params.iter().map(|param| mk_local(param.id)));
@@ -1455,10 +1449,7 @@ impl Eval {
 
         let mut p = mk_const(
             name.clone(),
-            local_types
-                .iter()
-                .map(|id| mk_type_local(*id))
-                .collect(),
+            local_types.iter().map(|id| mk_type_local(*id)).collect(),
             vec![],
         );
         p = p.apply(params.iter().map(|param| mk_local(param.id)));
@@ -1665,7 +1656,7 @@ impl Eval {
                 }) => {
                     // (s : set u)
                     let param = Local {
-                        id: Id::fresh_from(Id::from_name(field_name.clone())),
+                        id: Id::fresh_with_name(field_name.clone()),
                         ty: field_ty.clone(),
                     };
 
@@ -2015,12 +2006,10 @@ impl Eval {
         }]);
         let f = Local {
             id: Id::fresh_with_name(Name::from_str("f")),
-            ty: mk_type_local(ret_ty).arrow(fields.iter().filter_map(
-                |field| match field {
-                    InstanceField::Def(field) => Some(field.ty.clone()),
-                    InstanceField::Lemma(_) => None,
-                },
-            )),
+            ty: mk_type_local(ret_ty).arrow(fields.iter().filter_map(|field| match field {
+                InstanceField::Def(field) => Some(field.ty.clone()),
+                InstanceField::Lemma(_) => None,
+            })),
         };
         let mut right = mk_local(f.id);
         right = right.apply(fields.iter().filter_map(|field| match field {

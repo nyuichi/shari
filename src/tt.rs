@@ -148,15 +148,6 @@ impl Id {
         Id(id)
     }
 
-    pub fn fresh_from(id: Id) -> Self {
-        let value = ID_REV_TABLE.lock().unwrap().get(&id).cloned();
-        let new_id = Id::fresh();
-        if let Some(value) = value {
-            ID_REV_TABLE.lock().unwrap().insert(new_id, value);
-        }
-        new_id
-    }
-
     pub fn fresh_with_name(name: Name) -> Self {
         let new_id = Id::fresh();
         ID_REV_TABLE.lock().unwrap().insert(new_id, name);
@@ -995,8 +986,7 @@ pub struct TermAbs {
     pub metadata: TermMetadata,
     pub binder_type: Type,
     // for pretty-printing
-    // TODO: generated name は受け付けないようにする。そもそも Id ではなく String の方が(効率はさておき)意味論的には適切。
-    pub binder_id: Id,
+    pub binder_name: Option<Name>,
     pub body: Term,
 }
 
@@ -1062,7 +1052,10 @@ impl Display for Term {
                     if needs_paren {
                         write!(f, "(")?;
                     }
-                    write!(f, "λ{}:{}. ", inner.binder_id, inner.binder_type)?;
+                    match &inner.binder_name {
+                        Some(name) => write!(f, "λ{}:{}. ", name.as_str(), inner.binder_type)?,
+                        None => write!(f, "λ_:{}. ", inner.binder_type)?,
+                    }
                     fmt_term(&inner.body, f, TERM_PREC_LAM)?;
                     if needs_paren {
                         write!(f, ")")?;
@@ -1115,13 +1108,13 @@ impl Display for Term {
     }
 }
 
-pub fn mk_abs(binder_id: Id, binder_type: Type, body: Term) -> Term {
+pub fn mk_abs(binder_name: Option<Name>, binder_type: Type, body: Term) -> Term {
     let mut body_meta = body.metadata().clone();
     body_meta.span = None;
     Term::Abs(Arc::new(TermAbs {
         metadata: body_meta,
         binder_type,
-        binder_id,
+        binder_name,
         body,
     }))
 }
@@ -1309,7 +1302,7 @@ impl Term {
                 if inner.body.ptr_eq(&body) {
                     self.clone()
                 } else {
-                    mk_abs(inner.binder_id, inner.binder_type.clone(), body)
+                    mk_abs(inner.binder_name.clone(), inner.binder_type.clone(), body)
                 }
             }
             Self::App(inner) => {
@@ -1347,7 +1340,7 @@ impl Term {
                 if inner.body.ptr_eq(&body) {
                     self.clone()
                 } else {
-                    mk_abs(inner.binder_id, inner.binder_type.clone(), body)
+                    mk_abs(inner.binder_name.clone(), inner.binder_type.clone(), body)
                 }
             }
             Self::App(inner) => {
@@ -1375,7 +1368,7 @@ impl Term {
                 if inner.body.ptr_eq(&body) {
                     self.clone()
                 } else {
-                    mk_abs(inner.binder_id, inner.binder_type.clone(), body)
+                    mk_abs(inner.binder_name.clone(), inner.binder_type.clone(), body)
                 }
             }
             Term::App(inner) => {
@@ -1407,7 +1400,7 @@ impl Term {
                 if inner.body.ptr_eq(&body) {
                     self.clone()
                 } else {
-                    mk_abs(inner.binder_id, inner.binder_type.clone(), body)
+                    mk_abs(inner.binder_name.clone(), inner.binder_type.clone(), body)
                 }
             }
             Term::App(inner) => {
@@ -1442,7 +1435,7 @@ impl Term {
                 if inner.body.ptr_eq(&body) {
                     self.clone()
                 } else {
-                    mk_abs(inner.binder_id, inner.binder_type.clone(), body)
+                    mk_abs(inner.binder_name.clone(), inner.binder_type.clone(), body)
                 }
             }
             Term::App(inner) => {
@@ -1487,7 +1480,7 @@ impl Term {
                 if inner.binder_type.ptr_eq(&binder_type) && inner.body.ptr_eq(&body) {
                     self.clone()
                 } else {
-                    mk_abs(inner.binder_id, binder_type, body)
+                    mk_abs(inner.binder_name.clone(), binder_type, body)
                 }
             }
             Term::App(inner) => {
@@ -1703,7 +1696,7 @@ impl Term {
         let locals = xs.iter().map(|x| x.id).collect::<Vec<_>>();
         let mut m = self.close(&locals, 0);
         for x in xs.iter().rev() {
-            m = mk_abs(x.id, x.ty.clone(), m);
+            m = mk_abs(x.id.name(), x.ty.clone(), m);
         }
         m
     }
@@ -2002,7 +1995,7 @@ impl Env<'_> {
             Term::Abs(m) => {
                 self.check_wft(local_env, &m.binder_type);
                 let x = Local {
-                    id: Id::fresh_from(m.binder_id),
+                    id: Id::fresh(),
                     ty: m.binder_type.clone(),
                 };
                 let n = m.body.open(&[mk_local(x.id)], 0);
@@ -2484,10 +2477,10 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let x = Id::from_name(Name::from_str("x"));
+        let x = Name::from_str("x");
         let a = QualifiedName::from_str("a");
         let body = mk_var(0);
-        let lambda = mk_abs(x, mk_type_prop(), body);
+        let lambda = mk_abs(Some(x), mk_type_prop(), body);
         let arg = mk_const(a.clone(), vec![], vec![]);
         let applied = mk_app(lambda, arg.clone());
 

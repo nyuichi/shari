@@ -291,7 +291,7 @@ impl<'a> Elaborator<'a> {
                 let TermAbs {
                     metadata: _,
                     binder_type,
-                    binder_id: _,
+                    binder_name: _,
                     body,
                 } = &**m;
 
@@ -1507,7 +1507,7 @@ impl<'a> Elaborator<'a> {
                 let TermAbs {
                     metadata: _,
                     binder_type: right_binder_type,
-                    binder_id: _,
+                    binder_name: _,
                     body: right_body,
                 } = {
                     let Term::Abs(right_inner) = right else {
@@ -2500,19 +2500,15 @@ mod tests {
             mk_var(0),
         );
         let body = mk_app(mk_var(2), hole_applied);
-        let lambda = mk_abs(Id::from_name(Name::from_str("46379")), ty_u.clone(), body);
+        let lambda = mk_abs(Some(Name::from_str("46379")), ty_u.clone(), body);
         let lambda = mk_abs(
-            Id::from_name(Name::from_str("46378")),
+            Some(Name::from_str("46378")),
             ty_is_inhabited_u.clone(),
             lambda,
         );
+        let lambda = mk_abs(Some(Name::from_str("46377")), ty_u_to_prop.clone(), lambda);
         let lambda = mk_abs(
-            Id::from_name(Name::from_str("46377")),
-            ty_u_to_prop.clone(),
-            lambda,
-        );
-        let lambda = mk_abs(
-            Id::from_name(Name::from_str("46376")),
+            Some(Name::from_str("46376")),
             ty_is_inhabited_u.clone(),
             lambda,
         );

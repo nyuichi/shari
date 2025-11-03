@@ -50,7 +50,7 @@ pub fn generalize(term: &Term, xs: &[Local]) -> Term {
     let locals = xs.iter().map(|x| x.id).collect::<Vec<_>>();
     let mut result = term.close(&locals, 0);
     for x in xs.iter().rev() {
-        result = mk_abs(x.id, x.ty.clone(), result);
+        result = mk_abs(x.id.name(), x.ty.clone(), result);
         let mut c = mk_const(FORALL.clone(), vec![x.ty.clone()], vec![]);
         c = c.apply([result]);
         result = c;
@@ -86,10 +86,13 @@ pub fn ungeneralize1(term: &Term) -> Option<(Local, Term)> {
     let tt::TermAbs {
         metadata: _,
         binder_type,
-        binder_id,
+        binder_name,
         body,
     } = &**abs;
-    let id = Id::fresh_from(*binder_id);
+    let id = match binder_name {
+        Some(name) => Id::fresh_with_name(name.clone()),
+        None => Id::fresh(),
+    };
     let body = body.open(&[mk_local(id)], 0);
     let binder = Local {
         id,
