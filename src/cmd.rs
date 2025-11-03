@@ -1573,15 +1573,8 @@ impl Eval {
 
         let mut const_fields = vec![];
         for field in &fields {
-            if let StructureField::Const(StructureConst {
-                name: field_name,
-                ty,
-            }) = field
-            {
-                const_fields.push(Local {
-                    id: Id::from_name(field_name.clone()),
-                    ty: ty.clone(),
-                });
+            if let StructureField::Const(structure_const) = field {
+                const_fields.push(structure_const.clone());
             }
         }
 
@@ -1621,7 +1614,16 @@ impl Eval {
                     );
                     target = target.apply([mk_local(this.id), {
                         let mut target = mk_local(Id::from_name(field_name.clone()));
-                        target = target.abs(&const_fields);
+                        target = target.abs(
+                            const_fields
+                                .iter()
+                                .map(|f| Local {
+                                    id: Id::from_name(f.name.clone()),
+                                    ty: f.ty.clone(),
+                                })
+                                .collect::<Vec<_>>()
+                                .as_slice(),
+                        );
                         target
                     }]);
                     target = target.abs(slice::from_ref(&this));
@@ -1731,7 +1733,7 @@ impl Eval {
         };
         let mut guards = vec![];
         for field in &const_fields {
-            let fullname = name.extend(field.id.as_str());
+            let fullname = name.extend(field.name.as_str());
             let proj = mk_const(
                 fullname,
                 local_types.iter().cloned().map(mk_type_local).collect(),

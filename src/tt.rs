@@ -192,13 +192,6 @@ impl Id {
         };
         id != *self
     }
-
-    // TODO: 自動生成されたIdに対してas_strできないようにする
-    pub fn as_str(&self) -> String {
-        self.name()
-            .map(|name| name.as_str().to_owned())
-            .unwrap_or_else(|| format!("{}", self))
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
