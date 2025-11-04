@@ -1824,3 +1824,28 @@ lemma is_structure.ext.{base, u} [is_structure base u] (x₁ x₂ : u) : is_stru
   calc x₁ = x          := eq.symm «x = x₁»
       ... = x₂         := «x = x₂»
 }
+
+/-
+lemma ac_from_surjective_split.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) :=
+assume ∀ x, ∃ y, R x y,
+let structure R := {
+  const x : u
+  const y : v
+  axiom spec : R x y
+},
+have surjective R.x :=
+  take (x : u),
+  have ∃ y, R x y := «∀ x, ∃ y, R x y»[x],
+  obtain (y : v), R x y := «∃ y, R x y»,
+  obtain (r : R), R.x r = x ∧ R.y r = y := uexists.exists (@R.abs «R x y»),
+  @exists.intro[_, r] (and.left «R.x r = x ∧ R.y r = y»),
+have split R.x :=
+  surjective.split «surjective R.x»,
+obtain (f : u → R), ∀ x, R.x (f x) = x := «split R.x»,
+@exists.intro[_, λ x, R.y (f x)] (
+  take (x : u),
+  have R.x (f x) = x := «∀ x, R.x (f x) = x»[x],
+  have R (R.x (f x)) (R.y (f x)) := R.spec,
+  eq.transport «R.x (f x) = x» «R (R.x (f x)) (R.y (f x))»
+)
+-/
