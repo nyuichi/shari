@@ -90,42 +90,33 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + const surjective.{u, v} : (u → v) → Prop
 [<timestamp> INFO  shari::cmd] + const bijective.{u, v} : (u → v) → Prop
 [<timestamp> INFO  shari::cmd] + type const is_proposition : Type → Type
-[<timestamp> INFO  shari::cmd] + const is_proposition.rec.{u, u₁} : is_proposition u → u₁ → u₁
 [<timestamp> INFO  shari::cmd] + axiom is_proposition.proposition.{u} : ∀ this x₁ x₂, x₁ = x₂
 [<timestamp> INFO  shari::cmd] + axiom is_proposition.abs.{u} : (∀ x₁ x₂, x₁ = x₂) → ∃ this, true
 [<timestamp> INFO  shari::cmd] + axiom is_proposition.ext.{u} : ∀ this₁ this₂, this₁ = this₂
 [<timestamp> INFO  shari::cmd] + axiom is_proposition.is_proposition.proposition.{u} : ∀ x₁ x₂, x₁ = x₂
 [<timestamp> INFO  shari::cmd] + const is_proposition.is_proposition.{u} : is_proposition (is_proposition u)
-[<timestamp> INFO  shari::cmd] + axiom is_proposition.is_proposition.rec.{u, u₁} : is_proposition.rec is_proposition.is_proposition = λ f, f
 [<timestamp> INFO  shari::cmd] + type const is_contractible : Type → Type
-[<timestamp> INFO  shari::cmd] + const is_contractible.rec.{u, u₁} : is_contractible u → u₁ → u₁
 [<timestamp> INFO  shari::cmd] + axiom is_contractible.contractible.{u} : ∀ this, ∃! a, ⊤
 [<timestamp> INFO  shari::cmd] + axiom is_contractible.abs.{u} : (∃! a, ⊤) → ∃ this, true
 [<timestamp> INFO  shari::cmd] + axiom is_contractible.ext.{u} : ∀ this₁ this₂, this₁ = this₂
 [<timestamp> INFO  shari::cmd] + axiom is_contractible.is_proposition.proposition.{u} : ∀ x₁ x₂, x₁ = x₂
 [<timestamp> INFO  shari::cmd] + const is_contractible.is_proposition.{u} : is_proposition (is_contractible u)
-[<timestamp> INFO  shari::cmd] + axiom is_contractible.is_proposition.rec.{u, u₁} : is_proposition.rec is_contractible.is_proposition = λ f, f
 [<timestamp> INFO  shari::cmd] + type const is_inhabited : Type → Type
-[<timestamp> INFO  shari::cmd] + const is_inhabited.rec.{u, u₁} : is_inhabited u → u₁ → u₁
 [<timestamp> INFO  shari::cmd] + axiom is_inhabited.inhabited.{u} : ∀ this, ∃ a, ⊤
 [<timestamp> INFO  shari::cmd] + axiom is_inhabited.abs.{u} : (∃ a, ⊤) → ∃ this, true
 [<timestamp> INFO  shari::cmd] + axiom is_inhabited.ext.{u} : ∀ this₁ this₂, this₁ = this₂
 [<timestamp> INFO  shari::cmd] + axiom is_inhabited.is_proposition.proposition.{u} : ∀ x₁ x₂, x₁ = x₂
 [<timestamp> INFO  shari::cmd] + const is_inhabited.is_proposition.{u} : is_proposition (is_inhabited u)
-[<timestamp> INFO  shari::cmd] + axiom is_inhabited.is_proposition.rec.{u, u₁} : is_proposition.rec is_inhabited.is_proposition = λ f, f
 [<timestamp> INFO  shari::cmd] + type const is_empty : Type → Type
-[<timestamp> INFO  shari::cmd] + const is_empty.rec.{u, u₁} : is_empty u → u₁ → u₁
 [<timestamp> INFO  shari::cmd] + axiom is_empty.empty.{u} : ∀ this, ¬∃ x, ⊤
 [<timestamp> INFO  shari::cmd] + axiom is_empty.abs.{u} : ¬(∃ x, ⊤) → ∃ this, true
 [<timestamp> INFO  shari::cmd] + axiom is_empty.ext.{u} : ∀ this₁ this₂, this₁ = this₂
 [<timestamp> INFO  shari::cmd] + type const is_nonempty : Type → Type
-[<timestamp> INFO  shari::cmd] + const is_nonempty.rec.{u, u₁} : is_nonempty u → u₁ → u₁
 [<timestamp> INFO  shari::cmd] + axiom is_nonempty.nonempty.{u} : ∀ this, ¬¬∃ x, ⊤
 [<timestamp> INFO  shari::cmd] + axiom is_nonempty.abs.{u} : ¬¬(∃ x, ⊤) → ∃ this, true
 [<timestamp> INFO  shari::cmd] + axiom is_nonempty.ext.{u} : ∀ this₁ this₂, this₁ = this₂
 [<timestamp> INFO  shari::cmd] + axiom is_empty.is_proposition.proposition.{u} : ∀ x₁ x₂, x₁ = x₂
 [<timestamp> INFO  shari::cmd] + const is_empty.is_proposition.{u} : is_proposition (is_empty u)
-[<timestamp> INFO  shari::cmd] + axiom is_empty.is_proposition.rec.{u, u₁} : is_proposition.rec is_empty.is_proposition = λ f, f
 [<timestamp> INFO  shari::cmd] + const definite_description.{u} : is_contractible u → u
 [<timestamp> INFO  shari::cmd] + type const empty : Type
 [<timestamp> INFO  shari::cmd] + axiom empty.ind : ∀ x motive, motive x
@@ -135,18 +126,14 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom empty.strict.{u} : ∀ f, bijective f
 [<timestamp> INFO  shari::cmd] + axiom type_neg.is_empty.empty.{u} : ∀ f, ¬∃ x, ⊤
 [<timestamp> INFO  shari::cmd] + const type_neg.is_empty.{u} : (u → empty) → is_empty u
-[<timestamp> INFO  shari::cmd] + axiom type_neg.is_empty.rec.{u, u₁} : ∀ f, is_empty.rec (type_neg.is_empty f) = λ f, f
 [<timestamp> INFO  shari::cmd] + axiom type_neg.is_empty.bijective.{u} : bijective type_neg.is_empty
 [<timestamp> INFO  shari::cmd] + axiom empty_function.uexists.{u, v} : ¬(∃ x, ⊤) → ∃! f, ⊤
 [<timestamp> INFO  shari::cmd] + axiom EmptyFunction.is_contractible.contractible.{u, v} : ∀ h, ∃! f, ⊤
 [<timestamp> INFO  shari::cmd] + const EmptyFunction.is_contractible.{u, v} : is_empty u → is_contractible (u → v)
-[<timestamp> INFO  shari::cmd] + axiom EmptyFunction.is_contractible.rec.{u, v, u₁} : ∀ h, is_contractible.rec (EmptyFunction.is_contractible h) = λ f, f
 [<timestamp> INFO  shari::cmd] + type const u : Type
-[<timestamp> INFO  shari::cmd] + const u.rec.{u} : u → u → u
 [<timestamp> INFO  shari::cmd] + axiom u.abs : ∃ this, true
 [<timestamp> INFO  shari::cmd] + axiom u.ext : ∀ this₁ this₂, this₁ = this₂
 [<timestamp> INFO  shari::cmd] + type const v : Type
-[<timestamp> INFO  shari::cmd] + const v.rec.{u} : v → u → u
 [<timestamp> INFO  shari::cmd] + axiom v.abs : ∃ this, true
 [<timestamp> INFO  shari::cmd] + axiom v.ext : ∀ this₁ this₂, this₁ = this₂
 [<timestamp> INFO  shari::cmd] + const F : v → u
@@ -158,7 +145,6 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom ec.trans : ∀ x y z, ec x y → ec y z → ec x z
 [<timestamp> INFO  shari::cmd] + axiom ec.ind : ∀ x x₁ motive, ec x x₁ → (∀ a, motive (F a) (G a)) → (∀ x, motive x x) → (∀ x y, ec x y → motive x y → motive y x) → (∀ x y z, ec x y → ec y z → motive x y → motive y z → motive x z) → motive x x₁
 [<timestamp> INFO  shari::cmd] + type const quot : Type
-[<timestamp> INFO  shari::cmd] + const quot.rec.{u} : quot → ((u → Prop) → u) → u
 [<timestamp> INFO  shari::cmd] + const quot.rep : quot → u → Prop
 [<timestamp> INFO  shari::cmd] + axiom quot.spec : ∀ this, ∃ x, ec x = quot.rep this
 [<timestamp> INFO  shari::cmd] + axiom quot.abs : ∀ rep, (∃ x, ec x = rep) → ∃ this, rep = quot.rep this
@@ -166,9 +152,8 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + const into_quot.rep : u → u → Prop
 [<timestamp> INFO  shari::cmd] + axiom into_quot.spec : ∀ x, ∃ x₁, ec x₁ = into_quot.rep x
 [<timestamp> INFO  shari::cmd] + const into_quot : u → quot
-[<timestamp> INFO  shari::cmd] + axiom into_quot.rec.{u} : ∀ x, quot.rec (into_quot x) = λ f, f (into_quot.rep x)
+[<timestamp> INFO  shari::cmd] + axiom into_quot.rep.spec : ∀ x, quot.rep (into_quot x) = into_quot.rep x
 [<timestamp> INFO  shari::cmd] + type const bool : Type
-[<timestamp> INFO  shari::cmd] + const bool.rec.{u} : bool → (Prop → u) → u
 [<timestamp> INFO  shari::cmd] + const bool.rep : bool → Prop
 [<timestamp> INFO  shari::cmd] + axiom bool.spec : ∀ this, bool.rep this = ⊤ ∨ bool.rep this = ⊥
 [<timestamp> INFO  shari::cmd] + axiom bool.abs : ∀ rep, rep = ⊤ ∨ rep = ⊥ → ∃ this, rep = bool.rep this
@@ -176,11 +161,11 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + const bool.tt.rep : Prop
 [<timestamp> INFO  shari::cmd] + axiom bool.tt.spec : bool.tt.rep = ⊤ ∨ bool.tt.rep = ⊥
 [<timestamp> INFO  shari::cmd] + const bool.tt : bool
-[<timestamp> INFO  shari::cmd] + axiom bool.tt.rec.{u} : bool.rec bool.tt = λ f, f bool.tt.rep
+[<timestamp> INFO  shari::cmd] + axiom bool.tt.rep.spec : bool.rep bool.tt = bool.tt.rep
 [<timestamp> INFO  shari::cmd] + const bool.ff.rep : Prop
 [<timestamp> INFO  shari::cmd] + axiom bool.ff.spec : bool.ff.rep = ⊤ ∨ bool.ff.rep = ⊥
 [<timestamp> INFO  shari::cmd] + const bool.ff : bool
-[<timestamp> INFO  shari::cmd] + axiom bool.ff.rec.{u} : bool.rec bool.ff = λ f, f bool.ff.rep
+[<timestamp> INFO  shari::cmd] + axiom bool.ff.rep.spec : bool.rep bool.ff = bool.ff.rep
 [<timestamp> INFO  shari::cmd] + const tt : bool
 [<timestamp> INFO  shari::cmd] + const ff : bool
 [<timestamp> INFO  shari::cmd] + axiom bool.rep_tt_eq_true : bool.rep tt = ⊤
@@ -229,7 +214,6 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom fin.insert.{u} : ∀ a s, fin s → fin (insert a s)
 [<timestamp> INFO  shari::cmd] + axiom fin.ind.{u} : ∀ x motive, fin x → motive ∅ → (∀ a s, fin s → motive s → motive (insert a s)) → motive x
 [<timestamp> INFO  shari::cmd] + type const inhab : Type → Type
-[<timestamp> INFO  shari::cmd] + const inhab.rec.{u, u₁} : inhab u → ((u → Prop) → u₁) → u₁
 [<timestamp> INFO  shari::cmd] + const inhab.rep.{u} : inhab u → u → Prop
 [<timestamp> INFO  shari::cmd] + axiom inhab.inhabited.{u} : ∀ this, ∃ x, x ∈ inhab.rep this
 [<timestamp> INFO  shari::cmd] + axiom inhab.abs.{u} : ∀ rep, (∃ x, x ∈ rep) → ∃ this, rep = inhab.rep this
@@ -251,13 +235,11 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom snd.pair.{u, v} : ∀ x y, snd (pair x y) = y
 [<timestamp> INFO  shari::cmd] + axiom prod.eta.{u, v} : ∀ p, p = pair (fst p) (snd p)
 [<timestamp> INFO  shari::cmd] + type const total : Type → Type → Type
-[<timestamp> INFO  shari::cmd] + const total.rec.{u, v, u₁} : total u v → ((u → v → Prop) → u₁) → u₁
 [<timestamp> INFO  shari::cmd] + const total.rel.{u, v} : total u v → u → v → Prop
 [<timestamp> INFO  shari::cmd] + axiom total.spec.{u, v} : ∀ this x, ∃ y, total.rel this x y
 [<timestamp> INFO  shari::cmd] + axiom total.abs.{u, v} : ∀ rel, (∀ x, ∃ y, rel x y) → ∃ this, rel = total.rel this
 [<timestamp> INFO  shari::cmd] + axiom total.ext.{u, v} : ∀ this₁ this₂, total.rel this₁ = total.rel this₂ → this₁ = this₂
 [<timestamp> INFO  shari::cmd] + type const total.el : Type → Type → Type
-[<timestamp> INFO  shari::cmd] + const total.el.rec.{u, v, u₁} : total.el u v → (total u v → u → v → u₁) → u₁
 [<timestamp> INFO  shari::cmd] + const total.el.rel.{u, v} : total.el u v → total u v
 [<timestamp> INFO  shari::cmd] + const total.el.x.{u, v} : total.el u v → u
 [<timestamp> INFO  shari::cmd] + const total.el.y.{u, v} : total.el u v → v
@@ -292,25 +274,22 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom indefinite_description.exists.{u} : ∃ indefinite_description, ⊤
 [<timestamp> INFO  shari::cmd] + const indefinite_description.{u} : is_inhabited u → u
 [<timestamp> INFO  shari::cmd] + type const some.singleton : Type → Type
-[<timestamp> INFO  shari::cmd] + const some.singleton.rec.{u, u₁} : some.singleton u → (((u → Prop) → u) → u₁) → u₁
 [<timestamp> INFO  shari::cmd] + const some.singleton.some.{u} : some.singleton u → (u → Prop) → u
 [<timestamp> INFO  shari::cmd] + axiom some.singleton.spec.{u} : ∀ this P, (∃ y, P y) → P (some.singleton.some this P)
 [<timestamp> INFO  shari::cmd] + axiom some.singleton.abs.{u} : ∀ some, (∀ P, (∃ y, P y) → P (some P)) → ∃ this, some = some.singleton.some this
 [<timestamp> INFO  shari::cmd] + axiom some.singleton.ext.{u} : ∀ this₁ this₂, some.singleton.some this₁ = some.singleton.some this₂ → this₁ = this₂
 [<timestamp> INFO  shari::cmd] + axiom some.singleton.is_inhabited.inhabited.{u} : ∀ h, ∃ x, ⊤
 [<timestamp> INFO  shari::cmd] + const some.singleton.is_inhabited.{u} : is_inhabited u → is_inhabited (some.singleton u)
-[<timestamp> INFO  shari::cmd] + axiom some.singleton.is_inhabited.rec.{u, u₁} : ∀ h, is_inhabited.rec (some.singleton.is_inhabited h) = λ f, f
 [<timestamp> INFO  shari::cmd] + const some.{u} [has is_inhabited u] : (u → Prop) → u
 [<timestamp> INFO  shari::cmd] + axiom some.spec.{u} [has is_inhabited u] : ∀ P, (∃ y, P y) → P (some P)
 [<timestamp> INFO  shari::cmd] + axiom global_choice.is_inhabited.inhabited.{u} : ∃ f, ⊤
 [<timestamp> INFO  shari::cmd] + const global_choice.is_inhabited.{u} : is_inhabited (inhab u → u)
-[<timestamp> INFO  shari::cmd] + axiom global_choice.is_inhabited.rec.{u, u₁} : is_inhabited.rec global_choice.is_inhabited = λ f, f
 [<timestamp> INFO  shari::cmd] + const global_choice.{u} : inhab u → u
 [<timestamp> INFO  shari::cmd] + axiom global_choice.spec.{u} : choice global_choice
 [<timestamp> INFO  shari::cmd] + const is_inhabited.inhab.rep.{u} : is_inhabited u → u → Prop
 [<timestamp> INFO  shari::cmd] + axiom is_inhabited.inhab.inhabited.{u} : ∀ h, ∃ x, x ∈ is_inhabited.inhab.rep h
 [<timestamp> INFO  shari::cmd] + const is_inhabited.inhab.{u} : is_inhabited u → inhab u
-[<timestamp> INFO  shari::cmd] + axiom is_inhabited.inhab.rec.{u, u₁} : ∀ h, inhab.rec (is_inhabited.inhab h) = λ f, f (is_inhabited.inhab.rep h)
+[<timestamp> INFO  shari::cmd] + axiom is_inhabited.inhab.rep.spec.{u} : ∀ h, inhab.rep (is_inhabited.inhab h) = is_inhabited.inhab.rep h
 [<timestamp> INFO  shari::cmd] + const indefinite_description_from_global_choice.{u} : is_inhabited u → u
 [<timestamp> INFO  shari::cmd] + axiom ac_from_global_choice.{u, v} : ∀ R, (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x)
 [<timestamp> INFO  shari::cmd] + type const nat : Type
@@ -384,7 +363,6 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + const well_founded.{u} : (u → u → Prop) → Prop
 [<timestamp> INFO  shari::cmd] + axiom wf_induction.{u} : ∀ R P, well_founded R → (∀ x, (∀ y, R y x → P y) → P x) → ∀ x, P x
 [<timestamp> INFO  shari::cmd] + type const W.el : Type → Type → Type
-[<timestamp> INFO  shari::cmd] + const W.el.rec.{u, v, u₁} : W.el u v → ((u → v) → (list u → v → Prop) → u₁) → u₁
 [<timestamp> INFO  shari::cmd] + const W.el.f.{u, v} : W.el u v → u → v
 [<timestamp> INFO  shari::cmd] + const W.el.tree.{u, v} : W.el u v → list u → v → Prop
 [<timestamp> INFO  shari::cmd] + axiom W.el.root.{u, v} : ∀ this, ∃ a, W.el.tree this nil a
@@ -400,7 +378,6 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom unit.eta_reduce : ∀ x, star = x
 [<timestamp> INFO  shari::cmd] + axiom unit_ext : ∀ x₁ x₂, x₁ = x₂
 [<timestamp> INFO  shari::cmd] + type const monoid : Type → Type
-[<timestamp> INFO  shari::cmd] + const monoid.rec.{u, u₁} : monoid u → ((u → u → u) → u → u₁) → u₁
 [<timestamp> INFO  shari::cmd] + const monoid.mult.{u} : monoid u → u → u → u
 [<timestamp> INFO  shari::cmd] + const monoid.unit.{u} : monoid u → u
 [<timestamp> INFO  shari::cmd] + axiom monoid.assoc.{u} : ∀ this x₁ x₂ x₃, monoid.mult this (monoid.mult this x₁ x₂) x₃ = monoid.mult this x₁ (monoid.mult this x₂ x₃)
@@ -421,16 +398,14 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom topology.union.{u} : ∀ subbase A, (∀ a, a ∈ A → topology subbase a) → topology subbase (⋃A)
 [<timestamp> INFO  shari::cmd] + axiom topology.ind.{u} : ∀ subbase x motive, topology subbase x → (∀ x, x ∈ subbase → motive x) → motive univ → (∀ x y, motive (x ∩ y)) → (∀ A, (∀ a, a ∈ A → topology subbase a) → (∀ a, a ∈ A → motive a) → motive (⋃A)) → motive x
 [<timestamp> INFO  shari::cmd] + type const space : Type → Type
-[<timestamp> INFO  shari::cmd] + const space.rec.{u, u₁} : space u → (((u → Prop) → Prop) → u₁) → u₁
 [<timestamp> INFO  shari::cmd] + const space.subbase.{u} : space u → (u → Prop) → Prop
 [<timestamp> INFO  shari::cmd] + axiom space.abs.{u} : ∀ subbase, ∃ this, subbase = space.subbase this
 [<timestamp> INFO  shari::cmd] + axiom space.ext.{u} : ∀ this₁ this₂, space.subbase this₁ = space.subbase this₂ → this₁ = this₂
 [<timestamp> INFO  shari::cmd] + const space.mk.subbase.{u} : ((u → Prop) → Prop) → (u → Prop) → Prop
 [<timestamp> INFO  shari::cmd] + const space.mk.{u} : ((u → Prop) → Prop) → space u
-[<timestamp> INFO  shari::cmd] + axiom space.mk.rec.{u, u₁} : ∀ subbase, space.rec (space.mk subbase) = λ f, f (space.mk.subbase subbase)
+[<timestamp> INFO  shari::cmd] + axiom space.mk.subbase.spec.{u} : ∀ subbase, space.subbase (space.mk subbase) = space.mk.subbase subbase
 [<timestamp> INFO  shari::cmd] + const space.open.{u} : space u → (u → Prop) → Prop
 [<timestamp> INFO  shari::cmd] + type const complete_lattice : Type → Type
-[<timestamp> INFO  shari::cmd] + const complete_lattice.rec.{u, u₁} : complete_lattice u → (((u → Prop) → u) → ((u → Prop) → u) → u₁) → u₁
 [<timestamp> INFO  shari::cmd] + const complete_lattice.Meet.{u} : complete_lattice u → (u → Prop) → u
 [<timestamp> INFO  shari::cmd] + const complete_lattice.Join.{u} : complete_lattice u → (u → Prop) → u
 [<timestamp> INFO  shari::cmd] + axiom complete_lattice.abs.{u} : ∀ Meet Join, ∃ this, and (Meet = complete_lattice.Meet this) (Join = complete_lattice.Join this)

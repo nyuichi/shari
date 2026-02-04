@@ -15,7 +15,6 @@
  - [ ] kernel support for eta equality of lambdas
  -/
 
--- TODO: structure.rec -> field projections
 -- TODO: remove structure.ext
 
 /-
@@ -716,11 +715,10 @@ instance into_quot (x : u) : quot := {
 -- The structure command below is desugared into the following set of declarations.
 --
 --   type const bool : Type
---   const bool.rec.{α} : bool → (Prop → α) → α
---   def bool.rep : bool → Prop := λ (this : bool), bool.rec.{Prop} this (λ (rep : Prop), rep)
---   axiom bool.spec.{u} (this : bool) : bool.rep this = ⊤ ∨ bool.rep this = ⊥
---   axiom bool.abs.{u, α} (rep : Prop) : rep = ⊤ ∨ rep = ⊥ → ∃ this, bool.rec.{α} this = λ (f : Prop → α), f rep
---   axiom bool.ext.{u} (this₁ this₂ : bool) : bool.rep this₁ = bool.rep this₂ → this₁ = this₂
+--   const bool.rep : bool → Prop
+--   axiom bool.spec (this : bool) : bool.rep this = ⊤ ∨ bool.rep this = ⊥
+--   axiom bool.abs (rep : Prop) : rep = ⊤ ∨ rep = ⊥ → ∃ this, rep = bool.rep this
+--   axiom bool.ext (this₁ this₂ : bool) : bool.rep this₁ = bool.rep this₂ → this₁ = this₂
 --
 -- Of course, bool can be also defined in terms of an inductive type.
 --
@@ -742,7 +740,7 @@ structure bool := {
 --   def bool.tt.rep : Prop := ⊤
 --   lemma bool.tt.spec : bool.tt.rep = ⊤ ∨ bool.tt.rep = ⊥ := tt_spec
 --   const bool.tt : bool
---   axiom bool.tt.rec.{α} : bool.rec bool.tt = λ (f : Prop → α), f bool.tt.rep
+--   axiom bool.tt.rep.spec : bool.rep bool.tt = bool.tt.rep
 --
 instance bool.tt : bool := {
   def rep : Prop := ⊤
@@ -763,14 +761,12 @@ def tt : bool := bool.tt
 def ff : bool := bool.ff
 
 lemma bool.rep_tt_eq_true : bool.rep tt = ⊤ :=
-calc bool.rep tt = bool.rec tt (λ rep, rep)          := eq.refl
-             ... = (λ f, f bool.tt.rep) (λ rep, rep) := eq.ap bool.tt.rec
-             ... = ⊤                                 := eq.refl
+calc bool.rep tt = bool.tt.rep := bool.tt.rep.spec
+             ... = ⊤           := eq.refl
 
 lemma bool.rep_ff_eq_false : bool.rep ff = ⊥ :=
-calc bool.rep ff = bool.rec ff (λ rep, rep)          := eq.refl
-             ... = (λ f, f bool.ff.rep) (λ rep, rep) := eq.ap bool.ff.rec
-             ... = ⊥                                 := eq.refl
+calc bool.rep ff = bool.ff.rep := bool.ff.rep.spec
+             ... = ⊥           := eq.refl
 
 lemma bool.eq_tt (b : bool) : bool.rep b = ⊤ → b = tt :=
 assume bool.rep b = ⊤,
@@ -1020,7 +1016,7 @@ assume ∃ x, x ∈ s,
 --
 --   let c.rep : sub u := s,
 --   have c.inhabited : ∃ x, x ∈ c.rep := «∃ x, x ∈ s»,
---   obtain (c : bool), inhab.rec c = λ (f : sub u → α), f c.rep := @inhab.abs[c.rep] c.inhabited,
+--   obtain (c : inhab u), s = inhab.rep c := inhab.abs «∃ x, x ∈ s»,
 --
 obtain (c : inhab u), s = inhab.rep c := inhab.abs «∃ x, x ∈ s»,
 uexists.intro

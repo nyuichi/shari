@@ -1531,10 +1531,6 @@ impl Eval {
                 }
             }
         }
-        let rec_name = name.extend("rec");
-        if self.has_const(&rec_name) {
-            bail!("already defined");
-        }
         let abs_name = name.extend("abs");
         if self.has_axiom(&abs_name) {
             bail!("already defined");
@@ -1569,17 +1565,6 @@ impl Eval {
             }
         }
 
-        // generate recursor
-        //   rec.{u, α} : inhab u → (set u → α) → α
-        let ret_ty = Id::fresh_with_name(Name::from_str("u"));
-        let mut rec_local_types = local_types.clone();
-        rec_local_types.push(ret_ty);
-        let rec_ty = mk_type_local(ret_ty).arrow(vec![
-            this.ty.clone(),
-            mk_type_local(ret_ty).arrow(const_fields.iter().map(|field| field.ty.clone())),
-        ]);
-        self.add_const(rec_name.clone(), rec_local_types, vec![], rec_ty);
-
         let mut subst = vec![];
         for field in &fields {
             match field {
@@ -1587,38 +1572,9 @@ impl Eval {
                     name: field_name,
                     ty: field_ty,
                 }) => {
-                    // rep : set u
-                    // ↦ def inhab.rep.{u} : inhab u → set u := λ (this : inhab u), inhab.rec.{u, set u} this (λ (rep : set u), rep)
                     let fullname = name.extend(field_name.as_str());
                     let ty = field_ty.arrow([this.ty.clone()]);
                     self.add_const(fullname.clone(), local_types.clone(), vec![], ty);
-
-                    let mut target = mk_const(
-                        rec_name.clone(),
-                        local_types
-                            .iter()
-                            .cloned()
-                            .map(mk_type_local)
-                            .chain([field_ty.clone()])
-                            .collect(),
-                        vec![],
-                    );
-                    target = target.apply([mk_local(this.id), {
-                        let mut target = mk_local(Id::from_name(&field_name));
-                        target = target.abs(
-                            const_fields
-                                .iter()
-                                .map(|f| Local {
-                                    id: Id::from_name(&f.name),
-                                    ty: f.ty.clone(),
-                                })
-                                .collect::<Vec<_>>()
-                                .as_slice(),
-                        );
-                        target
-                    }]);
-                    target = target.abs(slice::from_ref(&this));
-                    self.add_delta(fullname.clone(), target);
 
                     // rep ↦ inhab.rep.{u} this
                     let mut target = mk_const(
@@ -1627,7 +1583,7 @@ impl Eval {
                         vec![],
                     );
                     target = target.apply([mk_local(this.id)]);
-                    subst.push((Id::from_name(&field_name), target));
+                    subst.push((Id::from_name(field_name), target));
                 }
                 StructureField::Axiom(StructureAxiom {
                     name: field_name,
@@ -1679,7 +1635,7 @@ impl Eval {
                     chars.push(char);
 
                     // rep ↦ s
-                    subst.push((Id::from_name(&field_name), mk_local(param.id)));
+                    subst.push((Id::from_name(field_name), mk_local(param.id)));
 
                     params.push(param);
                 }
@@ -1763,7 +1719,8 @@ impl Eval {
         //   def power.inhab.rep.{u} (A : set u) : set (set u) := power A
         //   lemma power.inhab.inhabited.{u} : ∃ a, a ∈ power.inhab.rep A := (..)
         //   const power.inhab.{u} : set u → inhab (set u)
-        //   axiom power.inhab.spec.{u} (A : set u) : inhab.rec (power.inhab A) = λ f, f (power.inhab.rep A)
+        //   axiom power.inhab.rep.spec.{u} (A : set u) :
+        //     inhab.rep (power.inhab A) = power.inhab.rep A
         //
         let CmdInstance {
             name,
@@ -1892,10 +1849,6 @@ impl Eval {
         local_env
             .locals
             .truncate(local_env.locals.len() - num_consts);
-        let rec_name = name.extend("rec");
-        if self.has_axiom(&rec_name) {
-            bail!("already defined");
-        }
         // well-formedness check (all but entity elaboration) is completed.
 
         // generate a delcaration per field first
@@ -1979,62 +1932,58 @@ impl Eval {
             target,
         );
 
-        // generate spec
-        //   axiom power.inhab.spec.{u, α} (A : set u) : inhab.rec.{set u, α} (power.inhab A) = λ (f : set (set u) → α), f (power.inhab.rep A)
-        let ret_ty = Id::fresh_with_name(Name::from_str("u"));
-        let mut left = mk_const(
-            structure_name.extend("rec"),
-            target_ty
-                .args()
-                .into_iter()
-                .cloned()
-                .chain([mk_type_local(ret_ty)])
+        // generate per-field spec axioms
+        let mut this = mk_const(
+            name.clone(),
+            local_types.iter().cloned().map(mk_type_local).collect(),
+            local_classes
+                .iter()
+                .map(|c| mk_instance_local(c.clone()))
                 .collect(),
-            vec![],
         );
-        left = left.apply([{
-            let mut target = mk_const(
-                name.clone(),
+        this = this.apply(params.iter().map(|param| mk_local(param.id)));
+        for field in &fields {
+            let InstanceField::Def(InstanceDef {
+                name: field_name,
+                ty,
+                ..
+            }) = field
+            else {
+                continue;
+            };
+            let field_name = field_name.clone();
+            let spec_name = name.extend(field_name.as_str()).extend("spec");
+            if self.has_axiom(&spec_name) {
+                bail!("already defined");
+            }
+
+            let mut lhs = mk_const(
+                structure_name.extend(field_name.as_str()),
+                target_ty.args().into_iter().cloned().collect(),
+                vec![],
+            );
+            lhs = lhs.apply([this.clone()]);
+
+            let mut rhs = mk_const(
+                name.extend(field_name.as_str()),
                 local_types.iter().cloned().map(mk_type_local).collect(),
                 local_classes
                     .iter()
                     .map(|c| mk_instance_local(c.clone()))
                     .collect(),
             );
-            target = target.apply(params.iter().map(|param| mk_local(param.id)));
-            target
-        }]);
-        let f = Local {
-            id: Id::fresh_with_name(Name::from_str("f")),
-            ty: mk_type_local(ret_ty).arrow(fields.iter().filter_map(|field| match field {
-                InstanceField::Def(field) => Some(field.ty.clone()),
-                InstanceField::Lemma(_) => None,
-            })),
-        };
-        let mut right = mk_local(f.id);
-        right = right.apply(fields.iter().filter_map(|field| match field {
-            InstanceField::Def(field) => {
-                let mut target = mk_const(
-                    name.extend(field.name.as_str()),
-                    local_types.iter().cloned().map(mk_type_local).collect(),
-                    vec![],
-                );
-                target = target.apply(params.iter().map(|param| mk_local(param.id)));
-                Some(target)
-            }
-            InstanceField::Lemma(_) => None,
-        }));
-        right = right.abs(slice::from_ref(&f));
-        let mut target = mk_const(
-            QualifiedName::from_str("eq"),
-            vec![{ mk_type_local(ret_ty).arrow([f.ty.clone()]) }],
-            vec![],
-        );
-        target = target.apply([left, right]);
-        target = generalize(&target, &params);
-        let mut local_types = local_types.clone();
-        local_types.push(ret_ty);
-        self.add_axiom(rec_name, local_types, local_classes, target);
+            rhs = rhs.apply(params.iter().map(|param| mk_local(param.id)));
+
+            let mut target = mk_const(QualifiedName::from_str("eq"), vec![ty.clone()], vec![]);
+            target = target.apply([lhs, rhs]);
+            target = generalize(&target, &params);
+            self.add_axiom(
+                spec_name,
+                local_types.clone(),
+                local_classes.clone(),
+                target,
+            );
+        }
         Ok(())
     }
 
@@ -2140,7 +2089,7 @@ impl Eval {
                         local_types.iter().cloned().map(mk_type_local).collect(),
                         vec![this_instance.clone()],
                     );
-                    subst.push((Id::from_name(&field_name), target));
+                    subst.push((Id::from_name(field_name), target));
                 }
                 ClassStructureField::Axiom(ClassStructureAxiom {
                     name: field_name,
