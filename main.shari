@@ -11,11 +11,10 @@
  - [ ] coercion
  - [ ] namespace
  - [ ] let expr
- - [ ] local typedef
+ - [x] local typedef
  - [ ] kernel support for eta equality of lambdas
  -/
 
--- TODO: structure.rec -> field projections
 -- TODO: remove structure.ext
 
 /-
@@ -716,11 +715,10 @@ instance into_quot (x : u) : quot := {
 -- The structure command below is desugared into the following set of declarations.
 --
 --   type const bool : Type
---   const bool.rec.{α} : bool → (Prop → α) → α
---   def bool.rep : bool → Prop := λ (this : bool), bool.rec.{Prop} this (λ (rep : Prop), rep)
---   axiom bool.spec.{u} (this : bool) : bool.rep this = ⊤ ∨ bool.rep this = ⊥
---   axiom bool.abs.{u, α} (rep : Prop) : rep = ⊤ ∨ rep = ⊥ → ∃ this, bool.rec.{α} this = λ (f : Prop → α), f rep
---   axiom bool.ext.{u} (this₁ this₂ : bool) : bool.rep this₁ = bool.rep this₂ → this₁ = this₂
+--   const bool.rep : bool → Prop
+--   axiom bool.spec (this : bool) : bool.rep this = ⊤ ∨ bool.rep this = ⊥
+--   axiom bool.abs (rep : Prop) : rep = ⊤ ∨ rep = ⊥ → ∃ this, rep = bool.rep this
+--   axiom bool.ext (this₁ this₂ : bool) : bool.rep this₁ = bool.rep this₂ → this₁ = this₂
 --
 -- Of course, bool can be also defined in terms of an inductive type.
 --
@@ -742,7 +740,7 @@ structure bool := {
 --   def bool.tt.rep : Prop := ⊤
 --   lemma bool.tt.spec : bool.tt.rep = ⊤ ∨ bool.tt.rep = ⊥ := tt_spec
 --   const bool.tt : bool
---   axiom bool.tt.rec.{α} : bool.rec bool.tt = λ (f : Prop → α), f bool.tt.rep
+--   axiom bool.tt.rep.spec : bool.rep bool.tt = bool.tt.rep
 --
 instance bool.tt : bool := {
   def rep : Prop := ⊤
@@ -763,14 +761,12 @@ def tt : bool := bool.tt
 def ff : bool := bool.ff
 
 lemma bool.rep_tt_eq_true : bool.rep tt = ⊤ :=
-calc bool.rep tt = bool.rec tt (λ rep, rep)          := eq.refl
-             ... = (λ f, f bool.tt.rep) (λ rep, rep) := eq.ap bool.tt.rec
-             ... = ⊤                                 := eq.refl
+calc bool.rep tt = bool.tt.rep := bool.tt.rep.spec
+             ... = ⊤           := eq.refl
 
 lemma bool.rep_ff_eq_false : bool.rep ff = ⊥ :=
-calc bool.rep ff = bool.rec ff (λ rep, rep)          := eq.refl
-             ... = (λ f, f bool.ff.rep) (λ rep, rep) := eq.ap bool.ff.rec
-             ... = ⊥                                 := eq.refl
+calc bool.rep ff = bool.ff.rep := bool.ff.rep.spec
+             ... = ⊥           := eq.refl
 
 lemma bool.eq_tt (b : bool) : bool.rep b = ⊤ → b = tt :=
 assume bool.rep b = ⊤,
@@ -1020,7 +1016,7 @@ assume ∃ x, x ∈ s,
 --
 --   let c.rep : sub u := s,
 --   have c.inhabited : ∃ x, x ∈ c.rep := «∃ x, x ∈ s»,
---   obtain (c : bool), inhab.rec c = λ (f : sub u → α), f c.rep := @inhab.abs[c.rep] c.inhabited,
+--   obtain (c : inhab u), s = inhab.rep c := inhab.abs «∃ x, x ∈ s»,
 --
 obtain (c : inhab u), s = inhab.rep c := inhab.abs «∃ x, x ∈ s»,
 uexists.intro
@@ -1112,6 +1108,29 @@ obtain (g : u × total u v → total.el u v), ∀ p, p = f (g p) := surjective.s
   «total.rel r x (total.el.y (g ⟨x, r⟩))»
 
 lemma ac_from_surjective_split.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) :=
+assume ∀ x, ∃ y, R x y,
+let structure R := {
+  const x : u
+  const y : v
+  axiom spec : R x y
+},
+have surjective R.x :=
+  take (x : u),
+  have ∃ y, R x y := «∀ x, ∃ y, R x y»[x],
+  obtain (y : v), R x y := «∃ y, R x y»,
+  obtain (r : R), x = R.x r ∧ y = R.y r := @R.abs[x, y] «R x y»,
+  @exists.intro[λ r0, x = R.x r0, r] (@and.left[x = R.x r, y = R.y r] «x = R.x r ∧ y = R.y r»),
+have split R.x :=
+  surjective.split «surjective R.x»,
+obtain (f : u → R), ∀ x, x = R.x (f x) := «split R.x»,
+@exists.intro[_, λ x, R.y (f x)] (
+  take (x : u),
+  have x = R.x (f x) := «∀ x, x = R.x (f x)»[x],
+  have R (R.x (f x)) (R.y (f x)) := @R.spec[f x],
+  eq.transport (eq.symm «x = R.x (f x)») «R (R.x (f x)) (R.y (f x))»
+)
+
+lemma ac_from_surjective_split_without_local_structure.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) :=
 assume ∀ x, ∃ y, R x y,
 obtain (r : total u v), R = total.rel r := total.abs «∀ x, ∃ y, R x y»,
 obtain (h : u → v), ∀ x, total.rel r x (h x) := total.choice.exists,
