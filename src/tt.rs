@@ -879,6 +879,17 @@ impl Instance {
         }
     }
 
+    pub fn contains_type_local(&self, id: Id) -> bool {
+        match self {
+            Instance::Local(class) => class.class.args.iter().any(|arg| arg.contains_local(id)),
+            Instance::Global(instance) => {
+                instance.ty_args.iter().any(|arg| arg.contains_local(id))
+                    || instance.args.iter().any(|arg| arg.contains_type_local(id))
+            }
+            Instance::Hole(_) => false,
+        }
+    }
+
     pub fn is_type_ground(&self) -> bool {
         match self {
             Instance::Local(c) => c.class.is_ground(),
@@ -1777,6 +1788,27 @@ impl Term {
         }
     }
 
+    pub fn contains_type_local(&self, id: Id) -> bool {
+        match self {
+            Term::Var(_) => false,
+            Term::Abs(inner) => {
+                inner.binder_type.contains_local(id) || inner.body.contains_type_local(id)
+            }
+            Term::App(inner) => {
+                inner.fun.contains_type_local(id) || inner.arg.contains_type_local(id)
+            }
+            Term::Local(_) => false,
+            Term::Const(inner) => {
+                inner.ty_args.iter().any(|ty| ty.contains_local(id))
+                    || inner
+                        .instances
+                        .iter()
+                        .any(|instance| instance.contains_type_local(id))
+            }
+            Term::Hole(_) => false,
+        }
+    }
+
     pub fn contains_local(&self, id: Id) -> bool {
         match self {
             Term::Var(_) => false,
@@ -1793,6 +1825,11 @@ impl Term {
 pub struct LocalEnv {
     pub local_types: Vec<Id>,
     pub local_classes: Vec<Class>,
+    // NOTE: Local constants are currently referenced via Term::Const. If we later add zeta
+    // reduction, we need them to remain unfoldable, so Term::Local is a poor fit. That would
+    // point to Term::LocalConst or Term::Const; between those, splitting the logic adds little
+    // value and scatters the code, so we keep using Term::Const for now.
+    pub local_consts: Vec<(QualifiedName, LocalConst)>,
     pub locals: Vec<Local>,
 }
 
@@ -1806,6 +1843,11 @@ impl LocalEnv {
             }
         })
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalConst {
+    pub ty: Type,
 }
 
 #[derive(Debug, Clone)]
@@ -1851,8 +1893,8 @@ impl Env<'_> {
             Type::Const(name) => self
                 .type_const_table
                 .get(&name.name)
-                .unwrap_or_else(|| panic!("unknown type constant: {:?}", name.name))
-                .clone(),
+                .cloned()
+                .unwrap_or_else(|| panic!("unknown type constant: {:?}", name.name)),
             Type::Arrow(inner) => {
                 let dom_kind = self.infer_kind(local_env, &inner.dom);
                 if dom_kind != Kind::base() {
@@ -2031,6 +2073,26 @@ impl Env<'_> {
                 panic!("unbound local term: {:?}", inner.id);
             }
             Term::Const(m) => {
+                for (local_name, info) in local_env.local_consts.iter().rev() {
+                    if local_name == &m.name {
+                        if !m.ty_args.is_empty() {
+                            panic!(
+                                "local constant {:?} expects 0 type arguments but got {}",
+                                m.name,
+                                m.ty_args.len()
+                            );
+                        }
+                        if !m.instances.is_empty() {
+                            panic!(
+                                "local constant {:?} expects 0 class arguments but got {}",
+                                m.name,
+                                m.instances.len()
+                            );
+                        }
+                        return info.ty.clone();
+                    }
+                }
+
                 let Const {
                     local_types,
                     local_classes,

@@ -1,0 +1,12 @@
+type const Prop : Type
+type const T : Type
+const imp : Prop → Prop → Prop
+const forall.{u} : (u → Prop) → Prop
+const P : T → T → Prop
+const p : Prop
+axiom hp : p
+
+lemma local_structure_type_escape (x : T) : p :=
+  have _ := let structure foo := { const f : T axiom a : P f x },
+            @foo.a,
+  @hp

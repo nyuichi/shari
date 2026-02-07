@@ -250,6 +250,7 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom f.surjective.{u, v} : surjective f
 [<timestamp> INFO  shari::cmd] + axiom total.choice.exists.{u, v} : ∀ r, ∃ h, ∀ x, total.rel r x (h x)
 [<timestamp> INFO  shari::cmd] + axiom ac_from_surjective_split.{u, v} : ∀ R, (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x)
+[<timestamp> INFO  shari::cmd] + axiom ac_from_surjective_split_without_local_structure.{u, v} : ∀ R, (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x)
 [<timestamp> INFO  shari::cmd] + const choice.{u} : (inhab u → u) → Prop
 [<timestamp> INFO  shari::cmd] + axiom choice.exists.{u} : ∃ f, choice f
 [<timestamp> INFO  shari::cmd] + axiom ac_from_choice_exists.{u, v} : ∀ R, (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x)

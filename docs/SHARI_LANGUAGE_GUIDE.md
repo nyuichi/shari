@@ -27,6 +27,7 @@ This document summarizes the surface syntax, proof language, and module system o
 - **Atomic proof** – `«φ»` quotes a goal assumption; `assume φ, e` introduces an implication, and the variant `assume φ as h, e` binds the hypothesis under the alias `h`. Aliases act like local proofs and can be referenced directly by name inside their scope. `take (x : τ), e` and `change φ, e` correspond to universal introduction and definitional rewriting. Function application uses juxtaposition, and explicit instantiation `e[m₁, …, mₙ]` supplies arguments to universal hypotheses.
 - **Constants** – Naming a lemma or axiom introduces it with implicit higher-order instantiation; prefixing the name with `@` suppresses automatic instantiation when manual control is required.
 - **Derived constructs** – `have φ := e₁, e₂` packages a lemma. Writing `have φ as h := e₁, e₂` additionally introduces an alias `h` scoped to `e₂`, allowing subsequent expressions to use `h` as a proof term. `obtain (x : τ), φ := e₁, e₂` performs existential elimination, and `obtain (x : τ), φ as h := e₁, e₂` likewise aliases the proof of `φ` within `e₂`. `calc` chains equalities via `have` and `eq.trans` expansions.
+- **Local structures** – `let structure Foo := { const f : τ ... axiom h : φ ... }, e` introduces a scoped structure type inside a proof expression. The structure name and generated constants/axioms (`Foo.f`, `Foo.abs`, `Foo.ext`, etc.) are available only in `e`. Local type parameters are not supported, and axiom targets may reference any term locals already in scope.
 
 ## Top-level commands
 The `cmd` dispatcher recognizes the following keywords. Each command builds a structured object in `cmd.rs` that the elaborator consumes.
@@ -37,7 +38,7 @@ The `cmd` dispatcher recognizes the following keywords. Each command builds a st
 - **Constants** – `const` introduces noncomputable constants with optional local type/class parameters.
 - **Type layer** – `type const` and `type inductive` manage type constructors and inductive type families.
 - **Inductive propositions** – `inductive` declares propositional inductives with parameters and constructor blocks separated by `|`. Constructor targets are automatically generalized over constructor parameters.
-- **Structures and instances** – `structure` declares record-like bundles of constants and axioms; `instance` supplies implementations of those fields for a target type, including derived lemmas.
+- **Structures and instances** – `structure` declares record-like bundles of constants and axioms; `instance` supplies implementations of those fields for a target type, including derived lemmas. Within a structure body, `const` and `axiom` fields may be freely interleaved.
 - **Type classes** – `class structure` and `class instance` mirror structures/instances but live in the class namespace and accept class arguments on fields.
 
 ## Type classes and implicit arguments

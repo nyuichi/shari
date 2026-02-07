@@ -6,6 +6,8 @@
 - Avoid variable names that are solely adjectives; prefer nouns instead. For example, use `name` rather than `existing` for a variable representing an existing name, and choose `existing_name` when `name` alone could cause confusion.
 - Prefer destructuring bindings when working with structs or enums. Avoid using `..` in patterns; instead, list fields explicitly and bind unused ones to `_` or `_name`.
 - Place test code at the bottom of each source file.
+- Do not use `..Default::default()` in struct literals; list fields explicitly.
+- When a simple `&items` or `&mut items` works in a `for` loop, prefer that over `.iter()`/`.iter_mut()`/`.into_iter()`.
 
 ## Testing
 

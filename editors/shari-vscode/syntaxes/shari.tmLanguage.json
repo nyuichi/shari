@@ -100,7 +100,7 @@
         },
         {
           "name": "keyword.control.contextual.shari",
-          "match": "\\b(?:have|obtain|assume|change|calc|take)\\b"
+          "match": "\\b(?:have|obtain|assume|change|calc|take|let)\\b"
         }
       ]
     },

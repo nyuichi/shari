@@ -1,0 +1,30 @@
+type const Prop : Type
+type const T : Type
+const imp : Prop → Prop → Prop
+const forall.{u} : (u → Prop) → Prop
+const exists.{u} : (u → Prop) → Prop
+const eq.{u} : u → u → Prop
+const and : Prop → Prop → Prop
+infixr → : 25 := imp
+infix = : 50 := eq
+infixl ∧ : 35 := and
+
+const P1 : T → T → Prop
+const P2 : T → T → T → Prop
+const P3 : T → T → Prop
+const p : Prop
+axiom hp : p
+
+lemma generated_axioms (x y : T) : p :=
+  let structure foo := {
+    const f : T
+    const g : T
+    const h : T
+    axiom a1 : P1 f x
+    axiom a2 : P2 g h y
+    axiom a3 : P3 h x
+  },
+  have ∀ (s : foo), P3 (foo.h s) x := @foo.a3,
+  have ∀ (f : T) (g : T) (h : T), P1 f x → P2 g h y → P3 h x → ∃ (s : foo), f = foo.f s ∧ g = foo.g s ∧ h = foo.h s := @foo.abs,
+  have ∀ (s1 s2 : foo), foo.f s1 = foo.f s2 → foo.g s1 = foo.g s2 → foo.h s1 = foo.h s2 → s1 = s2 := @foo.ext,
+  @hp

@@ -1,0 +1,12 @@
+type const Prop : Type
+type const T : Type
+const imp : Prop → Prop → Prop
+const forall.{u} : (u → Prop) → Prop
+const P : T → T → Prop
+const p : Prop
+axiom hp : p
+
+lemma axiom_scope (x : T) : p :=
+  let structure foo := { const f : T axiom a : P f x const x : T },
+  have ∀ (s : foo), P (foo.f s) x := @foo.a,
+  @hp
