@@ -1549,10 +1549,6 @@ impl Eval {
         if self.has_axiom(&abs_name) {
             bail!("already defined");
         }
-        let ext_name = name.extend("ext");
-        if self.has_axiom(&ext_name) {
-            bail!("already defined");
-        }
         // well-formedness check is completed.
         self.structure_table.insert(
             name.clone(),
@@ -1571,13 +1567,6 @@ impl Eval {
                 mk_type_const(name.clone()).apply(local_types.iter().cloned().map(mk_type_local))
             },
         };
-
-        let mut const_fields = vec![];
-        for field in &fields {
-            if let StructureField::Const(structure_const) = field {
-                const_fields.push(structure_const.clone());
-            }
-        }
 
         let mut subst = vec![];
         for field in &fields {
@@ -1613,7 +1602,7 @@ impl Eval {
             }
         }
         // generate abstraction principle
-        // axiom inhab.abs.{u} (s : set u) : (∃ x, x ∈ s) → ∃ this, s = inhab.rep this
+        // axiom inhab.abs.{u} (s : set u) : (∃ x, x ∈ s) → ∃! this, s = inhab.rep this
         let mut params = vec![];
         let mut guards = vec![];
         let mut chars = vec![];
@@ -1662,7 +1651,7 @@ impl Eval {
             }
         }
         let mut abs = mk_const(
-            QualifiedName::from_str("exists"),
+            QualifiedName::from_str("uexists"),
             vec![this.ty.clone()],
             vec![],
         );
@@ -1681,44 +1670,6 @@ impl Eval {
         abs = guard(&abs, guards);
         abs = generalize(&abs, &params);
         self.add_axiom(abs_name, local_types.clone(), vec![], abs);
-
-        // generate extensionality
-        // axiom inhab.ext.{u} (this₁ this₂ : inhab u) : inhab.rep this₁ = inhab.rep this₂ → this₁ = this₂
-        let this1 = Local {
-            id: Id::fresh_with_name(Name::from_str("this₁")),
-            ty: this.ty.clone(),
-        };
-        let this2 = Local {
-            id: Id::fresh_with_name(Name::from_str("this₂")),
-            ty: this.ty.clone(),
-        };
-        let mut guards = vec![];
-        for field in &const_fields {
-            let fullname = name.extend(field.name.as_str());
-            let proj = mk_const(
-                fullname,
-                local_types.iter().cloned().map(mk_type_local).collect(),
-                vec![],
-            );
-
-            let mut lhs = proj.clone();
-            lhs = lhs.apply([mk_local(this1.id)]);
-            let mut rhs = proj;
-            rhs = rhs.apply([mk_local(this2.id)]);
-
-            let mut guard = mk_const(
-                QualifiedName::from_str("eq"),
-                vec![field.ty.clone()],
-                vec![],
-            );
-            guard = guard.apply([lhs, rhs]);
-            guards.push(guard);
-        }
-        let mut target = mk_const(QualifiedName::from_str("eq"), vec![this.ty.clone()], vec![]);
-        target = target.apply([mk_local(this1.id), mk_local(this2.id)]);
-        target = guard(&target, guards);
-        target = generalize(&target, &[this1, this2]);
-        self.add_axiom(ext_name, local_types.clone(), vec![], target);
         Ok(())
     }
 

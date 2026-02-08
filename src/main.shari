@@ -15,8 +15,6 @@
  - [ ] kernel support for eta equality of lambdas
  -/
 
--- TODO: remove structure.ext
-
 /-
 
 ** FOR PLAYGROUND USERS **
@@ -404,6 +402,20 @@ have x = x₁ := «∀ y, P y → x = y»[x₁] «P x₁»,
 have x = x₂ := «∀ y, P y → x = y»[x₂] «P x₂»,
 eq.trans (eq.symm «x = x₁») «x = x₂»
 
+lemma abs.ext.{u, v} (rep : u → v) (P : v → Prop) :
+  (∀ (a : u), P (rep a)) →
+  (∀ (x : v), P x → ∃! (a : u), x = rep a) →
+  (∀ (a₁ a₂ : u), rep a₁ = rep a₂ → a₁ = a₂) :=
+assume ∀ (a : u), P (rep a),
+assume ∀ (x : v), P x → ∃! (a : u), x = rep a,
+take (a₁ : u),
+take (a₂ : u),
+assume rep a₁ = rep a₂,
+have P (rep a₂) := «∀ (a : u), P (rep a)»[a₂],
+have ∃! (a : u), rep a₂ = rep a := «∀ (x : v), P x → ∃! (a : u), x = rep a»[rep a₂] «P (rep a₂)»,
+have unique (λ (a : u), rep a₂ = rep a) := uexists.unique «∃! (a : u), rep a₂ = rep a»,
+«unique (λ (a : u), rep a₂ = rep a)»[a₁, a₂] (eq.symm «rep a₁ = rep a₂») eq.refl
+
 lemma iff.intro (φ ψ : Prop) : (φ → ψ) → (ψ → φ) → (φ ↔ ψ) :=
 assume φ → ψ,
 assume ψ → φ,
@@ -509,7 +521,8 @@ structure is_proposition u := {
 }
 
 instance is_proposition.is_proposition.{u} : is_proposition (is_proposition u) := {
-  lemma proposition : ∀ (x₁ x₂ : is_proposition u), x₁ = x₂ := @is_proposition.ext
+  lemma proposition (x₁ x₂ : is_proposition u) : x₁ = x₂ :=
+    (uexists.unique (is_proposition.abs @is_proposition.proposition[x₂]))[x₁, x₂] true.intro true.intro
 }
 
 -- TODO: is_prop (is_prop u)
@@ -529,7 +542,8 @@ structure is_contractible u := {
 }
 
 instance is_contractible.is_proposition.{u} : is_proposition (is_contractible u) := {
-  lemma proposition : ∀ (x₁ x₂ : is_contractible u), x₁ = x₂ := @is_contractible.ext
+  lemma proposition (x₁ x₂ : is_contractible u) : x₁ = x₂ :=
+    (uexists.unique (is_contractible.abs @is_contractible.contractible[x₂]))[x₁, x₂] true.intro true.intro
 }
 
 -- TODO: is_contr (is_contr u) = is_contr u
@@ -554,7 +568,8 @@ structure is_inhabited u := {
 -- TODO: is_prop u → (v → u) → is_inhab v → u
 
 instance is_inhabited.is_proposition.{u} : is_proposition (is_inhabited u) := {
-  lemma proposition : ∀ (x₁ x₂ : is_inhabited u), x₁ = x₂ := @is_inhabited.ext
+  lemma proposition (x₁ x₂ : is_inhabited u) : x₁ = x₂ :=
+    (uexists.unique (is_inhabited.abs @is_inhabited.inhabited[x₂]))[x₁, x₂] true.intro true.intro
 }
 
 -- A type u is called _empty_ if there is no element of u.
@@ -574,7 +589,8 @@ structure is_nonempty u := {
 }
 
 instance is_empty.is_proposition.{u} : is_proposition (is_empty u) := {
-  lemma proposition : ∀ (x₁ x₂ : is_empty u), x₁ = x₂ := @is_empty.ext
+  lemma proposition (x₁ x₂ : is_empty u) : x₁ = x₂ :=
+    (uexists.unique (is_empty.abs @is_empty.empty[x₂]))[x₁, x₂] true.intro true.intro
 }
 
 -- Definite description
@@ -717,8 +733,7 @@ instance into_quot (x : u) : quot := {
 --   type const bool : Type
 --   const bool.rep : bool → Prop
 --   axiom bool.spec (this : bool) : bool.rep this = ⊤ ∨ bool.rep this = ⊥
---   axiom bool.abs (rep : Prop) : rep = ⊤ ∨ rep = ⊥ → ∃ this, rep = bool.rep this
---   axiom bool.ext (this₁ this₂ : bool) : bool.rep this₁ = bool.rep this₂ → this₁ = this₂
+--   axiom bool.abs (rep : Prop) : rep = ⊤ ∨ rep = ⊥ → ∃! this, rep = bool.rep this
 --
 -- Of course, bool can be also defined in terms of an inductive type.
 --
@@ -767,6 +782,17 @@ calc bool.rep tt = bool.tt.rep := bool.tt.rep.spec
 lemma bool.rep_ff_eq_false : bool.rep ff = ⊥ :=
 calc bool.rep ff = bool.ff.rep := bool.ff.rep.spec
              ... = ⊥           := eq.refl
+
+lemma bool.ext (b₁ b₂ : bool) : bool.rep b₁ = bool.rep b₂ → b₁ = b₂ :=
+assume bool.rep b₁ = bool.rep b₂,
+have ∀ (b : bool), bool.rep b = ⊤ ∨ bool.rep b = ⊥ := @bool.spec,
+have ∀ (x : Prop), x = ⊤ ∨ x = ⊥ → ∃! (b : bool), x = bool.rep b :=
+  take (x : Prop),
+  assume x = ⊤ ∨ x = ⊥,
+  bool.abs «x = ⊤ ∨ x = ⊥»,
+have ∀ (b₁ b₂ : bool), bool.rep b₁ = bool.rep b₂ → b₁ = b₂ :=
+  abs.ext «∀ (b : bool), bool.rep b = ⊤ ∨ bool.rep b = ⊥» «∀ (x : Prop), x = ⊤ ∨ x = ⊥ → ∃! (b : bool), x = bool.rep b»,
+«∀ (b₁ b₂ : bool), bool.rep b₁ = bool.rep b₂ → b₁ = b₂»[b₁, b₂] «bool.rep b₁ = bool.rep b₂»
 
 lemma bool.eq_tt (b : bool) : bool.rep b = ⊤ → b = tt :=
 assume bool.rep b = ⊤,
@@ -1003,6 +1029,17 @@ structure inhab u := {
   axiom inhabited : ∃ x, x ∈ rep
 }
 
+lemma inhab.ext.{u} (c₁ c₂ : inhab u) : inhab.rep c₁ = inhab.rep c₂ → c₁ = c₂ :=
+assume inhab.rep c₁ = inhab.rep c₂,
+have ∀ (c : inhab u), ∃ (x : u), x ∈ inhab.rep c := @inhab.inhabited,
+have ∀ (s : sub u), (∃ (x : u), x ∈ s) → ∃! (c : inhab u), s = inhab.rep c :=
+  take (s : sub u),
+  assume ∃ (x : u), x ∈ s,
+  inhab.abs «∃ (x : u), x ∈ s»,
+have ∀ (c₁ c₂ : inhab u), inhab.rep c₁ = inhab.rep c₂ → c₁ = c₂ :=
+  abs.ext «∀ (c : inhab u), ∃ (x : u), x ∈ inhab.rep c» «∀ (s : sub u), (∃ (x : u), x ∈ s) → ∃! (c : inhab u), s = inhab.rep c»,
+«∀ (c₁ c₂ : inhab u), inhab.rep c₁ = inhab.rep c₂ → c₁ = c₂»[c₁, c₂] «inhab.rep c₁ = inhab.rep c₂»
+
 lemma inhab.uabs.{u} (s : sub u) : (∃ x, x ∈ s) → ∃! c, s = inhab.rep c :=
 assume ∃ x, x ∈ s,
 -- TODO: add obtain instance syntax
@@ -1016,9 +1053,9 @@ assume ∃ x, x ∈ s,
 --
 --   let c.rep : sub u := s,
 --   have c.inhabited : ∃ x, x ∈ c.rep := «∃ x, x ∈ s»,
---   obtain (c : inhab u), s = inhab.rep c := inhab.abs «∃ x, x ∈ s»,
+--   obtain (c : inhab u), s = inhab.rep c := uexists.exists (inhab.abs «∃ x, x ∈ s»),
 --
-obtain (c : inhab u), s = inhab.rep c := inhab.abs «∃ x, x ∈ s»,
+obtain (c : inhab u), s = inhab.rep c := uexists.exists (inhab.abs «∃ x, x ∈ s»),
 uexists.intro
   (exists.intro «s = inhab.rep c»)
   (take (c₁ : inhab u),
@@ -1077,10 +1114,8 @@ lemma f.surjective.{u, v} : surjective f.{u, v} := {
   take (p : u × total u v),
   have ∃ (y : v), total.rel p.1 p.0 y := total.spec,
   obtain (y : v), total.rel p.1 p.0 y := «∃ (y : v), total.rel p.1 p.0 y»,
-  have ∃ (e : total.el u v), p.1 = total.el.rel e ∧ p.0 = total.el.x e ∧ y = total.el.y e :=
-    total.el.abs «total.rel p.1 p.0 y»,
   obtain (e : total.el u v), p.1 = total.el.rel e ∧ p.0 = total.el.x e ∧ y = total.el.y e :=
-    «∃ (e : total.el u v), p.1 = total.el.rel e ∧ p.0 = total.el.x e ∧ y = total.el.y e»,
+    uexists.exists (total.el.abs «total.rel p.1 p.0 y»),
   have p.1 = total.el.rel e := and.left (and.left «p.1 = total.el.rel e ∧ p.0 = total.el.x e ∧ y = total.el.y e»),
   have p.0 = total.el.x e := and.right (and.left «p.1 = total.el.rel e ∧ p.0 = total.el.x e ∧ y = total.el.y e»),
   have p = ⟨total.el.x e, total.el.rel e⟩ :=
@@ -1118,7 +1153,7 @@ have surjective R.x :=
   take (x : u),
   have ∃ y, R x y := «∀ x, ∃ y, R x y»[x],
   obtain (y : v), R x y := «∃ y, R x y»,
-  obtain (r : R), x = R.x r ∧ y = R.y r := @R.abs[x, y] «R x y»,
+  obtain (r : R), x = R.x r ∧ y = R.y r := uexists.exists (@R.abs[x, y] «R x y»),
   @exists.intro[λ r0, x = R.x r0, r] (@and.left[x = R.x r, y = R.y r] «x = R.x r ∧ y = R.y r»),
 have split R.x :=
   surjective.split «surjective R.x»,
@@ -1132,7 +1167,7 @@ obtain (f : u → R), ∀ x, x = R.x (f x) := «split R.x»,
 
 lemma ac_from_surjective_split_without_local_structure.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x) :=
 assume ∀ x, ∃ y, R x y,
-obtain (r : total u v), R = total.rel r := total.abs «∀ x, ∃ y, R x y»,
+obtain (r : total u v), R = total.rel r := uexists.exists (@total.abs.{u, v}[R] «∀ x, ∃ y, R x y»),
 obtain (h : u → v), ∀ x, total.rel r x (h x) := total.choice.exists,
 @exists.intro[_, h] (take (x : u),
   have R x (h x) :=
@@ -1170,8 +1205,8 @@ obtain (g : u → inhab v), ∀ x, R x = inhab.rep (g x) := uexists.exists «∃
 lemma em (φ : Prop) : φ ∨ ¬φ := {
   have ∃ b, φ ∨ b = tt := exists.intro (or.right eq.refl),
   have ∃ b, φ ∨ b = ff := exists.intro (or.right eq.refl),
-  obtain (h₁ : inhab bool), (λ b, φ ∨ b = tt) = inhab.rep h₁ := inhab.abs «∃ b, φ ∨ b = tt»,
-  obtain (h₂ : inhab bool), (λ b, φ ∨ b = ff) = inhab.rep h₂ := inhab.abs «∃ b, φ ∨ b = ff»,
+  obtain (h₁ : inhab bool), (λ b, φ ∨ b = tt) = inhab.rep h₁ := uexists.exists (inhab.abs «∃ b, φ ∨ b = tt»),
+  obtain (h₂ : inhab bool), (λ b, φ ∨ b = ff) = inhab.rep h₂ := uexists.exists (inhab.abs «∃ b, φ ∨ b = ff»),
   obtain (c : inhab bool → bool), choice c := choice.exists,
   have φ → c h₁ = c h₂ :=
     assume φ,
@@ -1352,8 +1387,8 @@ ac_for_inhabited (@exists.intro[_, bool.tt] true.intro) @inhab.inhabited
 lemma em_from_some_exists (φ : Prop) : φ ∨ ¬φ := {
   have ∃ b, φ ∨ b = tt := exists.intro (or.right eq.refl),
   have ∃ b, φ ∨ b = ff := exists.intro (or.right eq.refl),
-  obtain (h₁ : inhab bool), (λ b, φ ∨ b = tt) = inhab.rep h₁ := inhab.abs «∃ b, φ ∨ b = tt»,
-  obtain (h₂ : inhab bool), (λ b, φ ∨ b = ff) = inhab.rep h₂ := inhab.abs «∃ b, φ ∨ b = ff»,
+  obtain (h₁ : inhab bool), (λ b, φ ∨ b = tt) = inhab.rep h₁ := uexists.exists (inhab.abs «∃ b, φ ∨ b = tt»),
+  obtain (h₂ : inhab bool), (λ b, φ ∨ b = ff) = inhab.rep h₂ := uexists.exists (inhab.abs «∃ b, φ ∨ b = ff»),
   obtain (c : inhab bool → bool), choice c := bool.has_choice,
   have φ → c h₁ = c h₂ :=
     assume φ,
@@ -1447,7 +1482,7 @@ structure some.singleton u := {
 instance some.singleton.is_inhabited.{u} (h : is_inhabited u) : is_inhabited (some.singleton u) := {
   lemma inhabited : ∃ (x : some.singleton u), ⊤ :=
   obtain (ε : (u → Prop) → u), ∀ P, (∃ y, P y) → P (ε P) := some.exists @is_inhabited.inhabited[h],
-  obtain (this : some.singleton u), ε = some.singleton.some this := @some.singleton.abs[ε] «∀ P, (∃ y, P y) → P (ε P)»,
+  obtain (this : some.singleton u), ε = some.singleton.some this := uexists.exists (@some.singleton.abs[ε] «∀ P, (∃ y, P y) → P (ε P)»),
   @exists.intro[_, this] true.intro
 }
 
@@ -1747,6 +1782,20 @@ have ∀ a b, mult m₁ a b = mult m₂ a b :=
 -- FIXME: remove @ from fun_ext after the bug in the unifier is fixed.
 @fun_ext[mult m₁, mult m₂] (take (a : u), @fun_ext[mult m₁ a, mult m₂ a] «∀ a b, mult m₁ a b = mult m₂ a b»[a])
 
+lemma monoid.ext.{u} (m₁ m₂ : monoid u) : mult m₁ = mult m₂ → unit m₁ = unit m₂ → m₁ = m₂ :=
+assume mult m₁ = mult m₂,
+assume unit m₁ = unit m₂,
+have ∀ (x₁ x₂ x₃ : u), mult m₂ (mult m₂ x₁ x₂) x₃ = mult m₂ x₁ (mult m₂ x₂ x₃) := @monoid.assoc[m₂],
+have ∀ (x : u), mult m₂ (unit m₂) x = x := @monoid.left_unit[m₂],
+have ∀ (x : u), mult m₂ x (unit m₂) = x := @monoid.right_unit[m₂],
+have ∃! (m : monoid u), mult m₂ = mult m ∧ unit m₂ = unit m := monoid.abs «∀ (x₁ x₂ x₃ : u), mult m₂ (mult m₂ x₁ x₂) x₃ = mult m₂ x₁ (mult m₂ x₂ x₃)» «∀ (x : u), mult m₂ (unit m₂) x = x» «∀ (x : u), mult m₂ x (unit m₂) = x»,
+obtain (m : monoid u), (mult m₂ = mult m ∧ unit m₂ = unit m) ∧ ∀ (m' : monoid u), (mult m₂ = mult m' ∧ unit m₂ = unit m') → m = m' := «∃! (m : monoid u), mult m₂ = mult m ∧ unit m₂ = unit m»,
+have ∀ (m' : monoid u), (mult m₂ = mult m' ∧ unit m₂ = unit m') → m = m' :=
+  and.right «(mult m₂ = mult m ∧ unit m₂ = unit m) ∧ ∀ (m' : monoid u), (mult m₂ = mult m' ∧ unit m₂ = unit m') → m = m'»,
+have m = m₁ := «∀ (m' : monoid u), (mult m₂ = mult m' ∧ unit m₂ = unit m') → m = m'»[m₁] (and.intro (eq.symm «mult m₁ = mult m₂») (eq.symm «unit m₁ = unit m₂»)),
+have m = m₂ := «∀ (m' : monoid u), (mult m₂ = mult m' ∧ unit m₂ = unit m') → m = m'»[m₂] (and.intro eq.refl eq.refl),
+eq.trans (eq.symm «m = m₁») «m = m₂»
+
 lemma eckmann_hilton.{u} (m₁ m₂ : monoid u) : interchange m₁ m₂ → m₁ = m₂ :=
 assume interchange m₁ m₂,
 monoid.ext (interchange.equates_mult «interchange m₁ m₂») (interchange.equates_unit «interchange m₁ m₂»)
@@ -1832,10 +1881,10 @@ class structure is_structure base u := {
 
 lemma is_structure.ext.{base, u} [is_structure base u] (x₁ x₂ : u) : is_structure.rep.{base, u} x₁ = is_structure.rep x₂ → x₁ = x₂ := {
   assume is_structure.rep.{base, u} x₁ = is_structure.rep x₂,
-  have is_structure.spec.{base, u} (is_structure.rep x₂) as this := is_structure.comm.{base, u},
-  have ∃! x, is_structure.rep.{base, u} x = is_structure.rep x₂ as this := is_structure.abs.{base, u} this,
+  have is_structure.spec.{base, u} (is_structure.rep x₂) := is_structure.comm.{base, u},
+  have ∃! x, is_structure.rep.{base, u} x = is_structure.rep x₂ := is_structure.abs.{base, u} «is_structure.spec.{base, u} (is_structure.rep x₂)»,
   -- TODO: obtain (x : t), φ as h
-  obtain (x : u), is_structure.rep.{base, u} x = is_structure.rep x₂ ∧ ∀ x', is_structure.rep x' = is_structure.rep x₂ → x = x' := this,
+  obtain (x : u), is_structure.rep.{base, u} x = is_structure.rep x₂ ∧ ∀ x', is_structure.rep x' = is_structure.rep x₂ → x = x' := «∃! x, is_structure.rep.{base, u} x = is_structure.rep x₂»,
   have is_structure.rep.{base, u} x = is_structure.rep x₂ := and.left «is_structure.rep.{base, u} x = is_structure.rep x₂ ∧ ∀ x', is_structure.rep.{base, u} x' = is_structure.rep x₂ → x = x'»,
   have ∀ x', is_structure.rep.{base, u} x' = is_structure.rep x₂ → x = x' := and.right «is_structure.rep.{base, u} x = is_structure.rep x₂ ∧ ∀ x', is_structure.rep.{base, u} x' = is_structure.rep x₂ → x = x'»,
   have x = x₂ := «∀ x', is_structure.rep.{base, u} x' = is_structure.rep x₂ → x = x'»[_] eq.refl,

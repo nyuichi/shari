@@ -2,6 +2,7 @@ type const Prop : Type
 type const T : Type
 const imp : Prop → Prop → Prop
 const forall.{u} : (u → Prop) → Prop
+const uexists.{u} : (u → Prop) → Prop
 const P : T → T → Prop
 const p : Prop
 axiom hp : p

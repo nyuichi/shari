@@ -763,7 +763,6 @@ impl<'a> Elaborator<'a> {
                 let mut local_consts: Vec<(QualifiedName, LocalConst)> = vec![];
                 let mut local_axioms: Vec<(QualifiedName, LocalAxiom)> = vec![];
                 let mut subst = vec![];
-                let mut const_fields = vec![];
 
                 for field in &*fields {
                     match field {
@@ -771,10 +770,6 @@ impl<'a> Elaborator<'a> {
                             name: field_name,
                             ty,
                         }) => {
-                            const_fields.push(LocalStructureConst {
-                                name: field_name.clone(),
-                                ty: ty.clone(),
-                            });
                             let fullname = structure_name.extend(field_name.as_str());
                             let ty = ty.arrow([this_ty.clone()]);
                             local_consts.push((fullname.clone(), LocalConst { ty }));
@@ -833,7 +828,7 @@ impl<'a> Elaborator<'a> {
                 }
 
                 let mut abs = mk_const(
-                    QualifiedName::from_str("exists"),
+                    QualifiedName::from_str("uexists"),
                     vec![this_ty.clone()],
                     vec![],
                 );
@@ -854,40 +849,6 @@ impl<'a> Elaborator<'a> {
                 abs = guard(&abs, guards);
                 abs = generalize(&abs, &params);
                 local_axioms.push((abs_name, LocalAxiom { target: abs }));
-
-                let ext_name = structure_name.extend("ext");
-                let this1 = Local {
-                    id: Id::fresh_with_name(Name::from_str("this₁")),
-                    ty: this_ty.clone(),
-                };
-                let this2 = Local {
-                    id: Id::fresh_with_name(Name::from_str("this₂")),
-                    ty: this_ty.clone(),
-                };
-                let mut ext_guards = vec![];
-                for field in &const_fields {
-                    let fullname = structure_name.extend(field.name.as_str());
-                    let proj = mk_const(fullname, vec![], vec![]);
-
-                    let mut lhs = proj.clone();
-                    lhs = lhs.apply([mk_local(this1.id)]);
-                    let mut rhs = proj;
-                    rhs = rhs.apply([mk_local(this2.id)]);
-
-                    let mut guard = mk_const(
-                        QualifiedName::from_str("eq"),
-                        vec![field.ty.clone()],
-                        vec![],
-                    );
-                    guard = guard.apply([lhs, rhs]);
-                    ext_guards.push(guard);
-                }
-                let mut ext =
-                    mk_const(QualifiedName::from_str("eq"), vec![this_ty.clone()], vec![]);
-                ext = ext.apply([mk_local(this1.id), mk_local(this2.id)]);
-                ext = guard(&ext, ext_guards);
-                ext = generalize(&ext, &[this1, this2]);
-                local_axioms.push((ext_name, LocalAxiom { target: ext }));
 
                 let local_type_len = self.tt_local_env.local_types.len();
                 let local_const_len = self.tt_local_env.local_consts.len();

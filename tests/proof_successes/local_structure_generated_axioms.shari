@@ -2,7 +2,7 @@ type const Prop : Type
 type const T : Type
 const imp : Prop → Prop → Prop
 const forall.{u} : (u → Prop) → Prop
-const exists.{u} : (u → Prop) → Prop
+const uexists.{u} : (u → Prop) → Prop
 const eq.{u} : u → u → Prop
 const and : Prop → Prop → Prop
 infixr → : 25 := imp
@@ -25,6 +25,5 @@ lemma generated_axioms (x y : T) : p :=
     axiom a3 : P3 h x
   },
   have ∀ (s : foo), P3 (foo.h s) x := @foo.a3,
-  have ∀ (f : T) (g : T) (h : T), P1 f x → P2 g h y → P3 h x → ∃ (s : foo), f = foo.f s ∧ g = foo.g s ∧ h = foo.h s := @foo.abs,
-  have ∀ (s1 s2 : foo), foo.f s1 = foo.f s2 → foo.g s1 = foo.g s2 → foo.h s1 = foo.h s2 → s1 = s2 := @foo.ext,
+  have ∀ (f : T) (g : T) (h : T), P1 f x → P2 g h y → P3 h x → ∃! (s : foo), f = foo.f s ∧ g = foo.g s ∧ h = foo.h s := @foo.abs,
   @hp
