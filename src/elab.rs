@@ -42,6 +42,65 @@ fn mk_error_join(e1: Error, e2: Error) -> Error {
     Error::Join(Arc::new((e1, e2)))
 }
 
+fn instance_contains_hole(instance: &Instance) -> bool {
+    match instance {
+        Instance::Local(_) => false,
+        Instance::Global(inner) => {
+            let InstanceGlobal {
+                name: _,
+                ty_args: _,
+                args,
+            } = &**inner;
+            args.iter().any(instance_contains_hole)
+        }
+        Instance::Hole(_) => true,
+    }
+}
+
+fn term_contains_instance_hole(term: &Term) -> bool {
+    match term {
+        Term::Var(_) => false,
+        Term::Abs(inner) => term_contains_instance_hole(&inner.body),
+        Term::App(inner) => {
+            term_contains_instance_hole(&inner.fun) || term_contains_instance_hole(&inner.arg)
+        }
+        Term::Local(_) => false,
+        Term::Const(inner) => inner.instances.iter().any(instance_contains_hole),
+        Term::Hole(_) => false,
+    }
+}
+
+fn expr_contains_instance_hole(expr: &Expr) -> bool {
+    match expr {
+        Expr::Assump(inner) => term_contains_instance_hole(&inner.target),
+        Expr::AssumpByName(_) => false,
+        Expr::Assume(inner) => {
+            term_contains_instance_hole(&inner.local_axiom)
+                || expr_contains_instance_hole(&inner.expr)
+        }
+        Expr::App(inner) => {
+            expr_contains_instance_hole(&inner.expr1) || expr_contains_instance_hole(&inner.expr2)
+        }
+        Expr::Take(inner) => expr_contains_instance_hole(&inner.expr),
+        Expr::Inst(inner) => {
+            expr_contains_instance_hole(&inner.expr) || term_contains_instance_hole(&inner.arg)
+        }
+        Expr::Const(inner) => inner.instances.iter().any(instance_contains_hole),
+        Expr::LetStructure(inner) => {
+            inner.fields.iter().any(|field| {
+                if let LocalStructureField::Axiom(axiom) = field {
+                    term_contains_instance_hole(&axiom.target)
+                } else {
+                    false
+                }
+            }) || expr_contains_instance_hole(&inner.body)
+        }
+        Expr::Change(inner) => {
+            term_contains_instance_hole(&inner.target) || expr_contains_instance_hole(&inner.expr)
+        }
+    }
+}
+
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -2594,6 +2653,9 @@ pub fn elaborate_term(
     }
 
     *target = elab.fully_inst(target);
+    if term_contains_instance_hole(target) {
+        bail!("unification failed: could not synthesize instance");
+    }
 
     ensure!(target.is_ground());
     ensure!(target.is_type_ground());
@@ -2646,6 +2708,9 @@ pub fn elaborate_expr(
     }
 
     elab.fully_inst_expr(e);
+    if expr_contains_instance_hole(e) {
+        bail!("unification failed: could not synthesize instance");
+    }
 
     if log::log_enabled!(log::Level::Debug) {
         println!("fully instantiated:\n{e}");
@@ -2661,6 +2726,9 @@ pub fn elaborate_expr(
         }
         None
     });
+    if expr_contains_instance_hole(e) {
+        bail!("unification failed: could not synthesize instance");
+    }
 
     ensure!(e.is_ground());
 

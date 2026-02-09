@@ -1,0 +1,9 @@
+type const Prop : Type
+
+class structure has_dummy u := {
+  const witness : u
+}
+
+const need_dummy.{u} [has_dummy u] : Prop
+
+def unresolved_non_ground : Prop := need_dummy
