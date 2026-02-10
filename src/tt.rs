@@ -900,6 +900,14 @@ impl Instance {
         }
     }
 
+    pub fn is_instance_ground(&self) -> bool {
+        match self {
+            Instance::Local(_) => true,
+            Instance::Global(inner) => inner.args.iter().all(Instance::is_instance_ground),
+            Instance::Hole(_) => false,
+        }
+    }
+
     fn subst(&self, subst: &[(Class, Instance)]) -> Instance {
         match self {
             Instance::Local(c) => {
@@ -1739,6 +1747,17 @@ impl Term {
                 inner.ty_args.iter().all(Type::is_ground)
                     && inner.instances.iter().all(Instance::is_type_ground)
             }
+            Term::Hole(_) => true,
+        }
+    }
+
+    pub fn is_instance_ground(&self) -> bool {
+        match self {
+            Term::Var(_) => true,
+            Term::Abs(inner) => inner.body.is_instance_ground(),
+            Term::App(inner) => inner.fun.is_instance_ground() && inner.arg.is_instance_ground(),
+            Term::Local(_) => true,
+            Term::Const(inner) => inner.instances.iter().all(Instance::is_instance_ground),
             Term::Hole(_) => true,
         }
     }

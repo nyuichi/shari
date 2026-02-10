@@ -717,6 +717,31 @@ impl Expr {
         }
     }
 
+    pub fn is_instance_ground(&self) -> bool {
+        match self {
+            Expr::Assump(inner) => inner.target.is_instance_ground(),
+            Expr::AssumpByName(_) => true,
+            Expr::Assume(inner) => {
+                inner.local_axiom.is_instance_ground() && inner.expr.is_instance_ground()
+            }
+            Expr::App(inner) => {
+                inner.expr1.is_instance_ground() && inner.expr2.is_instance_ground()
+            }
+            Expr::Take(inner) => inner.expr.is_instance_ground(),
+            Expr::Inst(inner) => inner.expr.is_instance_ground() && inner.arg.is_instance_ground(),
+            Expr::Const(inner) => inner.instances.iter().all(Instance::is_instance_ground),
+            Expr::LetStructure(inner) => {
+                inner.fields.iter().all(|field| match field {
+                    LocalStructureField::Const(_) => true,
+                    LocalStructureField::Axiom(axiom) => axiom.target.is_instance_ground(),
+                }) && inner.body.is_instance_ground()
+            }
+            Expr::Change(inner) => {
+                inner.target.is_instance_ground() && inner.expr.is_instance_ground()
+            }
+        }
+    }
+
     pub fn subst(&mut self, subst: &[(Id, Term)]) {
         match self {
             Expr::Assump(e) => {
