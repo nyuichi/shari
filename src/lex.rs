@@ -339,7 +339,7 @@ impl Iterator for Lex {
                     "λ" | "_" => TokenKind::Symbol,
                     "infixr" | "nofix" | "infixl" | "infix" | "prefix" | "axiom" | "def"
                     | "lemma" | "const" | "type" | "inductive" | "structure" | "instance"
-                    | "class" | "as" => TokenKind::Keyword,
+                    | "class" | "use" | "as" => TokenKind::Keyword,
                     _ => TokenKind::Ident,
                 }
             } else if first.is_ascii_digit() {

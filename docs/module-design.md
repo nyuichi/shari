@@ -1,162 +1,179 @@
-# Module and use Design Doc
+# Use Command Design Doc
 
 Status: initial draft
 
 ## Purpose
 
-- Provide logical grouping to avoid identifier collisions.
-- Allow qualified references like `foo.bar` and short references via `use foo.bar`.
-- Keep the design Lean-like while fitting Shari's existing syntax and implementation constraints.
+- Provide a small, explicit alias mechanism for qualified-name prefixes.
+- Allow writing `use prod.fst` so later code can use `fst` and `fst.baz`.
+- Allow chained alias declarations such as `use foo as bar; use bar as baz`.
+- Keep this feature independent from any module/namespace block feature.
 
 ## Non-goals
 
-- A full module system or file-level import mechanism.
-- Visibility controls like private/protected across modules.
-- Scoped use variants like `use scoped` or attribute-like features.
+- Introducing `module` syntax (`module foo { ... }`).
+- Introducing open-namespace behavior (`use foo` as namespace import).
+- Visibility control (private/protected).
 
 ## Terminology
 
-- Module: a logical hierarchy for symbols.
-- Qualified name: a full path like `foo.bar.baz`.
-- Use: bringing a specific identifier into the current scope for shorter references.
+- Qualified name: a dotted global name such as `prod.fst`.
+- Prefix alias: a local head segment that points to one qualified prefix.
+- Use table: mapping from alias head segment to qualified target prefix.
 
 ## Syntax (proposal)
 
-- Module definition: `module foo { ... }`
-- Nested module: `module foo.bar { ... }`
-- Qualified reference: `foo.bar`
-- Use: `use foo.bar` (where `foo.bar` is a fully qualified identifier)
-- Use alias: `use foo.bar as baz`
-
-Note: `use foo` is only valid when `foo` resolves to a concrete declaration, not a module path.
-
-Example:
-
-```shari
-module math {
-  type const Nat : Type
-  const zero : Nat
-  const add : Nat → Nat → Nat
-}
-
-def f : math.Nat := math.add math.zero math.zero
-
-use math.add
-use math.zero
-
-def g : math.Nat := add zero zero
-```
-
-## Scoping and name resolution (draft)
-
-Resolution order for unqualified names:
-
-1. Local bindings (function args, let, pattern binds).
-2. Current module declarations.
-3. Used identifiers.
-4. Root module.
+- `use prod.fst`
+- `use prod.fst as first`
+- `use prod.{fst, snd}`
+- `use bar as baz` (where `bar` is an existing alias)
+- `use {foo as bar, baz.{hoge as piyo, fuga as piyopiyo}}`
 
 Rules:
 
-- `use` is lexical and affects only later declarations in the same scope.
-- Ambiguous names are errors. Use a qualified name to disambiguate.
-- Inside `module foo { ... }`, unqualified `bar` resolves to `foo.bar` if present.
-- `use` does not open a module; it only introduces the chosen identifier.
+- `use` target can be a qualified global prefix or a path whose first segment is an existing alias.
+- The parser resolves target head aliases before registering the new alias.
+- If `as` is omitted, alias defaults to the last segment of the written target path.
+- `use foo` is valid even if `foo` has no current global declaration; unresolved targets are allowed.
+- Braced `use` trees contain comma-separated entries and nested `prefix.{...}` entries.
+- `use` trees are expanded left-to-right into a flat sequence of leaf `use` entries.
+- Comma-separated `use` targets are only valid inside `{...}`.
+- `use prod.fst, prod.snd` is invalid; write `use prod.{fst, snd}`.
+
+## Semantics
+
+- `use` creates one prefix entry in `use_table`.
+- `use prod.fst` registers `fst -> prod.fst`.
+- `use prod.fst as first` registers `first -> prod.fst`.
+- `use foo as bar; use bar as baz` registers `bar -> foo` then `baz -> foo`.
+
+Prefix rewrite:
+
+- If a reference starts with an alias key, replace that head with the mapped target prefix.
+- `fst` rewrites to `prod.fst`.
+- `fst.baz` rewrites to `prod.fst.baz`.
+- `first.baz` rewrites to `prod.fst.baz` when `use prod.fst as first` is active.
+
+Use-target canonicalization:
+
+- Before inserting a `use` entry, the parser rewrites the target head using current `use_table`.
+- The inserted mapping always points to a canonical qualified target, not to another alias.
+- This flattening makes chained `use` declarations idempotent and avoids alias chains at lookup time.
+- Canonicalization is left-to-right within one `use` command as well.
+- Example: `use {hoge as fuga, fuga as piyo}` registers `fuga -> hoge` and `piyo -> hoge`.
+- The parser does not require the canonicalized target to exist at `use` time.
+- If an unresolved alias is later referenced as a term/type/proof constant, resolution fails at that reference site.
+
+Use-tree expansion:
+
+- `use {foo as bar, baz.{hoge as piyo, fuga as piyopiyo}}`
+- expands to `use foo as bar; use baz.hoge as piyo; use baz.fuga as piyopiyo`
+- each expanded leaf is then canonicalized and inserted by the normal rules.
+
+Alias shadowing policy:
+
+- Reusing an alias is always allowed.
+- The latest `use` declaration wins and overwrites the previous mapping.
+- This applies both across multiple `use` commands and within one braced `use` tree.
 
 ## AST and IR representation
 
-- `ModuleDecl { path, items }` for `module` blocks.
-- `UseDecl { target }` for `use` statements.
-- Names stored internally as `Vec<Ident>` (fully qualified).
-- Unqualified references resolved to fully qualified names during name resolution.
+- Parser-only node: `UseTree` (leaf path or nested `prefix.{...}` group).
+- `UseDecl { target: QualifiedName, alias: Name }` for each expanded leaf.
+- The parser desugars missing alias to an explicit alias during parsing.
+- The parser expands `UseTree` to a flat ordered list of `UseDecl`.
+- The parser maintains `use_table: HashMap<Name, QualifiedName>` as parse-state.
+- The parser resolves `UseDecl.target` to a canonical qualified name before storing it in AST.
+- The parser rewrites other name references to fully qualified names before they are stored in AST.
 
-## Name resolution algorithm (sketch)
+## Parser-side name resolution algorithm (sketch)
 
-Environment fields:
+Resolution order for unqualified names:
 
-- `current_module: QualifiedName` — the active module path for the current scope. Unqualified
-  definitions declared in the scope are recorded under this path (for example, `module foo { def bar := ... }`
-  records `foo.bar`). Nested `module` blocks push/pop this path lexically.
-- `use_table: HashMap<QualifiedName, QualifiedName>` — maps an introduced name to its fully qualified
-  target. A `use math.add` entry registers `math.add -> math.add`, while `use math.add as plus` registers
-  `plus -> math.add`. Resolution first checks this map by the unqualified name (or alias) and, when present,
-  substitutes the fully qualified target.
+1. Local bindings (function args, let, proof-local aliases).
+2. `use_table` alias lookup.
+3. Existing global lookup.
 
-Algorithm:
+Rules:
 
-1. If the reference is qualified, resolve directly.
-2. If unqualified, try `current_module + name`.
-3. If still unresolved, check `use_table` for `name` and, if present, resolve to the mapped qualified name.
-4. If still unresolved, try `root + name`.
-5. If no candidates, emit unknown identifier error.
-6. If multiple candidates, emit ambiguity error.
-
-Note: `use` order does not affect priority. This avoids subtle changes in meaning; the rule can be relaxed later if needed.
-
-Kind handling:
-
-- Name resolution is independent of entity kind and is driven by `current_module`, `use_table`, and the root
-  namespace only.
-- The resolver returns a qualified name; any kind validation is owned by the elaboration path that consumes it.
+- Qualified references (`foo.bar`) consult `use_table` on the first segment.
+- `use` affects only declarations that appear after the `use` command in the same scope.
+- If global lookup returns multiple candidates (cross-entity same name), report ambiguity.
+- After a name is resolved, the parser stores only the resolved qualified name in AST.
+- For `use` commands, `UseTree` expansion happens first, then target normalization, then alias insertion.
+- `use` target existence checks are intentionally skipped.
 
 ## Errors (examples)
 
-- Unknown identifier: `unknown identifier 'add'`
-- Ambiguous identifier: `ambiguous identifier 'add': candidates are math.add, list.add`
-- Unknown use target: `unknown identifier 'math.add'`
+- Unknown identifier after rewrite: `unknown identifier 'fst.baz'`
+- Ambiguous global name: `ambiguous identifier 'add': candidates are ...`
+- Invalid use tree: `expected use entry after ','`
+- Invalid multi-target use: `comma-separated targets require braces; use 'use prod.{fst, snd}'`
 
-## Desugaring
-
-- `module foo.bar { ... }` desugars to `module foo { module bar { ... } }`.
-
-## Examples
+## Example
 
 ```shari
-module list {
-  type const List : Type
-  const add : List → List → List
-}
+type const A : Type
+type const B : Type
+type const Prod : Type
+const p : Prod
+const prod.fst : Prod → A
+const prod.snd : Prod → B
+const prod.fst.default : Prod → A
+const foo : A
+const foo.child : A
 
-module math {
-  type const Nat : Type
-  const add : Nat → Nat → Nat
-  const zero : Nat
-}
+use prod.fst
 
-use list.add
-use math.add
+def x : A := fst p
+def y : A := fst.default p
 
-def h : math.Nat := math.add math.zero math.zero
-```
+use foo as bar
+use bar as baz
 
-Ambiguity:
+def z : A := baz
+def w : A := baz.child
 
-```shari
-use list.add
-use math.add
+use {foo as bar2, prod.{fst as pfirst, snd as psnd}}
 
-def x : math.Nat := add math.zero math.zero -- error: list.add vs math.add
+def u : A := bar2
+def v : A := pfirst p
 ```
 
 ## Implementation plan (rough)
 
-1. Parser: add `module` and `use` constructs.
-2. AST: add `ModuleDecl` and `UseDecl`.
-3. Name resolution: track `current_module` and `use_table`.
-4. Errors: add unknown/ambiguous diagnostics.
-5. Tests: add examples and negative cases.
+1. Parser: add top-level `use` command with optional `as` alias and braced `UseTree` grammar.
+2. AST: add parser-only `UseTree`; keep `UseDecl { target, alias }` as normalized leaf form.
+3. Parser expansion: flatten `UseTree` left-to-right into leaf `UseDecl`.
+4. Parser state: maintain `use_table` with left-to-right shadowing semantics.
+5. Parser rewrite: apply prefix rewrite using `use_table` for both unqualified and qualified references.
+6. Parser normalization: resolve `use` targets through existing aliases before insertion.
+7. Parser output: store fully qualified resolved names in AST so later stages do not re-resolve names.
+8. Diagnostics: add unknown rewritten target and invalid-tree errors.
+9. Tests: positive alias case, implicit alias case, `bar.baz` rewrite case, chained-use case, nested use-tree case, shadowing case, unresolved-use acceptance case.
 
 ## Documentation updates
 
-- Update `docs/SHARI_LANGUAGE_GUIDE.md` with syntax and rules.
-- If keywords change, update `editors/shari-vscode/syntaxes/shari.tmLanguage.json`.
-- If keywords change, update `shari-playground/public/index.html`.
+- Update `/Users/yuichi/.codex/worktrees/3116/shari/docs/SHARI_LANGUAGE_GUIDE.md` when implementation lands.
+- If `use`/`as` keywords are added or changed in grammar, update:
+- `/Users/yuichi/.codex/worktrees/3116/shari/editors/shari-vscode/syntaxes/shari.tmLanguage.json`
+- `/Users/yuichi/.codex/worktrees/3116/shari/shari-playground/public/index.html`
 
 ## Risks and open questions
 
-- Interactions with existing name resolution paths.
-- Whether `use` should be order-sensitive in the future.
-- Whether `use` is allowed at expression scope or only at declaration scope.
-- Whether `module` should be allowed outside top-level.
-- Whether visibility modifiers are out-of-scope for now.
-- Whether the qualified-name separator should remain `.` or switch to `::`.
+- Scope boundary: top-level only vs nested scopes if future local command blocks are introduced.
+- Alias shadowing against existing globals is allowed because alias lookup runs before global lookup.
+- Whether `use` should allow non-qualified targets (`use fst`) in the future.
+- Parser complexity increase from doing all name resolution at parse time.
+
+## Future Directions (Not Implemented Yet)
+
+- Option A: implicit alias registration from declarations.
+- Example: `def foo := ...` automatically inserts `foo -> foo` into `use_table`.
+- Expected benefit: reduces boilerplate `use` commands.
+- Risks: shadowing interactions with existing aliases/globals and key policy for qualified definitions (`def prod.fst := ...`).
+
+- Option B: replace `QualifiedName` references with global `Id`.
+- Target model: `foo -> Id(X)` mapping, with `Const`/`ExprConst` and related TT/proof structures storing `Id` instead of `QualifiedName`.
+- Required work: global symbol table design, parser/elaborator/printer migration, and reverse lookup for pretty-printing.
+- Assessment: large refactor; best handled as incremental milestones rather than a single change.

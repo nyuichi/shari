@@ -106,6 +106,17 @@ impl QualifiedName {
         self.0.prefix.as_ref()
     }
 
+    pub fn names(&self) -> Vec<Name> {
+        let mut segments = vec![];
+        let mut current = Some(self);
+        while let Some(name) = current {
+            segments.push(name.name().clone());
+            current = name.prefix();
+        }
+        segments.reverse();
+        segments
+    }
+
     pub fn append(&self, suffix: &QualifiedName) -> QualifiedName {
         let prefix = match suffix.prefix() {
             Some(prefix) => self.append(prefix),

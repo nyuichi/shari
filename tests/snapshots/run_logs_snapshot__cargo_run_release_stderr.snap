@@ -23,7 +23,6 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + const has_le.le.{u} [has_le u] : u → u → Prop
 [<timestamp> INFO  shari::cmd] + class has _
 [<timestamp> INFO  shari::cmd] + const has.summon.{u} [has u] : u
-[<timestamp> INFO  shari::cmd] + const summon.{u} [has u] : u
 [<timestamp> INFO  shari::cmd] + class default _
 [<timestamp> INFO  shari::cmd] + const default.value.{u} [default u] : u
 [<timestamp> INFO  shari::cmd] + const eq.{u} : u → u → Prop
@@ -158,15 +157,13 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom bool.ff.spec : bool.ff.rep = ⊤ ∨ bool.ff.rep = ⊥
 [<timestamp> INFO  shari::cmd] + const bool.ff : bool
 [<timestamp> INFO  shari::cmd] + axiom bool.ff.rep.spec : bool.rep bool.ff = bool.ff.rep
-[<timestamp> INFO  shari::cmd] + const tt : bool
-[<timestamp> INFO  shari::cmd] + const ff : bool
-[<timestamp> INFO  shari::cmd] + axiom bool.rep_tt_eq_true : bool.rep tt = ⊤
-[<timestamp> INFO  shari::cmd] + axiom bool.rep_ff_eq_false : bool.rep ff = ⊥
+[<timestamp> INFO  shari::cmd] + axiom bool.rep_tt_eq_true : bool.rep bool.tt = ⊤
+[<timestamp> INFO  shari::cmd] + axiom bool.rep_ff_eq_false : bool.rep bool.ff = ⊥
 [<timestamp> INFO  shari::cmd] + axiom bool.ext : ∀ b₁ b₂, bool.rep b₁ = bool.rep b₂ → b₁ = b₂
-[<timestamp> INFO  shari::cmd] + axiom bool.eq_tt : ∀ b, bool.rep b = ⊤ → b = tt
-[<timestamp> INFO  shari::cmd] + axiom bool.eq_ff : ∀ b, bool.rep b = ⊥ → b = ff
-[<timestamp> INFO  shari::cmd] + axiom bool.case : ∀ b, b = tt ∨ b = ff
-[<timestamp> INFO  shari::cmd] + axiom bool.tt_ne_ff : tt ≠ ff
+[<timestamp> INFO  shari::cmd] + axiom bool.eq_tt : ∀ b, bool.rep b = ⊤ → b = bool.tt
+[<timestamp> INFO  shari::cmd] + axiom bool.eq_ff : ∀ b, bool.rep b = ⊥ → b = bool.ff
+[<timestamp> INFO  shari::cmd] + axiom bool.case : ∀ b, b = bool.tt ∨ b = bool.ff
+[<timestamp> INFO  shari::cmd] + axiom bool.tt_ne_ff : bool.tt ≠ bool.ff
 [<timestamp> INFO  shari::cmd] + axiom eq.congr_abs.{u, v} : ∀ m₁ m₂, (∀ x, m₁ = m₂) → (λ x, m₁) = λ x, m₂
 [<timestamp> INFO  shari::cmd] + axiom eta_expand.{u, v} : ∀ f, f = λ x, f x
 [<timestamp> INFO  shari::cmd] + axiom lawvere_fixpoint.{u, v} : ∀ f, (∃ e, surjective e) → ∃ y, y = f y
@@ -345,8 +342,6 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom bin_tree.empty.spec.{u, u₁} : bin_tree.rec bin_tree.empty = λ k k₁ k₁, k
 [<timestamp> INFO  shari::cmd] + axiom bin_tree.leaf.spec.{u, u₁} : ∀ x, bin_tree.rec (bin_tree.leaf x) = λ k k k₁, k x
 [<timestamp> INFO  shari::cmd] + axiom bin_tree.node.spec.{u, u₁} : ∀ x x₁, bin_tree.rec (bin_tree.node x x₁) = λ k k₁ k₂, k₂ x x₁ (bin_tree.rec x k k₁ k₂) (bin_tree.rec x₁ k k₁ k₂)
-[<timestamp> INFO  shari::cmd] + const nil.{u} : list u
-[<timestamp> INFO  shari::cmd] + const cons.{u} : u → list u → list u
 [<timestamp> INFO  shari::cmd] + const functional.{u, v} : (u → v → Prop) → Prop
 [<timestamp> INFO  shari::cmd] + const acc.{u} : (u → u → Prop) → u → Prop
 [<timestamp> INFO  shari::cmd] + axiom acc.intro.{u} : ∀ R x, (∀ y, R y x → acc R y) → acc R x
@@ -356,16 +351,14 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + type const W.el : Type → Type → Type
 [<timestamp> INFO  shari::cmd] + const W.el.f.{u, v} : W.el u v → u → v
 [<timestamp> INFO  shari::cmd] + const W.el.tree.{u, v} : W.el u v → list u → v → Prop
-[<timestamp> INFO  shari::cmd] + axiom W.el.root.{u, v} : ∀ this, ∃ a, W.el.tree this nil a
-[<timestamp> INFO  shari::cmd] + axiom W.el.branch.{u, v} : ∀ this l a b, W.el.tree this l a → W.el.f this b = a → ∃ a₀, W.el.tree this (cons b l) a₀
-[<timestamp> INFO  shari::cmd] + axiom W.el.prefix_closed.{u, v} : ∀ this l x a, W.el.tree this (cons x l) a → W.el.tree this l (W.el.f this x)
+[<timestamp> INFO  shari::cmd] + axiom W.el.root.{u, v} : ∀ this, ∃ a, W.el.tree this list.nil a
+[<timestamp> INFO  shari::cmd] + axiom W.el.branch.{u, v} : ∀ this l a b, W.el.tree this l a → W.el.f this b = a → ∃ a₀, W.el.tree this (list.cons b l) a₀
+[<timestamp> INFO  shari::cmd] + axiom W.el.prefix_closed.{u, v} : ∀ this l x a, W.el.tree this (list.cons x l) a → W.el.tree this l (W.el.f this x)
 [<timestamp> INFO  shari::cmd] + axiom W.el.functional.{u, v} : ∀ this, functional (W.el.tree this)
-[<timestamp> INFO  shari::cmd] + axiom W.el.well_founded.{u, v} : ∀ this, well_founded λ p₁ p₂, W.el.tree this (fst p₁) (snd p₁) ∧ W.el.tree this (fst p₂) (snd p₂) ∧ ∃ l a, fst p₂ = cons a l ∧ fst p₁ = l ∧ snd p₂ = W.el.f this a
-[<timestamp> INFO  shari::cmd] + axiom W.el.abs.{u, v} : ∀ f tree, (∃ a, tree nil a) → (∀ l a b, tree l a → f b = a → ∃ a₀, tree (cons b l) a₀) → (∀ l x a, tree (cons x l) a → tree l (f x)) → functional tree → well_founded (λ p₁ p₂, tree (fst p₁) (snd p₁) ∧ tree (fst p₂) (snd p₂) ∧ ∃ l a, fst p₂ = cons a l ∧ fst p₁ = l ∧ snd p₂ = f a) → ∃! this, and (f = W.el.f this) (tree = W.el.tree this)
-[<timestamp> INFO  shari::cmd] + const star : unit
-[<timestamp> INFO  shari::cmd] + const none.{u} : option u
-[<timestamp> INFO  shari::cmd] + axiom unit.eta_expand : ∀ x, x = star
-[<timestamp> INFO  shari::cmd] + axiom unit.eta_reduce : ∀ x, star = x
+[<timestamp> INFO  shari::cmd] + axiom W.el.well_founded.{u, v} : ∀ this, well_founded λ p₁ p₂, W.el.tree this (fst p₁) (snd p₁) ∧ W.el.tree this (fst p₂) (snd p₂) ∧ ∃ l a, fst p₂ = list.cons a l ∧ fst p₁ = l ∧ snd p₂ = W.el.f this a
+[<timestamp> INFO  shari::cmd] + axiom W.el.abs.{u, v} : ∀ f tree, (∃ a, tree list.nil a) → (∀ l a b, tree l a → f b = a → ∃ a₀, tree (list.cons b l) a₀) → (∀ l x a, tree (list.cons x l) a → tree l (f x)) → functional tree → well_founded (λ p₁ p₂, tree (fst p₁) (snd p₁) ∧ tree (fst p₂) (snd p₂) ∧ ∃ l a, fst p₂ = list.cons a l ∧ fst p₁ = l ∧ snd p₂ = f a) → ∃! this, and (f = W.el.f this) (tree = W.el.tree this)
+[<timestamp> INFO  shari::cmd] + axiom unit.eta_expand : ∀ x, x = unit.star
+[<timestamp> INFO  shari::cmd] + axiom unit.eta_reduce : ∀ x, unit.star = x
 [<timestamp> INFO  shari::cmd] + axiom unit_ext : ∀ x₁ x₂, x₁ = x₂
 [<timestamp> INFO  shari::cmd] + type const monoid : Type → Type
 [<timestamp> INFO  shari::cmd] + const monoid.mult.{u} : monoid u → u → u → u
@@ -374,12 +367,10 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom monoid.left_unit.{u} : ∀ this x, monoid.mult this (monoid.unit this) x = x
 [<timestamp> INFO  shari::cmd] + axiom monoid.right_unit.{u} : ∀ this x, monoid.mult this x (monoid.unit this) = x
 [<timestamp> INFO  shari::cmd] + axiom monoid.abs.{u} : ∀ mult unit, (∀ x₁ x₂ x₃, mult (mult x₁ x₂) x₃ = mult x₁ (mult x₂ x₃)) → (∀ x, mult unit x = x) → (∀ x, mult x unit = x) → ∃! this, and (mult = monoid.mult this) (unit = monoid.unit this)
-[<timestamp> INFO  shari::cmd] + const mult.{u} : monoid u → u → u → u
-[<timestamp> INFO  shari::cmd] + const unit.{u} : monoid u → u
 [<timestamp> INFO  shari::cmd] + const interchange.{u} : monoid u → monoid u → Prop
-[<timestamp> INFO  shari::cmd] + axiom interchange.equates_unit.{u} : ∀ m₁ m₂, interchange m₁ m₂ → unit m₁ = unit m₂
-[<timestamp> INFO  shari::cmd] + axiom interchange.equates_mult.{u} : ∀ m₁ m₂, interchange m₁ m₂ → mult m₁ = mult m₂
-[<timestamp> INFO  shari::cmd] + axiom monoid.ext.{u} : ∀ m₁ m₂, mult m₁ = mult m₂ → unit m₁ = unit m₂ → m₁ = m₂
+[<timestamp> INFO  shari::cmd] + axiom interchange.equates_unit.{u} : ∀ m₁ m₂, interchange m₁ m₂ → monoid.unit m₁ = monoid.unit m₂
+[<timestamp> INFO  shari::cmd] + axiom interchange.equates_mult.{u} : ∀ m₁ m₂, interchange m₁ m₂ → monoid.mult m₁ = monoid.mult m₂
+[<timestamp> INFO  shari::cmd] + axiom monoid.ext.{u} : ∀ m₁ m₂, monoid.mult m₁ = monoid.mult m₂ → monoid.unit m₁ = monoid.unit m₂ → m₁ = m₂
 [<timestamp> INFO  shari::cmd] + axiom eckmann_hilton.{u} : ∀ m₁ m₂, interchange m₁ m₂ → m₁ = m₂
 [<timestamp> INFO  shari::cmd] + const topology.{u} : ((u → Prop) → Prop) → (u → Prop) → Prop
 [<timestamp> INFO  shari::cmd] + axiom topology.subbase.{u} : ∀ subbase x, x ∈ subbase → topology subbase x

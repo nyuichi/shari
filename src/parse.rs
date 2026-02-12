@@ -2,9 +2,9 @@ use crate::cmd::{
     ClassInstanceDef, ClassInstanceField, ClassInstanceLemma, ClassStructureAxiom,
     ClassStructureConst, ClassStructureField, Cmd, CmdAxiom, CmdClassInstance, CmdClassStructure,
     CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdInstance, CmdLemma,
-    CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive, Constructor,
+    CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive, CmdUse, Constructor,
     DataConstructor, Fixity, InstanceDef, InstanceField, InstanceLemma, Operator, StructureAxiom,
-    StructureConst, StructureField,
+    StructureConst, StructureField, UseDecl as CmdUseDecl,
 };
 use crate::proof::{
     Axiom, Expr, LocalStructureAxiom, LocalStructureConst, LocalStructureField, count_forall,
@@ -162,10 +162,17 @@ pub enum ParseError {
     Eof { span: Span },
 }
 
+#[derive(Debug, Clone)]
+struct UseDecl {
+    target: QualifiedName,
+    alias: Option<Name>,
+}
+
 // TODO: instance lemma の中で hole を作ると引数にそれまでの instance def が入っちゃって後々 elab で const に置き換えられるので無駄。あと instance 自体の引数が2回ぐらい hole の引数に入ってしまうバグがありそう。
 pub struct Parser<'a> {
     lex: &'a mut Lex,
     tt: &'a TokenTable,
+    use_table: &'a mut HashMap<Name, QualifiedName>,
     type_const_table: &'a HashMap<QualifiedName, Kind>,
     const_table: &'a HashMap<QualifiedName, Const>,
     axiom_table: &'a HashMap<QualifiedName, Axiom>,
@@ -185,6 +192,7 @@ impl<'a> Parser<'a> {
     pub fn new(
         lex: &'a mut Lex,
         tt: &'a TokenTable,
+        use_table: &'a mut HashMap<Name, QualifiedName>,
         type_const_table: &'a HashMap<QualifiedName, Kind>,
         const_table: &'a HashMap<QualifiedName, Const>,
         axiom_table: &'a HashMap<QualifiedName, Axiom>,
@@ -193,6 +201,7 @@ impl<'a> Parser<'a> {
         Self {
             lex,
             tt,
+            use_table,
             type_const_table,
             const_table,
             axiom_table,
@@ -406,6 +415,22 @@ impl<'a> Parser<'a> {
         name
     }
 
+    fn resolve(&self, name: QualifiedName) -> QualifiedName {
+        let segments = name.names();
+        let (head, tail) = match segments.split_first() {
+            Some(parts) => parts,
+            None => return name,
+        };
+        let Some(prefix) = self.use_table.get(head) else {
+            return name;
+        };
+        let mut name = prefix.clone();
+        for segment in tail {
+            name = QualifiedName::from_parts(Some(name), segment.clone());
+        }
+        name
+    }
+
     fn alias_opt(&mut self) -> Result<Option<Name>, ParseError> {
         if let Some(token) = self.peek_opt()
             && token.kind == TokenKind::Keyword
@@ -436,16 +461,16 @@ impl<'a> Parser<'a> {
         if token.is_ident() {
             let name = self.qualified_name(&token);
             if name.prefix().is_none() && self.has_local_type(name.name()) {
-                Ok(mk_type_local(Id::from_name(name.name())))
-            } else if let Some(stash) =
-                self.type_self_ref.as_ref().and_then(|(self_name, stash)| {
-                    if self_name == &name {
-                        Some(stash)
-                    } else {
-                        None
-                    }
-                })
-            {
+                return Ok(mk_type_local(Id::from_name(name.name())));
+            }
+            let name = self.resolve(name);
+            if let Some(stash) = self.type_self_ref.as_ref().and_then(|(self_name, stash)| {
+                if self_name == &name {
+                    Some(stash)
+                } else {
+                    None
+                }
+            }) {
                 Ok(mk_type_local(*stash))
             } else if self.type_const_table.contains_key(&name) {
                 Ok(mk_type_const(name))
@@ -559,6 +584,7 @@ impl<'a> Parser<'a> {
             return Self::fail(token, "expected class name");
         }
         let name = self.qualified_name(&token);
+        let name = self.resolve(name);
         if !self.class_predicate_table.contains_key(&name) {
             return Self::fail(token, "unknown class");
         }
@@ -691,7 +717,7 @@ impl<'a> Parser<'a> {
                 if name.prefix().is_none() && self.has_local(name.name()) {
                     return Ok(mk_local(Id::from_name(name.name())));
                 }
-                name
+                self.resolve(name)
             }
         };
         if let Some(stash) = self.self_ref.as_ref().and_then(|(self_name, stash)| {
@@ -819,6 +845,7 @@ impl<'a> Parser<'a> {
 
     fn expr_const(&mut self, token: Token, auto_inst: bool) -> Result<Expr, ParseError> {
         let name = self.qualified_name(&token);
+        let name = self.resolve(name);
         let Some(axiom_info) = self.get_axiom(&name).cloned() else {
             return Self::fail(token, "unknown variable");
         };
@@ -1356,6 +1383,10 @@ impl<'a> Parser<'a> {
     pub fn cmd(&mut self) -> Result<Cmd, ParseError> {
         let keyword = self.keyword()?;
         let cmd = match keyword.as_str() {
+            "use" => {
+                let use_cmd = self.use_cmd(keyword)?;
+                Cmd::Use(use_cmd)
+            }
             "infixr" => {
                 let infixr_cmd = self.infixr_cmd(keyword)?;
                 Cmd::Infixr(infixr_cmd)
@@ -1443,6 +1474,77 @@ impl<'a> Parser<'a> {
         Ok(cmd)
     }
 
+    fn use_group(
+        &mut self,
+        prefix: Option<&QualifiedName>,
+        decls: &mut Vec<UseDecl>,
+    ) -> Result<(), ParseError> {
+        if self.expect_symbol_opt("}").is_some() {
+            return Ok(());
+        }
+        loop {
+            self.use_entry(prefix, decls)?;
+            if self.expect_symbol_opt(",").is_some() {
+                if let Some(token) = self.peek_opt()
+                    && token.is_symbol()
+                    && token.as_str() == "}"
+                {
+                    return Self::fail(token, "expected use entry after ','");
+                }
+                continue;
+            }
+            self.expect_symbol("}")?;
+            return Ok(());
+        }
+    }
+
+    fn use_entry(
+        &mut self,
+        prefix: Option<&QualifiedName>,
+        decls: &mut Vec<UseDecl>,
+    ) -> Result<(), ParseError> {
+        if self.expect_symbol_opt("{").is_some() {
+            return self.use_group(prefix, decls);
+        }
+        let token = self.ident()?;
+        let mut target = self.qualified_name(&token);
+        if let Some(prefix) = prefix {
+            target = prefix.append(&target);
+        }
+        if self.expect_symbol_opt(".{").is_some() {
+            return self.use_group(Some(&target), decls);
+        }
+        let alias = self.alias_opt()?;
+        decls.push(UseDecl { target, alias });
+        Ok(())
+    }
+
+    fn use_cmd(&mut self, _token: Token) -> Result<CmdUse, ParseError> {
+        let mut parsed_decls = vec![];
+        if self.expect_symbol_opt("{").is_some() {
+            self.use_group(None, &mut parsed_decls)?;
+        } else {
+            self.use_entry(None, &mut parsed_decls)?;
+        }
+        if let Some(token) = self.expect_symbol_opt(",") {
+            return Self::fail(
+                token,
+                "comma-separated targets require braces; use 'use prod.{fst, snd}'",
+            );
+        }
+
+        let mut decls = vec![];
+        for decl in parsed_decls {
+            let UseDecl { target, alias } = decl;
+            let target = self.resolve(target);
+            let alias = alias.unwrap_or_else(|| target.name().clone());
+            self.use_table.insert(alias.clone(), target.clone());
+            decls.push(CmdUseDecl { alias, target });
+        }
+
+        Ok(CmdUse { decls })
+    }
+
     fn infixr_cmd(&mut self, _token: Token) -> Result<CmdInfixr, ParseError> {
         let op = self.symbol()?;
         self.expect_symbol(":")?;
@@ -1454,6 +1556,7 @@ impl<'a> Parser<'a> {
         self.expect_symbol(":=")?;
         let ident = self.ident()?;
         let entity = self.qualified_name(&ident);
+        let entity = self.resolve(entity);
         Ok(CmdInfixr {
             op: op.as_str().to_owned(),
             prec,
@@ -1472,6 +1575,7 @@ impl<'a> Parser<'a> {
         self.expect_symbol(":=")?;
         let ident = self.ident()?;
         let entity = self.qualified_name(&ident);
+        let entity = self.resolve(entity);
         Ok(CmdInfixl {
             op: op.as_str().to_owned(),
             prec,
@@ -1490,6 +1594,7 @@ impl<'a> Parser<'a> {
         self.expect_symbol(":=")?;
         let ident = self.ident()?;
         let entity = self.qualified_name(&ident);
+        let entity = self.resolve(entity);
         Ok(CmdInfix {
             op: op.as_str().to_owned(),
             prec,
@@ -1508,6 +1613,7 @@ impl<'a> Parser<'a> {
         self.expect_symbol(":=")?;
         let ident = self.ident()?;
         let entity = self.qualified_name(&ident);
+        let entity = self.resolve(entity);
         Ok(CmdPrefix {
             op: op.as_str().to_owned(),
             prec,
@@ -1520,6 +1626,7 @@ impl<'a> Parser<'a> {
         self.expect_symbol(":=")?;
         let ident = self.ident()?;
         let entity = self.qualified_name(&ident);
+        let entity = self.resolve(entity);
         Ok(CmdNofix {
             op: op.as_str().to_owned(),
             entity,
@@ -1529,6 +1636,7 @@ impl<'a> Parser<'a> {
     fn def_cmd(&mut self, _token: Token) -> Result<CmdDef, ParseError> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
+        let name = self.resolve(name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -1562,6 +1670,7 @@ impl<'a> Parser<'a> {
     fn axiom_cmd(&mut self, _token: Token) -> Result<CmdAxiom, ParseError> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
+        let name = self.resolve(name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -1589,6 +1698,7 @@ impl<'a> Parser<'a> {
     fn lemma_cmd(&mut self, _token: Token) -> Result<CmdLemma, ParseError> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
+        let name = self.resolve(name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -1624,6 +1734,7 @@ impl<'a> Parser<'a> {
     fn const_cmd(&mut self, _token: Token) -> Result<CmdConst, ParseError> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
+        let name = self.resolve(name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -1645,6 +1756,7 @@ impl<'a> Parser<'a> {
     fn type_const_cmd(&mut self, _token: Token) -> Result<CmdTypeConst, ParseError> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
+        let name = self.resolve(name);
         self.expect_symbol(":")?;
         let kind = self.kind()?;
         Ok(CmdTypeConst { name, kind })
@@ -1653,6 +1765,7 @@ impl<'a> Parser<'a> {
     fn type_inductive_cmd(&mut self, _token: Token) -> Result<CmdTypeInductive, ParseError> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
+        let name = self.resolve(name);
         let self_id = Id::fresh();
         debug_assert!(
             self.type_self_ref.is_none(),
@@ -1673,6 +1786,7 @@ impl<'a> Parser<'a> {
         while let Some(_token) = self.expect_symbol_opt("|") {
             let token = self.ident()?;
             let ctor_name = self.qualified_name(&token);
+            let ctor_name = self.resolve(ctor_name);
             for ctor in &ctors {
                 if ctor_name == ctor.name {
                     return Self::fail(token, "duplicate constructor")?;
@@ -1700,6 +1814,7 @@ impl<'a> Parser<'a> {
     fn inductive_cmd(&mut self, _token: Token) -> Result<CmdInductive, ParseError> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
+        let name = self.resolve(name);
         let self_id = Id::fresh();
         debug_assert!(
             self.self_ref.is_none(),
@@ -1720,6 +1835,7 @@ impl<'a> Parser<'a> {
         while let Some(_token) = self.expect_symbol_opt("|") {
             let token = self.ident()?;
             let ctor_name = self.qualified_name(&token);
+            let ctor_name = self.resolve(ctor_name);
             for ctor in &ctors {
                 if ctor_name == ctor.name {
                     return Self::fail(token, "duplicate constructor")?;
@@ -1756,6 +1872,7 @@ impl<'a> Parser<'a> {
     fn structure_cmd(&mut self, _token: Token) -> Result<CmdStructure, ParseError> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
+        let name = self.resolve(name);
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
             let tv = Name::from_str(token.as_str());
@@ -1818,6 +1935,7 @@ impl<'a> Parser<'a> {
     fn instance_cmd(&mut self, _token: Token) -> Result<CmdInstance, ParseError> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
+        let name = self.resolve(name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -1907,6 +2025,7 @@ impl<'a> Parser<'a> {
     fn class_structure_cmd(&mut self, _token: Token) -> Result<CmdClassStructure, ParseError> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
+        let name = self.resolve(name);
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
             let tv = Name::from_str(token.as_str());
@@ -1969,6 +2088,7 @@ impl<'a> Parser<'a> {
     fn class_instance_cmd(&mut self, _token: Token) -> Result<CmdClassInstance, ParseError> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
+        let name = self.resolve(name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -2090,11 +2210,13 @@ mod tests {
 
     fn parse_expr(input: &str) -> Expr {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
         let mut parser = Parser::new(
             &mut lex,
             &tt,
+            &mut use_table,
             &type_consts,
             &consts,
             &axioms,
@@ -2113,6 +2235,7 @@ mod tests {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
         let tt = TokenTable::default();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
         let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
         let const_table: HashMap<QualifiedName, Const> = HashMap::new();
         let axiom_table: HashMap<QualifiedName, Axiom> = HashMap::new();
@@ -2120,6 +2243,7 @@ mod tests {
         let mut parser = Parser::new(
             &mut lex,
             &tt,
+            &mut use_table,
             &type_const_table,
             &const_table,
             &axiom_table,
@@ -2127,6 +2251,73 @@ mod tests {
         );
         let ident = parser.ident()?;
         Ok(parser.qualified_name(&ident))
+    }
+
+    fn parse_cmd_with_tables(
+        input: &str,
+        tt: &TokenTable,
+        use_table: &mut HashMap<Name, QualifiedName>,
+        type_const_table: &HashMap<QualifiedName, Kind>,
+        const_table: &HashMap<QualifiedName, Const>,
+        axiom_table: &HashMap<QualifiedName, Axiom>,
+        class_predicate_table: &HashMap<QualifiedName, ClassType>,
+    ) -> Result<Cmd, ParseError> {
+        let file = Arc::new(File::new("<test>", input));
+        let mut lex = Lex::new(file);
+        let mut parser = Parser::new(
+            &mut lex,
+            tt,
+            use_table,
+            type_const_table,
+            const_table,
+            axiom_table,
+            class_predicate_table,
+        );
+        parser.cmd()
+    }
+
+    fn parse_term_with_tables(
+        input: &str,
+        tt: &TokenTable,
+        use_table: &mut HashMap<Name, QualifiedName>,
+        type_const_table: &HashMap<QualifiedName, Kind>,
+        const_table: &HashMap<QualifiedName, Const>,
+        axiom_table: &HashMap<QualifiedName, Axiom>,
+        class_predicate_table: &HashMap<QualifiedName, ClassType>,
+    ) -> Result<Term, ParseError> {
+        let file = Arc::new(File::new("<test>", input));
+        let mut lex = Lex::new(file);
+        let mut parser = Parser::new(
+            &mut lex,
+            tt,
+            use_table,
+            type_const_table,
+            const_table,
+            axiom_table,
+            class_predicate_table,
+        );
+        parser.term()
+    }
+
+    fn qualified(value: &str) -> QualifiedName {
+        let mut parts = value.split('.');
+        let first = parts.next().expect("qualified name must not be empty");
+        let mut name = QualifiedName::from_str(first);
+        for part in parts {
+            name = name.extend(part);
+        }
+        name
+    }
+
+    fn insert_prop_const(const_table: &mut HashMap<QualifiedName, Const>, name: &str) {
+        const_table.insert(
+            qualified(name),
+            Const {
+                local_types: vec![],
+                local_classes: vec![],
+                ty: mk_type_const(QualifiedName::from_str("Prop")),
+            },
+        );
     }
 
     #[test]
@@ -2220,5 +2411,328 @@ mod tests {
         let without = parse_qualified("foo.bar").expect("parse without whitespace");
         let with = parse_qualified("foo .bar").expect("parse with whitespace");
         assert_eq!(with, without);
+    }
+
+    #[test]
+    fn use_scoped_group_expands_to_leaf_decls() {
+        let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
+        insert_prop_const(&mut consts, "prod.fst");
+        insert_prop_const(&mut consts, "prod.snd");
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "use prod.{fst, snd}",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("use command parses");
+        let Cmd::Use(CmdUse { decls }) = cmd else {
+            panic!("expected use command");
+        };
+        assert_eq!(decls.len(), 2);
+        assert_eq!(decls[0].alias, Name::from_str("fst"));
+        assert_eq!(decls[0].target, qualified("prod.fst"));
+        assert_eq!(decls[1].alias, Name::from_str("snd"));
+        assert_eq!(decls[1].target, qualified("prod.snd"));
+    }
+
+    #[test]
+    fn use_chain_normalizes_alias_target() {
+        let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
+        insert_prop_const(&mut consts, "foo");
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        use_table.insert(Name::from_str("bar"), qualified("foo"));
+        let cmd = parse_cmd_with_tables(
+            "use bar as baz",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("use command parses");
+        let Cmd::Use(CmdUse { decls }) = cmd else {
+            panic!("expected use command");
+        };
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0].alias, Name::from_str("baz"));
+        assert_eq!(decls[0].target, qualified("foo"));
+    }
+
+    #[test]
+    fn use_shadowing_rebinds_alias_to_new_target() {
+        let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
+        insert_prop_const(&mut consts, "foo");
+        insert_prop_const(&mut consts, "bar");
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        use_table.insert(Name::from_str("name"), qualified("foo"));
+        let cmd = parse_cmd_with_tables(
+            "use bar as name",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("use command parses");
+        let Cmd::Use(CmdUse { decls }) = cmd else {
+            panic!("expected use command");
+        };
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0].alias, Name::from_str("name"));
+        assert_eq!(decls[0].target, qualified("bar"));
+    }
+
+    #[test]
+    fn use_group_alias_chain_is_resolved_left_to_right() {
+        let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
+        insert_prop_const(&mut consts, "hoge");
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "use {hoge as fuga, fuga as piyo}",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("use command parses");
+        let Cmd::Use(CmdUse { decls }) = cmd else {
+            panic!("expected use command");
+        };
+        assert_eq!(decls.len(), 2);
+        assert_eq!(decls[0].alias, Name::from_str("fuga"));
+        assert_eq!(decls[0].target, qualified("hoge"));
+        assert_eq!(decls[1].alias, Name::from_str("piyo"));
+        assert_eq!(decls[1].target, qualified("hoge"));
+    }
+
+    #[test]
+    fn use_unknown_target_is_accepted() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "use future.symbol as fs",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("use command parses");
+        let Cmd::Use(CmdUse { decls }) = cmd else {
+            panic!("expected use command");
+        };
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0].alias, Name::from_str("fs"));
+        assert_eq!(decls[0].target, qualified("future.symbol"));
+    }
+
+    #[test]
+    fn use_unknown_target_chain_in_same_group() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "use {future as f, f as g}",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("use command parses");
+        let Cmd::Use(CmdUse { decls }) = cmd else {
+            panic!("expected use command");
+        };
+        assert_eq!(decls.len(), 2);
+        assert_eq!(decls[0].alias, Name::from_str("f"));
+        assert_eq!(decls[0].target, qualified("future"));
+        assert_eq!(decls[1].alias, Name::from_str("g"));
+        assert_eq!(decls[1].target, qualified("future"));
+    }
+
+    #[test]
+    fn use_unknown_target_fails_when_referenced() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        parse_cmd_with_tables(
+            "use unknown as a",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("first use command parses");
+        parse_cmd_with_tables(
+            "use a as b",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("second use command parses");
+        let err = parse_term_with_tables(
+            "b",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect_err("reference should fail when target entity is undefined");
+        let ParseError::Parse { message, span: _ } = err else {
+            panic!("expected parse error");
+        };
+        assert_eq!(message, "unknown variable");
+    }
+
+    #[test]
+    fn use_unknown_target_alias_fails_in_def_body() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        parse_cmd_with_tables(
+            "use unknown as a",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("first use command parses");
+        parse_cmd_with_tables(
+            "use a as b",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("second use command parses");
+        let err = parse_cmd_with_tables(
+            "def x : Prop := b",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect_err("definition body should fail when alias target entity is undefined");
+        let ParseError::Parse { message, span: _ } = err else {
+            panic!("expected parse error");
+        };
+        assert_eq!(message, "unknown variable");
+    }
+
+    #[test]
+    fn use_comma_without_braces_is_rejected() {
+        let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
+        insert_prop_const(&mut consts, "prod.fst");
+        insert_prop_const(&mut consts, "prod.snd");
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let err = parse_cmd_with_tables(
+            "use prod.fst, prod.snd",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect_err("command should fail");
+        let ParseError::Parse { message, span: _ } = err else {
+            panic!("expected parse error");
+        };
+        assert!(
+            message.contains("comma-separated targets require braces"),
+            "message = {message}"
+        );
+    }
+
+    #[test]
+    fn term_resolution_rewrites_use_alias_head() {
+        let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
+        insert_prop_const(&mut consts, "prod.fst.default");
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        use_table.insert(Name::from_str("fst"), qualified("prod.fst"));
+        let term = parse_term_with_tables(
+            "fst.default",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("term parses");
+        let Term::Const(inner) = term else {
+            panic!("expected constant term");
+        };
+        assert_eq!(inner.name, qualified("prod.fst.default"));
+    }
+
+    #[test]
+    fn declaration_name_resolution_rewrites_use_alias_head() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        use_table.insert(Name::from_str("alias"), qualified("prod"));
+        let cmd = parse_cmd_with_tables(
+            "type const alias.elem : Type",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("type const command parses");
+        let Cmd::TypeConst(CmdTypeConst { name, kind: _ }) = cmd else {
+            panic!("expected type_const command");
+        };
+        assert_eq!(name, qualified("prod.elem"));
+    }
+
+    #[test]
+    fn type_inductive_ctor_resolution_rewrites_use_alias_head() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        use_table.insert(Name::from_str("alias"), qualified("prod"));
+        let cmd = parse_cmd_with_tables(
+            "type inductive alias.list | alias.nil : alias.list",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("type inductive command parses");
+        let Cmd::TypeInductive(CmdTypeInductive {
+            name,
+            self_id: _,
+            local_types: _,
+            ctors,
+        }) = cmd
+        else {
+            panic!("expected type_inductive command");
+        };
+        assert_eq!(name, qualified("prod.list"));
+        assert_eq!(ctors.len(), 1);
+        assert_eq!(ctors[0].name, qualified("prod.nil"));
     }
 }

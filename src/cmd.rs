@@ -16,6 +16,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub enum Cmd {
+    Use(CmdUse),
     Infix(CmdInfix),
     Infixr(CmdInfixr),
     Infixl(CmdInfixl),
@@ -66,6 +67,17 @@ pub struct CmdPrefix {
 pub struct CmdNofix {
     pub op: String,
     pub entity: QualifiedName,
+}
+
+#[derive(Clone, Debug)]
+pub struct CmdUse {
+    pub decls: Vec<UseDecl>,
+}
+
+#[derive(Clone, Debug)]
+pub struct UseDecl {
+    pub alias: Name,
+    pub target: QualifiedName,
 }
 
 #[derive(Clone, Debug)]
@@ -253,6 +265,15 @@ pub struct ClassInstanceLemma {
 impl std::fmt::Display for Cmd {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Cmd::Use(cmd) => write!(
+                f,
+                "use {}",
+                cmd.decls
+                    .iter()
+                    .map(|decl| format!("{} as {}", decl.target, decl.alias))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
             Cmd::Infix(cmd) => write!(f, "infix {} {} {}", cmd.op, cmd.prec, cmd.entity),
             Cmd::Infixr(cmd) => write!(f, "infixr {} {} {}", cmd.op, cmd.prec, cmd.entity),
             Cmd::Infixl(cmd) => write!(f, "infixl {} {} {}", cmd.op, cmd.prec, cmd.entity),
@@ -434,6 +455,7 @@ impl std::fmt::Display for Cmd {
 pub struct Eval {
     pub tt: TokenTable,
     pub pp: OpTable,
+    pub use_table: HashMap<Name, QualifiedName>,
     pub type_const_table: HashMap<QualifiedName, Kind>,
     pub const_table: HashMap<QualifiedName, Const>,
     pub axiom_table: HashMap<QualifiedName, Axiom>,
@@ -730,6 +752,14 @@ impl Eval {
 
     pub fn run_cmd(&mut self, cmd: Cmd) -> anyhow::Result<()> {
         match cmd {
+            Cmd::Use(inner) => {
+                let CmdUse { decls } = inner;
+                for decl in decls {
+                    let UseDecl { alias, target } = decl;
+                    self.use_table.insert(alias, target);
+                }
+                Ok(())
+            }
             Cmd::Infix(inner) => {
                 let CmdInfix { op, prec, entity } = inner;
                 let op = Operator {
