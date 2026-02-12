@@ -174,7 +174,7 @@ class structure has u := {
   const summon : u
 }
 
-def summon.{u} [has u] : u := has.summon
+use has.summon as summon
 
 -- The unifier uses this class to resolve unconstrained metavariables.
 class structure default u := {
@@ -772,8 +772,7 @@ class instance bool.default : default bool := {
   def value : bool := bool.tt
 }
 
-def tt : bool := bool.tt
-def ff : bool := bool.ff
+use bool.{tt, ff}
 
 lemma bool.rep_tt_eq_true : bool.rep tt = ⊤ :=
 calc bool.rep tt = bool.tt.rep := bool.tt.rep.spec
@@ -1686,8 +1685,7 @@ type inductive bin_tree u
 | leaf : u → bin_tree
 | node : bin_tree → bin_tree → bin_tree
 
-def nil.{u} : list u := list.nil
-def cons.{u} (x : u) (l : list u) : list u := list.cons x l
+use list.{nil, cons}
 
 def functional.{u, v} (R : u → v → Prop) : Prop := ∀ x a₁ a₂, R x a₁ → R x a₂ → a₁ = a₂
 
@@ -1724,12 +1722,7 @@ structure W.el u v := {
 }
 
 -- type infixr × : 35
--- TODO: use namespace
-def star : unit := unit.star
--- def inl : u → sum u v := sum.inl
--- def inr : v → sum u v := sum.inr
-def none.{u} : option u := option.none
--- def some : u → option u := option.some
+use unit.star as star
 
 lemma unit.eta_expand (x : unit) : x = star :=
 unit.ind eq.refl
@@ -1752,8 +1745,8 @@ structure monoid u := {
   axiom right_unit (x : u) : mult x unit = x
 }
 
-def mult.{u} : monoid u → u → u → u := monoid.mult
-def unit.{u} : monoid u → u := monoid.unit
+use monoid.mult as mult
+use monoid.unit as unit
 
 def interchange.{u} (m₁ m₂ : monoid u) : Prop := ∀ a b c d, mult m₁ (mult m₂ a b) (mult m₂ c d) = mult m₂ (mult m₁ a c) (mult m₁ b d)
 
