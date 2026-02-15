@@ -21,7 +21,7 @@ use crate::{
         self, Class, ClassInstance, ClassType, Const, Id, Instance, InstanceGlobal, Kind, Local,
         LocalConst, LocalEnv, Name, QualifiedName, Term, TermAbs, TermApp, Type, TypeApp,
         TypeArrow, mk_const, mk_fresh_type_hole, mk_hole, mk_instance_global, mk_instance_local,
-        mk_local, mk_type_arrow, mk_type_local,
+        mk_local, mk_local_const, mk_type_arrow, mk_type_local,
     },
 };
 
@@ -333,19 +333,13 @@ impl<'a> Elaborator<'a> {
 
                 Ok(ret_ty)
             }
+            Term::LocalConst(inner) => {
+                let Some((_, local_const)) = self.tt_local_env.local_consts.get(inner.level) else {
+                    bail!("unknown local constant level");
+                };
+                Ok(local_const.ty.clone())
+            }
             Term::Const(n) => {
-                for (local_name, c) in self.tt_local_env.local_consts.iter().rev() {
-                    if local_name == &n.name {
-                        if !n.ty_args.is_empty() {
-                            bail!("local constant expects no type arguments");
-                        }
-                        if !n.instances.is_empty() {
-                            bail!("local constant expects no class instances");
-                        }
-                        return Ok(c.ty.clone());
-                    }
-                }
-
                 let Some(Const {
                     local_types,
                     local_classes,
@@ -772,9 +766,10 @@ impl<'a> Elaborator<'a> {
                         }) => {
                             let fullname = structure_name.extend(field_name.as_str());
                             let ty = ty.arrow([this_ty.clone()]);
-                            local_consts.push((fullname.clone(), LocalConst { ty }));
+                            let level = self.tt_local_env.local_consts.len() + local_consts.len();
+                            local_consts.push((fullname, LocalConst { ty }));
 
-                            let mut target = mk_const(fullname, vec![], vec![]);
+                            let mut target = mk_local_const(level);
                             target = target.apply([mk_local(this.id)]);
                             subst.push((Id::from_name(field_name), target));
                         }
@@ -808,7 +803,12 @@ impl<'a> Elaborator<'a> {
                             };
 
                             let fullname = structure_name.extend(field_name.as_str());
-                            let mut rhs = mk_const(fullname, vec![], vec![]);
+                            let level = self.tt_local_env.local_consts.len()
+                                + local_consts
+                                    .iter()
+                                    .position(|(local_const_name, _)| *local_const_name == fullname)
+                                    .expect("const field level should be available");
+                            let mut rhs = mk_local_const(level);
                             rhs = rhs.apply([mk_local(this.id)]);
 
                             let mut char =
@@ -1116,6 +1116,7 @@ impl<'a> Elaborator<'a> {
             Term::Abs(m) => self.occur_check(&m.body, hole),
             Term::App(m) => self.occur_check(&m.fun, hole) && self.occur_check(&m.arg, hole),
             Term::Local(_) => true,
+            Term::LocalConst(_) => true,
             Term::Const(_) => true,
             Term::Hole(inner) => {
                 if inner.id == hole {
@@ -1805,7 +1806,28 @@ impl<'a> Elaborator<'a> {
             self.add_flex_constraint(local_env, left, right, error);
             return None;
         }
-        // then each of the heads can be a local or a const.
+        // then each of the heads can be a local, local const, or a const.
+        if let (Term::LocalConst(left_head), Term::LocalConst(right_head)) =
+            (left.head(), right.head())
+        {
+            if left_head.level != right_head.level {
+                return Some(error);
+            }
+            let left_args = left.args();
+            let right_args = right.args();
+            if left_args.len() != right_args.len() {
+                return Some(error);
+            }
+            for (left_arg, right_arg) in left_args.into_iter().zip(right_args.into_iter()).rev() {
+                self.push_term_constraint(
+                    local_env.clone(),
+                    left_arg.clone(),
+                    right_arg.clone(),
+                    error.clone(),
+                );
+            }
+            return None;
+        }
         if let (Term::Local(left_head), Term::Local(right_head)) = (left.head(), right.head()) {
             if left_head.id != right_head.id {
                 return Some(error);
@@ -1824,6 +1846,40 @@ impl<'a> Elaborator<'a> {
                 );
             }
             return None;
+        }
+        if left.head().is_local() && right.head().is_local_const()
+            || left.head().is_local_const() && right.head().is_local()
+        {
+            return Some(error);
+        }
+        if right.head().is_local_const() {
+            mem::swap(&mut left, &mut right);
+        }
+        if let (Term::LocalConst(left_head), Term::Const(right_head)) = (left.head(), right.head())
+        {
+            let Some((left_name, _)) = local_env.local_consts.get(left_head.level) else {
+                return Some(error);
+            };
+            if *left_name == right_head.name {
+                if !right_head.ty_args.is_empty() || !right_head.instances.is_empty() {
+                    return Some(error);
+                }
+                let left_args = left.args();
+                let right_args = right.args();
+                if left_args.len() != right_args.len() {
+                    return Some(error);
+                }
+                for (left_arg, right_arg) in left_args.into_iter().zip(right_args.into_iter()).rev()
+                {
+                    self.push_term_constraint(
+                        local_env.clone(),
+                        left_arg.clone(),
+                        right_arg.clone(),
+                        error.clone(),
+                    );
+                }
+                return None;
+            }
         }
         if right.head().is_local() {
             mem::swap(&mut left, &mut right);
@@ -2325,19 +2381,9 @@ impl<'a> Elaborator<'a> {
         //   M ↦ λ z[1] .. z[p], C (Y[1] z[1] .. z[p]) .. (Y[q] z[1] .. z[p])
         //
         // when @ = C.
-        if let Term::Const(right_head_inner) = right_head {
-            // τ(C)
-            let right_head_ty = {
-                let ty = 'exit: {
-                    for (name, local_const) in c.local_env.local_consts.iter().rev() {
-                        if name == &right_head_inner.name {
-                            debug_assert!(
-                                right_head_inner.ty_args.is_empty(),
-                                "local constant expects no type arguments"
-                            );
-                            break 'exit local_const.ty.clone();
-                        }
-                    }
+        let imitation_head_ty = match right_head {
+            Term::Const(right_head_inner) => {
+                let ty = {
                     let Const {
                         local_types,
                         local_classes: _,
@@ -2354,9 +2400,16 @@ impl<'a> Elaborator<'a> {
                     }
                     ty.subst(&subst)
                 };
-                self.fully_inst_type(&ty) // TODO: avoid full instantiation
-            };
-
+                Some(self.fully_inst_type(&ty))
+            }
+            Term::LocalConst(inner) => c
+                .local_env
+                .local_consts
+                .get(inner.level)
+                .map(|(_, local_const)| self.fully_inst_type(&local_const.ty)),
+            Term::Var(_) | Term::Abs(_) | Term::App(_) | Term::Local(_) | Term::Hole(_) => None,
+        };
+        if let Some(right_head_ty) = imitation_head_ty {
             // τ(u[1]) ⋯ τ(u[q])
             let new_arg_tys = right_head_ty
                 .components()

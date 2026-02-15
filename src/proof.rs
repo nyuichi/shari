@@ -7,7 +7,7 @@ use crate::{
     lex::Span,
     tt::{
         self, Class, Id, Instance, Local, LocalConst, Name, QualifiedName, Term, Type, mk_abs,
-        mk_const, mk_local, mk_type_const, mk_type_local,
+        mk_const, mk_local, mk_local_const, mk_type_const, mk_type_local,
     },
 };
 
@@ -1174,9 +1174,10 @@ impl Env<'_> {
                         }) => {
                             let fullname = structure_name.extend(field_name.as_str());
                             let ty = ty.arrow([this_ty.clone()]);
-                            local_consts.push((fullname.clone(), LocalConst { ty }));
+                            let level = tt_local_env.local_consts.len() + local_consts.len();
+                            local_consts.push((fullname, LocalConst { ty }));
 
-                            let mut target = mk_const(fullname, vec![], vec![]);
+                            let mut target = mk_local_const(level);
                             target = target.apply([mk_local(this.id)]);
                             subst.push((Id::from_name(field_name), target));
                         }
@@ -1210,7 +1211,12 @@ impl Env<'_> {
                             };
 
                             let fullname = structure_name.extend(field_name.as_str());
-                            let mut rhs = mk_const(fullname, vec![], vec![]);
+                            let level = tt_local_env.local_consts.len()
+                                + local_consts
+                                    .iter()
+                                    .position(|(local_const_name, _)| *local_const_name == fullname)
+                                    .expect("const field level should be available");
+                            let mut rhs = mk_local_const(level);
                             rhs = rhs.apply([mk_local(this.id)]);
 
                             let mut char =

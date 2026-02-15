@@ -62,15 +62,21 @@ struct Printer<'a> {
     print_type_args: bool,
     print_binder_types: bool,
     local_type_names: &'a HashMap<Id, String>,
+    local_const_names: &'a [QualifiedName],
 }
 
 impl<'a> Printer<'a> {
-    fn new(op_table: &'a OpTable, local_type_names: &'a HashMap<Id, String>) -> Self {
+    fn new(
+        op_table: &'a OpTable,
+        local_type_names: &'a HashMap<Id, String>,
+        local_const_names: &'a [QualifiedName],
+    ) -> Self {
         Printer {
             op_table,
             print_type_args: false,
             print_binder_types: false,
             local_type_names,
+            local_const_names,
         }
     }
 
@@ -314,6 +320,13 @@ impl<'a> Printer<'a> {
             Term::Local(inner) => {
                 write!(f, "{}", inner.id)
             }
+            Term::LocalConst(inner) => {
+                if let Some(name) = self.local_const_names.get(inner.level) {
+                    write!(f, "{}", name.name())
+                } else {
+                    write!(f, "#LocalConst({})", inner.level)
+                }
+            }
             Term::Hole(inner) => {
                 write!(f, "?{}", inner.id)
             }
@@ -429,14 +442,21 @@ impl<'a> Printer<'a> {
 pub struct PrettyInner<'a, T> {
     op_table: &'a OpTable,
     local_type_names: &'a HashMap<Id, String>,
+    local_const_names: &'a [QualifiedName],
     data: T,
 }
 
 impl<'a, T> PrettyInner<'a, T> {
-    pub fn new(op_table: &'a OpTable, local_type_names: &'a HashMap<Id, String>, data: T) -> Self {
+    pub fn new(
+        op_table: &'a OpTable,
+        local_type_names: &'a HashMap<Id, String>,
+        local_const_names: &'a [QualifiedName],
+        data: T,
+    ) -> Self {
         PrettyInner {
             op_table,
             local_type_names,
+            local_const_names,
             data,
         }
     }
@@ -444,37 +464,43 @@ impl<'a, T> PrettyInner<'a, T> {
 
 impl Display for PrettyInner<'_, &Type> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        Printer::new(self.op_table, self.local_type_names).fmt_type(f, self.data)
+        Printer::new(self.op_table, self.local_type_names, self.local_const_names)
+            .fmt_type(f, self.data)
     }
 }
 
 impl Display for PrettyInner<'_, Type> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        Printer::new(self.op_table, self.local_type_names).fmt_type(f, &self.data)
+        Printer::new(self.op_table, self.local_type_names, self.local_const_names)
+            .fmt_type(f, &self.data)
     }
 }
 
 impl Display for PrettyInner<'_, &Term> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        Printer::new(self.op_table, self.local_type_names).fmt_term(self.data, f)
+        Printer::new(self.op_table, self.local_type_names, self.local_const_names)
+            .fmt_term(self.data, f)
     }
 }
 
 impl Display for PrettyInner<'_, Term> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        Printer::new(self.op_table, self.local_type_names).fmt_term(&self.data, f)
+        Printer::new(self.op_table, self.local_type_names, self.local_const_names)
+            .fmt_term(&self.data, f)
     }
 }
 
 impl Display for PrettyInner<'_, &Class> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        Printer::new(self.op_table, self.local_type_names).fmt_class(f, self.data)
+        Printer::new(self.op_table, self.local_type_names, self.local_const_names)
+            .fmt_class(f, self.data)
     }
 }
 
 impl Display for PrettyInner<'_, Class> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        Printer::new(self.op_table, self.local_type_names).fmt_class(f, &self.data)
+        Printer::new(self.op_table, self.local_type_names, self.local_const_names)
+            .fmt_class(f, &self.data)
     }
 }
 
@@ -561,13 +587,13 @@ impl Display for Pretty<'_, (&QualifiedName, &Const)> {
             write!(
                 f,
                 " [{}]",
-                PrettyInner::new(self.op_table, &local_type_names, local_class)
+                PrettyInner::new(self.op_table, &local_type_names, &[], local_class)
             )?;
         }
         write!(
             f,
             " : {}",
-            PrettyInner::new(self.op_table, &local_type_names, ty)
+            PrettyInner::new(self.op_table, &local_type_names, &[], ty)
         )?;
         Ok(())
     }
@@ -601,13 +627,13 @@ impl Display for Pretty<'_, (&QualifiedName, &Axiom)> {
             write!(
                 f,
                 " [{}]",
-                PrettyInner::new(self.op_table, &local_type_names, local_class)
+                PrettyInner::new(self.op_table, &local_type_names, &[], local_class)
             )?;
         }
         write!(
             f,
             " : {}",
-            PrettyInner::new(self.op_table, &local_type_names, target)
+            PrettyInner::new(self.op_table, &local_type_names, &[], target)
         )?;
         Ok(())
     }
