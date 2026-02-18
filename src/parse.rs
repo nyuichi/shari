@@ -745,8 +745,8 @@ impl<'a> Parser<'a> {
                 }) {
                     return Ok(mk_local(*stash));
                 }
-                if self.get_local_const(&name).is_some() {
-                    return Ok(mk_local_const(name));
+                if let Some(local_const) = self.get_local_const(&name) {
+                    return Ok(mk_local_const(local_const.id));
                 }
                 let name = self.resolve(name);
                 if let Some(stash) = self.self_ref.as_ref().and_then(|(self_name, stash)| {
@@ -1009,9 +1009,10 @@ impl<'a> Parser<'a> {
                     ty,
                 }) => {
                     let fullname = structure_name.extend(field_name.as_str());
+                    let id = Id::from_qualified_name(&fullname);
                     let ty = ty.arrow([this_ty.clone()]);
-                    local_consts.push((fullname.clone(), LocalConst { ty }));
-                    let mut target = mk_local_const(fullname);
+                    local_consts.push((fullname, LocalConst { id, ty }));
+                    let mut target = mk_local_const(id);
                     target = target.apply([mk_local(this.id)]);
                     subst.push((Id::from_name(field_name), target));
                 }
@@ -1052,7 +1053,8 @@ impl<'a> Parser<'a> {
                     };
 
                     let fullname = structure_name.extend(field_name.as_str());
-                    let mut rhs = mk_local_const(fullname);
+                    let id = Id::from_qualified_name(&fullname);
+                    let mut rhs = mk_local_const(id);
                     rhs = rhs.apply([mk_local(this.id)]);
 
                     let mut char =
@@ -1134,9 +1136,11 @@ impl<'a> Parser<'a> {
         self.expect_symbol(",")?;
 
         let local_const_len = self.local_consts.len();
+        let id = Id::from_qualified_name(&name);
         self.local_consts.push((
             name.clone(),
             LocalConst {
+                id,
                 ty: ty.clone().unwrap_or_else(mk_fresh_type_hole),
             },
         ));
@@ -2850,7 +2854,7 @@ mod tests {
         let Term::LocalConst(local_const) = local_axiom else {
             panic!("expected local const term in let body");
         };
-        assert_eq!(local_const.name, qualified("c"));
+        assert_eq!(local_const.id, Id::from_qualified_name(&qualified("c")));
     }
 
     #[test]
@@ -2898,7 +2902,10 @@ mod tests {
         let Term::LocalConst(local_const) = local_axiom else {
             panic!("expected local const term in let body");
         };
-        assert_eq!(local_const.name, qualified("Foo.bar"));
+        assert_eq!(
+            local_const.id,
+            Id::from_qualified_name(&qualified("Foo.bar"))
+        );
     }
 
     #[test]
@@ -2940,7 +2947,7 @@ mod tests {
         let Term::LocalConst(local_const) = local_axiom else {
             panic!("expected local const term in let body");
         };
-        assert_eq!(local_const.name, qualified("c"));
+        assert_eq!(local_const.id, Id::from_qualified_name(&qualified("c")));
     }
 
     #[test]
@@ -2961,7 +2968,7 @@ mod tests {
         let Term::LocalConst(local_const) = local_axiom else {
             panic!("expected local const term");
         };
-        assert_eq!(local_const.name, qualified("foo.f"));
+        assert_eq!(local_const.id, Id::from_qualified_name(&qualified("foo.f")));
     }
 
     #[test]
@@ -2989,7 +2996,7 @@ mod tests {
         let Term::LocalConst(local_const) = local_axiom else {
             panic!("expected local const term");
         };
-        assert_eq!(local_const.name, qualified("foo.f"));
+        assert_eq!(local_const.id, Id::from_qualified_name(&qualified("foo.f")));
     }
 
     #[test]
@@ -3022,6 +3029,6 @@ mod tests {
         let Term::LocalConst(local_const) = local_axiom else {
             panic!("expected local const term");
         };
-        assert_eq!(local_const.name, qualified("foo.f"));
+        assert_eq!(local_const.id, Id::from_qualified_name(&qualified("foo.f")));
     }
 }

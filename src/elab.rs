@@ -334,18 +334,12 @@ impl<'a> Elaborator<'a> {
                 Ok(ret_ty)
             }
             Term::LocalConst(inner) => {
-                let Some(local_const) =
-                    self.tt_local_env
-                        .local_consts
-                        .iter()
-                        .rev()
-                        .find_map(|(name, local_const)| {
-                            if *name == inner.name {
-                                Some(local_const)
-                            } else {
-                                None
-                            }
-                        })
+                let Some(local_const) = self
+                    .tt_local_env
+                    .local_consts
+                    .iter()
+                    .rev()
+                    .find(|local_const| local_const.id == inner.id)
                 else {
                     bail!("unknown local constant");
                 };
@@ -720,16 +714,15 @@ impl<'a> Elaborator<'a> {
 
                 let local_const_len = self.tt_local_env.local_consts.len();
                 let local_delta_len = self.tt_local_env.local_deltas.len();
+                let id = Id::from_qualified_name(name);
                 self.tt_local_env
                     .local_consts
-                    .push((name.clone(), LocalConst { ty: binder_ty }));
-                self.tt_local_env.local_deltas.push((
-                    name.clone(),
-                    LocalDelta {
-                        target: value.clone(),
-                        height: self.proof_env.tt_env.height(self.tt_local_env, value),
-                    },
-                ));
+                    .push(LocalConst { id, ty: binder_ty });
+                self.tt_local_env.local_deltas.push(LocalDelta {
+                    id,
+                    target: value.clone(),
+                    height: self.proof_env.tt_env.height(self.tt_local_env, value),
+                });
                 let result = self.visit_expr(body);
                 self.tt_local_env.local_deltas.truncate(local_delta_len);
                 self.tt_local_env.local_consts.truncate(local_const_len);
@@ -811,7 +804,7 @@ impl<'a> Elaborator<'a> {
                     id: Id::fresh_with_name(Name::from_str("this")),
                     ty: this_ty.clone(),
                 };
-                let mut local_consts: Vec<(QualifiedName, LocalConst)> = vec![];
+                let mut local_consts: Vec<LocalConst> = vec![];
                 let mut local_axioms: Vec<(QualifiedName, LocalAxiom)> = vec![];
                 let mut subst = vec![];
 
@@ -822,10 +815,11 @@ impl<'a> Elaborator<'a> {
                             ty,
                         }) => {
                             let fullname = structure_name.extend(field_name.as_str());
+                            let id = Id::from_qualified_name(&fullname);
                             let ty = ty.arrow([this_ty.clone()]);
-                            local_consts.push((fullname.clone(), LocalConst { ty }));
+                            local_consts.push(LocalConst { id, ty });
 
-                            let mut target = mk_local_const(fullname);
+                            let mut target = mk_local_const(id);
                             target = target.apply([mk_local(this.id)]);
                             subst.push((Id::from_name(field_name), target));
                         }
@@ -859,7 +853,8 @@ impl<'a> Elaborator<'a> {
                             };
 
                             let fullname = structure_name.extend(field_name.as_str());
-                            let mut rhs = mk_local_const(fullname);
+                            let id = Id::from_qualified_name(&fullname);
+                            let mut rhs = mk_local_const(id);
                             rhs = rhs.apply([mk_local(this.id)]);
 
                             let mut char =
@@ -1875,7 +1870,7 @@ impl<'a> Elaborator<'a> {
         if let (Term::LocalConst(left_head), Term::LocalConst(right_head)) =
             (left.head(), right.head())
         {
-            if left_head.name != right_head.name {
+            if left_head.id != right_head.id {
                 return Some(error);
             }
             let left_args = left.args();
@@ -1919,27 +1914,6 @@ impl<'a> Elaborator<'a> {
         }
         if right.head().is_local_const() {
             mem::swap(&mut left, &mut right);
-        }
-        if let (Term::LocalConst(left_head), Term::Const(right_head)) = (left.head(), right.head())
-            && left_head.name == right_head.name
-        {
-            if !right_head.ty_args.is_empty() || !right_head.instances.is_empty() {
-                return Some(error);
-            }
-            let left_args = left.args();
-            let right_args = right.args();
-            if left_args.len() != right_args.len() {
-                return Some(error);
-            }
-            for (left_arg, right_arg) in left_args.into_iter().zip(right_args.into_iter()).rev() {
-                self.push_term_constraint(
-                    local_env.clone(),
-                    left_arg.clone(),
-                    right_arg.clone(),
-                    error.clone(),
-                );
-            }
-            return None;
         }
         if left.head().is_local_const() {
             if let Some(new_left) = self.proof_env.tt_env.unfold_head(&local_env, &left) {
@@ -2470,19 +2444,13 @@ impl<'a> Elaborator<'a> {
                 };
                 Some(self.fully_inst_type(&ty))
             }
-            Term::LocalConst(inner) => {
-                c.local_env
-                    .local_consts
-                    .iter()
-                    .rev()
-                    .find_map(|(name, local_const)| {
-                        if *name == inner.name {
-                            Some(self.fully_inst_type(&local_const.ty))
-                        } else {
-                            None
-                        }
-                    })
-            }
+            Term::LocalConst(inner) => c
+                .local_env
+                .local_consts
+                .iter()
+                .rev()
+                .find(|local_const| local_const.id == inner.id)
+                .map(|local_const| self.fully_inst_type(&local_const.ty)),
             Term::Var(_) | Term::Abs(_) | Term::App(_) | Term::Local(_) | Term::Hole(_) => None,
         };
         if let Some(right_head_ty) = imitation_head_ty {

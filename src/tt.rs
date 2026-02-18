@@ -30,8 +30,12 @@ static QUALIFIED_NAME_TABLE: LazyLock<
 > = LazyLock::new(Default::default);
 
 static ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
-static ID_TABLE: LazyLock<Mutex<HashMap<Name, Id>>> = LazyLock::new(Default::default);
-static ID_REV_TABLE: LazyLock<Mutex<HashMap<Id, Name>>> = LazyLock::new(Default::default);
+static ID_NAME_TABLE: LazyLock<Mutex<HashMap<Name, Id>>> = LazyLock::new(Default::default);
+static ID_QNAME_TABLE: LazyLock<Mutex<HashMap<QualifiedName, Id>>> =
+    LazyLock::new(Default::default);
+static ID_NAME_REV_TABLE: LazyLock<Mutex<HashMap<Id, Name>>> = LazyLock::new(Default::default);
+static ID_QNAME_REV_TABLE: LazyLock<Mutex<HashMap<Id, QualifiedName>>> =
+    LazyLock::new(Default::default);
 
 impl Display for Name {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -148,14 +152,19 @@ impl Hash for QualifiedName {
 
 impl Display for Id {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Some(name) = self.name() else {
-            return write!(f, "{}", self.0);
-        };
-        if self.is_generated() {
-            write!(f, "{}{}", name, self.0)
-        } else {
-            write!(f, "{}", name)
+        if let Some(name) = self.name() {
+            if self.is_generated() {
+                return write!(f, "{}{}", name, self.0);
+            }
+            return write!(f, "{}", name);
         }
+        if let Some(name) = self.qualified_name() {
+            if self.is_generated() {
+                return write!(f, "{}{}", name, self.0);
+            }
+            return write!(f, "{}", name);
+        }
+        write!(f, "{}", self.0)
     }
 }
 
@@ -167,12 +176,12 @@ impl Id {
 
     pub fn fresh_with_name(name: Name) -> Self {
         let new_id = Id::fresh();
-        ID_REV_TABLE.lock().unwrap().insert(new_id, name);
+        ID_NAME_REV_TABLE.lock().unwrap().insert(new_id, name);
         new_id
     }
 
     pub fn from_name(name: &Name) -> Id {
-        let mut id_table = ID_TABLE.lock().unwrap();
+        let mut id_table = ID_NAME_TABLE.lock().unwrap();
         if let Some(&id) = id_table.get(name) {
             return id;
         }
@@ -180,24 +189,52 @@ impl Id {
         let id = Id::fresh();
         id_table.insert(name.clone(), id);
         drop(id_table);
-        // This can be put here outside the critical section of ID_TABLE
+        // This can be put here outside the critical section of ID_NAME_TABLE
         // because no one but this function knows of the value of `id`.
-        ID_REV_TABLE.lock().unwrap().insert(id, name.clone());
+        ID_NAME_REV_TABLE.lock().unwrap().insert(id, name.clone());
+        id
+    }
+
+    pub fn from_qualified_name(qualified_name: &QualifiedName) -> Id {
+        let mut id_table = ID_QNAME_TABLE.lock().unwrap();
+        if let Some(&id) = id_table.get(qualified_name) {
+            return id;
+        }
+
+        let id = Id::fresh();
+        id_table.insert(qualified_name.clone(), id);
+        drop(id_table);
+        // This can be put here outside the critical section of ID_QNAME_TABLE
+        // because no one but this function knows of the value of `id`.
+        ID_QNAME_REV_TABLE
+            .lock()
+            .unwrap()
+            .insert(id, qualified_name.clone());
         id
     }
 
     pub fn name(&self) -> Option<Name> {
-        ID_REV_TABLE.lock().unwrap().get(self).cloned()
+        ID_NAME_REV_TABLE.lock().unwrap().get(self).cloned()
+    }
+
+    fn qualified_name(&self) -> Option<QualifiedName> {
+        ID_QNAME_REV_TABLE.lock().unwrap().get(self).cloned()
     }
 
     pub fn is_generated(&self) -> bool {
-        let Some(name) = self.name() else {
-            return true;
-        };
-        let Some(&id) = ID_TABLE.lock().unwrap().get(&name) else {
-            return true;
-        };
-        id != *self
+        if let Some(name) = self.name() {
+            let Some(&id) = ID_NAME_TABLE.lock().unwrap().get(&name) else {
+                return true;
+            };
+            return id != *self;
+        }
+        if let Some(name) = self.qualified_name() {
+            let Some(&id) = ID_QNAME_TABLE.lock().unwrap().get(&name) else {
+                return true;
+            };
+            return id != *self;
+        }
+        true
     }
 }
 
@@ -1042,7 +1079,7 @@ pub struct TermLocal {
 #[derive(Clone, Debug)]
 pub struct TermLocalConst {
     pub metadata: TermMetadata,
-    pub name: QualifiedName,
+    pub id: Id,
 }
 
 #[derive(Clone, Debug)]
@@ -1118,7 +1155,7 @@ impl Display for Term {
                     Ok(())
                 }
                 Term::Local(inner) => write!(f, "${}", inner.id),
-                Term::LocalConst(inner) => write!(f, "#LocalConst({})", inner.name),
+                Term::LocalConst(inner) => write!(f, "#LocalConst({})", inner.id),
                 Term::Const(inner) => {
                     write!(f, "{}", inner.name)?;
                     if !inner.ty_args.is_empty() {
@@ -1213,7 +1250,7 @@ pub fn mk_local(id: Id) -> Term {
     Term::Local(Arc::new(TermLocal { metadata, id }))
 }
 
-pub fn mk_local_const(name: QualifiedName) -> Term {
+pub fn mk_local_const(id: Id) -> Term {
     let metadata = TermMetadata {
         span: None,
         is_closed: true,
@@ -1221,7 +1258,7 @@ pub fn mk_local_const(name: QualifiedName) -> Term {
         has_const: false,
         has_hole: false,
     };
-    Term::LocalConst(Arc::new(TermLocalConst { metadata, name }))
+    Term::LocalConst(Arc::new(TermLocalConst { metadata, id }))
 }
 
 pub fn mk_fresh_hole() -> Term {
@@ -1833,7 +1870,7 @@ impl Term {
                 inner1.fun.alpha_eq(&inner2.fun) && inner1.arg.alpha_eq(&inner2.arg)
             }
             (Term::Local(name1), Term::Local(name2)) => name1.id == name2.id,
-            (Term::LocalConst(inner1), Term::LocalConst(inner2)) => inner1.name == inner2.name,
+            (Term::LocalConst(inner1), Term::LocalConst(inner2)) => inner1.id == inner2.id,
             (Term::Const(inner1), Term::Const(inner2)) => inner1.alpha_eq(inner2),
             (Term::Hole(name1), Term::Hole(name2)) => name1.id == name2.id,
             _ => false,
@@ -1848,7 +1885,7 @@ impl Term {
                 inner1.fun.maybe_alpha_eq(&inner2.fun) && inner1.arg.maybe_alpha_eq(&inner2.arg)
             }
             (Term::Local(name1), Term::Local(name2)) => name1.id == name2.id,
-            (Term::LocalConst(inner1), Term::LocalConst(inner2)) => inner1.name == inner2.name,
+            (Term::LocalConst(inner1), Term::LocalConst(inner2)) => inner1.id == inner2.id,
             (Term::Const(inner1), Term::Const(inner2)) => inner1.name == inner2.name,
             (Term::Hole(name1), Term::Hole(name2)) => name1.id == name2.id,
             _ => false,
@@ -1914,8 +1951,8 @@ impl Term {
 pub struct LocalEnv {
     pub local_types: Vec<Id>,
     pub local_classes: Vec<Class>,
-    pub local_consts: Vec<(QualifiedName, LocalConst)>,
-    pub local_deltas: Vec<(QualifiedName, LocalDelta)>,
+    pub local_consts: Vec<LocalConst>,
+    pub local_deltas: Vec<LocalDelta>,
     pub locals: Vec<Local>,
 }
 
@@ -1930,30 +1967,15 @@ impl LocalEnv {
         })
     }
 
-    pub fn get_local_const(&self, name: &QualifiedName) -> Option<&LocalConst> {
+    fn get_local_const(&self, id: Id) -> Option<&LocalConst> {
         self.local_consts
             .iter()
             .rev()
-            .find_map(|(local_const_name, local_const)| {
-                if local_const_name == name {
-                    Some(local_const)
-                } else {
-                    None
-                }
-            })
+            .find(|local_const| local_const.id == id)
     }
 
-    pub fn get_local_delta(&self, name: &QualifiedName) -> Option<&LocalDelta> {
-        self.local_deltas
-            .iter()
-            .rev()
-            .find_map(|(delta_name, delta)| {
-                if delta_name == name {
-                    Some(delta)
-                } else {
-                    None
-                }
-            })
+    pub fn get_local_delta(&self, id: Id) -> Option<&LocalDelta> {
+        self.local_deltas.iter().rev().find(|delta| delta.id == id)
     }
 }
 
@@ -1961,11 +1983,13 @@ impl LocalEnv {
 pub struct LocalConst {
     // TODO: The Local/LocalConst split turned out to add complexity.
     // Revisit this and migrate LocalConst toward a unified Local representation.
+    pub id: Id,
     pub ty: Type,
 }
 
 #[derive(Debug, Clone)]
 pub struct LocalDelta {
+    pub id: Id,
     pub target: Term,
     pub height: usize,
 }
@@ -2193,8 +2217,8 @@ impl Env<'_> {
                 panic!("unbound local term: {:?}", inner.id);
             }
             Term::LocalConst(inner) => {
-                let Some(local_const) = local_env.get_local_const(&inner.name) else {
-                    panic!("unbound local constant: {}", inner.name);
+                let Some(local_const) = local_env.get_local_const(inner.id) else {
+                    panic!("unbound local constant: {}", inner.id);
                 };
                 local_const.ty.clone()
             }
@@ -2329,7 +2353,7 @@ impl Env<'_> {
     fn local_delta_reduce(&self, local_env: &LocalEnv, m: &Term) -> Option<Term> {
         match m {
             Term::LocalConst(inner) => local_env
-                .get_local_delta(&inner.name)
+                .get_local_delta(inner.id)
                 .map(|delta| delta.target.clone()),
             _ => None,
         }
@@ -2343,9 +2367,9 @@ impl Env<'_> {
         })
     }
 
-    pub fn local_delta_height(&self, local_env: &LocalEnv, name: &QualifiedName) -> usize {
+    pub fn local_delta_height(&self, local_env: &LocalEnv, id: Id) -> usize {
         local_env
-            .get_local_delta(name)
+            .get_local_delta(id)
             .map_or(0, |delta| delta.height + 1)
     }
 
@@ -2365,7 +2389,7 @@ impl Env<'_> {
                 self.height(local_env, &m.arg),
             ),
             Term::Local(_) => 0,
-            Term::LocalConst(inner) => self.local_delta_height(local_env, &inner.name),
+            Term::LocalConst(inner) => self.local_delta_height(local_env, inner.id),
             Term::Const(inner) => self.delta_height(&inner.name),
             Term::Hole(_) => 0,
         }
@@ -2483,7 +2507,7 @@ impl Env<'_> {
             let head1 = m1.head();
             let head2 = m2.head();
             if let (Term::LocalConst(head1_inner), Term::LocalConst(head2_inner)) = (head1, head2) {
-                if head1_inner.name != head2_inner.name {
+                if head1_inner.id != head2_inner.id {
                     return false;
                 }
                 let args1 = m1.args();
@@ -2575,13 +2599,13 @@ impl Env<'_> {
             }
 
             let height1 = match head1 {
-                Term::LocalConst(inner) => self.local_delta_height(local_env, &inner.name),
+                Term::LocalConst(inner) => self.local_delta_height(local_env, inner.id),
                 Term::Const(inner) => self.delta_height(&inner.name),
                 Term::Local(_) => 0,
                 _ => unreachable!(),
             };
             let height2 = match head2 {
-                Term::LocalConst(inner) => self.local_delta_height(local_env, &inner.name),
+                Term::LocalConst(inner) => self.local_delta_height(local_env, inner.id),
                 Term::Const(inner) => self.delta_height(&inner.name),
                 Term::Local(_) => 0,
                 _ => unreachable!(),
@@ -2748,22 +2772,22 @@ mod tests {
     #[test]
     fn unfold_head_uses_local_delta_for_local_const() {
         let c = QualifiedName::from_str("c");
+        let c_id = Id::from_qualified_name(&c);
         let d = QualifiedName::from_str("d");
         let fixture = EnvFixture::new();
         let env = fixture.env();
         let mut local_env = empty_local_env();
-        local_env
-            .local_consts
-            .push((c.clone(), LocalConst { ty: mk_type_prop() }));
-        local_env.local_deltas.push((
-            c,
-            LocalDelta {
-                target: mk_const(d.clone(), vec![], vec![]),
-                height: 0,
-            },
-        ));
+        local_env.local_consts.push(LocalConst {
+            id: c_id,
+            ty: mk_type_prop(),
+        });
+        local_env.local_deltas.push(LocalDelta {
+            id: c_id,
+            target: mk_const(d.clone(), vec![], vec![]),
+            height: 0,
+        });
 
-        let term = mk_local_const(QualifiedName::from_str("c"));
+        let term = mk_local_const(c_id);
         let unfolded = env
             .unfold_head(&local_env, &term)
             .expect("local const should unfold by local delta");
@@ -2786,13 +2810,11 @@ mod tests {
         );
         let env = fixture.env();
         let mut local_env = empty_local_env();
-        local_env.local_deltas.push((
-            c.clone(),
-            LocalDelta {
-                target: mk_const(b.clone(), vec![], vec![]),
-                height: 0,
-            },
-        ));
+        local_env.local_deltas.push(LocalDelta {
+            id: Id::from_qualified_name(&c),
+            target: mk_const(b.clone(), vec![], vec![]),
+            height: 0,
+        });
 
         let term = mk_const(c, vec![], vec![]);
         let unfolded = env
@@ -2804,22 +2826,22 @@ mod tests {
     #[test]
     fn equiv_uses_local_delta() {
         let c = QualifiedName::from_str("c");
+        let c_id = Id::from_qualified_name(&c);
         let d = QualifiedName::from_str("d");
         let fixture = EnvFixture::new();
         let env = fixture.env();
         let mut local_env = empty_local_env();
-        local_env
-            .local_consts
-            .push((c.clone(), LocalConst { ty: mk_type_prop() }));
-        local_env.local_deltas.push((
-            c,
-            LocalDelta {
-                target: mk_const(d.clone(), vec![], vec![]),
-                height: 0,
-            },
-        ));
+        local_env.local_consts.push(LocalConst {
+            id: c_id,
+            ty: mk_type_prop(),
+        });
+        local_env.local_deltas.push(LocalDelta {
+            id: c_id,
+            target: mk_const(d.clone(), vec![], vec![]),
+            height: 0,
+        });
 
-        let left = mk_local_const(QualifiedName::from_str("c"));
+        let left = mk_local_const(c_id);
         let right = mk_const(d, vec![], vec![]);
         assert!(env.equiv(&local_env, &left, &right));
     }
@@ -2854,37 +2876,65 @@ mod tests {
     }
 
     #[test]
-    fn infer_type_local_const_uses_name_lookup() {
+    fn infer_type_local_const_uses_id_lookup() {
         let fixture = EnvFixture::new();
         let env = fixture.env();
+        let name = QualifiedName::from_str("foo.bar");
+        let id = Id::from_qualified_name(&name);
         let mut local_env = LocalEnv {
             local_types: vec![],
             local_classes: vec![],
-            local_consts: vec![(
-                QualifiedName::from_str("foo.bar"),
-                LocalConst { ty: mk_type_prop() },
-            )],
+            local_consts: vec![LocalConst {
+                id,
+                ty: mk_type_prop(),
+            }],
             local_deltas: vec![],
             locals: vec![],
         };
 
-        let term = mk_local_const(QualifiedName::from_str("foo.bar"));
+        let term = mk_local_const(id);
         let inferred = env.infer_type(&mut local_env, &term);
         assert_eq!(inferred, mk_type_prop());
     }
 
     #[test]
-    fn equiv_local_const_compares_names() {
+    fn equiv_local_const_compares_ids() {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let left = mk_local_const(QualifiedName::from_str("a"));
-        let right = mk_local_const(QualifiedName::from_str("a"));
-        let mismatch = mk_local_const(QualifiedName::from_str("b"));
+        let a_id = Id::from_qualified_name(&QualifiedName::from_str("a"));
+        let b_id = Id::from_qualified_name(&QualifiedName::from_str("b"));
+        let left = mk_local_const(a_id);
+        let right = mk_local_const(a_id);
+        let mismatch = mk_local_const(b_id);
 
         let local_env = empty_local_env();
         assert!(env.equiv(&local_env, &left, &right));
         assert!(!env.equiv(&local_env, &left, &mismatch));
+    }
+
+    #[test]
+    fn local_const_and_const_are_not_equiv_without_unfold() {
+        let fixture = EnvFixture::new().with_const(
+            QualifiedName::from_str("c"),
+            Const {
+                local_types: vec![],
+                local_classes: vec![],
+                ty: mk_type_prop(),
+            },
+        );
+        let env = fixture.env();
+        let c = QualifiedName::from_str("c");
+        let c_id = Id::from_qualified_name(&c);
+        let mut local_env = empty_local_env();
+        local_env.local_consts.push(LocalConst {
+            id: c_id,
+            ty: mk_type_prop(),
+        });
+
+        let left = mk_local_const(c_id);
+        let right = mk_const(c, vec![], vec![]);
+        assert!(!env.equiv(&local_env, &left, &right));
     }
 
     #[test]
@@ -2902,12 +2952,10 @@ mod tests {
         let mut local_env = LocalEnv {
             local_types: vec![],
             local_classes: vec![],
-            local_consts: vec![(
-                c.clone(),
-                LocalConst {
-                    ty: mk_type_arrow(mk_type_prop(), mk_type_prop()),
-                },
-            )],
+            local_consts: vec![LocalConst {
+                id: Id::from_qualified_name(&c),
+                ty: mk_type_arrow(mk_type_prop(), mk_type_prop()),
+            }],
             local_deltas: vec![],
             locals: vec![],
         };
@@ -2915,5 +2963,19 @@ mod tests {
         let term = mk_const(c, vec![], vec![]);
         let inferred = env.infer_type(&mut local_env, &term);
         assert_eq!(inferred, mk_type_prop());
+    }
+
+    #[test]
+    fn from_qualified_name_is_canonical() {
+        let name = QualifiedName::from_str("foo.bar");
+        let left = Id::from_qualified_name(&name);
+        let right = Id::from_qualified_name(&name);
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn name_returns_none_for_qualified_name_id() {
+        let id = Id::from_qualified_name(&QualifiedName::from_str("foo.bar"));
+        assert_eq!(id.name(), None);
     }
 }
