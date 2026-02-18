@@ -1,161 +1,106 @@
-# Design: Term Local-Const Migration and Expr `let` Bindings
+# Design: Expr `let` for Terms (Binder Non-`resolve`)
 
 ## Status
-Proposed.
+Implemented design target for proof-expression `let` with local delta conversion.
 
 ## Summary
-This design has two phases.
+Introduce proof-expression term binders:
 
-1. Migrate existing local constants from `Term::Const` representation to a dedicated `Term::LocalConst`.
-2. Introduce expression-level term let-bindings:
-   - `let c := m, e`
-   - `let c : t := m, e`
+- `let c := m, e`
+- `let c : t := m, e`
 
 Where:
-- `m` is a **term** (`Term`), not an expression.
+
+- `m` is a term (`Term`), not a proof expression.
 - `c` may be a qualified name.
-- Let-binding introduces a local constant and a local delta rule `c = m` inside `e`.
+- binder name `c` is preserved as written (non-resolved).
+- RHS is non-recursive (`c` is not in scope while parsing/elaborating `m`).
+- body `e` is checked with both:
+  - a local constant entry (`c`), and
+  - a local delta rule (`c = m`) used by definitional equality.
 
-The immediate priority is **Phase 1** (local const migration of existing code).
+## AST
+`src/proof.rs`
 
-## Goals
-- Make local/global constants representation explicit and robust:
-  - local constants => `Term::LocalConst`
-  - global constants => `Term::Const`
-- Preserve existing behavior while migrating current local-const paths (`let structure` etc.).
-- Prepare a clean foundation for `let c := m, e`.
+- `Expr::LetTerm(Box<ExprLetTerm>)`
+- `ExprLetTerm { metadata, name: QualifiedName, ty: Option<Type>, value: Term, body: Expr }`
+- constructor: `mk_expr_let_term(...)`
 
-## Non-goals
-- No term-level binder syntax like `let x := t in u` inside `term`.
-- No top-level `let` command.
-- No behavior change in class/kappa semantics except local-const interaction needed for correctness.
+Display forms:
 
-## Phase 1: Local-Const Migration (Priority)
+- `let c := m, e`
+- `let c : t := m, e`
 
-### 1) Term layer changes (`src/tt.rs`)
-- Add:
-  - `Term::LocalConst(Arc<TermLocalConst>)`
-  - `TermLocalConst { metadata, id: Id, name: QualifiedName }`
-  - `mk_local_const(id: Id, name: QualifiedName) -> Term`
-- Keep display as the original qualified name (`name`).
+## Parser behavior
+`src/parse.rs`
 
-### 2) Term utility updates (`src/tt.rs`)
-Update all `Term` traversal/matching utilities to handle `LocalConst`:
-- `Display`
-- `metadata`, `with_span`, `ptr_eq`
-- `open`, `close`
-- `replace_local`, `replace_hole`, `replace_type`, `replace_instance`
-- `is_ground`, `is_type_ground`, `is_instance_ground`
-- `alpha_eq`, `maybe_alpha_eq`
-- `whnf`, `head`, `args`, `replace_head`, `replace_args`
-- `contains_type_local`, `contains_local`, `is_pattern`, `is_quasi_pattern`
+- `let` in proof expressions is split into:
+  - `let structure ...` (existing path)
+  - `let-term` (new path)
+- Binder parsing for let-term:
+  - parse as `QualifiedName`
+  - do **not** call `resolve` on binder name
+- Scope discipline:
+  - parse `value` before introducing binder (non-recursive)
+  - push binder into parser local const table only while parsing `body`
 
-### 3) Local environment model (`src/tt.rs`)
-- Extend `LocalEnv` with:
-  - local const table keyed by id/name (for type lookup)
-  - `local_deltas` for local definitional unfolding
-- Existing local const entries currently used by `let structure` migrate to this model.
+### Term name resolution order
+`term_var` is fixed to prioritize local bindings:
 
-### 4) TT environment API replacement (`src/tt.rs`)
-Change existing APIs to accept `local_env` (replace, do not add parallel versions):
+1. term locals / self-reference
+2. local consts (raw name comparison, before `resolve`)
+3. global constant resolution after `resolve`
+
+This guarantees local binder priority over global/use aliases.
+
+## TT local environment and conversion
+`src/tt.rs`
+
+- `LocalEnv` includes:
+  - `local_consts: Vec<(QualifiedName, LocalConst)>`
+  - `local_deltas: Vec<(QualifiedName, LocalDelta)>`
+- `LocalDelta { target: Term, height: usize }`
+
+Definitional-equality API uses local environment:
+
 - `unfold_head(&self, local_env: &LocalEnv, m: &Term) -> Option<Term>`
 - `has_delta(&self, local_env: &LocalEnv, head: &Term) -> bool`
 - `delta_height(&self, local_env: &LocalEnv, head: &Term) -> usize`
 - `equiv(&self, local_env: &LocalEnv, m1: &Term, m2: &Term) -> bool`
 
-Internal helpers (`delta_reduce`, kappa checks, height helpers) are updated accordingly.
+Unfolding order for `Const` head:
 
-### 5) Consumers (`src/elab.rs`, `src/proof.rs`, `src/cmd.rs`)
-- Replace all call sites of the above APIs with local-env-aware calls.
-- Update local constant resolution in elaborator/type checker to treat `Term::LocalConst` as local only.
-- Ensure `change` in proof checker uses local-env-aware `equiv`.
-- Update all `LocalEnv` initializations with new fields.
+1. local delta
+2. global delta
+3. kappa
 
-### 6) Parser mapping (`src/parse.rs`)
-- Existing local constants (currently produced as `Term::Const`) should be emitted as `Term::LocalConst`.
-- This includes current local-const-producing paths such as `let structure`.
+For `LocalConst` head:
 
-### 7) Validation and tests
-Add regression tests to confirm no behavior changes after migration:
-- Existing `let structure` proof successes remain green.
-- Snapshot changes are intentional only.
-- Add focused tests for local/global const disambiguation and shadowing.
+- resolve level -> local const name -> local delta lookup
 
-## Phase 2: Expr Let-Term Syntax
+## Elaborator / proof checker behavior
+`src/elab.rs`, `src/proof.rs`
 
-## Syntax
-Extend expression grammar with:
+For `Expr::LetTerm`:
 
-```text
-expr ::= ...
-      | "let" qname ":=" term "," expr
-      | "let" qname ":" type ":=" term "," expr
-      | "let" "structure" ...
-```
+- If annotation exists:
+  - check annotation is a well-formed type
+  - constrain/check `value : ty`
+- Without annotation:
+  - infer binder type from `value`
+- During body checking only:
+  - push local const `(name, LocalConst { ty })`
+  - push local delta `(name, LocalDelta { target: value, height })`
+- Pop both entries after body
 
-Where `qname` is a qualified name.
+`change` conversion uses local-env-aware `equiv`, so local let delta participates in conversion.
 
-## AST (`src/proof.rs`)
-- Add:
-  - `Expr::LetTerm(Box<ExprLetTerm>)`
-  - `ExprLetTerm { metadata, name: QualifiedName, ty: Option<Type>, value: Term, body: Expr }`
+## Scope and shadowing
+- Binder is local to `body`.
+- Binder shadows globals and alias-resolved names in term positions.
+- Existing `let structure` behavior remains.
 
-## Semantics
-- Scope:
-  - `name` is available only in `body`.
-  - `value` is parsed/elaborated without `name` in scope (non-recursive RHS).
-- Introduce into local environment for `body`:
-  - local constant `name`
-  - local delta `name = value`
-- For typed let:
-  - check `ty` is well-formed type
-  - enforce `value : ty` via elaboration constraints.
-
-## Parser behavior (`src/parse.rs`)
-- `let` branch:
-  - if next keyword is `structure`, keep existing flow.
-  - else parse let-term form.
-- Allow qualified binder names.
-
-## Elaborator / Proof checker behavior
-- Elaborator:
-  - infer/check type of `value`
-  - if `ty` is present, constrain `value` to `ty`
-  - push local const + local delta while visiting `body`
-- Proof checker:
-  - mirror same scope discipline
-  - use local-env-aware `equiv` for conversion checks.
-
-## Risks
-- `Term` variant addition touches many exhaustive matches; missed sites can cause silent behavior drift.
-- Local delta integration in unifier/equiv can accidentally introduce loops; unfolding must detect no-progress cases.
-- Shadowing interactions between local const / global const / class methods need targeted tests.
-
-## Test strategy
-
-### Phase 1 (migration) tests
-- Existing proof success snapshots (especially local-structure tests) remain valid.
-- New unit tests for:
-  - local const type inference
-  - local const shadowing
-  - local vs global const precedence
-
-### Phase 2 (let syntax) tests
-Positive:
-- `let_expr_term_basic.shari`
-- `let_expr_term_typed_basic.shari`
-- `let_expr_term_qualified_name.shari`
-- `let_expr_term_shadowing.shari`
-- `let_expr_term_change_delta.shari`
-
-Negative:
-- `let_expr_term_recursive_rhs.shari` (`let c := c, ...` fails)
-- `let_expr_term_typed_mismatch.shari`
-- `let_expr_term_bad_annotation.shari`
-
-## Documentation updates
-After implementation:
-- Update `docs/SHARI_LANGUAGE_GUIDE.md` with:
-  - `Term::LocalConst`-backed local-const semantics
-  - new expression let syntax and scoping
-- Keep this design doc as the canonical migration + feature design record.
+## Non-goals
+- No term-level `let ... in ...` syntax.
+- No top-level `let` command.
+- No recursive let RHS.

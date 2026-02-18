@@ -1,0 +1,17 @@
+type const Prop : Type
+const imp : Prop → Prop → Prop
+infixr → : 25 := imp
+const p : Prop
+axiom hp : p
+
+lemma let.expr.term.basic : p :=
+  let c := p,
+  change p,
+  change c,
+  @hp
+
+lemma let.expr.term.typed : p :=
+  let c : Prop := p,
+  change p,
+  change c,
+  @hp

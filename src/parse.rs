@@ -9,7 +9,8 @@ use crate::cmd::{
 use crate::proof::{
     Axiom, Expr, LocalStructureAxiom, LocalStructureConst, LocalStructureField, count_forall,
     generalize, guard, mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_assump_by_name,
-    mk_expr_change, mk_expr_const, mk_expr_inst, mk_expr_let_structure, mk_expr_take, mk_type_prop,
+    mk_expr_change, mk_expr_const, mk_expr_inst, mk_expr_let_structure, mk_expr_let_term,
+    mk_expr_take, mk_type_prop,
 };
 use crate::tt::{
     Class, ClassType, Const, Id, Kind, Local, LocalConst, Name, QualifiedName, Term, Type,
@@ -237,13 +238,17 @@ impl<'a> Parser<'a> {
         self.const_table.get(name)
     }
 
-    fn get_local_const_level(&self, name: &QualifiedName) -> Option<usize> {
-        for (level, (local_const_name, _)) in self.local_consts.iter().enumerate().rev() {
-            if local_const_name == name {
-                return Some(level);
-            }
-        }
-        None
+    fn get_local_const(&self, name: &QualifiedName) -> Option<&LocalConst> {
+        self.local_consts
+            .iter()
+            .rev()
+            .find_map(|(local_const_name, local_const)| {
+                if local_const_name == name {
+                    Some(local_const)
+                } else {
+                    None
+                }
+            })
     }
 
     fn get_axiom(&self, name: &QualifiedName) -> Option<&Axiom> {
@@ -391,6 +396,16 @@ impl<'a> Parser<'a> {
             return Self::fail(token, "expected keyword");
         }
         Ok(token)
+    }
+
+    fn keyword_opt(&mut self) -> Option<Token> {
+        if let Some(token) = self.peek_opt()
+            && token.is_keyword()
+        {
+            self.advance();
+            return Some(token);
+        }
+        None
     }
 
     fn name(&mut self) -> Result<Name, ParseError> {
@@ -721,21 +736,31 @@ impl<'a> Parser<'a> {
                 if name.prefix().is_none() && self.has_local(name.name()) {
                     return Ok(mk_local(Id::from_name(name.name())));
                 }
-                self.resolve(name)
+                if let Some(stash) = self.self_ref.as_ref().and_then(|(self_name, stash)| {
+                    if self_name == &name {
+                        Some(stash)
+                    } else {
+                        None
+                    }
+                }) {
+                    return Ok(mk_local(*stash));
+                }
+                if self.get_local_const(&name).is_some() {
+                    return Ok(mk_local_const(name));
+                }
+                let name = self.resolve(name);
+                if let Some(stash) = self.self_ref.as_ref().and_then(|(self_name, stash)| {
+                    if self_name == &name {
+                        Some(stash)
+                    } else {
+                        None
+                    }
+                }) {
+                    return Ok(mk_local(*stash));
+                }
+                name
             }
         };
-        if let Some(stash) = self.self_ref.as_ref().and_then(|(self_name, stash)| {
-            if self_name == &name {
-                Some(stash)
-            } else {
-                None
-            }
-        }) {
-            return Ok(mk_local(*stash));
-        }
-        if let Some(level) = self.get_local_const_level(&name) {
-            return Ok(mk_local_const(level));
-        }
         let Some(const_info) = self.get_const(&name).cloned() else {
             return Self::fail(token, "unknown variable");
         };
@@ -985,9 +1010,8 @@ impl<'a> Parser<'a> {
                 }) => {
                     let fullname = structure_name.extend(field_name.as_str());
                     let ty = ty.arrow([this_ty.clone()]);
-                    let level = self.local_consts.len() + local_consts.len();
-                    local_consts.push((fullname, LocalConst { ty }));
-                    let mut target = mk_local_const(level);
+                    local_consts.push((fullname.clone(), LocalConst { ty }));
+                    let mut target = mk_local_const(fullname);
                     target = target.apply([mk_local(this.id)]);
                     subst.push((Id::from_name(field_name), target));
                 }
@@ -1028,12 +1052,7 @@ impl<'a> Parser<'a> {
                     };
 
                     let fullname = structure_name.extend(field_name.as_str());
-                    let level = self.local_consts.len()
-                        + local_consts
-                            .iter()
-                            .position(|(local_const_name, _)| *local_const_name == fullname)
-                            .expect("const field level should be available");
-                    let mut rhs = mk_local_const(level);
+                    let mut rhs = mk_local_const(fullname);
                     rhs = rhs.apply([mk_local(this.id)]);
 
                     let mut char =
@@ -1100,6 +1119,36 @@ impl<'a> Parser<'a> {
         self.local_consts.truncate(local_const_len);
         self.local_types.pop();
         Ok(mk_expr_let_structure(name, fields, body))
+    }
+
+    fn let_term_expr(&mut self, _let_token: Token) -> Result<Expr, ParseError> {
+        let binder = self.ident()?;
+        let name = self.qualified_name(&binder);
+        let ty = if self.expect_symbol_opt(":").is_some() {
+            Some(self.ty()?)
+        } else {
+            None
+        };
+        self.expect_symbol(":=")?;
+        let value = self.term()?;
+        self.expect_symbol(",")?;
+
+        let local_const_len = self.local_consts.len();
+        self.local_consts.push((
+            name.clone(),
+            LocalConst {
+                ty: ty.clone().unwrap_or_else(mk_fresh_type_hole),
+            },
+        ));
+        let body = match self.expr() {
+            Ok(body) => body,
+            Err(err) => {
+                self.local_consts.truncate(local_const_len);
+                return Err(err);
+            }
+        };
+        self.local_consts.truncate(local_const_len);
+        Ok(mk_expr_let_term(name, ty, value, body))
     }
 
     fn subexpr(&mut self, rbp: usize) -> Result<Expr, ParseError> {
@@ -1296,10 +1345,15 @@ impl<'a> Parser<'a> {
                     body
                 }
                 "let" => {
-                    let keyword = self.keyword()?;
-                    match keyword.as_str() {
-                        "structure" => self.let_structure_expr(keyword)?,
-                        _ => return Self::fail(keyword, "expected structure"),
+                    if let Some(keyword) = self.keyword_opt() {
+                        match keyword.as_str() {
+                            "structure" => self.let_structure_expr(keyword)?,
+                            _ => {
+                                return Self::fail(keyword, "expected structure or binder name");
+                            }
+                        }
+                    } else {
+                        self.let_term_expr(token)?
                     }
                 }
                 _ => {
@@ -2174,7 +2228,7 @@ impl<'a> Parser<'a> {
 mod tests {
     use super::*;
     use crate::lex::{File, Lex};
-    use crate::proof::{ExprApp, ExprAssume, ExprAssumpByName};
+    use crate::proof::{ExprApp, ExprAssume, ExprAssumpByName, ExprLetTerm};
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -2766,6 +2820,130 @@ mod tests {
     }
 
     #[test]
+    fn let_term_expr_without_type_annotation_parses() {
+        let expr = parse_expr("let c := p, assume c as h, h");
+        let Expr::LetTerm(let_term) = expr else {
+            panic!("expected let-term expression");
+        };
+        let ExprLetTerm {
+            metadata: _,
+            name,
+            ty,
+            value,
+            body,
+        } = *let_term;
+        assert_eq!(name, qualified("c"));
+        assert!(ty.is_none());
+        let Term::Const(value_const) = value else {
+            panic!("expected const term in let value");
+        };
+        assert_eq!(value_const.name, qualified("p"));
+        let Expr::Assume(assume) = body else {
+            panic!("expected assume expression in let body");
+        };
+        let ExprAssume {
+            metadata: _,
+            local_axiom,
+            alias: _,
+            expr: _,
+        } = *assume;
+        let Term::LocalConst(local_const) = local_axiom else {
+            panic!("expected local const term in let body");
+        };
+        assert_eq!(local_const.name, qualified("c"));
+    }
+
+    #[test]
+    fn let_term_expr_with_type_annotation_parses() {
+        let expr = parse_expr("let c : Prop := p, assume c as h, h");
+        let Expr::LetTerm(let_term) = expr else {
+            panic!("expected let-term expression");
+        };
+        let ExprLetTerm {
+            metadata: _,
+            name: _,
+            ty,
+            value: _,
+            body: _,
+        } = *let_term;
+        let Some(ty) = ty else {
+            panic!("expected type annotation");
+        };
+        assert_eq!(ty, mk_type_const(qualified("Prop")));
+    }
+
+    #[test]
+    fn let_term_expr_allows_qualified_binder() {
+        let expr = parse_expr("let Foo.bar := p, assume Foo.bar as h, h");
+        let Expr::LetTerm(let_term) = expr else {
+            panic!("expected let-term expression");
+        };
+        let ExprLetTerm {
+            metadata: _,
+            name,
+            ty: _,
+            value: _,
+            body,
+        } = *let_term;
+        assert_eq!(name, qualified("Foo.bar"));
+        let Expr::Assume(assume) = body else {
+            panic!("expected assume expression in let body");
+        };
+        let ExprAssume {
+            metadata: _,
+            local_axiom,
+            alias: _,
+            expr: _,
+        } = *assume;
+        let Term::LocalConst(local_const) = local_axiom else {
+            panic!("expected local const term in let body");
+        };
+        assert_eq!(local_const.name, qualified("Foo.bar"));
+    }
+
+    #[test]
+    fn let_term_binder_name_is_not_resolved_and_shadows_globals() {
+        let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
+        insert_prop_const(&mut consts, "global.target");
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        use_table.insert(Name::from_str("c"), qualified("global.target"));
+        let expr = parse_expr_with_tables(
+            "let c := p, assume c as h, h",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("expression parses");
+        let Expr::LetTerm(let_term) = expr else {
+            panic!("expected let-term expression");
+        };
+        let ExprLetTerm {
+            metadata: _,
+            name,
+            ty: _,
+            value: _,
+            body,
+        } = *let_term;
+        assert_eq!(name, qualified("c"));
+        let Expr::Assume(assume) = body else {
+            panic!("expected assume expression in let body");
+        };
+        let ExprAssume {
+            metadata: _,
+            local_axiom,
+            alias: _,
+            expr: _,
+        } = *assume;
+        let Term::LocalConst(local_const) = local_axiom else {
+            panic!("expected local const term in let body");
+        };
+        assert_eq!(local_const.name, qualified("c"));
+    }
+
+    #[test]
     fn let_structure_body_uses_local_const_term() {
         let expr = parse_expr("let structure foo := { const f : Prop }, assume foo.f as h, h");
         let Expr::LetStructure(let_structure) = expr else {
@@ -2783,7 +2961,7 @@ mod tests {
         let Term::LocalConst(local_const) = local_axiom else {
             panic!("expected local const term");
         };
-        assert_eq!(local_const.level, 0);
+        assert_eq!(local_const.name, qualified("foo.f"));
     }
 
     #[test]
@@ -2811,7 +2989,7 @@ mod tests {
         let Term::LocalConst(local_const) = local_axiom else {
             panic!("expected local const term");
         };
-        assert_eq!(local_const.level, 1);
+        assert_eq!(local_const.name, qualified("foo.f"));
     }
 
     #[test]
@@ -2844,6 +3022,6 @@ mod tests {
         let Term::LocalConst(local_const) = local_axiom else {
             panic!("expected local const term");
         };
-        assert_eq!(local_const.level, 0);
+        assert_eq!(local_const.name, qualified("foo.f"));
     }
 }

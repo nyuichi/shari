@@ -321,10 +321,14 @@ impl<'a> Printer<'a> {
                 write!(f, "{}", inner.id)
             }
             Term::LocalConst(inner) => {
-                if let Some(name) = self.local_const_names.get(inner.level) {
-                    write!(f, "{}", name.name())
+                if self
+                    .local_const_names
+                    .iter()
+                    .any(|name| *name == inner.name)
+                {
+                    write!(f, "{}", inner.name.name())
                 } else {
-                    write!(f, "#LocalConst({})", inner.level)
+                    write!(f, "#LocalConst({})", inner.name)
                 }
             }
             Term::Hole(inner) => {

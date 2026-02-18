@@ -1042,7 +1042,7 @@ pub struct TermLocal {
 #[derive(Clone, Debug)]
 pub struct TermLocalConst {
     pub metadata: TermMetadata,
-    pub level: usize,
+    pub name: QualifiedName,
 }
 
 #[derive(Clone, Debug)]
@@ -1118,7 +1118,7 @@ impl Display for Term {
                     Ok(())
                 }
                 Term::Local(inner) => write!(f, "${}", inner.id),
-                Term::LocalConst(inner) => write!(f, "#LocalConst({})", inner.level),
+                Term::LocalConst(inner) => write!(f, "#LocalConst({})", inner.name),
                 Term::Const(inner) => {
                     write!(f, "{}", inner.name)?;
                     if !inner.ty_args.is_empty() {
@@ -1213,7 +1213,7 @@ pub fn mk_local(id: Id) -> Term {
     Term::Local(Arc::new(TermLocal { metadata, id }))
 }
 
-pub fn mk_local_const(level: usize) -> Term {
+pub fn mk_local_const(name: QualifiedName) -> Term {
     let metadata = TermMetadata {
         span: None,
         is_closed: true,
@@ -1221,7 +1221,7 @@ pub fn mk_local_const(level: usize) -> Term {
         has_const: false,
         has_hole: false,
     };
-    Term::LocalConst(Arc::new(TermLocalConst { metadata, level }))
+    Term::LocalConst(Arc::new(TermLocalConst { metadata, name }))
 }
 
 pub fn mk_fresh_hole() -> Term {
@@ -1833,7 +1833,7 @@ impl Term {
                 inner1.fun.alpha_eq(&inner2.fun) && inner1.arg.alpha_eq(&inner2.arg)
             }
             (Term::Local(name1), Term::Local(name2)) => name1.id == name2.id,
-            (Term::LocalConst(inner1), Term::LocalConst(inner2)) => inner1.level == inner2.level,
+            (Term::LocalConst(inner1), Term::LocalConst(inner2)) => inner1.name == inner2.name,
             (Term::Const(inner1), Term::Const(inner2)) => inner1.alpha_eq(inner2),
             (Term::Hole(name1), Term::Hole(name2)) => name1.id == name2.id,
             _ => false,
@@ -1848,7 +1848,7 @@ impl Term {
                 inner1.fun.maybe_alpha_eq(&inner2.fun) && inner1.arg.maybe_alpha_eq(&inner2.arg)
             }
             (Term::Local(name1), Term::Local(name2)) => name1.id == name2.id,
-            (Term::LocalConst(inner1), Term::LocalConst(inner2)) => inner1.level == inner2.level,
+            (Term::LocalConst(inner1), Term::LocalConst(inner2)) => inner1.name == inner2.name,
             (Term::Const(inner1), Term::Const(inner2)) => inner1.name == inner2.name,
             (Term::Hole(name1), Term::Hole(name2)) => name1.id == name2.id,
             _ => false,
@@ -1915,6 +1915,7 @@ pub struct LocalEnv {
     pub local_types: Vec<Id>,
     pub local_classes: Vec<Class>,
     pub local_consts: Vec<(QualifiedName, LocalConst)>,
+    pub local_deltas: Vec<(QualifiedName, LocalDelta)>,
     pub locals: Vec<Local>,
 }
 
@@ -1929,16 +1930,44 @@ impl LocalEnv {
         })
     }
 
-    pub fn get_local_const(&self, level: usize) -> Option<&LocalConst> {
+    pub fn get_local_const(&self, name: &QualifiedName) -> Option<&LocalConst> {
         self.local_consts
-            .get(level)
-            .map(|(_, local_const)| local_const)
+            .iter()
+            .rev()
+            .find_map(|(local_const_name, local_const)| {
+                if local_const_name == name {
+                    Some(local_const)
+                } else {
+                    None
+                }
+            })
+    }
+
+    pub fn get_local_delta(&self, name: &QualifiedName) -> Option<&LocalDelta> {
+        self.local_deltas
+            .iter()
+            .rev()
+            .find_map(|(delta_name, delta)| {
+                if delta_name == name {
+                    Some(delta)
+                } else {
+                    None
+                }
+            })
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct LocalConst {
+    // TODO: The Local/LocalConst split turned out to add complexity.
+    // Revisit this and migrate LocalConst toward a unified Local representation.
     pub ty: Type,
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalDelta {
+    pub target: Term,
+    pub height: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -2164,8 +2193,8 @@ impl Env<'_> {
                 panic!("unbound local term: {:?}", inner.id);
             }
             Term::LocalConst(inner) => {
-                let Some(local_const) = local_env.get_local_const(inner.level) else {
-                    panic!("unbound local constant level: {}", inner.level);
+                let Some(local_const) = local_env.get_local_const(&inner.name) else {
+                    panic!("unbound local constant: {}", inner.name);
                 };
                 local_const.ty.clone()
             }
@@ -2297,29 +2326,47 @@ impl Env<'_> {
         )
     }
 
-    pub fn unfold_head(&self, m: &Term) -> Option<Term> {
+    fn local_delta_reduce(&self, local_env: &LocalEnv, m: &Term) -> Option<Term> {
+        match m {
+            Term::LocalConst(inner) => local_env
+                .get_local_delta(&inner.name)
+                .map(|delta| delta.target.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn unfold_head(&self, local_env: &LocalEnv, m: &Term) -> Option<Term> {
         m.replace_head(&|head| match head {
+            Term::LocalConst(_) => self.local_delta_reduce(local_env, head),
             Term::Const(_) => self.delta_reduce(head).or_else(|| self.kappa_reduce(head)),
             _ => None,
         })
     }
 
-    pub fn delta_height(&self, name: QualifiedName) -> usize {
-        match self.delta_table.get(&name) {
-            Some(delta) => delta.height + 1,
-            None => 0,
-        }
+    pub fn local_delta_height(&self, local_env: &LocalEnv, name: &QualifiedName) -> usize {
+        local_env
+            .get_local_delta(name)
+            .map_or(0, |delta| delta.height + 1)
+    }
+
+    pub fn delta_height(&self, name: &QualifiedName) -> usize {
+        self.delta_table
+            .get(name)
+            .map_or(0, |delta| delta.height + 1)
     }
 
     // NB: does not take kappa-reductions into account.
-    pub fn height(&self, m: &Term) -> usize {
+    pub fn height(&self, local_env: &LocalEnv, m: &Term) -> usize {
         match m {
             Term::Var(_) => 0,
-            Term::Abs(m) => self.height(&m.body),
-            Term::App(m) => std::cmp::max(self.height(&m.fun), self.height(&m.arg)),
+            Term::Abs(m) => self.height(local_env, &m.body),
+            Term::App(m) => std::cmp::max(
+                self.height(local_env, &m.fun),
+                self.height(local_env, &m.arg),
+            ),
             Term::Local(_) => 0,
-            Term::LocalConst(_) => 0,
-            Term::Const(m) => self.delta_height(m.name.clone()),
+            Term::LocalConst(inner) => self.local_delta_height(local_env, &inner.name),
+            Term::Const(inner) => self.delta_height(&inner.name),
             Term::Hole(_) => 0,
         }
     }
@@ -2371,7 +2418,7 @@ impl Env<'_> {
     /// Γ ⊢ delta_reduce c.{t₁ ⋯ tₙ}[i₁ ⋯ iₘ] : c.{t₁ ⋯ tₙ}[i₁ ⋯ iₘ] ≡ [i₁ ⋯ iₘ][t₁/u₁ ⋯ tₙ/uₙ]m
     ///
     /// Both terms must be ground
-    pub fn equiv(&self, m1: &Term, m2: &Term) -> bool {
+    pub fn equiv(&self, local_env: &LocalEnv, m1: &Term, m2: &Term) -> bool {
         if m1.alpha_eq(m2) {
             return true;
         }
@@ -2422,7 +2469,7 @@ impl Env<'_> {
                 continue;
             }
             if m2.is_abs() {
-                if let Some(new_m1) = self.unfold_head(&m1) {
+                if let Some(new_m1) = self.unfold_head(local_env, &m1) {
                     m1 = new_m1;
                     if m1.alpha_eq(&m2) {
                         return true;
@@ -2436,7 +2483,7 @@ impl Env<'_> {
             let head1 = m1.head();
             let head2 = m2.head();
             if let (Term::LocalConst(head1_inner), Term::LocalConst(head2_inner)) = (head1, head2) {
-                if head1_inner.level != head2_inner.level {
+                if head1_inner.name != head2_inner.name {
                     return false;
                 }
                 let args1 = m1.args();
@@ -2445,7 +2492,7 @@ impl Env<'_> {
                     return false;
                 }
                 for (a1, a2) in std::iter::zip(args1, args2) {
-                    if !self.equiv(a1, a2) {
+                    if !self.equiv(local_env, a1, a2) {
                         return false;
                     }
                 }
@@ -2461,7 +2508,7 @@ impl Env<'_> {
                     return false;
                 }
                 for (a1, a2) in std::iter::zip(args1, args2) {
-                    if !self.equiv(a1, a2) {
+                    if !self.equiv(local_env, a1, a2) {
                         return false;
                     }
                 }
@@ -2472,7 +2519,7 @@ impl Env<'_> {
                 continue;
             }
             if head2.is_local() {
-                if let Some(new_m1) = self.unfold_head(&m1) {
+                if let Some(new_m1) = self.unfold_head(local_env, &m1) {
                     m1 = new_m1;
                     if m1.alpha_eq(&m2) {
                         return true;
@@ -2495,7 +2542,7 @@ impl Env<'_> {
                     if args1.len() == args2.len() {
                         let mut all_equiv = true;
                         for (a1, a2) in std::iter::zip(args1, args2) {
-                            if !self.equiv(a1, a2) {
+                            if !self.equiv(local_env, a1, a2) {
                                 all_equiv = false;
                                 break;
                             }
@@ -2509,14 +2556,14 @@ impl Env<'_> {
                 if self.has_kappa(head1_inner.name.clone())
                     || self.has_kappa(head2_inner.name.clone())
                 {
-                    if let Some(new_m1) = self.unfold_head(&m1) {
+                    if let Some(new_m1) = self.unfold_head(local_env, &m1) {
                         m1 = new_m1;
                         if m1.alpha_eq(&m2) {
                             return true;
                         }
                         continue;
                     }
-                    if let Some(new_m2) = self.unfold_head(&m2) {
+                    if let Some(new_m2) = self.unfold_head(local_env, &m2) {
                         m2 = new_m2;
                         if m1.alpha_eq(&m2) {
                             return true;
@@ -2527,15 +2574,17 @@ impl Env<'_> {
                 }
             }
 
-            let height1 = if let Term::Const(inner) = head1 {
-                self.delta_height(inner.name.clone())
-            } else {
-                0
+            let height1 = match head1 {
+                Term::LocalConst(inner) => self.local_delta_height(local_env, &inner.name),
+                Term::Const(inner) => self.delta_height(&inner.name),
+                Term::Local(_) => 0,
+                _ => unreachable!(),
             };
-            let height2 = if let Term::Const(inner) = head2 {
-                self.delta_height(inner.name.clone())
-            } else {
-                0
+            let height2 = match head2 {
+                Term::LocalConst(inner) => self.local_delta_height(local_env, &inner.name),
+                Term::Const(inner) => self.delta_height(&inner.name),
+                Term::Local(_) => 0,
+                _ => unreachable!(),
             };
             if height1 == 0 && height2 == 0 {
                 return false;
@@ -2543,7 +2592,7 @@ impl Env<'_> {
 
             match height1.cmp(&height2) {
                 std::cmp::Ordering::Less => {
-                    if let Some(new_m2) = self.unfold_head(&m2) {
+                    if let Some(new_m2) = self.unfold_head(local_env, &m2) {
                         m2 = new_m2;
                         if m1.alpha_eq(&m2) {
                             return true;
@@ -2554,12 +2603,12 @@ impl Env<'_> {
                     }
                 }
                 std::cmp::Ordering::Equal => {
-                    if let Some(new_m1) = self.unfold_head(&m1) {
+                    if let Some(new_m1) = self.unfold_head(local_env, &m1) {
                         m1 = new_m1;
                     } else {
                         return false;
                     }
-                    if let Some(new_m2) = self.unfold_head(&m2) {
+                    if let Some(new_m2) = self.unfold_head(local_env, &m2) {
                         m2 = new_m2;
                     } else {
                         return false;
@@ -2570,7 +2619,7 @@ impl Env<'_> {
                     continue;
                 }
                 std::cmp::Ordering::Greater => {
-                    if let Some(new_m1) = self.unfold_head(&m1) {
+                    if let Some(new_m1) = self.unfold_head(local_env, &m1) {
                         m1 = new_m1;
                         if m1.alpha_eq(&m2) {
                             return true;
@@ -2634,8 +2683,18 @@ mod tests {
         }
     }
 
+    fn empty_local_env() -> LocalEnv {
+        LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_consts: vec![],
+            local_deltas: vec![],
+            locals: vec![],
+        }
+    }
+
     fn is_equiv(env: &Env<'_>, left: &Term, right: &Term) -> bool {
-        env.equiv(left, right)
+        env.equiv(&empty_local_env(), left, right)
     }
 
     #[test]
@@ -2687,6 +2746,85 @@ mod tests {
     }
 
     #[test]
+    fn unfold_head_uses_local_delta_for_local_const() {
+        let c = QualifiedName::from_str("c");
+        let d = QualifiedName::from_str("d");
+        let fixture = EnvFixture::new();
+        let env = fixture.env();
+        let mut local_env = empty_local_env();
+        local_env
+            .local_consts
+            .push((c.clone(), LocalConst { ty: mk_type_prop() }));
+        local_env.local_deltas.push((
+            c,
+            LocalDelta {
+                target: mk_const(d.clone(), vec![], vec![]),
+                height: 0,
+            },
+        ));
+
+        let term = mk_local_const(QualifiedName::from_str("c"));
+        let unfolded = env
+            .unfold_head(&local_env, &term)
+            .expect("local const should unfold by local delta");
+        assert!(unfolded.alpha_eq(&mk_const(d, vec![], vec![])));
+    }
+
+    #[test]
+    fn local_delta_does_not_apply_to_global_const() {
+        let c = QualifiedName::from_str("c");
+        let a = QualifiedName::from_str("a");
+        let b = QualifiedName::from_str("b");
+        let fixture = EnvFixture::new().with_delta(
+            c.clone(),
+            Delta {
+                local_types: vec![],
+                local_classes: vec![],
+                target: mk_const(a.clone(), vec![], vec![]),
+                height: 0,
+            },
+        );
+        let env = fixture.env();
+        let mut local_env = empty_local_env();
+        local_env.local_deltas.push((
+            c.clone(),
+            LocalDelta {
+                target: mk_const(b.clone(), vec![], vec![]),
+                height: 0,
+            },
+        ));
+
+        let term = mk_const(c, vec![], vec![]);
+        let unfolded = env
+            .unfold_head(&local_env, &term)
+            .expect("constant should unfold by global delta");
+        assert!(unfolded.alpha_eq(&mk_const(a, vec![], vec![])));
+    }
+
+    #[test]
+    fn equiv_uses_local_delta() {
+        let c = QualifiedName::from_str("c");
+        let d = QualifiedName::from_str("d");
+        let fixture = EnvFixture::new();
+        let env = fixture.env();
+        let mut local_env = empty_local_env();
+        local_env
+            .local_consts
+            .push((c.clone(), LocalConst { ty: mk_type_prop() }));
+        local_env.local_deltas.push((
+            c,
+            LocalDelta {
+                target: mk_const(d.clone(), vec![], vec![]),
+                height: 0,
+            },
+        ));
+
+        let left = mk_local_const(QualifiedName::from_str("c"));
+        let right = mk_const(d, vec![], vec![]);
+        assert!(env.equiv(&local_env, &left, &right));
+    }
+
+    #[test]
     fn equiv_detects_constant_mismatch() {
         let fixture = EnvFixture::new();
         let env = fixture.env();
@@ -2716,7 +2854,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_type_local_const_uses_level_lookup() {
+    fn infer_type_local_const_uses_name_lookup() {
         let fixture = EnvFixture::new();
         let env = fixture.env();
         let mut local_env = LocalEnv {
@@ -2726,25 +2864,27 @@ mod tests {
                 QualifiedName::from_str("foo.bar"),
                 LocalConst { ty: mk_type_prop() },
             )],
+            local_deltas: vec![],
             locals: vec![],
         };
 
-        let term = mk_local_const(0);
+        let term = mk_local_const(QualifiedName::from_str("foo.bar"));
         let inferred = env.infer_type(&mut local_env, &term);
         assert_eq!(inferred, mk_type_prop());
     }
 
     #[test]
-    fn equiv_local_const_compares_levels() {
+    fn equiv_local_const_compares_names() {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let left = mk_local_const(1);
-        let right = mk_local_const(1);
-        let mismatch = mk_local_const(0);
+        let left = mk_local_const(QualifiedName::from_str("a"));
+        let right = mk_local_const(QualifiedName::from_str("a"));
+        let mismatch = mk_local_const(QualifiedName::from_str("b"));
 
-        assert!(env.equiv(&left, &right));
-        assert!(!env.equiv(&left, &mismatch));
+        let local_env = empty_local_env();
+        assert!(env.equiv(&local_env, &left, &right));
+        assert!(!env.equiv(&local_env, &left, &mismatch));
     }
 
     #[test]
@@ -2768,6 +2908,7 @@ mod tests {
                     ty: mk_type_arrow(mk_type_prop(), mk_type_prop()),
                 },
             )],
+            local_deltas: vec![],
             locals: vec![],
         };
 

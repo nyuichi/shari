@@ -1,0 +1,7 @@
+type const Prop : Type
+const p : Prop
+axiom hp : p
+
+lemma let.expr.term.recursive.rhs : p :=
+  let c := c,
+  @hp

@@ -1,0 +1,13 @@
+---
+source: tests/proof_error_snapshots.rs
+expression: formatted
+---
+error chain:
+  - command error
+  - unification failed: type mismatch in let binding `c`
+tests/proof_errors/let_expr_term_typed_mismatch.shari:7:15
+
+  let c : T := p,
+              ^^
+
+fixture: tests/proof_errors/let_expr_term_typed_mismatch.shari

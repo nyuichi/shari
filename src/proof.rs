@@ -6,8 +6,8 @@ use std::{collections::HashMap, iter::zip, slice};
 use crate::{
     lex::Span,
     tt::{
-        self, Class, Id, Instance, Local, LocalConst, Name, QualifiedName, Term, Type, mk_abs,
-        mk_const, mk_local, mk_local_const, mk_type_const, mk_type_local,
+        self, Class, Id, Instance, Local, LocalConst, LocalDelta, Name, QualifiedName, Term, Type,
+        mk_abs, mk_const, mk_local, mk_local_const, mk_type_const, mk_type_local,
     },
 };
 
@@ -195,6 +195,7 @@ pub enum Expr {
     Take(Box<ExprTake>),
     Inst(Box<ExprInst>),
     Const(Box<ExprConst>),
+    LetTerm(Box<ExprLetTerm>),
     LetStructure(Box<ExprLetStructure>),
     Change(Box<ExprChange>),
 }
@@ -247,6 +248,15 @@ pub struct ExprConst {
     pub name: QualifiedName,
     pub ty_args: Vec<Type>,
     pub instances: Vec<Instance>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExprLetTerm {
+    pub metadata: ExprMetadata,
+    pub name: QualifiedName,
+    pub ty: Option<Type>,
+    pub value: Term,
+    pub body: Expr,
 }
 
 #[derive(Debug, Clone)]
@@ -346,6 +356,16 @@ pub fn mk_expr_const(name: QualifiedName, ty_args: Vec<Type>, instances: Vec<Ins
     }))
 }
 
+pub fn mk_expr_let_term(name: QualifiedName, ty: Option<Type>, value: Term, body: Expr) -> Expr {
+    Expr::LetTerm(Box::new(ExprLetTerm {
+        metadata: ExprMetadata::default(),
+        name,
+        ty,
+        value,
+        body,
+    }))
+}
+
 pub fn mk_expr_let_structure(name: Name, fields: Vec<LocalStructureField>, body: Expr) -> Expr {
     Expr::LetStructure(Box::new(ExprLetStructure {
         metadata: ExprMetadata::default(),
@@ -376,9 +396,11 @@ impl std::fmt::Display for Expr {
                 Expr::Assump(_) | Expr::AssumpByName(_) | Expr::Const(_) => PREC_ATOM,
                 Expr::Inst(_) => PREC_INST,
                 Expr::App(_) => PREC_APP,
-                Expr::Assume(_) | Expr::Take(_) | Expr::LetStructure(_) | Expr::Change(_) => {
-                    PREC_PREFIX
-                }
+                Expr::Assume(_)
+                | Expr::Take(_)
+                | Expr::LetTerm(_)
+                | Expr::LetStructure(_)
+                | Expr::Change(_) => PREC_PREFIX,
             }
         }
 
@@ -464,6 +486,14 @@ impl std::fmt::Display for Expr {
                         write!(f, "]")?;
                     }
                 }
+                Expr::LetTerm(e) => {
+                    write!(f, "let {}", e.name)?;
+                    if let Some(ty) = &e.ty {
+                        write!(f, " : {}", ty)?;
+                    }
+                    write!(f, " := {}, ", e.value)?;
+                    fmt_expr(&e.body, f, PREC_LOWEST)?;
+                }
                 Expr::LetStructure(e) => {
                     write!(f, "let structure {} := {{", e.name)?;
                     for (idx, field) in e.fields.iter().enumerate() {
@@ -514,6 +544,7 @@ impl Expr {
             Expr::Take(inner) => &inner.metadata,
             Expr::Inst(inner) => &inner.metadata,
             Expr::Const(inner) => &inner.metadata,
+            Expr::LetTerm(inner) => &inner.metadata,
             Expr::LetStructure(inner) => &inner.metadata,
             Expr::Change(inner) => &inner.metadata,
         }
@@ -552,6 +583,10 @@ impl Expr {
             Expr::Const(mut inner) => {
                 inner.metadata.span = span;
                 Expr::Const(inner)
+            }
+            Expr::LetTerm(mut inner) => {
+                inner.metadata.span = span;
+                Expr::LetTerm(inner)
             }
             Expr::LetStructure(mut inner) => {
                 inner.metadata.span = span;
@@ -609,6 +644,16 @@ impl Expr {
                 expr.is_ground() && arg.is_ground()
             }
             Expr::Const(_) => true,
+            Expr::LetTerm(e) => {
+                let ExprLetTerm {
+                    metadata: _,
+                    name: _,
+                    ty,
+                    value,
+                    body,
+                } = &**e;
+                ty.as_ref().is_none_or(Type::is_ground) && value.is_ground() && body.is_ground()
+            }
             Expr::LetStructure(e) => {
                 let ExprLetStructure {
                     metadata: _,
@@ -690,6 +735,18 @@ impl Expr {
                 ty_args.iter().all(|t| t.is_ground())
                     && instances.iter().all(|i| i.is_type_ground())
             }
+            Expr::LetTerm(e) => {
+                let ExprLetTerm {
+                    metadata: _,
+                    name: _,
+                    ty,
+                    value,
+                    body,
+                } = &**e;
+                ty.as_ref().is_none_or(Type::is_ground)
+                    && value.is_type_ground()
+                    && body.is_type_ground()
+            }
             Expr::LetStructure(e) => {
                 let ExprLetStructure {
                     metadata: _,
@@ -730,6 +787,11 @@ impl Expr {
             Expr::Take(inner) => inner.expr.is_instance_ground(),
             Expr::Inst(inner) => inner.expr.is_instance_ground() && inner.arg.is_instance_ground(),
             Expr::Const(inner) => inner.instances.iter().all(Instance::is_instance_ground),
+            Expr::LetTerm(inner) => {
+                inner.ty.as_ref().is_none_or(Type::is_ground)
+                    && inner.value.is_instance_ground()
+                    && inner.body.is_instance_ground()
+            }
             Expr::LetStructure(inner) => {
                 inner.fields.iter().all(|field| match field {
                     LocalStructureField::Const(_) => true,
@@ -793,6 +855,17 @@ impl Expr {
                 *arg = new_arg;
             }
             Expr::Const(_) => {}
+            Expr::LetTerm(e) => {
+                let ExprLetTerm {
+                    metadata: _,
+                    name: _,
+                    ty: _,
+                    value,
+                    body,
+                } = e.as_mut();
+                *value = value.subst(subst);
+                body.subst(subst);
+            }
             Expr::LetStructure(e) => {
                 let ExprLetStructure {
                     metadata: _,
@@ -871,6 +944,17 @@ impl Expr {
                 *arg = arg.replace_hole(f);
             }
             Expr::Const(_) => {}
+            Expr::LetTerm(e) => {
+                let ExprLetTerm {
+                    metadata: _,
+                    name: _,
+                    ty: _,
+                    value,
+                    body,
+                } = e.as_mut();
+                *value = value.replace_hole(f);
+                body.replace_hole(f);
+            }
             Expr::LetStructure(e) => {
                 let ExprLetStructure {
                     metadata: _,
@@ -1107,6 +1191,42 @@ impl Env<'_> {
                 target = target.subst_instance(&instance_subst);
                 target
             }
+            Expr::LetTerm(e) => {
+                let ExprLetTerm {
+                    metadata: _,
+                    name,
+                    ty,
+                    value,
+                    body,
+                } = &**e;
+
+                let value_ty = self.tt_env.infer_type(tt_local_env, value);
+                let binder_ty = if let Some(ty) = ty {
+                    self.tt_env.check_wft(tt_local_env, ty);
+                    self.tt_env.check_type(tt_local_env, value, ty);
+                    ty.clone()
+                } else {
+                    value_ty
+                };
+
+                let local_const_len = tt_local_env.local_consts.len();
+                let local_delta_len = tt_local_env.local_deltas.len();
+                tt_local_env
+                    .local_consts
+                    .push((name.clone(), LocalConst { ty: binder_ty }));
+                tt_local_env.local_deltas.push((
+                    name.clone(),
+                    LocalDelta {
+                        target: value.clone(),
+                        height: self.tt_env.height(tt_local_env, value),
+                    },
+                ));
+                let target = self.infer_prop(tt_local_env, local_env, body);
+                tt_local_env.local_deltas.truncate(local_delta_len);
+                tt_local_env.local_consts.truncate(local_const_len);
+                self.tt_env.check_wff(tt_local_env, &target);
+                target
+            }
             Expr::LetStructure(e) => {
                 let ExprLetStructure {
                     metadata: _,
@@ -1174,10 +1294,9 @@ impl Env<'_> {
                         }) => {
                             let fullname = structure_name.extend(field_name.as_str());
                             let ty = ty.arrow([this_ty.clone()]);
-                            let level = tt_local_env.local_consts.len() + local_consts.len();
-                            local_consts.push((fullname, LocalConst { ty }));
+                            local_consts.push((fullname.clone(), LocalConst { ty }));
 
-                            let mut target = mk_local_const(level);
+                            let mut target = mk_local_const(fullname);
                             target = target.apply([mk_local(this.id)]);
                             subst.push((Id::from_name(field_name), target));
                         }
@@ -1211,12 +1330,7 @@ impl Env<'_> {
                             };
 
                             let fullname = structure_name.extend(field_name.as_str());
-                            let level = tt_local_env.local_consts.len()
-                                + local_consts
-                                    .iter()
-                                    .position(|(local_const_name, _)| *local_const_name == fullname)
-                                    .expect("const field level should be available");
-                            let mut rhs = mk_local_const(level);
+                            let mut rhs = mk_local_const(fullname);
                             rhs = rhs.apply([mk_local(this.id)]);
 
                             let mut char =
@@ -1283,7 +1397,7 @@ impl Env<'_> {
                 } = &**e;
                 self.tt_env.check_wff(tt_local_env, target);
                 let source = self.infer_prop(tt_local_env, local_env, expr);
-                if !self.tt_env.equiv(&source, target) {
+                if !self.tt_env.equiv(tt_local_env, &source, target) {
                     panic!(
                         "conversion failed: expected {} but proof showed {}",
                         target, source

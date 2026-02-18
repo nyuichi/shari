@@ -1,0 +1,12 @@
+---
+source: tests/proof_error_snapshots.rs
+expression: formatted
+---
+error chain:
+  - parse error
+  - parse error: unknown variable at tests/proof_errors/let_expr_term_recursive_rhs.shari:6:12
+
+  let c := c,
+           ^
+
+fixture: tests/proof_errors/let_expr_term_recursive_rhs.shari

@@ -1,0 +1,6 @@
+---
+source: tests/proof_success_snapshots.rs
+expression: formatted
+---
+ok
+fixture: tests/proof_successes/let_expr_term_qualified_name.shari

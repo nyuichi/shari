@@ -10,7 +10,7 @@
  - [x] improved error reporting
  - [ ] coercion
  - [ ] namespace
- - [ ] let expr
+ - [x] let expr
  - [x] local typedef
  - [ ] kernel support for eta equality of lambdas
  -/

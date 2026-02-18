@@ -1,0 +1,10 @@
+type const Prop : Type
+const p : Prop
+axiom hp : p
+const Foo.bar : Prop
+
+lemma let.expr.term.qualified : p :=
+  let Foo.bar := p,
+  change p,
+  change Foo.bar,
+  @hp

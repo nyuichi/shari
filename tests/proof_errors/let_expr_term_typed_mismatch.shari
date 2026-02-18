@@ -1,0 +1,8 @@
+type const Prop : Type
+type const T : Type
+const p : Prop
+axiom hp : p
+
+lemma let.expr.term.typed.mismatch : p :=
+  let c : T := p,
+  @hp

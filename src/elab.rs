@@ -13,15 +13,15 @@ use crate::{
     lex::Span,
     proof::{
         self, Assume, Axiom, Expr, ExprApp, ExprAssume, ExprAssump, ExprAssumpByName, ExprChange,
-        ExprConst, ExprInst, ExprLetStructure, ExprTake, LocalAxiom, LocalStructureAxiom,
-        LocalStructureConst, LocalStructureField, generalize, guard, mk_expr_change, mk_type_prop,
-        ungeneralize1, unguard1,
+        ExprConst, ExprInst, ExprLetStructure, ExprLetTerm, ExprTake, LocalAxiom,
+        LocalStructureAxiom, LocalStructureConst, LocalStructureField, generalize, guard,
+        mk_expr_change, mk_type_prop, ungeneralize1, unguard1,
     },
     tt::{
         self, Class, ClassInstance, ClassType, Const, Id, Instance, InstanceGlobal, Kind, Local,
-        LocalConst, LocalEnv, Name, QualifiedName, Term, TermAbs, TermApp, Type, TypeApp,
-        TypeArrow, mk_const, mk_fresh_type_hole, mk_hole, mk_instance_global, mk_instance_local,
-        mk_local, mk_local_const, mk_type_arrow, mk_type_local,
+        LocalConst, LocalDelta, LocalEnv, Name, QualifiedName, Term, TermAbs, TermApp, Type,
+        TypeApp, TypeArrow, mk_const, mk_fresh_type_hole, mk_hole, mk_instance_global,
+        mk_instance_local, mk_local, mk_local_const, mk_type_arrow, mk_type_local,
     },
 };
 
@@ -334,8 +334,20 @@ impl<'a> Elaborator<'a> {
                 Ok(ret_ty)
             }
             Term::LocalConst(inner) => {
-                let Some((_, local_const)) = self.tt_local_env.local_consts.get(inner.level) else {
-                    bail!("unknown local constant level");
+                let Some(local_const) =
+                    self.tt_local_env
+                        .local_consts
+                        .iter()
+                        .rev()
+                        .find_map(|(name, local_const)| {
+                            if *name == inner.name {
+                                Some(local_const)
+                            } else {
+                                None
+                            }
+                        })
+                else {
+                    bail!("unknown local constant");
                 };
                 Ok(local_const.ty.clone())
             }
@@ -678,6 +690,51 @@ impl<'a> Elaborator<'a> {
                 target = target.subst_instance(&instance_subst);
                 Ok(target)
             }
+            Expr::LetTerm(expr) => {
+                let ExprLetTerm {
+                    metadata: _,
+                    name,
+                    ty,
+                    value,
+                    body,
+                } = expr.as_mut();
+
+                let value_ty = self.visit_term(value)?;
+                let binder_ty = if let Some(ty) = ty {
+                    let kind = self.visit_type(ty)?;
+                    if !kind.is_base() {
+                        bail!("expected Type, but got {kind}");
+                    }
+                    self.push_type_constraint(
+                        ty.clone(),
+                        value_ty,
+                        visit_error(
+                            format!("type mismatch in let binding `{name}`"),
+                            value.span().cloned(),
+                        ),
+                    );
+                    ty.clone()
+                } else {
+                    value_ty
+                };
+
+                let local_const_len = self.tt_local_env.local_consts.len();
+                let local_delta_len = self.tt_local_env.local_deltas.len();
+                self.tt_local_env
+                    .local_consts
+                    .push((name.clone(), LocalConst { ty: binder_ty }));
+                self.tt_local_env.local_deltas.push((
+                    name.clone(),
+                    LocalDelta {
+                        target: value.clone(),
+                        height: self.proof_env.tt_env.height(self.tt_local_env, value),
+                    },
+                ));
+                let result = self.visit_expr(body);
+                self.tt_local_env.local_deltas.truncate(local_delta_len);
+                self.tt_local_env.local_consts.truncate(local_const_len);
+                result
+            }
             Expr::LetStructure(expr) => {
                 let ExprLetStructure {
                     metadata: _,
@@ -766,10 +823,9 @@ impl<'a> Elaborator<'a> {
                         }) => {
                             let fullname = structure_name.extend(field_name.as_str());
                             let ty = ty.arrow([this_ty.clone()]);
-                            let level = self.tt_local_env.local_consts.len() + local_consts.len();
-                            local_consts.push((fullname, LocalConst { ty }));
+                            local_consts.push((fullname.clone(), LocalConst { ty }));
 
-                            let mut target = mk_local_const(level);
+                            let mut target = mk_local_const(fullname);
                             target = target.apply([mk_local(this.id)]);
                             subst.push((Id::from_name(field_name), target));
                         }
@@ -803,12 +859,7 @@ impl<'a> Elaborator<'a> {
                             };
 
                             let fullname = structure_name.extend(field_name.as_str());
-                            let level = self.tt_local_env.local_consts.len()
-                                + local_consts
-                                    .iter()
-                                    .position(|(local_const_name, _)| *local_const_name == fullname)
-                                    .expect("const field level should be available");
-                            let mut rhs = mk_local_const(level);
+                            let mut rhs = mk_local_const(fullname);
                             rhs = rhs.apply([mk_local(this.id)]);
 
                             let mut char =
@@ -1340,6 +1391,20 @@ impl<'a> Elaborator<'a> {
                     *instances = new_instances;
                 }
             }
+            Expr::LetTerm(expr) => {
+                let ExprLetTerm {
+                    metadata: _,
+                    name: _,
+                    ty,
+                    value,
+                    body,
+                } = expr.as_mut();
+                if let Some(ty) = ty {
+                    *ty = self.fully_inst_type(ty);
+                }
+                *value = self.fully_inst(value);
+                self.fully_inst_expr(body);
+            }
             Expr::LetStructure(expr) => {
                 let ExprLetStructure {
                     metadata: _,
@@ -1717,7 +1782,7 @@ impl<'a> Elaborator<'a> {
                         return None;
                     }
                 }
-                if let Some(new_left) = self.proof_env.tt_env.unfold_head(&left) {
+                if let Some(new_left) = self.proof_env.tt_env.unfold_head(&local_env, &left) {
                     left = new_left;
                     self.push_term_constraint(local_env, left, right, error);
                     return None;
@@ -1810,7 +1875,7 @@ impl<'a> Elaborator<'a> {
         if let (Term::LocalConst(left_head), Term::LocalConst(right_head)) =
             (left.head(), right.head())
         {
-            if left_head.level != right_head.level {
+            if left_head.name != right_head.name {
                 return Some(error);
             }
             let left_args = left.args();
@@ -1856,30 +1921,33 @@ impl<'a> Elaborator<'a> {
             mem::swap(&mut left, &mut right);
         }
         if let (Term::LocalConst(left_head), Term::Const(right_head)) = (left.head(), right.head())
+            && left_head.name == right_head.name
         {
-            let Some((left_name, _)) = local_env.local_consts.get(left_head.level) else {
+            if !right_head.ty_args.is_empty() || !right_head.instances.is_empty() {
                 return Some(error);
-            };
-            if *left_name == right_head.name {
-                if !right_head.ty_args.is_empty() || !right_head.instances.is_empty() {
-                    return Some(error);
-                }
-                let left_args = left.args();
-                let right_args = right.args();
-                if left_args.len() != right_args.len() {
-                    return Some(error);
-                }
-                for (left_arg, right_arg) in left_args.into_iter().zip(right_args.into_iter()).rev()
-                {
-                    self.push_term_constraint(
-                        local_env.clone(),
-                        left_arg.clone(),
-                        right_arg.clone(),
-                        error.clone(),
-                    );
-                }
+            }
+            let left_args = left.args();
+            let right_args = right.args();
+            if left_args.len() != right_args.len() {
+                return Some(error);
+            }
+            for (left_arg, right_arg) in left_args.into_iter().zip(right_args.into_iter()).rev() {
+                self.push_term_constraint(
+                    local_env.clone(),
+                    left_arg.clone(),
+                    right_arg.clone(),
+                    error.clone(),
+                );
+            }
+            return None;
+        }
+        if left.head().is_local_const() {
+            if let Some(new_left) = self.proof_env.tt_env.unfold_head(&local_env, &left) {
+                left = new_left;
+                self.push_term_constraint(local_env, left, right, error);
                 return None;
             }
+            return Some(error);
         }
         if right.head().is_local() {
             mem::swap(&mut left, &mut right);
@@ -1901,7 +1969,7 @@ impl<'a> Elaborator<'a> {
             if !right.contains_local(left_head.id) {
                 return Some(error);
             }
-            if let Some(new_right) = self.proof_env.tt_env.unfold_head(&right) {
+            if let Some(new_right) = self.proof_env.tt_env.unfold_head(&local_env, &right) {
                 right = new_right;
                 self.push_term_constraint(local_env, left, right, error);
                 return None;
@@ -1928,7 +1996,7 @@ impl<'a> Elaborator<'a> {
                 self.add_method_constraint(local_env, left, right, error);
                 return None;
             }
-            if let Some(new_left) = self.proof_env.tt_env.unfold_head(&left) {
+            if let Some(new_left) = self.proof_env.tt_env.unfold_head(&local_env, &left) {
                 left = new_left;
                 self.push_term_constraint(local_env.clone(), left, right, error);
                 return None;
@@ -1946,7 +2014,7 @@ impl<'a> Elaborator<'a> {
                 self.add_method_constraint(local_env, left, right, error);
                 return None;
             }
-            if let Some(new_right) = self.proof_env.tt_env.unfold_head(&right) {
+            if let Some(new_right) = self.proof_env.tt_env.unfold_head(&local_env, &right) {
                 right = new_right;
                 self.push_term_constraint(local_env.clone(), left, right, error);
                 return None;
@@ -1981,28 +2049,28 @@ impl<'a> Elaborator<'a> {
             }
             return None;
         }
-        let left_height = self.proof_env.tt_env.delta_height(left_head.name.clone());
-        let right_height = self.proof_env.tt_env.delta_height(right_head.name.clone());
+        let left_height = self.proof_env.tt_env.delta_height(&left_head.name);
+        let right_height = self.proof_env.tt_env.delta_height(&right_head.name);
         if left_height == 0 && right_height == 0 {
             // (f t₁ ⋯ tₙ) ≈ (g s₁ ⋯ sₘ) where f and g are both irreducible.
             return Some(error);
         }
         match left_height.cmp(&right_height) {
             std::cmp::Ordering::Greater => {
-                if let Some(new_left) = self.proof_env.tt_env.unfold_head(&left) {
+                if let Some(new_left) = self.proof_env.tt_env.unfold_head(&local_env, &left) {
                     left = new_left;
                 }
             }
             std::cmp::Ordering::Less => {
-                if let Some(new_right) = self.proof_env.tt_env.unfold_head(&right) {
+                if let Some(new_right) = self.proof_env.tt_env.unfold_head(&local_env, &right) {
                     right = new_right;
                 }
             }
             std::cmp::Ordering::Equal => {
-                if let Some(new_left) = self.proof_env.tt_env.unfold_head(&left) {
+                if let Some(new_left) = self.proof_env.tt_env.unfold_head(&local_env, &left) {
                     left = new_left;
                 }
-                if let Some(new_right) = self.proof_env.tt_env.unfold_head(&right) {
+                if let Some(new_right) = self.proof_env.tt_env.unfold_head(&local_env, &right) {
                     right = new_right;
                 }
             }
@@ -2238,10 +2306,10 @@ impl<'a> Elaborator<'a> {
             let mut node = Node::default();
             let mut left = c.left.clone();
             let mut right = c.right.clone();
-            if let Some(new_left) = self.proof_env.tt_env.unfold_head(&left) {
+            if let Some(new_left) = self.proof_env.tt_env.unfold_head(&c.local_env, &left) {
                 left = new_left;
             }
-            if let Some(new_right) = self.proof_env.tt_env.unfold_head(&right) {
+            if let Some(new_right) = self.proof_env.tt_env.unfold_head(&c.local_env, &right) {
                 right = new_right;
             }
             node.term_constraints
@@ -2402,11 +2470,19 @@ impl<'a> Elaborator<'a> {
                 };
                 Some(self.fully_inst_type(&ty))
             }
-            Term::LocalConst(inner) => c
-                .local_env
-                .local_consts
-                .get(inner.level)
-                .map(|(_, local_const)| self.fully_inst_type(&local_const.ty)),
+            Term::LocalConst(inner) => {
+                c.local_env
+                    .local_consts
+                    .iter()
+                    .rev()
+                    .find_map(|(name, local_const)| {
+                        if *name == inner.name {
+                            Some(self.fully_inst_type(&local_const.ty))
+                        } else {
+                            None
+                        }
+                    })
+            }
             Term::Var(_) | Term::Abs(_) | Term::App(_) | Term::Local(_) | Term::Hole(_) => None,
         };
         if let Some(right_head_ty) = imitation_head_ty {
@@ -2850,6 +2926,7 @@ mod tests {
             local_classes: vec![],
             locals,
             local_consts: vec![],
+            local_deltas: vec![],
         };
         let mut tt_local_env = local_env.clone();
 

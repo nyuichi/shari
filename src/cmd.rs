@@ -500,6 +500,7 @@ impl Eval {
                     local_classes: vec![],
                     locals: vec![],
                     local_consts: vec![],
+                    local_deltas: vec![],
                 },
                 local_class,
             );
@@ -510,6 +511,7 @@ impl Eval {
                 local_classes: local_classes.clone(),
                 locals: vec![],
                 local_consts: vec![],
+                local_deltas: vec![],
             },
             &ty,
         );
@@ -544,6 +546,7 @@ impl Eval {
                     local_classes: vec![],
                     locals: vec![],
                     local_consts: vec![],
+                    local_deltas: vec![],
                 },
                 local_class,
             );
@@ -554,6 +557,7 @@ impl Eval {
                 local_classes: local_classes.clone(),
                 locals: vec![],
                 local_consts: vec![],
+                local_deltas: vec![],
             },
             &target,
         );
@@ -614,6 +618,7 @@ impl Eval {
                     local_classes: vec![],
                     locals: vec![],
                     local_consts: vec![],
+                    local_deltas: vec![],
                 },
                 local_class,
             );
@@ -624,6 +629,7 @@ impl Eval {
                 local_classes: local_classes.clone(),
                 locals: vec![],
                 local_consts: vec![],
+                local_deltas: vec![],
             },
             &target,
         );
@@ -652,23 +658,22 @@ impl Eval {
             .get(&name)
             .expect("constant must be defined before delta");
 
-        self.tt_env().check_type(
-            &mut LocalEnv {
-                local_types: local_types.clone(),
-                local_classes: local_classes.clone(),
-                locals: vec![],
-                local_consts: vec![],
-            },
-            &target,
-            ty,
-        );
+        let mut local_env = LocalEnv {
+            local_types: local_types.clone(),
+            local_classes: local_classes.clone(),
+            locals: vec![],
+            local_consts: vec![],
+            local_deltas: vec![],
+        };
+
+        self.tt_env().check_type(&mut local_env, &target, ty);
 
         self.delta_table.insert(
             name,
             Delta {
                 local_types: local_types.clone(),
                 local_classes: local_classes.clone(),
-                height: self.tt_env().height(&target),
+                height: self.tt_env().height(&local_env, &target),
                 target,
             },
         );
@@ -845,6 +850,7 @@ impl Eval {
                     local_classes: vec![],
                     locals: vec![],
                     local_consts: vec![],
+                    local_deltas: vec![],
                 };
                 for local_class in &local_classes {
                     self.elaborate_class(&mut local_env, local_class)?;
@@ -884,6 +890,7 @@ impl Eval {
                     local_classes: vec![],
                     locals: vec![],
                     local_consts: vec![],
+                    local_deltas: vec![],
                 };
                 for local_class in &local_classes {
                     self.elaborate_class(&mut local_env, local_class)?;
@@ -918,6 +925,7 @@ impl Eval {
                     local_classes: vec![],
                     locals: vec![],
                     local_consts: vec![],
+                    local_deltas: vec![],
                 };
                 for local_class in &local_classes {
                     self.elaborate_class(&mut local_env, local_class)?;
@@ -956,6 +964,7 @@ impl Eval {
                     local_classes: vec![],
                     locals: vec![],
                     local_consts: vec![],
+                    local_deltas: vec![],
                 };
                 for local_class in &local_classes {
                     self.elaborate_class(&mut local_env, local_class)?;
@@ -1004,6 +1013,7 @@ impl Eval {
             local_classes: vec![],
             locals: vec![],
             local_consts: vec![],
+            local_deltas: vec![],
         };
         local_env.local_types.insert(0, self_id);
         for i in 0..ctors.len() {
@@ -1309,6 +1319,7 @@ impl Eval {
             local_classes: vec![],
             locals: vec![],
             local_consts: vec![],
+            local_deltas: vec![],
         };
         for i in 0..params.len() {
             for j in i + 1..params.len() {
@@ -1534,6 +1545,7 @@ impl Eval {
             local_classes: vec![],
             locals: vec![],
             local_consts: vec![],
+            local_deltas: vec![],
         };
         let mut const_field_names: Vec<Name> = vec![];
         let mut axiom_field_names: Vec<Name> = vec![];
@@ -1740,6 +1752,7 @@ impl Eval {
             local_classes: vec![],
             locals: vec![],
             local_consts: vec![],
+            local_deltas: vec![],
         };
         for local_class in &local_classes {
             self.elaborate_class(&mut local_env, local_class)?;
@@ -2004,6 +2017,7 @@ impl Eval {
             local_classes: vec![],
             locals: vec![],
             local_consts: vec![],
+            local_deltas: vec![],
         };
         let mut const_field_names: Vec<Name> = vec![];
         let mut axiom_field_names: Vec<Name> = vec![];
@@ -2131,6 +2145,7 @@ impl Eval {
             local_classes: vec![],
             locals: vec![],
             local_consts: vec![],
+            local_deltas: vec![],
         };
         for local_class in &local_classes {
             self.elaborate_class(&mut local_env, local_class)?;
