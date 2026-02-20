@@ -314,9 +314,6 @@ impl<'a> Printer<'a> {
             Term::Local(inner) => {
                 write!(f, "{}", inner.id)
             }
-            Term::LocalConst(inner) => {
-                write!(f, "#LocalConst({})", inner.id)
-            }
             Term::Hole(inner) => {
                 write!(f, "?{}", inner.id)
             }

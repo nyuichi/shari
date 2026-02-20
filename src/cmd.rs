@@ -499,7 +499,6 @@ impl Eval {
                     local_types: local_types.clone(),
                     local_classes: vec![],
                     locals: vec![],
-                    local_consts: vec![],
                     local_deltas: vec![],
                 },
                 local_class,
@@ -510,7 +509,6 @@ impl Eval {
                 local_types: local_types.clone(),
                 local_classes: local_classes.clone(),
                 locals: vec![],
-                local_consts: vec![],
                 local_deltas: vec![],
             },
             &ty,
@@ -545,7 +543,6 @@ impl Eval {
                     local_types: local_types.clone(),
                     local_classes: vec![],
                     locals: vec![],
-                    local_consts: vec![],
                     local_deltas: vec![],
                 },
                 local_class,
@@ -556,7 +553,6 @@ impl Eval {
                 local_types: local_types.clone(),
                 local_classes: local_classes.clone(),
                 locals: vec![],
-                local_consts: vec![],
                 local_deltas: vec![],
             },
             &target,
@@ -617,7 +613,6 @@ impl Eval {
                     local_types: local_types.clone(),
                     local_classes: vec![],
                     locals: vec![],
-                    local_consts: vec![],
                     local_deltas: vec![],
                 },
                 local_class,
@@ -628,7 +623,6 @@ impl Eval {
                 local_types: local_types.clone(),
                 local_classes: local_classes.clone(),
                 locals: vec![],
-                local_consts: vec![],
                 local_deltas: vec![],
             },
             &target,
@@ -662,7 +656,6 @@ impl Eval {
             local_types: local_types.clone(),
             local_classes: local_classes.clone(),
             locals: vec![],
-            local_consts: vec![],
             local_deltas: vec![],
         };
 
@@ -849,7 +842,6 @@ impl Eval {
                     local_types: local_types.clone(),
                     local_classes: vec![],
                     locals: vec![],
-                    local_consts: vec![],
                     local_deltas: vec![],
                 };
                 for local_class in &local_classes {
@@ -889,7 +881,6 @@ impl Eval {
                     local_types: local_types.clone(),
                     local_classes: vec![],
                     locals: vec![],
-                    local_consts: vec![],
                     local_deltas: vec![],
                 };
                 for local_class in &local_classes {
@@ -924,7 +915,6 @@ impl Eval {
                     local_types: local_types.clone(),
                     local_classes: vec![],
                     locals: vec![],
-                    local_consts: vec![],
                     local_deltas: vec![],
                 };
                 for local_class in &local_classes {
@@ -963,7 +953,6 @@ impl Eval {
                     local_types: local_types.clone(),
                     local_classes: vec![],
                     locals: vec![],
-                    local_consts: vec![],
                     local_deltas: vec![],
                 };
                 for local_class in &local_classes {
@@ -1012,7 +1001,6 @@ impl Eval {
             local_types: local_types.clone(),
             local_classes: vec![],
             locals: vec![],
-            local_consts: vec![],
             local_deltas: vec![],
         };
         local_env.local_types.insert(0, self_id);
@@ -1318,7 +1306,6 @@ impl Eval {
             local_types: local_types.clone(),
             local_classes: vec![],
             locals: vec![],
-            local_consts: vec![],
             local_deltas: vec![],
         };
         for i in 0..params.len() {
@@ -1544,7 +1531,6 @@ impl Eval {
             local_types: local_types.clone(),
             local_classes: vec![],
             locals: vec![],
-            local_consts: vec![],
             local_deltas: vec![],
         };
         let mut const_field_names: Vec<Name> = vec![];
@@ -1751,7 +1737,6 @@ impl Eval {
             local_types: local_types.clone(),
             local_classes: vec![],
             locals: vec![],
-            local_consts: vec![],
             local_deltas: vec![],
         };
         for local_class in &local_classes {
@@ -2016,7 +2001,6 @@ impl Eval {
             local_types: local_types.clone(),
             local_classes: vec![],
             locals: vec![],
-            local_consts: vec![],
             local_deltas: vec![],
         };
         let mut const_field_names: Vec<Name> = vec![];
@@ -2144,7 +2128,6 @@ impl Eval {
             local_types: local_types.clone(),
             local_classes: vec![],
             locals: vec![],
-            local_consts: vec![],
             local_deltas: vec![],
         };
         for local_class in &local_classes {

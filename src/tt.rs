@@ -1043,7 +1043,6 @@ pub enum Term {
     Abs(Arc<TermAbs>),
     App(Arc<TermApp>),
     Local(Arc<TermLocal>),
-    LocalConst(Arc<TermLocalConst>),
     Const(Arc<TermConst>),
     Hole(Arc<TermHole>),
 }
@@ -1072,12 +1071,6 @@ pub struct TermApp {
 
 #[derive(Clone, Debug)]
 pub struct TermLocal {
-    pub metadata: TermMetadata,
-    pub id: Id,
-}
-
-#[derive(Clone, Debug)]
-pub struct TermLocalConst {
     pub metadata: TermMetadata,
     pub id: Id,
 }
@@ -1155,7 +1148,6 @@ impl Display for Term {
                     Ok(())
                 }
                 Term::Local(inner) => write!(f, "${}", inner.id),
-                Term::LocalConst(inner) => write!(f, "#LocalConst({})", inner.id),
                 Term::Const(inner) => {
                     write!(f, "{}", inner.name)?;
                     if !inner.ty_args.is_empty() {
@@ -1250,17 +1242,6 @@ pub fn mk_local(id: Id) -> Term {
     Term::Local(Arc::new(TermLocal { metadata, id }))
 }
 
-pub fn mk_local_const(id: Id) -> Term {
-    let metadata = TermMetadata {
-        span: None,
-        is_closed: true,
-        bound: 0,
-        has_const: false,
-        has_hole: false,
-    };
-    Term::LocalConst(Arc::new(TermLocalConst { metadata, id }))
-}
-
 pub fn mk_fresh_hole() -> Term {
     mk_hole(Id::fresh())
 }
@@ -1297,9 +1278,7 @@ impl TryFrom<Term> for Ctor {
                 ctor.args.push(value.arg);
                 Ok(ctor)
             }
-            Term::Var(_) | Term::Abs(_) | Term::Local(_) | Term::LocalConst(_) | Term::Hole(_) => {
-                Err(())
-            }
+            Term::Var(_) | Term::Abs(_) | Term::Local(_) | Term::Hole(_) => Err(()),
         }
     }
 }
@@ -1318,7 +1297,6 @@ impl Term {
             Term::Abs(inner) => &inner.metadata,
             Term::App(inner) => &inner.metadata,
             Term::Local(inner) => &inner.metadata,
-            Term::LocalConst(inner) => &inner.metadata,
             Term::Const(inner) => &inner.metadata,
             Term::Hole(inner) => &inner.metadata,
         }
@@ -1350,11 +1328,6 @@ impl Term {
                 inner.metadata.span = span;
                 Term::Local(Arc::new(inner))
             }
-            Term::LocalConst(inner) => {
-                let mut inner = Arc::unwrap_or_clone(inner);
-                inner.metadata.span = span;
-                Term::LocalConst(Arc::new(inner))
-            }
             Term::Const(inner) => {
                 let mut inner = Arc::unwrap_or_clone(inner);
                 inner.metadata.span = span;
@@ -1374,7 +1347,6 @@ impl Term {
             (Term::Abs(a), Term::Abs(b)) => Arc::ptr_eq(a, b),
             (Term::App(a), Term::App(b)) => Arc::ptr_eq(a, b),
             (Term::Local(a), Term::Local(b)) => Arc::ptr_eq(a, b),
-            (Term::LocalConst(a), Term::LocalConst(b)) => Arc::ptr_eq(a, b),
             (Term::Const(a), Term::Const(b)) => Arc::ptr_eq(a, b),
             (Term::Hole(a), Term::Hole(b)) => Arc::ptr_eq(a, b),
             _ => false,
@@ -1388,7 +1360,6 @@ impl Term {
         }
         match self {
             Self::Local(_) => self.clone(),
-            Self::LocalConst(_) => self.clone(),
             Self::Var(inner) => {
                 if inner.index >= level {
                     let i = inner.index - level;
@@ -1453,7 +1424,6 @@ impl Term {
                     mk_app(fun, arg)
                 }
             }
-            Self::LocalConst(_) => self.clone(),
             Self::Const(_) => self.clone(),
             Self::Hole(_) => self.clone(),
         }
@@ -1489,7 +1459,6 @@ impl Term {
                     self.clone()
                 }
             }
-            Term::LocalConst(_) => self.clone(),
             Term::Const(_) => self.clone(),
             Term::Hole(_) => self.clone(),
         }
@@ -1516,7 +1485,6 @@ impl Term {
                 }
             }
             Term::Local(_) => self.clone(),
-            Term::LocalConst(_) => self.clone(),
             Term::Const(_) => self.clone(),
             Term::Hole(inner) => {
                 if let Some(m) = f(inner.id) {
@@ -1552,7 +1520,6 @@ impl Term {
                 }
             }
             Term::Local(_) => self.clone(),
-            Term::LocalConst(_) => self.clone(),
             Term::Const(inner) => {
                 let mut changed = false;
                 let instances: Vec<Instance> = inner
@@ -1598,7 +1565,6 @@ impl Term {
                 }
             }
             Term::Local(_) => self.clone(),
-            Term::LocalConst(_) => self.clone(),
             Term::Const(inner) => {
                 let mut changed = false;
                 let ty_args: Vec<Type> = inner
@@ -1656,7 +1622,6 @@ impl Term {
     pub fn is_fresh(&self, free_list: &[Id]) -> bool {
         match self {
             Self::Local(inner) => !free_list.contains(&inner.id),
-            Self::LocalConst(_) => true,
             Self::Var(_) => true,
             Self::Abs(inner) => inner.body.is_fresh(free_list),
             Self::App(inner) => inner.fun.is_fresh(free_list) && inner.arg.is_fresh(free_list),
@@ -1670,7 +1635,6 @@ impl Term {
     pub fn is_supported_by(&self, free_list: &[Id]) -> bool {
         match self {
             Self::Local(inner) => free_list.contains(&inner.id),
-            Self::LocalConst(_) => true,
             Self::Var(_) => true,
             Self::Abs(inner) => inner.body.is_supported_by(free_list),
             Self::App(inner) => {
@@ -1690,7 +1654,6 @@ impl Term {
             Term::Abs(inner) => inner.body.contains_var(i + 1),
             Term::App(inner) => inner.fun.contains_var(i) || inner.arg.contains_var(i),
             Term::Local(_) => false,
-            Term::LocalConst(_) => false,
             Term::Const(_) => false,
             Term::Hole(_) => false,
         }
@@ -1720,12 +1683,9 @@ impl Term {
 
     pub fn replace_head(&self, f: &impl Fn(&Term) -> Option<Term>) -> Option<Term> {
         match self {
-            Term::Var(_)
-            | Term::Abs(_)
-            | Term::Local(_)
-            | Term::LocalConst(_)
-            | Term::Const(_)
-            | Term::Hole(_) => f(self),
+            Term::Var(_) | Term::Abs(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) => {
+                f(self)
+            }
             Term::App(inner) => {
                 let fun = inner.fun.replace_head(f)?;
                 Some(mk_app(fun, inner.arg.clone()))
@@ -1735,12 +1695,9 @@ impl Term {
 
     pub fn replace_args(&self, f: &impl Fn(&Term) -> Term) -> Term {
         match self {
-            Term::Var(_)
-            | Term::Abs(_)
-            | Term::Local(_)
-            | Term::LocalConst(_)
-            | Term::Const(_)
-            | Term::Hole(_) => self.clone(),
+            Term::Var(_) | Term::Abs(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) => {
+                self.clone()
+            }
             Term::App(inner) => {
                 let fun = inner.fun.replace_args(f);
                 let arg = f(&inner.arg);
@@ -1761,16 +1718,8 @@ impl Term {
         matches!(self, Term::Hole(_))
     }
 
-    pub fn is_local(&self) -> bool {
-        matches!(self, Term::Local(_))
-    }
-
-    pub fn is_local_const(&self) -> bool {
-        matches!(self, Term::LocalConst(_))
-    }
-
-    /// Checks if self ≡ (?M l₁ ⋯ lₙ) where l₁ ⋯ lₙ are pairwise distinct locals.
-    pub fn is_pattern(&self) -> Option<Vec<Id>> {
+    /// Checks if self ≡ (?M l₁ ⋯ lₙ) where l₁ ⋯ lₙ are pairwise distinct non-unfoldable locals.
+    pub fn is_pattern(&self, local_env: &LocalEnv) -> Option<Vec<Id>> {
         let mut arg_locals = vec![];
         if !self.head().is_hole() {
             return None;
@@ -1779,6 +1728,9 @@ impl Term {
             let Term::Local(arg) = arg else {
                 return None;
             };
+            if local_env.get_local_delta(arg.id).is_some() {
+                return None;
+            }
             for a in &arg_locals {
                 if *a == arg.id {
                     return None;
@@ -1789,12 +1741,15 @@ impl Term {
         Some(arg_locals)
     }
 
-    pub fn is_quasi_pattern(&self) -> bool {
+    pub fn is_quasi_pattern(&self, local_env: &LocalEnv) -> bool {
         if !self.head().is_hole() {
             return false;
         }
         for arg in self.args() {
-            let Term::Local(_) = arg else {
+            let Term::Local(arg) = arg else {
+                return false;
+            };
+            if local_env.get_local_delta(arg.id).is_some() {
                 return false;
             };
         }
@@ -1827,7 +1782,6 @@ impl Term {
             Term::Abs(m) => m.body.is_ground(),
             Term::App(m) => m.fun.is_ground() && m.arg.is_ground(),
             Term::Local(_) => true,
-            Term::LocalConst(_) => true,
             Term::Const(_) => true,
             Term::Hole(_) => false,
         }
@@ -1839,7 +1793,6 @@ impl Term {
             Term::Abs(inner) => inner.binder_type.is_ground() && inner.body.is_type_ground(),
             Term::App(inner) => inner.fun.is_type_ground() && inner.arg.is_type_ground(),
             Term::Local(_) => true,
-            Term::LocalConst(_) => true,
             Term::Const(inner) => {
                 inner.ty_args.iter().all(Type::is_ground)
                     && inner.instances.iter().all(Instance::is_type_ground)
@@ -1854,7 +1807,6 @@ impl Term {
             Term::Abs(inner) => inner.body.is_instance_ground(),
             Term::App(inner) => inner.fun.is_instance_ground() && inner.arg.is_instance_ground(),
             Term::Local(_) => true,
-            Term::LocalConst(_) => true,
             Term::Const(inner) => inner.instances.iter().all(Instance::is_instance_ground),
             Term::Hole(_) => true,
         }
@@ -1870,7 +1822,6 @@ impl Term {
                 inner1.fun.alpha_eq(&inner2.fun) && inner1.arg.alpha_eq(&inner2.arg)
             }
             (Term::Local(name1), Term::Local(name2)) => name1.id == name2.id,
-            (Term::LocalConst(inner1), Term::LocalConst(inner2)) => inner1.id == inner2.id,
             (Term::Const(inner1), Term::Const(inner2)) => inner1.alpha_eq(inner2),
             (Term::Hole(name1), Term::Hole(name2)) => name1.id == name2.id,
             _ => false,
@@ -1885,7 +1836,6 @@ impl Term {
                 inner1.fun.maybe_alpha_eq(&inner2.fun) && inner1.arg.maybe_alpha_eq(&inner2.arg)
             }
             (Term::Local(name1), Term::Local(name2)) => name1.id == name2.id,
-            (Term::LocalConst(inner1), Term::LocalConst(inner2)) => inner1.id == inner2.id,
             (Term::Const(inner1), Term::Const(inner2)) => inner1.name == inner2.name,
             (Term::Hole(name1), Term::Hole(name2)) => name1.id == name2.id,
             _ => false,
@@ -1895,12 +1845,7 @@ impl Term {
     /// Returns None if the term is already in whnf.
     pub fn whnf(&self) -> Option<Term> {
         match self {
-            Term::Var(_)
-            | Term::Local(_)
-            | Term::LocalConst(_)
-            | Term::Const(_)
-            | Term::Hole(_)
-            | Term::Abs(_) => None,
+            Term::Var(_) | Term::Local(_) | Term::Const(_) | Term::Hole(_) | Term::Abs(_) => None,
             Term::App(inner) => {
                 let fun = inner.fun.whnf();
                 if let Term::Abs(abs) = fun.as_ref().unwrap_or(&inner.fun) {
@@ -1922,7 +1867,6 @@ impl Term {
                 inner.fun.contains_type_local(id) || inner.arg.contains_type_local(id)
             }
             Term::Local(_) => false,
-            Term::LocalConst(_) => false,
             Term::Const(inner) => {
                 inner.ty_args.iter().any(|ty| ty.contains_local(id))
                     || inner
@@ -1940,7 +1884,6 @@ impl Term {
             Term::Abs(m) => m.body.contains_local(id),
             Term::App(m) => m.fun.contains_local(id) || m.arg.contains_local(id),
             Term::Local(inner) => inner.id == id,
-            Term::LocalConst(_) => false,
             Term::Const(_) => false,
             Term::Hole(_) => false,
         }
@@ -1951,7 +1894,6 @@ impl Term {
 pub struct LocalEnv {
     pub local_types: Vec<Id>,
     pub local_classes: Vec<Class>,
-    pub local_consts: Vec<LocalConst>,
     pub local_deltas: Vec<LocalDelta>,
     pub locals: Vec<Local>,
 }
@@ -1967,24 +1909,9 @@ impl LocalEnv {
         })
     }
 
-    fn get_local_const(&self, id: Id) -> Option<&LocalConst> {
-        self.local_consts
-            .iter()
-            .rev()
-            .find(|local_const| local_const.id == id)
-    }
-
     pub fn get_local_delta(&self, id: Id) -> Option<&LocalDelta> {
         self.local_deltas.iter().rev().find(|delta| delta.id == id)
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct LocalConst {
-    // TODO: The Local/LocalConst split turned out to add complexity.
-    // Revisit this and migrate LocalConst toward a unified Local representation.
-    pub id: Id,
-    pub ty: Type,
 }
 
 #[derive(Debug, Clone)]
@@ -2216,12 +2143,6 @@ impl Env<'_> {
                 }
                 panic!("unbound local term: {:?}", inner.id);
             }
-            Term::LocalConst(inner) => {
-                let Some(local_const) = local_env.get_local_const(inner.id) else {
-                    panic!("unbound local constant: {}", inner.id);
-                };
-                local_const.ty.clone()
-            }
             Term::Const(m) => {
                 let Const {
                     local_types,
@@ -2352,7 +2273,7 @@ impl Env<'_> {
 
     fn local_delta_reduce(&self, local_env: &LocalEnv, m: &Term) -> Option<Term> {
         match m {
-            Term::LocalConst(inner) => local_env
+            Term::Local(inner) => local_env
                 .get_local_delta(inner.id)
                 .map(|delta| delta.target.clone()),
             _ => None,
@@ -2361,7 +2282,7 @@ impl Env<'_> {
 
     pub fn unfold_head(&self, local_env: &LocalEnv, m: &Term) -> Option<Term> {
         m.replace_head(&|head| match head {
-            Term::LocalConst(_) => self.local_delta_reduce(local_env, head),
+            Term::Local(_) => self.local_delta_reduce(local_env, head),
             Term::Const(_) => self.delta_reduce(head).or_else(|| self.kappa_reduce(head)),
             _ => None,
         })
@@ -2388,19 +2309,45 @@ impl Env<'_> {
                 self.height(local_env, &m.fun),
                 self.height(local_env, &m.arg),
             ),
-            Term::Local(_) => 0,
-            Term::LocalConst(inner) => self.local_delta_height(local_env, inner.id),
+            Term::Local(inner) => self.local_delta_height(local_env, inner.id),
             Term::Const(inner) => self.delta_height(&inner.name),
             Term::Hole(_) => 0,
         }
     }
 
-    pub fn has_kappa(&self, name: QualifiedName) -> bool {
-        self.kappa_table.contains_key(&name)
+    pub fn has_kappa(&self, name: &QualifiedName) -> bool {
+        self.kappa_table.contains_key(name)
     }
 
-    pub fn has_delta(&self, name: QualifiedName) -> bool {
-        self.delta_table.contains_key(&name)
+    fn is_kappa_redex(&self, m: &Term) -> bool {
+        let Term::Const(n) = m else {
+            return false;
+        };
+        self.kappa_table.contains_key(&n.name)
+            && !n.instances.is_empty()
+            && matches!(&n.instances[0], Instance::Global(_))
+    }
+
+    pub fn is_delta_redex(&self, local_env: &LocalEnv, m: &Term) -> bool {
+        match m {
+            Term::Local(inner) => self.local_delta_height(local_env, inner.id) > 0,
+            Term::Const(inner) => self.delta_height(&inner.name) > 0,
+            _ => false,
+        }
+    }
+
+    pub fn is_opaque(&self, local_env: &LocalEnv, m: &Term) -> bool {
+        matches!(m, Term::Const(_) | Term::Local(_))
+            && !self.is_kappa_redex(m)
+            && !self.is_delta_redex(local_env, m)
+    }
+
+    pub fn unfold_priority(&self, local_env: &LocalEnv, m: &Term) -> usize {
+        if self.is_kappa_redex(m) {
+            usize::MAX
+        } else {
+            self.height(local_env, m)
+        }
     }
 
     /// Judgmental equality for the definitional equality.
@@ -2506,115 +2453,26 @@ impl Env<'_> {
 
             let head1 = m1.head();
             let head2 = m2.head();
-            if let (Term::LocalConst(head1_inner), Term::LocalConst(head2_inner)) = (head1, head2) {
-                if head1_inner.id != head2_inner.id {
-                    return false;
-                }
+
+            if head1.alpha_eq(head2) {
                 let args1 = m1.args();
                 let args2 = m2.args();
-                if args1.len() != args2.len() {
-                    return false;
-                }
-                for (a1, a2) in std::iter::zip(args1, args2) {
-                    if !self.equiv(local_env, a1, a2) {
-                        return false;
+                if args1.len() == args2.len() {
+                    let mut all_equiv = true;
+                    for (a1, a2) in std::iter::zip(args1, args2) {
+                        if !self.equiv(local_env, a1, a2) {
+                            all_equiv = false;
+                            break;
+                        }
                     }
-                }
-                return true;
-            }
-            if let (Term::Local(head1_inner), Term::Local(head2_inner)) = (head1, head2) {
-                if head1_inner.id != head2_inner.id {
-                    return false;
-                }
-                let args1 = m1.args();
-                let args2 = m2.args();
-                if args1.len() != args2.len() {
-                    return false;
-                }
-                for (a1, a2) in std::iter::zip(args1, args2) {
-                    if !self.equiv(local_env, a1, a2) {
-                        return false;
-                    }
-                }
-                return true;
-            }
-            if head1.is_local() {
-                std::mem::swap(&mut m1, &mut m2);
-                continue;
-            }
-            if head2.is_local() {
-                if let Some(new_m1) = self.unfold_head(local_env, &m1) {
-                    m1 = new_m1;
-                    if m1.alpha_eq(&m2) {
+                    if all_equiv {
                         return true;
                     }
-                    continue;
-                } else {
-                    return false;
                 }
             }
-
-            if head1.is_hole() || head2.is_hole() {
-                panic!("holes found");
-            }
-
-            if let (Term::Const(head1_inner), Term::Const(head2_inner)) = (head1, head2) {
-                // small optimization
-                if head1_inner.alpha_eq(head2_inner) {
-                    let args1 = m1.args();
-                    let args2 = m2.args();
-                    if args1.len() == args2.len() {
-                        let mut all_equiv = true;
-                        for (a1, a2) in std::iter::zip(args1, args2) {
-                            if !self.equiv(local_env, a1, a2) {
-                                all_equiv = false;
-                                break;
-                            }
-                        }
-                        if all_equiv {
-                            return true;
-                        }
-                    }
-                }
-
-                if self.has_kappa(head1_inner.name.clone())
-                    || self.has_kappa(head2_inner.name.clone())
-                {
-                    if let Some(new_m1) = self.unfold_head(local_env, &m1) {
-                        m1 = new_m1;
-                        if m1.alpha_eq(&m2) {
-                            return true;
-                        }
-                        continue;
-                    }
-                    if let Some(new_m2) = self.unfold_head(local_env, &m2) {
-                        m2 = new_m2;
-                        if m1.alpha_eq(&m2) {
-                            return true;
-                        }
-                        continue;
-                    }
-                    return false;
-                }
-            }
-
-            let height1 = match head1 {
-                Term::LocalConst(inner) => self.local_delta_height(local_env, inner.id),
-                Term::Const(inner) => self.delta_height(&inner.name),
-                Term::Local(_) => 0,
-                _ => unreachable!(),
-            };
-            let height2 = match head2 {
-                Term::LocalConst(inner) => self.local_delta_height(local_env, inner.id),
-                Term::Const(inner) => self.delta_height(&inner.name),
-                Term::Local(_) => 0,
-                _ => unreachable!(),
-            };
-            if height1 == 0 && height2 == 0 {
-                return false;
-            }
-
-            match height1.cmp(&height2) {
+            let priority1 = self.unfold_priority(local_env, head1);
+            let priority2 = self.unfold_priority(local_env, head2);
+            match priority1.cmp(&priority2) {
                 std::cmp::Ordering::Less => {
                     if let Some(new_m2) = self.unfold_head(local_env, &m2) {
                         m2 = new_m2;
@@ -2711,7 +2569,6 @@ mod tests {
         LocalEnv {
             local_types: vec![],
             local_classes: vec![],
-            local_consts: vec![],
             local_deltas: vec![],
             locals: vec![],
         }
@@ -2770,14 +2627,14 @@ mod tests {
     }
 
     #[test]
-    fn unfold_head_uses_local_delta_for_local_const() {
+    fn unfold_head_uses_local_delta_for_local() {
         let c = QualifiedName::from_str("c");
         let c_id = Id::from_qualified_name(&c);
         let d = QualifiedName::from_str("d");
         let fixture = EnvFixture::new();
         let env = fixture.env();
         let mut local_env = empty_local_env();
-        local_env.local_consts.push(LocalConst {
+        local_env.locals.push(Local {
             id: c_id,
             ty: mk_type_prop(),
         });
@@ -2787,10 +2644,10 @@ mod tests {
             height: 0,
         });
 
-        let term = mk_local_const(c_id);
+        let term = mk_local(c_id);
         let unfolded = env
             .unfold_head(&local_env, &term)
-            .expect("local const should unfold by local delta");
+            .expect("local should unfold by local delta");
         assert!(unfolded.alpha_eq(&mk_const(d, vec![], vec![])));
     }
 
@@ -2824,6 +2681,36 @@ mod tests {
     }
 
     #[test]
+    fn equiv_unfolds_mixed_local_heads() {
+        let fixture = EnvFixture::new();
+        let env = fixture.env();
+
+        let unfoldable_id = Id::from_qualified_name(&QualifiedName::from_str("foo.l"));
+        let rigid_id = Id::from_name(&Name::from_str("x"));
+        let local_env = LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![LocalDelta {
+                id: unfoldable_id,
+                target: mk_local(rigid_id),
+                height: 0,
+            }],
+            locals: vec![
+                Local {
+                    id: unfoldable_id,
+                    ty: mk_type_prop(),
+                },
+                Local {
+                    id: rigid_id,
+                    ty: mk_type_prop(),
+                },
+            ],
+        };
+
+        assert!(env.equiv(&local_env, &mk_local(unfoldable_id), &mk_local(rigid_id)));
+    }
+
+    #[test]
     fn equiv_uses_local_delta() {
         let c = QualifiedName::from_str("c");
         let c_id = Id::from_qualified_name(&c);
@@ -2831,7 +2718,7 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
         let mut local_env = empty_local_env();
-        local_env.local_consts.push(LocalConst {
+        local_env.locals.push(Local {
             id: c_id,
             ty: mk_type_prop(),
         });
@@ -2841,7 +2728,7 @@ mod tests {
             height: 0,
         });
 
-        let left = mk_local_const(c_id);
+        let left = mk_local(c_id);
         let right = mk_const(d, vec![], vec![]);
         assert!(env.equiv(&local_env, &left, &right));
     }
@@ -2876,7 +2763,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_type_local_const_uses_id_lookup() {
+    fn infer_type_local_uses_id_lookup() {
         let fixture = EnvFixture::new();
         let env = fixture.env();
         let name = QualifiedName::from_str("foo.bar");
@@ -2884,29 +2771,28 @@ mod tests {
         let mut local_env = LocalEnv {
             local_types: vec![],
             local_classes: vec![],
-            local_consts: vec![LocalConst {
+            locals: vec![Local {
                 id,
                 ty: mk_type_prop(),
             }],
             local_deltas: vec![],
-            locals: vec![],
         };
 
-        let term = mk_local_const(id);
+        let term = mk_local(id);
         let inferred = env.infer_type(&mut local_env, &term);
         assert_eq!(inferred, mk_type_prop());
     }
 
     #[test]
-    fn equiv_local_const_compares_ids() {
+    fn equiv_local_compares_ids() {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
         let a_id = Id::from_qualified_name(&QualifiedName::from_str("a"));
         let b_id = Id::from_qualified_name(&QualifiedName::from_str("b"));
-        let left = mk_local_const(a_id);
-        let right = mk_local_const(a_id);
-        let mismatch = mk_local_const(b_id);
+        let left = mk_local(a_id);
+        let right = mk_local(a_id);
+        let mismatch = mk_local(b_id);
 
         let local_env = empty_local_env();
         assert!(env.equiv(&local_env, &left, &right));
@@ -2914,7 +2800,7 @@ mod tests {
     }
 
     #[test]
-    fn local_const_and_const_are_not_equiv_without_unfold() {
+    fn local_and_const_are_not_equiv_without_unfold() {
         let fixture = EnvFixture::new().with_const(
             QualifiedName::from_str("c"),
             Const {
@@ -2927,18 +2813,18 @@ mod tests {
         let c = QualifiedName::from_str("c");
         let c_id = Id::from_qualified_name(&c);
         let mut local_env = empty_local_env();
-        local_env.local_consts.push(LocalConst {
+        local_env.locals.push(Local {
             id: c_id,
             ty: mk_type_prop(),
         });
 
-        let left = mk_local_const(c_id);
+        let left = mk_local(c_id);
         let right = mk_const(c, vec![], vec![]);
         assert!(!env.equiv(&local_env, &left, &right));
     }
 
     #[test]
-    fn infer_type_const_ignores_local_const_name_collision() {
+    fn infer_type_const_ignores_local_name_collision() {
         let c = QualifiedName::from_str("c");
         let fixture = EnvFixture::new().with_const(
             c.clone(),
@@ -2952,12 +2838,11 @@ mod tests {
         let mut local_env = LocalEnv {
             local_types: vec![],
             local_classes: vec![],
-            local_consts: vec![LocalConst {
+            locals: vec![Local {
                 id: Id::from_qualified_name(&c),
                 ty: mk_type_arrow(mk_type_prop(), mk_type_prop()),
             }],
             local_deltas: vec![],
-            locals: vec![],
         };
 
         let term = mk_const(c, vec![], vec![]);
@@ -2977,5 +2862,12 @@ mod tests {
     fn name_returns_none_for_qualified_name_id() {
         let id = Id::from_qualified_name(&QualifiedName::from_str("foo.bar"));
         assert_eq!(id.name(), None);
+    }
+
+    #[test]
+    fn mk_local_for_qualified_id_is_not_closed() {
+        let id = Id::from_qualified_name(&QualifiedName::from_str("foo.bar"));
+        let local = mk_local(id);
+        assert!(!local.metadata().is_closed);
     }
 }

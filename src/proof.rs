@@ -6,8 +6,8 @@ use std::{collections::HashMap, iter::zip, slice};
 use crate::{
     lex::Span,
     tt::{
-        self, Class, Id, Instance, Local, LocalConst, LocalDelta, Name, QualifiedName, Term, Type,
-        mk_abs, mk_const, mk_local, mk_local_const, mk_type_const, mk_type_local,
+        self, Class, Id, Instance, Local, LocalDelta, Name, QualifiedName, Term, Type, mk_abs,
+        mk_const, mk_local, mk_type_const, mk_type_local,
     },
 };
 
@@ -1209,12 +1209,10 @@ impl Env<'_> {
                     value_ty
                 };
 
-                let local_const_len = tt_local_env.local_consts.len();
+                let local_len = tt_local_env.locals.len();
                 let local_delta_len = tt_local_env.local_deltas.len();
                 let id = Id::from_qualified_name(name);
-                tt_local_env
-                    .local_consts
-                    .push(LocalConst { id, ty: binder_ty });
+                tt_local_env.locals.push(Local { id, ty: binder_ty });
                 tt_local_env.local_deltas.push(LocalDelta {
                     id,
                     target: value.clone(),
@@ -1222,7 +1220,7 @@ impl Env<'_> {
                 });
                 let target = self.infer_prop(tt_local_env, local_env, body);
                 tt_local_env.local_deltas.truncate(local_delta_len);
-                tt_local_env.local_consts.truncate(local_const_len);
+                tt_local_env.locals.truncate(local_len);
                 self.tt_env.check_wff(tt_local_env, &target);
                 target
             }
@@ -1281,7 +1279,7 @@ impl Env<'_> {
                     id: Id::fresh_with_name(Name::from_str("this")),
                     ty: this_ty.clone(),
                 };
-                let mut local_consts: Vec<LocalConst> = vec![];
+                let mut locals: Vec<Local> = vec![];
                 let mut local_axioms: Vec<(QualifiedName, LocalAxiom)> = vec![];
                 let mut subst = vec![];
 
@@ -1294,9 +1292,9 @@ impl Env<'_> {
                             let fullname = structure_name.extend(field_name.as_str());
                             let id = Id::from_qualified_name(&fullname);
                             let ty = ty.arrow([this_ty.clone()]);
-                            local_consts.push(LocalConst { id, ty });
+                            locals.push(Local { id, ty });
 
-                            let mut target = mk_local_const(id);
+                            let mut target = mk_local(id);
                             target = target.apply([mk_local(this.id)]);
                             subst.push((Id::from_name(field_name), target));
                         }
@@ -1331,7 +1329,7 @@ impl Env<'_> {
 
                             let fullname = structure_name.extend(field_name.as_str());
                             let id = Id::from_qualified_name(&fullname);
-                            let mut rhs = mk_local_const(id);
+                            let mut rhs = mk_local(id);
                             rhs = rhs.apply([mk_local(this.id)]);
 
                             let mut char =
@@ -1374,18 +1372,18 @@ impl Env<'_> {
                 local_axioms.push((abs_name, LocalAxiom { target: abs }));
 
                 let local_type_len = tt_local_env.local_types.len();
-                let local_const_len = tt_local_env.local_consts.len();
+                let local_len = tt_local_env.locals.len();
                 let local_axiom_len = local_env.local_axioms.len();
                 tt_local_env.local_types.push(structure_id);
-                tt_local_env.local_consts.extend(local_consts);
+                tt_local_env.locals.extend(locals);
                 local_env.local_axioms.extend(local_axioms);
-                for i in local_const_len..tt_local_env.local_consts.len() {
-                    let local_const = &tt_local_env.local_consts[i];
-                    self.tt_env.check_wft(tt_local_env, &local_const.ty);
+                for i in local_len..tt_local_env.locals.len() {
+                    let local = &tt_local_env.locals[i];
+                    self.tt_env.check_wft(tt_local_env, &local.ty);
                 }
                 let target = self.infer_prop(tt_local_env, local_env, body);
                 local_env.local_axioms.truncate(local_axiom_len);
-                tt_local_env.local_consts.truncate(local_const_len);
+                tt_local_env.locals.truncate(local_len);
                 tt_local_env.local_types.truncate(local_type_len);
                 self.tt_env.check_wff(tt_local_env, &target);
                 target

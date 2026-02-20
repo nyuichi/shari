@@ -19,9 +19,9 @@ use crate::{
     },
     tt::{
         self, Class, ClassInstance, ClassType, Const, Id, Instance, InstanceGlobal, Kind, Local,
-        LocalConst, LocalDelta, LocalEnv, Name, QualifiedName, Term, TermAbs, TermApp, Type,
-        TypeApp, TypeArrow, mk_const, mk_fresh_type_hole, mk_hole, mk_instance_global,
-        mk_instance_local, mk_local, mk_local_const, mk_type_arrow, mk_type_local,
+        LocalDelta, LocalEnv, Name, QualifiedName, Term, TermAbs, TermApp, Type, TypeApp,
+        TypeArrow, mk_const, mk_fresh_type_hole, mk_hole, mk_instance_global, mk_instance_local,
+        mk_local, mk_type_arrow, mk_type_local,
     },
 };
 
@@ -59,7 +59,7 @@ impl std::fmt::Display for Error {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConstraintKind {
-    Delta,
+    Unfold,
     QuasiPattern,
     FlexRigid,
     FlexFlex,
@@ -142,7 +142,7 @@ struct Elaborator<'a> {
     class_constraints: Vec<(LocalEnv, Id, Class, Error)>,
 
     // TODO: resolveされた制約はその場で消したい
-    queue_delta: VecDeque<Rc<EqConstraint>>,
+    queue_unfold: VecDeque<Rc<EqConstraint>>,
     queue_qp: VecDeque<Rc<EqConstraint>>,
     queue_fr: VecDeque<Rc<EqConstraint>>,
     queue_ff: VecDeque<Rc<EqConstraint>>,
@@ -180,7 +180,7 @@ impl<'a> Elaborator<'a> {
             type_constraints: Default::default(),
             term_constraints: Default::default(),
             class_constraints: Default::default(),
-            queue_delta: Default::default(),
+            queue_unfold: Default::default(),
             queue_qp: Default::default(),
             queue_fr: Default::default(),
             queue_ff: Default::default(),
@@ -252,21 +252,17 @@ impl<'a> Elaborator<'a> {
 
     // generate a fresh hole of form `?M l₁ ⋯ lₙ` where l₁ ⋯ lₙ are the local variables
     fn mk_term_hole(&mut self, ty: Type) -> Term {
-        let hole_ty = ty.arrow(
-            self.tt_local_env
-                .locals
-                .iter()
-                .map(|local| local.ty.clone()),
-        );
+        let locals = self
+            .tt_local_env
+            .locals
+            .iter()
+            .filter(|local| self.tt_local_env.get_local_delta(local.id).is_none())
+            .collect::<Vec<_>>();
+        let hole_ty = ty.arrow(locals.iter().map(|local| local.ty.clone()));
         let hole = Id::fresh();
         self.term_holes.push((hole, hole_ty));
         let mut target = mk_hole(hole);
-        target = target.apply(
-            self.tt_local_env
-                .locals
-                .iter()
-                .map(|local| mk_local(local.id)),
-        );
+        target = target.apply(locals.iter().map(|local| mk_local(local.id)));
         target
     }
 
@@ -332,18 +328,6 @@ impl<'a> Elaborator<'a> {
                 self.push_type_constraint(fun_ty, mk_type_arrow(arg_ty, ret_ty.clone()), error);
 
                 Ok(ret_ty)
-            }
-            Term::LocalConst(inner) => {
-                let Some(local_const) = self
-                    .tt_local_env
-                    .local_consts
-                    .iter()
-                    .rev()
-                    .find(|local_const| local_const.id == inner.id)
-                else {
-                    bail!("unknown local constant");
-                };
-                Ok(local_const.ty.clone())
             }
             Term::Const(n) => {
                 let Some(Const {
@@ -712,12 +696,10 @@ impl<'a> Elaborator<'a> {
                     value_ty
                 };
 
-                let local_const_len = self.tt_local_env.local_consts.len();
+                let local_len = self.tt_local_env.locals.len();
                 let local_delta_len = self.tt_local_env.local_deltas.len();
                 let id = Id::from_qualified_name(name);
-                self.tt_local_env
-                    .local_consts
-                    .push(LocalConst { id, ty: binder_ty });
+                self.tt_local_env.locals.push(Local { id, ty: binder_ty });
                 self.tt_local_env.local_deltas.push(LocalDelta {
                     id,
                     target: value.clone(),
@@ -725,7 +707,7 @@ impl<'a> Elaborator<'a> {
                 });
                 let result = self.visit_expr(body);
                 self.tt_local_env.local_deltas.truncate(local_delta_len);
-                self.tt_local_env.local_consts.truncate(local_const_len);
+                self.tt_local_env.locals.truncate(local_len);
                 result
             }
             Expr::LetStructure(expr) => {
@@ -804,7 +786,7 @@ impl<'a> Elaborator<'a> {
                     id: Id::fresh_with_name(Name::from_str("this")),
                     ty: this_ty.clone(),
                 };
-                let mut local_consts: Vec<LocalConst> = vec![];
+                let mut locals: Vec<Local> = vec![];
                 let mut local_axioms: Vec<(QualifiedName, LocalAxiom)> = vec![];
                 let mut subst = vec![];
 
@@ -817,9 +799,9 @@ impl<'a> Elaborator<'a> {
                             let fullname = structure_name.extend(field_name.as_str());
                             let id = Id::from_qualified_name(&fullname);
                             let ty = ty.arrow([this_ty.clone()]);
-                            local_consts.push(LocalConst { id, ty });
+                            locals.push(Local { id, ty });
 
-                            let mut target = mk_local_const(id);
+                            let mut target = mk_local(id);
                             target = target.apply([mk_local(this.id)]);
                             subst.push((Id::from_name(field_name), target));
                         }
@@ -854,7 +836,7 @@ impl<'a> Elaborator<'a> {
 
                             let fullname = structure_name.extend(field_name.as_str());
                             let id = Id::from_qualified_name(&fullname);
-                            let mut rhs = mk_local_const(id);
+                            let mut rhs = mk_local(id);
                             rhs = rhs.apply([mk_local(this.id)]);
 
                             let mut char =
@@ -897,10 +879,10 @@ impl<'a> Elaborator<'a> {
                 local_axioms.push((abs_name, LocalAxiom { target: abs }));
 
                 let local_type_len = self.tt_local_env.local_types.len();
-                let local_const_len = self.tt_local_env.local_consts.len();
+                let local_len = self.tt_local_env.locals.len();
                 let local_axiom_len = self.local_axioms.len();
                 self.tt_local_env.local_types.push(structure_id);
-                self.tt_local_env.local_consts.extend(local_consts);
+                self.tt_local_env.locals.extend(locals);
                 self.local_axioms.extend(local_axioms);
                 let result = match self.visit_expr(body) {
                     Ok(target) => {
@@ -916,7 +898,7 @@ impl<'a> Elaborator<'a> {
                     Err(err) => Err(err),
                 };
                 self.local_axioms.truncate(local_axiom_len);
-                self.tt_local_env.local_consts.truncate(local_const_len);
+                self.tt_local_env.locals.truncate(local_len);
                 self.tt_local_env.local_types.truncate(local_type_len);
                 result
             }
@@ -964,9 +946,9 @@ impl<'a> Elaborator<'a> {
             }
             println!();
         }
-        if !self.queue_delta.is_empty() {
-            println!("{sp}| delta ({}):", self.queue_delta.len());
-            for c in &self.queue_delta {
+        if !self.queue_unfold.is_empty() {
+            println!("{sp}| unfold ({}):", self.queue_unfold.len());
+            for c in &self.queue_unfold {
                 let left = self.fully_inst(&c.left);
                 let right = self.fully_inst(&c.right);
                 println!("{sp}| - {}\n{sp}|   {}", left, right);
@@ -1101,7 +1083,7 @@ impl<'a> Elaborator<'a> {
 
     fn watch_instance(&mut self, c: Rc<MethodConstraint>) {
         if let Term::Const(left_head) = c.left.head()
-            && self.proof_env.tt_env.has_kappa(left_head.name.clone())
+            && self.proof_env.tt_env.has_kappa(&left_head.name)
             && let Instance::Hole(hole) = &left_head.instances[0]
         {
             self.instance_watch_list
@@ -1112,7 +1094,7 @@ impl<'a> Elaborator<'a> {
             return;
         }
         if let Term::Const(right_head) = c.right.head()
-            && self.proof_env.tt_env.has_kappa(right_head.name.clone())
+            && self.proof_env.tt_env.has_kappa(&right_head.name)
             && let Instance::Hole(hole) = &right_head.instances[0]
         {
             self.instance_watch_list
@@ -1124,7 +1106,7 @@ impl<'a> Elaborator<'a> {
 
     fn unwatch_instance(&mut self, c: &Rc<MethodConstraint>) {
         if let Term::Const(left_head) = c.left.head()
-            && self.proof_env.tt_env.has_kappa(left_head.name.clone())
+            && self.proof_env.tt_env.has_kappa(&left_head.name)
             && let Instance::Hole(hole) = &left_head.instances[0]
         {
             let hole_id = hole.id;
@@ -1140,7 +1122,7 @@ impl<'a> Elaborator<'a> {
             return;
         }
         if let Term::Const(right_head) = c.right.head()
-            && self.proof_env.tt_env.has_kappa(right_head.name.clone())
+            && self.proof_env.tt_env.has_kappa(&right_head.name)
             && let Instance::Hole(hole) = &right_head.instances[0]
         {
             let hole_id = hole.id;
@@ -1162,7 +1144,6 @@ impl<'a> Elaborator<'a> {
             Term::Abs(m) => self.occur_check(&m.body, hole),
             Term::App(m) => self.occur_check(&m.fun, hole) && self.occur_check(&m.arg, hole),
             Term::Local(_) => true,
-            Term::LocalConst(_) => true,
             Term::Const(_) => true,
             Term::Hole(inner) => {
                 if inner.id == hole {
@@ -1200,7 +1181,7 @@ impl<'a> Elaborator<'a> {
             let Term::Const(head_const) = head else {
                 return None;
             };
-            if !self.proof_env.tt_env.has_kappa(head_const.name.clone()) {
+            if !self.proof_env.tt_env.has_kappa(&head_const.name) {
                 return None;
             }
             if head_const.instances.is_empty() {
@@ -1431,11 +1412,17 @@ impl<'a> Elaborator<'a> {
         }
     }
 
-    fn add_delta_constraint(&mut self, local_env: LocalEnv, left: Term, right: Term, error: Error) {
+    fn add_unfold_constraint(
+        &mut self,
+        local_env: LocalEnv,
+        left: Term,
+        right: Term,
+        error: Error,
+    ) {
         if log::log_enabled!(log::Level::Debug) {
             let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
             println!(
-                "{sp}new constraint (delta):\n{sp}- {}\n{sp}  {}",
+                "{sp}new constraint (unfold):\n{sp}- {}\n{sp}  {}",
                 left, right
             );
         }
@@ -1444,11 +1431,11 @@ impl<'a> Elaborator<'a> {
             local_env,
             left,
             right,
-            kind: ConstraintKind::Delta,
+            kind: ConstraintKind::Unfold,
             error,
         });
         self.trail.push(Record::AddEqConstraint(c.clone()));
-        self.queue_delta.push_back(c.clone());
+        self.queue_unfold.push_back(c.clone());
     }
 
     fn add_flex_constraint(
@@ -1461,9 +1448,9 @@ impl<'a> Elaborator<'a> {
         left = self.inst_arg_head(&left);
         right = self.inst_arg_head(&right);
         let kind;
-        if left.is_quasi_pattern() {
+        if left.is_quasi_pattern(&local_env) {
             kind = ConstraintKind::QuasiPattern;
-        } else if right.is_quasi_pattern() {
+        } else if right.is_quasi_pattern(&local_env) {
             mem::swap(&mut left, &mut right);
             kind = ConstraintKind::QuasiPattern;
         } else if left.head().is_hole() && right.head().is_hole() {
@@ -1505,7 +1492,7 @@ impl<'a> Elaborator<'a> {
             ConstraintKind::FlexFlex => {
                 self.queue_ff.push_back(c.clone());
             }
-            ConstraintKind::Delta => unreachable!(),
+            ConstraintKind::Unfold => unreachable!(),
         }
 
         self.watch(c);
@@ -1765,7 +1752,7 @@ impl<'a> Elaborator<'a> {
             // 1. L is stuck by an unfoldable constant
             // 2. L is stuck by an unassigned hole
             if let Term::Const(left_head) = left.head().clone() {
-                if self.proof_env.tt_env.has_kappa(left_head.name.clone()) {
+                if self.proof_env.tt_env.has_kappa(&left_head.name) {
                     if let Some(new_left) = self.inst_recv(&left) {
                         left = new_left;
                     }
@@ -1827,7 +1814,7 @@ impl<'a> Elaborator<'a> {
         if let Term::Hole(right_head) = right.head() {
             let right_head = right_head.id;
             right = self.inst_arg_head(&right);
-            if let Some(args) = right.is_pattern()
+            if let Some(args) = right.is_pattern(&local_env)
                 && self.occur_check(&left, right_head)
                 && left.is_supported_by(&args)
             {
@@ -1846,7 +1833,7 @@ impl<'a> Elaborator<'a> {
         if let Term::Hole(left_head) = left.head() {
             let left_head = left_head.id;
             left = self.inst_arg_head(&left);
-            if let Some(args) = left.is_pattern()
+            if let Some(args) = left.is_pattern(&local_env)
                 && self.occur_check(&right, left_head)
                 && right.is_supported_by(&args)
             {
@@ -1866,12 +1853,52 @@ impl<'a> Elaborator<'a> {
             self.add_flex_constraint(local_env, left, right, error);
             return None;
         }
-        // then each of the heads can be a local, local const, or a const.
-        if let (Term::LocalConst(left_head), Term::LocalConst(right_head)) =
-            (left.head(), right.head())
+        // then each of the heads can be a local or a const.
+        if let Some(new_left) = self.inst_recv(&left) {
+            left = new_left;
+        }
+        if let Some(new_right) = self.inst_recv(&right) {
+            right = new_right;
+        }
+        if let Term::Const(left_head) = left.head()
+            && self.proof_env.tt_env.has_kappa(&left_head.name)
+            && left_head.instances[0].is_hole()
         {
-            if left_head.id != right_head.id {
-                return Some(error);
+            self.add_method_constraint(local_env.clone(), left, right, error);
+            return None;
+        }
+        if let Term::Const(right_head) = right.head()
+            && self.proof_env.tt_env.has_kappa(&right_head.name)
+            && right_head.instances[0].is_hole()
+        {
+            self.add_method_constraint(local_env.clone(), left, right, error);
+            return None;
+        }
+        // then each of the heads is either opaque or unfoldable.
+        if self.proof_env.tt_env.is_opaque(&local_env, left.head())
+            && self.proof_env.tt_env.is_opaque(&local_env, right.head())
+        {
+            match (left.head(), right.head()) {
+                (Term::Local(left_head), Term::Local(right_head)) => {
+                    if left_head.id != right_head.id {
+                        return Some(error);
+                    }
+                }
+                (Term::Const(left_head), Term::Const(right_head)) => {
+                    if left_head.name != right_head.name {
+                        return Some(error);
+                    }
+                    for (left_ty_arg, right_ty_arg) in
+                        left_head.ty_args.iter().zip(right_head.ty_args.iter())
+                    {
+                        self.push_type_constraint(
+                            left_ty_arg.clone(),
+                            right_ty_arg.clone(),
+                            error.clone(),
+                        );
+                    }
+                }
+                _ => return Some(error),
             }
             let left_args = left.args();
             let right_args = right.args();
@@ -1888,165 +1915,85 @@ impl<'a> Elaborator<'a> {
             }
             return None;
         }
-        if let (Term::Local(left_head), Term::Local(right_head)) = (left.head(), right.head()) {
-            if left_head.id != right_head.id {
-                return Some(error);
-            }
-            let left_args = left.args();
-            let right_args = right.args();
-            if left_args.len() != right_args.len() {
-                return Some(error);
-            }
-            for (left_arg, right_arg) in left_args.into_iter().zip(right_args.into_iter()).rev() {
-                self.push_term_constraint(
-                    local_env.clone(),
-                    left_arg.clone(),
-                    right_arg.clone(),
-                    error.clone(),
-                );
-            }
-            return None;
-        }
-        if left.head().is_local() && right.head().is_local_const()
-            || left.head().is_local_const() && right.head().is_local()
-        {
-            return Some(error);
-        }
-        if right.head().is_local_const() {
-            mem::swap(&mut left, &mut right);
-        }
-        if left.head().is_local_const() {
-            if let Some(new_left) = self.proof_env.tt_env.unfold_head(&local_env, &left) {
-                left = new_left;
-                self.push_term_constraint(local_env, left, right, error);
+        // now at least one of the heads is unfoldable.
+        // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where f is unfoldable
+        match (left.head(), right.head()) {
+            (Term::Local(left_head), Term::Local(right_head)) if left_head.id == right_head.id => {
+                self.add_unfold_constraint(local_env, left, right, error);
                 return None;
             }
-            return Some(error);
-        }
-        if right.head().is_local() {
-            mem::swap(&mut left, &mut right);
-        }
-        let right_head_term = right.head().clone();
-        if let (Term::Local(left_head), Term::Const(right_head)) = (left.head(), right_head_term) {
-            if self.proof_env.tt_env.has_kappa(right_head.name.clone()) {
-                if let Some(new_right) = self.inst_recv(&right) {
-                    right = new_right;
+            (Term::Const(left_head), Term::Const(right_head))
+                if left_head.name == right_head.name
+                    && self
+                        .proof_env
+                        .tt_env
+                        .is_delta_redex(&local_env, left.head()) =>
+            {
+                self.add_unfold_constraint(local_env, left, right, error);
+                return None;
+            }
+            (Term::Const(left_head), Term::Const(right_head))
+                if left_head.name == right_head.name
+                    && self.proof_env.tt_env.has_kappa(&left_head.name) =>
+            {
+                assert!(self.proof_env.tt_env.has_kappa(&left_head.name));
+                let Const {
+                    local_types,
+                    local_classes,
+                    ty: _,
+                } = self
+                    .proof_env
+                    .tt_env
+                    .const_table
+                    .get(&left_head.name)
+                    .unwrap();
+                let mut subst = Vec::with_capacity(local_types.len());
+                for (x, t) in zip(local_types, &left_head.ty_args) {
+                    subst.push((*x, t.clone()));
                 }
-                let Term::Const(updated_right_head) = right.head().clone() else {
-                    unreachable!();
-                };
-                if updated_right_head.instances[0].is_hole() {
-                    self.add_method_constraint(local_env, left, right, error);
+                let left_class = local_classes[0].subst(&subst);
+                let mut subst = Vec::with_capacity(local_types.len());
+                for (x, t) in zip(local_types, &right_head.ty_args) {
+                    subst.push((*x, t.clone()));
+                }
+                let right_class = local_classes[0].subst(&subst);
+                if left_class == right_class {
+                    self.add_unfold_constraint(local_env, left, right, error);
                     return None;
                 }
             }
-            if !right.contains_local(left_head.id) {
-                return Some(error);
-            }
-            if let Some(new_right) = self.proof_env.tt_env.unfold_head(&local_env, &right) {
-                right = new_right;
-                self.push_term_constraint(local_env, left, right, error);
-                return None;
-            }
-            return Some(error);
+            _ => {}
         }
-        let mut left_head = match left.head().clone() {
-            Term::Const(head) => head,
-            _ => unreachable!(),
-        };
-        let mut right_head = match right.head().clone() {
-            Term::Const(head) => head,
-            _ => unreachable!(),
-        };
-        if self.proof_env.tt_env.has_kappa(left_head.name.clone()) {
-            if let Some(new_left) = self.inst_recv(&left) {
-                left = new_left;
-                left_head = match left.head().clone() {
-                    Term::Const(head) => head,
-                    _ => unreachable!(),
-                };
-            }
-            if left_head.instances[0].is_hole() {
-                self.add_method_constraint(local_env, left, right, error);
-                return None;
-            }
-            if let Some(new_left) = self.proof_env.tt_env.unfold_head(&local_env, &left) {
-                left = new_left;
-                self.push_term_constraint(local_env.clone(), left, right, error);
-                return None;
-            }
-        }
-        if self.proof_env.tt_env.has_kappa(right_head.name.clone()) {
-            if let Some(new_right) = self.inst_recv(&right) {
-                right = new_right;
-                right_head = match right.head().clone() {
-                    Term::Const(head) => head,
-                    _ => unreachable!(),
-                };
-            }
-            if right_head.instances[0].is_hole() {
-                self.add_method_constraint(local_env, left, right, error);
-                return None;
-            }
-            if let Some(new_right) = self.proof_env.tt_env.unfold_head(&local_env, &right) {
-                right = new_right;
-                self.push_term_constraint(local_env.clone(), left, right, error);
-                return None;
-            }
-        }
-        let (left_head, right_head) = match (left.head().clone(), right.head().clone()) {
-            (Term::Const(left_head), Term::Const(right_head)) => (left_head, right_head),
-            _ => unreachable!(),
-        };
-        if left_head.name == right_head.name {
-            if self.proof_env.tt_env.has_delta(left_head.name.clone()) {
-                // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where f is unfoldable
-                self.add_delta_constraint(local_env, left, right, error);
-                return None;
-            }
-            // (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₘ) where f is not unfoldable.
-            for (t1, t2) in left_head.ty_args.iter().zip(right_head.ty_args.iter()) {
-                self.push_type_constraint(t1.clone(), t2.clone(), error.clone());
-            }
-            let left_args = left.args();
-            let right_args = right.args();
-            if left_args.len() != right_args.len() {
-                return Some(error);
-            }
-            for (left_arg, right_arg) in left_args.into_iter().zip(right_args.into_iter()).rev() {
-                self.push_term_constraint(
-                    local_env.clone(),
-                    left_arg.clone(),
-                    right_arg.clone(),
-                    error.clone(),
-                );
-            }
-            return None;
-        }
-        let left_height = self.proof_env.tt_env.delta_height(&left_head.name);
-        let right_height = self.proof_env.tt_env.delta_height(&right_head.name);
-        if left_height == 0 && right_height == 0 {
-            // (f t₁ ⋯ tₙ) ≈ (g s₁ ⋯ sₘ) where f and g are both irreducible.
-            return Some(error);
-        }
-        match left_height.cmp(&right_height) {
+        let left_priority = self
+            .proof_env
+            .tt_env
+            .unfold_priority(&local_env, left.head());
+        let right_priority = self
+            .proof_env
+            .tt_env
+            .unfold_priority(&local_env, right.head());
+        match left_priority.cmp(&right_priority) {
             std::cmp::Ordering::Greater => {
-                if let Some(new_left) = self.proof_env.tt_env.unfold_head(&local_env, &left) {
-                    left = new_left;
-                }
+                let Some(new_left) = self.proof_env.tt_env.unfold_head(&local_env, &left) else {
+                    unreachable!()
+                };
+                left = new_left;
             }
             std::cmp::Ordering::Less => {
-                if let Some(new_right) = self.proof_env.tt_env.unfold_head(&local_env, &right) {
-                    right = new_right;
-                }
+                let Some(new_right) = self.proof_env.tt_env.unfold_head(&local_env, &right) else {
+                    unreachable!()
+                };
+                right = new_right;
             }
             std::cmp::Ordering::Equal => {
-                if let Some(new_left) = self.proof_env.tt_env.unfold_head(&local_env, &left) {
-                    left = new_left;
-                }
-                if let Some(new_right) = self.proof_env.tt_env.unfold_head(&local_env, &right) {
-                    right = new_right;
-                }
+                let Some(new_left) = self.proof_env.tt_env.unfold_head(&local_env, &left) else {
+                    unreachable!()
+                };
+                left = new_left;
+                let Some(new_right) = self.proof_env.tt_env.unfold_head(&local_env, &right) else {
+                    unreachable!()
+                };
+                right = new_right;
             }
         }
         self.push_term_constraint(local_env, left, right, error);
@@ -2176,8 +2123,8 @@ impl<'a> Elaborator<'a> {
         for _ in 0..self.trail.len() - snapshot.trail_len {
             match self.trail.pop().unwrap() {
                 Record::AddEqConstraint(c) => match c.kind {
-                    ConstraintKind::Delta => {
-                        self.queue_delta.pop_back();
+                    ConstraintKind::Unfold => {
+                        self.queue_unfold.pop_back();
                     }
                     ConstraintKind::QuasiPattern => {
                         self.queue_qp.pop_back();
@@ -2210,8 +2157,8 @@ impl<'a> Elaborator<'a> {
                     self.instance_subst_map.remove(&id);
                 }
                 Record::RemoveEqConstraint(c) => match c.kind {
-                    ConstraintKind::Delta => {
-                        self.queue_delta.push_front(c);
+                    ConstraintKind::Unfold => {
+                        self.queue_unfold.push_front(c);
                     }
                     ConstraintKind::QuasiPattern => {
                         self.queue_qp.push_front(c);
@@ -2248,22 +2195,24 @@ impl<'a> Elaborator<'a> {
         true
     }
 
-    fn choice_delta(&self, c: &EqConstraint) -> Vec<Node> {
-        // suppose (f t₁ ⋯ tₙ) ≈ (f s₁ ⋯ sₙ)
-        let Term::Const(left_head) = c.left.head() else {
-            unreachable!();
-        };
-        let Term::Const(right_head) = c.right.head() else {
-            unreachable!();
-        };
+    fn choice_unfold(&self, c: &EqConstraint) -> Vec<Node> {
+        // Suppose (h t₁ ⋯ tₙ) ≈ (h s₁ ⋯ sₙ), where h is local or const.
         let left_args = c.left.args();
         let right_args = c.right.args();
         // Try first (t₁ ≈ s₁) ∧ ⋯ ∧ (tₙ ≈ sₙ)
         let node1 = {
             let mut node = Node::default();
-            for (t1, t2) in zip(&left_head.ty_args, &right_head.ty_args) {
-                node.type_constraints
-                    .push((t1.clone(), t2.clone(), c.error.clone()));
+            match (c.left.head(), c.right.head()) {
+                (Term::Const(left_head), Term::Const(right_head)) => {
+                    for (t1, t2) in zip(&left_head.ty_args, &right_head.ty_args) {
+                        node.type_constraints
+                            .push((t1.clone(), t2.clone(), c.error.clone()));
+                    }
+                }
+                (Term::Local(left_head), Term::Local(right_head)) => {
+                    debug_assert_eq!(left_head.id, right_head.id);
+                }
+                _ => unreachable!(),
             }
             for (&left_arg, &right_arg) in left_args.iter().zip(right_args.iter()) {
                 node.term_constraints.push((
@@ -2280,12 +2229,14 @@ impl<'a> Elaborator<'a> {
             let mut node = Node::default();
             let mut left = c.left.clone();
             let mut right = c.right.clone();
-            if let Some(new_left) = self.proof_env.tt_env.unfold_head(&c.local_env, &left) {
-                left = new_left;
-            }
-            if let Some(new_right) = self.proof_env.tt_env.unfold_head(&c.local_env, &right) {
-                right = new_right;
-            }
+            let Some(new_left) = self.proof_env.tt_env.unfold_head(&c.local_env, &left) else {
+                unreachable!()
+            };
+            left = new_left;
+            let Some(new_right) = self.proof_env.tt_env.unfold_head(&c.local_env, &right) else {
+                unreachable!()
+            };
+            right = new_right;
             node.term_constraints
                 .push((c.local_env.clone(), left, right, c.error.clone()));
             node
@@ -2444,14 +2395,14 @@ impl<'a> Elaborator<'a> {
                 };
                 Some(self.fully_inst_type(&ty))
             }
-            Term::LocalConst(inner) => c
+            Term::Local(inner) => c
                 .local_env
-                .local_consts
+                .locals
                 .iter()
                 .rev()
-                .find(|local_const| local_const.id == inner.id)
-                .map(|local_const| self.fully_inst_type(&local_const.ty)),
-            Term::Var(_) | Term::Abs(_) | Term::App(_) | Term::Local(_) | Term::Hole(_) => None,
+                .find(|local| local.id == inner.id)
+                .map(|local| self.fully_inst_type(&local.ty)),
+            Term::Var(_) | Term::Abs(_) | Term::App(_) | Term::Hole(_) => None,
         };
         if let Some(right_head_ty) = imitation_head_ty {
             // τ(u[1]) ⋯ τ(u[q])
@@ -2522,16 +2473,16 @@ impl<'a> Elaborator<'a> {
     // - method-const case: m l₁ ⋯ lₙ =?= c r₁ ⋯ rₘ  (infer the type of m by searching the method table)
     fn decide(&mut self) -> bool {
         let nodes = 'next: {
-            if let Some(c) = self.queue_delta.pop_front() {
+            if let Some(c) = self.queue_unfold.pop_front() {
                 self.trail.push(Record::RemoveEqConstraint(c.clone()));
                 if log::log_enabled!(log::Level::Debug) {
                     let sp = repeat_n(' ', self.decisions.len()).collect::<String>();
                     println!(
-                        "{sp}making a decision (delta):\n{sp}- {}\n{sp}  {}",
+                        "{sp}making a decision (unfold):\n{sp}- {}\n{sp}  {}",
                         c.left, c.right
                     );
                 }
-                break 'next self.choice_delta(&c);
+                break 'next self.choice_unfold(&c);
             }
             while let Some(c) = self.queue_qp.pop_front() {
                 self.trail.push(Record::RemoveEqConstraint(c.clone()));
@@ -2893,7 +2844,6 @@ mod tests {
             local_types: vec![Id::from_name(&name_u)],
             local_classes: vec![],
             locals,
-            local_consts: vec![],
             local_deltas: vec![],
         };
         let mut tt_local_env = local_env.clone();
@@ -2936,5 +2886,709 @@ mod tests {
         let result = elab.solve();
         println!("result: {result:?}");
         assert!(result.is_err(), "unification unexpectedly succeeded");
+    }
+
+    #[test]
+    fn mk_term_hole_uses_only_non_unfoldable_locals() {
+        let x_id = Id::from_name(&Name::from_str("x"));
+        let q_id = Id::from_qualified_name(&QualifiedName::from_str("foo.q"));
+        let u_id = Id::from_qualified_name(&QualifiedName::from_str("foo.u"));
+
+        let x_ty = mk_type_prop();
+        let q_ty = mk_type_prop();
+        let u_ty = mk_type_prop();
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![LocalDelta {
+                id: u_id,
+                target: mk_const(QualifiedName::from_str("c"), vec![], vec![]),
+                height: 0,
+            }],
+            locals: vec![
+                Local {
+                    id: x_id,
+                    ty: x_ty.clone(),
+                },
+                Local {
+                    id: q_id,
+                    ty: q_ty.clone(),
+                },
+                Local { id: u_id, ty: u_ty },
+            ],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let mut elab = Elaborator::new(proof_env, &mut local_env, vec![]);
+
+        let hole = elab.mk_term_hole(mk_type_prop());
+        let args = hole.args();
+        assert_eq!(args.len(), 2);
+        let Term::Local(arg0) = args[0] else {
+            panic!("expected local argument");
+        };
+        assert_eq!(arg0.id, x_id);
+        let Term::Local(arg1) = args[1] else {
+            panic!("expected local argument");
+        };
+        assert_eq!(arg1.id, q_id);
+
+        let (_, hole_ty) = elab
+            .term_holes
+            .last()
+            .expect("hole type should be registered");
+        let expected_hole_ty = mk_type_prop().arrow([x_ty, q_ty]);
+        assert_eq!(*hole_ty, expected_hole_ty);
+    }
+
+    #[test]
+    fn unify_local_and_const_uses_local_unfold() {
+        let c = QualifiedName::from_str("c");
+        let l_id = Id::from_qualified_name(&QualifiedName::from_str("foo.l"));
+        let c_term = mk_const(c.clone(), vec![], vec![]);
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![LocalDelta {
+                id: l_id,
+                target: c_term.clone(),
+                height: 0,
+            }],
+            locals: vec![Local {
+                id: l_id,
+                ty: mk_type_prop(),
+            }],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::from([(
+            c.clone(),
+            Const {
+                local_types: vec![],
+                local_classes: vec![],
+                ty: mk_type_prop(),
+            },
+        )]);
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let local_env_snapshot = local_env.clone();
+        let mut elab = Elaborator::new(proof_env, &mut local_env, vec![]);
+
+        let error = visit_error("expected success", None);
+        elab.push_term_constraint(
+            local_env_snapshot.clone(),
+            mk_local(l_id),
+            c_term.clone(),
+            error.clone(),
+        );
+        elab.push_term_constraint(local_env_snapshot, c_term, mk_local(l_id), error);
+        assert!(
+            elab.solve().is_ok(),
+            "local/const unification should succeed by local unfold"
+        );
+    }
+
+    #[test]
+    fn unify_local_local_with_unfoldable_side() {
+        let unfoldable_id = Id::from_qualified_name(&QualifiedName::from_str("foo.l"));
+        let rigid_id = Id::from_name(&Name::from_str("x"));
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![LocalDelta {
+                id: unfoldable_id,
+                target: mk_local(rigid_id),
+                height: 0,
+            }],
+            locals: vec![
+                Local {
+                    id: unfoldable_id,
+                    ty: mk_type_prop(),
+                },
+                Local {
+                    id: rigid_id,
+                    ty: mk_type_prop(),
+                },
+            ],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let local_env_snapshot = local_env.clone();
+        let mut elab = Elaborator::new(proof_env, &mut local_env, vec![]);
+
+        let error = visit_error("expected success", None);
+        elab.push_term_constraint(
+            local_env_snapshot,
+            mk_local(unfoldable_id),
+            mk_local(rigid_id),
+            error,
+        );
+        assert!(
+            elab.solve().is_ok(),
+            "local/local unification should succeed by unfolding the unfoldable side"
+        );
+    }
+
+    #[test]
+    fn unify_same_kappa_const_with_local_instance_is_reachable() {
+        let method_name = QualifiedName::from_str("m");
+        let class_name = QualifiedName::from_str("C");
+        let x_id = Id::from_name(&Name::from_str("x"));
+        let y_id = Id::from_name(&Name::from_str("y"));
+        let instance = mk_instance_local(Class {
+            name: class_name.clone(),
+            args: vec![],
+        });
+        let head = mk_const(method_name.clone(), vec![], vec![instance]);
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![],
+            locals: vec![
+                Local {
+                    id: x_id,
+                    ty: mk_type_prop(),
+                },
+                Local {
+                    id: y_id,
+                    ty: mk_type_prop(),
+                },
+            ],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::from([(
+            method_name.clone(),
+            Const {
+                local_types: vec![],
+                local_classes: vec![],
+                ty: mk_type_prop().arrow([mk_type_prop()]),
+            },
+        )]);
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> =
+            HashMap::from([(method_name.clone(), Kappa)]);
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let local_env_snapshot = local_env.clone();
+        let mut elab = Elaborator::new(proof_env, &mut local_env, vec![]);
+
+        let error = visit_error("expected failure", None);
+        elab.push_term_constraint(
+            local_env_snapshot,
+            mk_app(head.clone(), mk_local(x_id)),
+            mk_app(head, mk_local(y_id)),
+            error,
+        );
+
+        let result = elab.solve();
+        assert!(
+            result.is_err(),
+            "unification should fail by rigid argument mismatch"
+        );
+    }
+
+    #[test]
+    fn unify_same_local_delta_head_with_mismatched_args_fails_without_panic() {
+        let f_id = Id::from_qualified_name(&QualifiedName::from_str("foo.f"));
+        let x_id = Id::from_name(&Name::from_str("x"));
+        let y_id = Id::from_name(&Name::from_str("y"));
+        let c = QualifiedName::from_str("c");
+        let c_term = mk_const(c.clone(), vec![], vec![]);
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![LocalDelta {
+                id: f_id,
+                target: c_term.clone(),
+                height: 0,
+            }],
+            locals: vec![
+                Local {
+                    id: f_id,
+                    ty: mk_type_prop().arrow([mk_type_prop()]),
+                },
+                Local {
+                    id: x_id,
+                    ty: mk_type_prop(),
+                },
+                Local {
+                    id: y_id,
+                    ty: mk_type_prop(),
+                },
+            ],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::from([(
+            c.clone(),
+            Const {
+                local_types: vec![],
+                local_classes: vec![],
+                ty: mk_type_prop().arrow([mk_type_prop()]),
+            },
+        )]);
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let local_env_snapshot = local_env.clone();
+        let mut elab = Elaborator::new(proof_env, &mut local_env, vec![]);
+
+        let error = visit_error("expected failure", None);
+        elab.push_term_constraint(
+            local_env_snapshot,
+            mk_app(mk_local(f_id), mk_local(x_id)),
+            mk_app(mk_local(f_id), mk_local(y_id)),
+            error,
+        );
+        let result = elab.solve();
+        assert!(
+            result.is_err(),
+            "unification should fail by rigid argument mismatch"
+        );
+    }
+
+    #[test]
+    fn unfold_constraint_keeps_head_arguments_as_is() {
+        let f = QualifiedName::from_str("f");
+        let g = QualifiedName::from_str("g");
+        let u = Id::from_name(&Name::from_str("u"));
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![],
+            locals: vec![],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::from([
+            (
+                f.clone(),
+                Const {
+                    local_types: vec![u],
+                    local_classes: vec![],
+                    ty: mk_type_prop(),
+                },
+            ),
+            (
+                g.clone(),
+                Const {
+                    local_types: vec![],
+                    local_classes: vec![],
+                    ty: mk_type_prop(),
+                },
+            ),
+        ]);
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::from([(
+            f.clone(),
+            Delta {
+                local_types: vec![u],
+                local_classes: vec![],
+                target: mk_const(g, vec![], vec![]),
+                height: 0,
+            },
+        )]);
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let mut elab = Elaborator::new(proof_env, &mut local_env, vec![]);
+
+        let left_ty_arg = mk_fresh_type_hole();
+        let Type::Hole(hole) = left_ty_arg else {
+            unreachable!();
+        };
+        elab.type_subst_map.insert(hole.id, mk_type_prop());
+
+        let error = visit_error("expected success", None);
+        let left = mk_const(f.clone(), vec![Type::Hole(hole.clone())], vec![]);
+        let right = mk_const(f, vec![mk_type_prop()], vec![]);
+        let conflict = elab.find_conflict_in_terms(
+            tt::LocalEnv {
+                local_types: vec![],
+                local_classes: vec![],
+                local_deltas: vec![],
+                locals: vec![],
+            },
+            left,
+            right,
+            error,
+        );
+        assert!(
+            conflict.is_none(),
+            "should defer by adding an unfold constraint"
+        );
+
+        let c = elab
+            .queue_unfold
+            .front()
+            .expect("unfold constraint should be queued");
+        let Term::Const(left_head) = c.left.head() else {
+            panic!("expected const head");
+        };
+        assert_eq!(left_head.ty_args, vec![Type::Hole(hole)]);
+    }
+
+    #[test]
+    fn kappa_unfold_constraint_uses_head_type_not_receiver_instance() {
+        let method_name = QualifiedName::from_str("m");
+        let body_name = QualifiedName::from_str("id");
+        let class_name = QualifiedName::from_str("C");
+        let instance_name = QualifiedName::from_str("inst.C");
+        let u = Id::from_name(&Name::from_str("u"));
+        let v = Id::from_name(&Name::from_str("v"));
+        let x_id = Id::from_name(&Name::from_str("x"));
+        let y_id = Id::from_name(&Name::from_str("y"));
+
+        let left_head = mk_const(
+            method_name.clone(),
+            vec![mk_type_prop(), mk_type_prop()],
+            vec![mk_instance_global(
+                instance_name.clone(),
+                vec![mk_type_prop(), mk_type_prop()],
+                vec![],
+            )],
+        );
+        let right_head = mk_const(
+            method_name.clone(),
+            vec![mk_type_prop(), mk_type_prop()],
+            vec![mk_instance_global(
+                instance_name.clone(),
+                vec![
+                    mk_type_prop(),
+                    mk_type_arrow(mk_type_prop(), mk_type_prop()),
+                ],
+                vec![],
+            )],
+        );
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![],
+            locals: vec![
+                Local {
+                    id: x_id,
+                    ty: mk_type_prop(),
+                },
+                Local {
+                    id: y_id,
+                    ty: mk_type_prop(),
+                },
+            ],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::from([
+            (
+                method_name.clone(),
+                Const {
+                    local_types: vec![u, v],
+                    local_classes: vec![Class {
+                        name: class_name.clone(),
+                        args: vec![mk_type_local(u), mk_type_local(v)],
+                    }],
+                    ty: mk_type_prop().arrow([mk_type_prop()]),
+                },
+            ),
+            (
+                body_name.clone(),
+                Const {
+                    local_types: vec![],
+                    local_classes: vec![],
+                    ty: mk_type_prop().arrow([mk_type_prop()]),
+                },
+            ),
+        ]);
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> =
+            HashMap::from([(method_name.clone(), Kappa)]);
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::from([(
+            instance_name,
+            ClassInstance {
+                local_types: vec![u, v],
+                local_classes: vec![],
+                target: Class {
+                    name: class_name,
+                    args: vec![mk_type_local(u), mk_type_local(v)],
+                },
+                method_table: HashMap::from([(method_name, mk_const(body_name, vec![], vec![]))]),
+            },
+        )]);
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let mut elab = Elaborator::new(proof_env, &mut local_env, vec![]);
+
+        let conflict = elab.find_conflict_in_terms(
+            tt::LocalEnv {
+                local_types: vec![],
+                local_classes: vec![],
+                local_deltas: vec![],
+                locals: vec![
+                    Local {
+                        id: x_id,
+                        ty: mk_type_prop(),
+                    },
+                    Local {
+                        id: y_id,
+                        ty: mk_type_prop(),
+                    },
+                ],
+            },
+            mk_app(left_head, mk_local(x_id)),
+            mk_app(right_head, mk_local(y_id)),
+            visit_error("expected success", None),
+        );
+        assert!(
+            conflict.is_none(),
+            "comparison should keep searching by unfolding, not fail immediately"
+        );
+        assert!(
+            !elab.queue_unfold.is_empty(),
+            "kappa unfold constraints should be queued based on head type even when receiver instances differ"
+        );
+    }
+
+    #[test]
+    fn kappa_unfold_constraint_requires_matching_head_class() {
+        let method_name = QualifiedName::from_str("m");
+        let body_name = QualifiedName::from_str("id");
+        let class_name = QualifiedName::from_str("C");
+        let instance_name = QualifiedName::from_str("inst.C");
+        let u = Id::from_name(&Name::from_str("u"));
+        let v = Id::from_name(&Name::from_str("v"));
+        let x_id = Id::from_name(&Name::from_str("x"));
+        let y_id = Id::from_name(&Name::from_str("y"));
+
+        let left_head = mk_const(
+            method_name.clone(),
+            vec![mk_type_prop(), mk_type_prop()],
+            vec![mk_instance_global(
+                instance_name.clone(),
+                vec![mk_type_prop(), mk_type_prop()],
+                vec![],
+            )],
+        );
+        let right_head = mk_const(
+            method_name.clone(),
+            vec![
+                mk_type_prop(),
+                mk_type_arrow(mk_type_prop(), mk_type_prop()),
+            ],
+            vec![mk_instance_global(
+                instance_name.clone(),
+                vec![mk_type_prop(), mk_type_prop()],
+                vec![],
+            )],
+        );
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![],
+            locals: vec![
+                Local {
+                    id: x_id,
+                    ty: mk_type_prop(),
+                },
+                Local {
+                    id: y_id,
+                    ty: mk_type_prop(),
+                },
+            ],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::from([
+            (
+                method_name.clone(),
+                Const {
+                    local_types: vec![u, v],
+                    local_classes: vec![Class {
+                        name: class_name.clone(),
+                        args: vec![mk_type_local(u), mk_type_local(v)],
+                    }],
+                    ty: mk_type_prop().arrow([mk_type_prop()]),
+                },
+            ),
+            (
+                body_name.clone(),
+                Const {
+                    local_types: vec![],
+                    local_classes: vec![],
+                    ty: mk_type_prop().arrow([mk_type_prop()]),
+                },
+            ),
+        ]);
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> =
+            HashMap::from([(method_name.clone(), Kappa)]);
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::from([(
+            instance_name,
+            ClassInstance {
+                local_types: vec![u, v],
+                local_classes: vec![],
+                target: Class {
+                    name: class_name,
+                    args: vec![mk_type_local(u), mk_type_local(v)],
+                },
+                method_table: HashMap::from([(method_name, mk_const(body_name, vec![], vec![]))]),
+            },
+        )]);
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let mut elab = Elaborator::new(proof_env, &mut local_env, vec![]);
+
+        let conflict = elab.find_conflict_in_terms(
+            tt::LocalEnv {
+                local_types: vec![],
+                local_classes: vec![],
+                local_deltas: vec![],
+                locals: vec![
+                    Local {
+                        id: x_id,
+                        ty: mk_type_prop(),
+                    },
+                    Local {
+                        id: y_id,
+                        ty: mk_type_prop(),
+                    },
+                ],
+            },
+            mk_app(left_head, mk_local(x_id)),
+            mk_app(right_head, mk_local(y_id)),
+            visit_error("expected success", None),
+        );
+        assert!(
+            conflict.is_none(),
+            "comparison should keep searching by unfolding, not fail immediately"
+        );
+        assert!(
+            elab.queue_unfold.is_empty(),
+            "kappa unfold constraints should not be queued when instantiated head classes differ"
+        );
+        assert!(
+            !elab.term_constraints.is_empty(),
+            "when not queued, unfold should continue via pushed term constraints"
+        );
     }
 }
