@@ -1,21 +1,4 @@
 /-
- - TODO:
- - [x] stronger type inference. (propagate constraints among exprs)
- - [x] automatic insertion of forall_elim using higher-order unification
- - [x] inductive types
- - [x] inductive predicates
- - [x] structures and instances
- - [x] type class
- - [x] calc environment
- - [x] improved error reporting
- - [ ] coercion
- - [ ] namespace
- - [x] let expr
- - [x] local typedef
- - [ ] kernel support for eta equality of lambdas
- -/
-
-/-
 
 ** FOR PLAYGROUND USERS **
 
