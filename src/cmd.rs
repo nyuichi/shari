@@ -1,4 +1,4 @@
-use std::{collections::HashMap, iter::zip, slice, vec};
+use std::{collections::HashMap, iter::zip, mem, slice, vec};
 
 use anyhow::bail;
 
@@ -9,13 +9,14 @@ use crate::{
     proof::{self, Axiom, Expr, generalize, guard, mk_type_prop, ungeneralize, unguard},
     tt::{
         self, Class, ClassInstance, ClassType, Const, Delta, Id, Kappa, Kind, Local, LocalEnv,
-        Name, QualifiedName, Term, Type, mk_const, mk_fresh_type_hole, mk_instance_local, mk_local,
-        mk_type_arrow, mk_type_const, mk_type_local,
+        Name, Path, QualifiedName, Term, Type, mk_const, mk_fresh_type_hole, mk_instance_local,
+        mk_local, mk_type_arrow, mk_type_const, mk_type_local,
     },
 };
 
 #[derive(Debug, Clone)]
 pub enum Cmd {
+    Namespace(CmdNamespace),
     Use(CmdUse),
     Infix(CmdInfix),
     Infixr(CmdInfixr),
@@ -33,6 +34,12 @@ pub enum Cmd {
     Instance(CmdInstance),
     ClassStructure(CmdClassStructure),
     ClassInstance(CmdClassInstance),
+}
+
+#[derive(Clone, Debug)]
+pub struct CmdNamespace {
+    pub path: Path,
+    pub cmds: Vec<Cmd>,
 }
 
 #[derive(Clone, Debug)]
@@ -67,6 +74,17 @@ pub struct CmdPrefix {
 pub struct CmdNofix {
     pub op: String,
     pub entity: QualifiedName,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Namespace {
+    pub use_table: HashMap<Name, QualifiedName>,
+}
+
+impl Namespace {
+    pub fn add(&mut self, alias: Name, target: QualifiedName) {
+        self.use_table.insert(alias, target);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -265,6 +283,16 @@ pub struct ClassInstanceLemma {
 impl std::fmt::Display for Cmd {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Cmd::Namespace(cmd) => write!(
+                f,
+                "namespace {} {{\n{}\n}}",
+                cmd.path,
+                cmd.cmds
+                    .iter()
+                    .map(|cmd| format!("  {}", cmd))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
             Cmd::Use(cmd) => write!(
                 f,
                 "use {}",
@@ -451,11 +479,12 @@ impl std::fmt::Display for Cmd {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Eval {
     pub tt: TokenTable,
     pub pp: OpTable,
-    pub use_table: HashMap<Name, QualifiedName>,
+    pub namespace_table: HashMap<Path, Namespace>,
+    pub current_namespace: Path,
     pub type_const_table: HashMap<QualifiedName, Kind>,
     pub const_table: HashMap<QualifiedName, Const>,
     pub axiom_table: HashMap<QualifiedName, Axiom>,
@@ -465,6 +494,29 @@ pub struct Eval {
     pub class_instance_table: HashMap<QualifiedName, ClassInstance>,
     pub structure_table: HashMap<QualifiedName, CmdStructure>,
     pub class_structure_table: HashMap<QualifiedName, CmdClassStructure>,
+}
+
+impl Default for Eval {
+    fn default() -> Self {
+        let current_namespace = Path::toplevel();
+        let mut namespace_table = HashMap::new();
+        namespace_table.insert(current_namespace.clone(), Namespace::default());
+        Self {
+            tt: TokenTable::default(),
+            pp: OpTable::default(),
+            namespace_table,
+            current_namespace,
+            type_const_table: HashMap::new(),
+            const_table: HashMap::new(),
+            axiom_table: HashMap::new(),
+            delta_table: HashMap::new(),
+            kappa_table: HashMap::new(),
+            class_predicate_table: HashMap::new(),
+            class_instance_table: HashMap::new(),
+            structure_table: HashMap::new(),
+            class_structure_table: HashMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -750,11 +802,31 @@ impl Eval {
 
     pub fn run_cmd(&mut self, cmd: Cmd) -> anyhow::Result<()> {
         match cmd {
+            Cmd::Namespace(inner) => {
+                let CmdNamespace { path, cmds } = inner;
+                if !self.namespace_table.contains_key(&path) {
+                    self.namespace_table
+                        .insert(path.clone(), Namespace::default());
+                }
+                let prev_namespace = mem::replace(&mut self.current_namespace, path);
+                for cmd in cmds {
+                    if let Err(err) = self.run_cmd(cmd) {
+                        self.current_namespace = prev_namespace;
+                        return Err(err);
+                    }
+                }
+                self.current_namespace = prev_namespace;
+                Ok(())
+            }
             Cmd::Use(inner) => {
                 let CmdUse { decls } = inner;
+                let namespace = self
+                    .namespace_table
+                    .get_mut(&self.current_namespace)
+                    .expect("current namespace must exist");
                 for decl in decls {
                     let UseDecl { alias, target } = decl;
-                    self.use_table.insert(alias, target);
+                    namespace.add(alias, target);
                 }
                 Ok(())
             }

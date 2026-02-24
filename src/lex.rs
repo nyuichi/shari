@@ -339,7 +339,7 @@ impl Iterator for Lex {
                     "λ" | "_" => TokenKind::Symbol,
                     "infixr" | "nofix" | "infixl" | "infix" | "prefix" | "axiom" | "def"
                     | "lemma" | "const" | "type" | "inductive" | "structure" | "instance"
-                    | "class" | "use" | "as" => TokenKind::Keyword,
+                    | "class" | "namespace" | "use" | "as" => TokenKind::Keyword,
                     _ => TokenKind::Ident,
                 }
             } else if first.is_ascii_digit() {
@@ -415,6 +415,14 @@ mod tests {
         assert_eq!(first.kind, TokenKind::Ident);
         assert_eq!(first.as_str(), "foo");
         assert!(matches!(lex.next(), Some(Err(_))));
+    }
+
+    #[test]
+    fn namespace_is_keyword() {
+        let tokens = tokenize("namespace");
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, TokenKind::Keyword);
+        assert_eq!(tokens[0].as_str(), "namespace");
     }
 
     #[test]

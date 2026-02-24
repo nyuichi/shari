@@ -88,7 +88,7 @@
       "patterns": [
         {
           "name": "keyword.control.shari",
-          "match": "\\b(?:infixr|nofix|infixl|infix|prefix|axiom|def|lemma|const|type|local|inductive|structure|instance|class|use|as)\\b"
+          "match": "\\b(?:infixr|nofix|infixl|infix|prefix|axiom|def|lemma|const|type|local|inductive|structure|instance|class|namespace|use|as)\\b"
         }
       ]
     },

@@ -13,11 +13,20 @@ use crate::{lex::Span, proof::mk_type_prop};
 pub struct Name(Arc<String>);
 
 #[derive(Debug, Clone, Ord, PartialOrd, Default)]
+pub struct Path(Option<Arc<PathInner>>);
+
+#[derive(Debug, Clone, PartialEq, Eq, Ord, Hash, PartialOrd)]
+struct PathInner {
+    parent: Path,
+    name: Name,
+}
+
+#[derive(Debug, Clone, Ord, PartialOrd, Default)]
 pub struct QualifiedName(Arc<QualifiedNameInner>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, Hash, PartialOrd, Default)]
 struct QualifiedNameInner {
-    prefix: Option<QualifiedName>,
+    path: Path,
     name: Name,
 }
 
@@ -25,6 +34,8 @@ struct QualifiedNameInner {
 pub struct Id(usize);
 
 static NAME_TABLE: LazyLock<Mutex<HashMap<String, Weak<String>>>> = LazyLock::new(Default::default);
+static PATH_TABLE: LazyLock<Mutex<HashMap<PathInner, Weak<PathInner>>>> =
+    LazyLock::new(Default::default);
 static QUALIFIED_NAME_TABLE: LazyLock<
     Mutex<HashMap<QualifiedNameInner, Weak<QualifiedNameInner>>>,
 > = LazyLock::new(Default::default);
@@ -74,18 +85,115 @@ impl Hash for Name {
     }
 }
 
-impl Display for QualifiedName {
+impl Display for Path {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.prefix() {
-            Some(prefix) => write!(f, "{}.{}", prefix, self.name()),
-            None => write!(f, "{}", self.name()),
+        let names = self.names();
+        if names.is_empty() {
+            return Ok(());
+        }
+        write!(f, "{}", names[0])?;
+        for name in &names[1..] {
+            write!(f, ".{name}")?;
+        }
+        Ok(())
+    }
+}
+
+impl Path {
+    pub fn toplevel() -> Path {
+        Path(None)
+    }
+
+    pub fn from_parts(parent: Path, name: Name) -> Path {
+        let value = PathInner { parent, name };
+
+        let mut table = PATH_TABLE.lock().unwrap();
+        if let Some(existing) = table.get(&value).and_then(|weak| weak.upgrade()) {
+            return Path(Some(existing));
+        }
+
+        let owned = Arc::new(value.clone());
+        table.insert(value, Arc::downgrade(&owned));
+        Path(Some(owned))
+    }
+
+    pub fn name(&self) -> Option<&Name> {
+        self.0.as_ref().map(|inner| &inner.name)
+    }
+
+    pub fn parent(&self) -> Option<&Path> {
+        self.0.as_ref().map(|inner| &inner.parent)
+    }
+
+    pub fn to_parts(&self) -> Option<(&Path, &Name)> {
+        self.0
+            .as_ref()
+            .map(|inner| (&inner.as_ref().parent, &inner.as_ref().name))
+    }
+
+    pub fn names(&self) -> Vec<Name> {
+        let mut names = vec![];
+        let mut current = self;
+        while let Some(inner) = &current.0 {
+            names.push(inner.name.clone());
+            current = &inner.parent;
+        }
+        names.reverse();
+        names
+    }
+
+    pub fn append(&self, suffix: &Path) -> Path {
+        let mut path = self.clone();
+        for name in suffix.names() {
+            path = Path::from_parts(path, name);
+        }
+        path
+    }
+
+    pub fn extend(&self, suffix: impl AsRef<str>) -> Path {
+        let name = Name::from_str(suffix.as_ref());
+        Path::from_parts(self.clone(), name)
+    }
+}
+
+impl PartialEq for Path {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (None, None) => true,
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+            _ => false,
         }
     }
 }
 
+impl Eq for Path {}
+
+impl Hash for Path {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match &self.0 {
+            Some(inner) => Arc::as_ptr(inner).hash(state),
+            None => 0usize.hash(state),
+        }
+    }
+}
+
+impl Display for QualifiedName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names = self.names();
+        if names.is_empty() {
+            return Ok(());
+        }
+        write!(f, "{}", names[0])?;
+        for name in &names[1..] {
+            write!(f, ".{name}")?;
+        }
+        Ok(())
+    }
+}
+
 impl QualifiedName {
-    pub fn from_parts(prefix: Option<QualifiedName>, name: Name) -> QualifiedName {
-        let value = QualifiedNameInner { prefix, name };
+    pub fn from_parts(path: Path, name: Name) -> QualifiedName {
+        let value = QualifiedNameInner { path, name };
 
         let mut table = QUALIFIED_NAME_TABLE.lock().unwrap();
         if let Some(existing) = table.get(&value).and_then(|weak| weak.upgrade()) {
@@ -93,46 +201,49 @@ impl QualifiedName {
         }
 
         let owned = Arc::new(value.clone());
-        table.insert(value.to_owned(), Arc::downgrade(&owned));
+        table.insert(value, Arc::downgrade(&owned));
         QualifiedName(owned)
     }
 
     // TODO: deprecate this method in favor of from_parts
     pub fn from_str(value: &str) -> QualifiedName {
-        Self::from_parts(None, Name::from_str(value))
+        Self::from_parts(Path::toplevel(), Name::from_str(value))
     }
 
     pub fn name(&self) -> &Name {
         &self.0.name
     }
 
-    pub fn prefix(&self) -> Option<&QualifiedName> {
-        self.0.prefix.as_ref()
+    pub fn path(&self) -> &Path {
+        &self.0.path
+    }
+
+    pub fn prefix(&self) -> Option<QualifiedName> {
+        let name = self.path().name()?.clone();
+        let parent = self.path().parent().cloned().unwrap_or_else(Path::toplevel);
+        Some(QualifiedName::from_parts(parent, name))
     }
 
     pub fn names(&self) -> Vec<Name> {
-        let mut segments = vec![];
-        let mut current = Some(self);
-        while let Some(name) = current {
-            segments.push(name.name().clone());
-            current = name.prefix();
-        }
-        segments.reverse();
-        segments
+        let mut names = vec![];
+        names.extend(self.path().names());
+        names.push(self.name().clone());
+        names
+    }
+
+    pub fn to_path(&self) -> Path {
+        self.path().extend(self.name().as_str())
     }
 
     pub fn append(&self, suffix: &QualifiedName) -> QualifiedName {
-        let prefix = match suffix.prefix() {
-            Some(prefix) => self.append(prefix),
-            None => self.clone(),
-        };
-        Self::from_parts(Some(prefix), suffix.name().clone())
+        let path = self.to_path().append(suffix.path());
+        Self::from_parts(path, suffix.name().clone())
     }
 
     // TODO: deprecate this method in favor of append
     pub fn extend(&self, suffix: impl AsRef<str>) -> QualifiedName {
         let name = Name::from_str(suffix.as_ref());
-        Self::from_parts(Some(self.clone()), name)
+        Self::from_parts(self.to_path(), name)
     }
 }
 
@@ -2869,5 +2980,30 @@ mod tests {
         let id = Id::from_qualified_name(&QualifiedName::from_str("foo.bar"));
         let local = mk_local(id);
         assert!(!local.metadata().is_closed);
+    }
+
+    #[test]
+    fn path_toplevel_is_canonical() {
+        let left = Path::toplevel();
+        let right = Path::toplevel();
+        assert_eq!(left, right);
+        assert!(left.parent().is_none());
+        assert!(left.name().is_none());
+    }
+
+    #[test]
+    fn path_from_parts_is_canonical() {
+        let left = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        let right = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn qualified_name_stores_path_and_name_separately() {
+        let path = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        let name = QualifiedName::from_parts(path.clone(), Name::from_str("bar"));
+        assert_eq!(name.path(), &path);
+        assert_eq!(name.name().as_str(), "bar");
+        assert_eq!(name.to_string(), "foo.bar");
     }
 }

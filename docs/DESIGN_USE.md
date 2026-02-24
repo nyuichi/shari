@@ -7,11 +7,11 @@ Status: initial draft
 - Provide a small, explicit alias mechanism for qualified-name prefixes.
 - Allow writing `use prod.fst` so later code can use `fst` and `fst.baz`.
 - Allow chained alias declarations such as `use foo as bar; use bar as baz`.
-- Keep this feature independent from any module/namespace block feature.
+- Keep this feature independent from any namespace block feature.
 
 ## Non-goals
 
-- Introducing `module` syntax (`module foo { ... }`).
+- Introducing `namespace` syntax (`namespace foo { ... }`).
 - Introducing open-namespace behavior (`use foo` as namespace import).
 - Visibility control (private/protected).
 

@@ -1,11 +1,11 @@
 # Shari Language Guide for Coding Agents
 
-This document summarizes the surface syntax, proof language, and module system of Shari. Coding agents must consult this guide before editing or adding `.shari` sources so that generated code respects the language.
+This document summarizes the surface syntax, proof language, and namespace system of Shari. Coding agents must consult this guide before editing or adding `.shari` sources so that generated code respects the language.
 
 ## Lexical conventions
 - **Whitespace and comments** – Lexing skips Unicode whitespace, line comments starting with `--`, and nested block comments delimited by `/-` … `-/`.
 - **Tokens** – Tokens are classified as identifiers, symbols, numeral literals, or keywords according to the rules in the lexer. Identifiers may contain Unicode letters, digits, underscores, apostrophes, and dot-separated namespaces. Symbols cover operators such as `:=`, `∃!`, `${`, `.{`, parentheses, and punctuation.
-- **Keywords** – Reserved words recognized by the lexer are `infixr`, `infixl`, `infix`, `nofix`, `prefix`, `def`, `axiom`, `lemma`, `const`, `type`, `inductive`, `structure`, `instance`, `class`, `use`, and `as`. The bare glyphs `λ` and `_` are treated as symbols, not identifiers.
+- **Keywords** – Reserved words recognized by the lexer are `infixr`, `infixl`, `infix`, `nofix`, `prefix`, `def`, `axiom`, `lemma`, `const`, `type`, `inductive`, `structure`, `instance`, `class`, `namespace`, `use`, and `as`. The bare glyphs `λ` and `_` are treated as symbols, not identifiers.
 
 ## Type grammar
 - **Primary forms** – A type primary can be a local type variable, a registered type constant, the special keyword `sub` (expanding to an arrow into `Prop`), the numeral type `ℕ` (desugaring to `nat`), or a parenthesized type.
@@ -41,7 +41,8 @@ The `cmd` dispatcher recognizes the following keywords. Each command builds a st
 - **Inductive propositions** – `inductive` declares propositional inductives with parameters and constructor blocks separated by `|`. Constructor targets are automatically generalized over constructor parameters.
 - **Structures and instances** – `structure` declares record-like bundles of constants and axioms; `instance` supplies implementations of those fields for a target type, including derived lemmas. Within a structure body, `const` and `axiom` fields may be freely interleaved.
 - **Type classes** – `class structure` and `class instance` mirror structures/instances but live in the class namespace and accept class arguments on fields.
-- **Use aliases** – `use` introduces parser-time alias mappings for qualified names. Supported forms include `use foo.bar`, `use foo.bar as baz`, grouped imports such as `use foo.{bar, baz}`, and nested groups such as `use {foo as bar, baz.{hoge as piyo}}`. `use` targets are allowed even if they are not defined yet; alias expansion is resolved during parsing and stored as fully qualified names in AST, and unresolved entities fail later when referenced.
+- **Namespaces** – `namespace foo.bar { ... }` opens a scoped namespace block. Declarations inside are stored with fully qualified names; qualified declaration heads like `def qux.quux := ...` create missing child namespaces under the current namespace.
+- **Use aliases** – `use` introduces parser-time alias mappings for qualified names in the current namespace table. Supported forms include `use foo.bar`, `use foo.bar as baz`, grouped imports such as `use foo.{bar, baz}`, and nested groups such as `use {foo as bar, baz.{hoge as piyo}}`. Alias expansion is resolved during parsing and stored as fully qualified names in AST.
 
 ## Type classes and implicit arguments
 - Class parameters `[C]` record constraints that become implicit instance arguments when using the resulting constants or lemmas.

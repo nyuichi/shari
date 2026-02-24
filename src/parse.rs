@@ -2,9 +2,9 @@ use crate::cmd::{
     ClassInstanceDef, ClassInstanceField, ClassInstanceLemma, ClassStructureAxiom,
     ClassStructureConst, ClassStructureField, Cmd, CmdAxiom, CmdClassInstance, CmdClassStructure,
     CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdInstance, CmdLemma,
-    CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive, CmdUse, Constructor,
-    DataConstructor, Fixity, InstanceDef, InstanceField, InstanceLemma, Operator, StructureAxiom,
-    StructureConst, StructureField, UseDecl as CmdUseDecl,
+    CmdNamespace, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive, CmdUse,
+    Constructor, DataConstructor, Fixity, InstanceDef, InstanceField, InstanceLemma, Namespace,
+    Operator, StructureAxiom, StructureConst, StructureField, UseDecl as CmdUseDecl,
 };
 use crate::proof::{
     Axiom, Expr, LocalStructureAxiom, LocalStructureConst, LocalStructureField, count_forall,
@@ -13,7 +13,7 @@ use crate::proof::{
     mk_expr_take, mk_type_prop,
 };
 use crate::tt::{
-    Class, ClassType, Const, Id, Kind, Local, Name, QualifiedName, Term, Type, mk_const,
+    Class, ClassType, Const, Id, Kind, Local, Name, Path, QualifiedName, Term, Type, mk_const,
     mk_fresh_hole, mk_fresh_type_hole, mk_instance_hole, mk_local, mk_type_arrow, mk_type_const,
     mk_type_local,
 };
@@ -173,7 +173,8 @@ struct UseDecl {
 pub struct Parser<'a> {
     lex: &'a mut Lex,
     tt: &'a TokenTable,
-    use_table: &'a mut HashMap<Name, QualifiedName>,
+    namespace_table: &'a mut HashMap<Path, Namespace>,
+    current_namespace: &'a mut Path,
     type_const_table: &'a HashMap<QualifiedName, Kind>,
     const_table: &'a HashMap<QualifiedName, Const>,
     axiom_table: &'a HashMap<QualifiedName, Axiom>,
@@ -190,10 +191,12 @@ pub struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         lex: &'a mut Lex,
         tt: &'a TokenTable,
-        use_table: &'a mut HashMap<Name, QualifiedName>,
+        namespace_table: &'a mut HashMap<Path, Namespace>,
+        current_namespace: &'a mut Path,
         type_const_table: &'a HashMap<QualifiedName, Kind>,
         const_table: &'a HashMap<QualifiedName, Const>,
         axiom_table: &'a HashMap<QualifiedName, Axiom>,
@@ -202,7 +205,8 @@ impl<'a> Parser<'a> {
         Self {
             lex,
             tt,
-            use_table,
+            namespace_table,
+            current_namespace,
             type_const_table,
             const_table,
             axiom_table,
@@ -258,6 +262,13 @@ impl<'a> Parser<'a> {
             }
         }
         self.axiom_table.get(name)
+    }
+
+    fn has_local_axiom(&self, name: &QualifiedName) -> bool {
+        self.local_axioms
+            .iter()
+            .rev()
+            .any(|(local_name, _)| local_name == name)
     }
 
     fn has_local_type(&self, name: &Name) -> bool {
@@ -434,20 +445,35 @@ impl<'a> Parser<'a> {
         name
     }
 
-    fn resolve(&self, name: QualifiedName) -> QualifiedName {
-        let segments = name.names();
-        let (head, tail) = match segments.split_first() {
-            Some(parts) => parts,
-            None => return name,
-        };
-        let Some(prefix) = self.use_table.get(head) else {
-            return name;
-        };
-        let mut name = prefix.clone();
-        for segment in tail {
-            name = QualifiedName::from_parts(Some(name), segment.clone());
+    fn resolve(&mut self, name: QualifiedName) -> QualifiedName {
+        let mut path = (*self.current_namespace).clone();
+        for name in name.names() {
+            path = if let Some(target) = self.namespace_table[&path].use_table.get(&name) {
+                target.to_path()
+            } else {
+                Path::from_parts(path, name)
+            };
+            if !self.namespace_table.contains_key(&path) {
+                self.namespace_table
+                    .insert(path.clone(), Namespace::default());
+                let (parent, name) = path.to_parts().unwrap();
+                self.namespace_table
+                    .get_mut(parent)
+                    .unwrap()
+                    .use_table
+                    .entry(name.clone())
+                    .or_insert_with(|| QualifiedName::from_parts(parent.clone(), name.clone()));
+            }
         }
-        name
+        let (parent, name) = path.to_parts().unwrap();
+        QualifiedName::from_parts(parent.clone(), name.clone())
+    }
+
+    fn register_name(&mut self, name: &QualifiedName) {
+        self.namespace_table
+            .get_mut(name.path())
+            .unwrap()
+            .add(name.name().clone(), name.clone());
     }
 
     fn alias_opt(&mut self) -> Result<Option<Name>, ParseError> {
@@ -877,7 +903,11 @@ impl<'a> Parser<'a> {
 
     fn expr_const(&mut self, token: Token, auto_inst: bool) -> Result<Expr, ParseError> {
         let name = self.qualified_name(&token);
-        let name = self.resolve(name);
+        let name = if self.has_local_axiom(&name) {
+            name
+        } else {
+            self.resolve(name)
+        };
         let Some(axiom_info) = self.get_axiom(&name).cloned() else {
             return Self::fail(token, "unknown variable");
         };
@@ -1447,6 +1477,10 @@ impl<'a> Parser<'a> {
     pub fn cmd(&mut self) -> Result<Cmd, ParseError> {
         let keyword = self.keyword()?;
         let cmd = match keyword.as_str() {
+            "namespace" => {
+                let namespace_cmd = self.namespace_cmd(keyword)?;
+                Cmd::Namespace(namespace_cmd)
+            }
             "use" => {
                 let use_cmd = self.use_cmd(keyword)?;
                 Cmd::Use(use_cmd)
@@ -1538,6 +1572,29 @@ impl<'a> Parser<'a> {
         Ok(cmd)
     }
 
+    fn namespace_cmd(&mut self, _token: Token) -> Result<CmdNamespace, ParseError> {
+        let name = self.ident()?;
+        let name = self.qualified_name(&name);
+        let name = self.resolve(name);
+        self.register_name(&name);
+        let path = name.to_path();
+        self.expect_symbol("{")?;
+        let prev_namespace = self.current_namespace.clone();
+        *self.current_namespace = path.clone();
+        let mut cmds = vec![];
+        while self.expect_symbol_opt("}").is_none() {
+            match self.cmd() {
+                Ok(cmd) => cmds.push(cmd),
+                Err(err) => {
+                    *self.current_namespace = prev_namespace;
+                    return Err(err);
+                }
+            }
+        }
+        *self.current_namespace = prev_namespace;
+        Ok(CmdNamespace { path, cmds })
+    }
+
     fn use_group(
         &mut self,
         prefix: Option<&QualifiedName>,
@@ -1598,11 +1655,15 @@ impl<'a> Parser<'a> {
         }
 
         let mut decls = vec![];
+        let current_namespace = self.current_namespace.clone();
         for decl in parsed_decls {
             let UseDecl { target, alias } = decl;
             let target = self.resolve(target);
             let alias = alias.unwrap_or_else(|| target.name().clone());
-            self.use_table.insert(alias.clone(), target.clone());
+            self.namespace_table
+                .get_mut(&current_namespace)
+                .expect("current namespace must exist")
+                .add(alias.clone(), target.clone());
             decls.push(CmdUseDecl { alias, target });
         }
 
@@ -1701,6 +1762,7 @@ impl<'a> Parser<'a> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
         let name = self.resolve(name);
+        self.register_name(&name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -1735,6 +1797,7 @@ impl<'a> Parser<'a> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
         let name = self.resolve(name);
+        self.register_name(&name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -1763,6 +1826,7 @@ impl<'a> Parser<'a> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
         let name = self.resolve(name);
+        self.register_name(&name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -1799,6 +1863,7 @@ impl<'a> Parser<'a> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
         let name = self.resolve(name);
+        self.register_name(&name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -1821,6 +1886,7 @@ impl<'a> Parser<'a> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
         let name = self.resolve(name);
+        self.register_name(&name);
         self.expect_symbol(":")?;
         let kind = self.kind()?;
         Ok(CmdTypeConst { name, kind })
@@ -1830,6 +1896,7 @@ impl<'a> Parser<'a> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
         let name = self.resolve(name);
+        self.register_name(&name);
         let self_id = Id::fresh();
         debug_assert!(
             self.type_self_ref.is_none(),
@@ -1879,6 +1946,7 @@ impl<'a> Parser<'a> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
         let name = self.resolve(name);
+        self.register_name(&name);
         let self_id = Id::fresh();
         debug_assert!(
             self.self_ref.is_none(),
@@ -1937,6 +2005,7 @@ impl<'a> Parser<'a> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
         let name = self.resolve(name);
+        self.register_name(&name);
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
             let tv = Name::from_str(token.as_str());
@@ -2000,6 +2069,7 @@ impl<'a> Parser<'a> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
         let name = self.resolve(name);
+        self.register_name(&name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -2090,6 +2160,7 @@ impl<'a> Parser<'a> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
         let name = self.resolve(name);
+        self.register_name(&name);
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
             let tv = Name::from_str(token.as_str());
@@ -2153,6 +2224,7 @@ impl<'a> Parser<'a> {
         let ident = self.ident()?;
         let name = self.qualified_name(&ident);
         let name = self.resolve(name);
+        self.register_name(&name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -2272,15 +2344,87 @@ mod tests {
         )
     }
 
+    fn ensure_namespace_path_for_tests(
+        namespace_table: &mut HashMap<Path, Namespace>,
+        namespace: &Path,
+    ) {
+        if namespace == &Path::toplevel() {
+            return;
+        }
+
+        let mut parent = Path::toplevel();
+        for segment in namespace.names() {
+            let child = Path::from_parts(parent.clone(), segment.clone());
+            if !namespace_table.contains_key(&child) {
+                namespace_table.insert(child.clone(), Namespace::default());
+            }
+            namespace_table
+                .get_mut(&parent)
+                .expect("parent namespace must exist")
+                .use_table
+                .entry(segment.clone())
+                .or_insert_with(|| QualifiedName::from_parts(parent.clone(), segment.clone()));
+            parent = child;
+        }
+    }
+
+    fn register_global_name_for_tests(
+        namespace_table: &mut HashMap<Path, Namespace>,
+        name: &QualifiedName,
+    ) {
+        let owner_namespace = name.path().clone();
+        ensure_namespace_path_for_tests(namespace_table, &owner_namespace);
+        namespace_table
+            .get_mut(&owner_namespace)
+            .expect("owner namespace must exist")
+            .use_table
+            .entry(name.name().clone())
+            .or_insert_with(|| name.clone());
+    }
+
+    fn seed_namespace_table_from_globals(
+        namespace_table: &mut HashMap<Path, Namespace>,
+        type_const_table: &HashMap<QualifiedName, Kind>,
+        const_table: &HashMap<QualifiedName, Const>,
+        axiom_table: &HashMap<QualifiedName, Axiom>,
+        class_predicate_table: &HashMap<QualifiedName, ClassType>,
+    ) {
+        let mut names = vec![];
+        names.extend(type_const_table.keys().cloned());
+        names.extend(const_table.keys().cloned());
+        names.extend(axiom_table.keys().cloned());
+        names.extend(class_predicate_table.keys().cloned());
+        for name in names {
+            register_global_name_for_tests(namespace_table, &name);
+        }
+    }
+
     fn parse_expr(input: &str) -> Expr {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let top_namespace = Path::toplevel();
+        let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
+        namespace_table.insert(
+            top_namespace.clone(),
+            Namespace {
+                use_table: std::mem::take(&mut use_table),
+            },
+        );
+        seed_namespace_table_from_globals(
+            &mut namespace_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        );
+        let mut current_namespace = top_namespace;
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
         let mut parser = Parser::new(
             &mut lex,
             &tt,
-            &mut use_table,
+            &mut namespace_table,
+            &mut current_namespace,
             &type_consts,
             &consts,
             &axioms,
@@ -2300,6 +2444,15 @@ mod tests {
         let mut lex = Lex::new(file);
         let tt = TokenTable::default();
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let top_namespace = Path::toplevel();
+        let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
+        namespace_table.insert(
+            top_namespace.clone(),
+            Namespace {
+                use_table: std::mem::take(&mut use_table),
+            },
+        );
+        let mut current_namespace = top_namespace;
         let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
         let const_table: HashMap<QualifiedName, Const> = HashMap::new();
         let axiom_table: HashMap<QualifiedName, Axiom> = HashMap::new();
@@ -2307,7 +2460,8 @@ mod tests {
         let mut parser = Parser::new(
             &mut lex,
             &tt,
-            &mut use_table,
+            &mut namespace_table,
+            &mut current_namespace,
             &type_const_table,
             &const_table,
             &axiom_table,
@@ -2328,16 +2482,38 @@ mod tests {
     ) -> Result<Cmd, ParseError> {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
-        let mut parser = Parser::new(
-            &mut lex,
-            tt,
-            use_table,
+        let top_namespace = Path::toplevel();
+        let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
+        namespace_table.insert(
+            top_namespace.clone(),
+            Namespace {
+                use_table: std::mem::take(use_table),
+            },
+        );
+        seed_namespace_table_from_globals(
+            &mut namespace_table,
             type_const_table,
             const_table,
             axiom_table,
             class_predicate_table,
         );
-        parser.cmd()
+        let mut current_namespace = top_namespace.clone();
+        let mut parser = Parser::new(
+            &mut lex,
+            tt,
+            &mut namespace_table,
+            &mut current_namespace,
+            type_const_table,
+            const_table,
+            axiom_table,
+            class_predicate_table,
+        );
+        let cmd = parser.cmd();
+        let top_entry = namespace_table
+            .remove(&top_namespace)
+            .expect("top-level namespace entry must exist");
+        *use_table = top_entry.use_table;
+        cmd
     }
 
     fn parse_term_with_tables(
@@ -2351,16 +2527,38 @@ mod tests {
     ) -> Result<Term, ParseError> {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
-        let mut parser = Parser::new(
-            &mut lex,
-            tt,
-            use_table,
+        let top_namespace = Path::toplevel();
+        let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
+        namespace_table.insert(
+            top_namespace.clone(),
+            Namespace {
+                use_table: std::mem::take(use_table),
+            },
+        );
+        seed_namespace_table_from_globals(
+            &mut namespace_table,
             type_const_table,
             const_table,
             axiom_table,
             class_predicate_table,
         );
-        parser.term()
+        let mut current_namespace = top_namespace.clone();
+        let mut parser = Parser::new(
+            &mut lex,
+            tt,
+            &mut namespace_table,
+            &mut current_namespace,
+            type_const_table,
+            const_table,
+            axiom_table,
+            class_predicate_table,
+        );
+        let term = parser.term();
+        let top_entry = namespace_table
+            .remove(&top_namespace)
+            .expect("top-level namespace entry must exist");
+        *use_table = top_entry.use_table;
+        term
     }
 
     fn parse_expr_with_tables(
@@ -2374,16 +2572,38 @@ mod tests {
     ) -> Result<Expr, ParseError> {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
-        let mut parser = Parser::new(
-            &mut lex,
-            tt,
-            use_table,
+        let top_namespace = Path::toplevel();
+        let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
+        namespace_table.insert(
+            top_namespace.clone(),
+            Namespace {
+                use_table: std::mem::take(use_table),
+            },
+        );
+        seed_namespace_table_from_globals(
+            &mut namespace_table,
             type_const_table,
             const_table,
             axiom_table,
             class_predicate_table,
         );
-        parser.expr()
+        let mut current_namespace = top_namespace.clone();
+        let mut parser = Parser::new(
+            &mut lex,
+            tt,
+            &mut namespace_table,
+            &mut current_namespace,
+            type_const_table,
+            const_table,
+            axiom_table,
+            class_predicate_table,
+        );
+        let expr = parser.expr();
+        let top_entry = namespace_table
+            .remove(&top_namespace)
+            .expect("top-level namespace entry must exist");
+        *use_table = top_entry.use_table;
+        expr
     }
 
     fn qualified(value: &str) -> QualifiedName {
@@ -2394,6 +2614,17 @@ mod tests {
             name = name.extend(part);
         }
         name
+    }
+
+    fn path(value: &str) -> Path {
+        let mut path = Path::toplevel();
+        if value.is_empty() {
+            return path;
+        }
+        for part in value.split('.') {
+            path = Path::from_parts(path, Name::from_str(part));
+        }
+        path
     }
 
     fn insert_prop_const(const_table: &mut HashMap<QualifiedName, Const>, name: &str) {
@@ -2774,6 +3005,70 @@ mod tests {
     }
 
     #[test]
+    fn infix_entity_rewrites_alias_head_without_target_validation() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        parse_cmd_with_tables(
+            "use foo as bar",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("use command parses");
+        let cmd = parse_cmd_with_tables(
+            "infix * : 50 := bar.baz",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("infix command parses");
+        let Cmd::Infix(CmdInfix {
+            op: _,
+            prec: _,
+            entity,
+        }) = cmd
+        else {
+            panic!("expected infix command");
+        };
+        assert_eq!(entity, qualified("foo.baz"));
+    }
+
+    #[test]
+    fn infix_entity_resolves_aliases_left_to_right_across_namespaces() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "namespace foo { use qux as inner namespace qux { use real as leaf } infix * : 50 := inner.leaf.tail }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("namespace command parses");
+        let Cmd::Namespace(namespace_cmd) = cmd else {
+            panic!("expected namespace command");
+        };
+        assert_eq!(namespace_cmd.cmds.len(), 3);
+        let Cmd::Infix(CmdInfix {
+            op: _,
+            prec: _,
+            entity,
+        }) = &namespace_cmd.cmds[2]
+        else {
+            panic!("expected infix command");
+        };
+        assert_eq!(entity, &qualified("foo.qux.real.tail"));
+    }
+
+    #[test]
     fn declaration_name_resolution_rewrites_use_alias_head() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
@@ -2821,6 +3116,160 @@ mod tests {
         assert_eq!(name, qualified("prod.list"));
         assert_eq!(ctors.len(), 1);
         assert_eq!(ctors[0].name, qualified("prod.nil"));
+    }
+
+    #[test]
+    fn type_inductive_ctor_registers_top_level_alias() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        parse_cmd_with_tables(
+            "type inductive foo | ctor : foo",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("type inductive command parses");
+        assert!(
+            use_table.contains_key(&Name::from_str("ctor")),
+            "constructor alias should be registered in the current namespace"
+        );
+    }
+
+    #[test]
+    fn resolve_to_path_resolves_each_segment_without_parent_alias_entry() {
+        let file = Arc::new(File::new("<test>", ""));
+        let mut lex = Lex::new(file);
+        let tt = TokenTable::default();
+        let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
+        let top_namespace = Path::toplevel();
+        namespace_table.insert(top_namespace, Namespace::default());
+        namespace_table.insert(path("foo"), Namespace::default());
+        namespace_table.insert(path("foo.qux.real"), Namespace::default());
+        let mut qux_namespace = Namespace::default();
+        qux_namespace.add(Name::from_str("leaf"), qualified("foo.qux.real"));
+        namespace_table.insert(path("foo.qux"), qux_namespace);
+        let mut current_namespace = path("foo");
+        let type_const_table = HashMap::new();
+        let const_table = HashMap::new();
+        let axiom_table = HashMap::new();
+        let class_predicate_table = HashMap::new();
+        let mut parser = Parser::new(
+            &mut lex,
+            &tt,
+            &mut namespace_table,
+            &mut current_namespace,
+            &type_const_table,
+            &const_table,
+            &axiom_table,
+            &class_predicate_table,
+        );
+
+        let resolved = parser.resolve(qualified("qux.leaf")).to_path();
+        assert_eq!(resolved, path("foo.qux.real"));
+    }
+
+    #[test]
+    fn resolve_resolves_each_segment_without_parent_alias_entry() {
+        let file = Arc::new(File::new("<test>", ""));
+        let mut lex = Lex::new(file);
+        let tt = TokenTable::default();
+        let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
+        let top_namespace = Path::toplevel();
+        namespace_table.insert(top_namespace, Namespace::default());
+        namespace_table.insert(path("foo"), Namespace::default());
+        namespace_table.insert(path("foo.qux.real"), Namespace::default());
+        let mut qux_namespace = Namespace::default();
+        qux_namespace.add(Name::from_str("leaf"), qualified("foo.qux.real"));
+        namespace_table.insert(path("foo.qux"), qux_namespace);
+        let mut current_namespace = path("foo");
+        let type_const_table = HashMap::new();
+        let const_table = HashMap::new();
+        let axiom_table = HashMap::new();
+        let class_predicate_table = HashMap::new();
+        let mut parser = Parser::new(
+            &mut lex,
+            &tt,
+            &mut namespace_table,
+            &mut current_namespace,
+            &type_const_table,
+            &const_table,
+            &axiom_table,
+            &class_predicate_table,
+        );
+
+        let resolved = parser.resolve(qualified("qux.leaf"));
+        assert_eq!(resolved, qualified("foo.qux.real"));
+    }
+
+    #[test]
+    fn resolve_creates_missing_namespaces_along_path() {
+        let file = Arc::new(File::new("<test>", ""));
+        let mut lex = Lex::new(file);
+        let tt = TokenTable::default();
+        let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
+        let top_namespace = Path::toplevel();
+        namespace_table.insert(top_namespace.clone(), Namespace::default());
+        let mut current_namespace = top_namespace;
+        let type_const_table = HashMap::new();
+        let const_table = HashMap::new();
+        let axiom_table = HashMap::new();
+        let class_predicate_table = HashMap::new();
+        let mut parser = Parser::new(
+            &mut lex,
+            &tt,
+            &mut namespace_table,
+            &mut current_namespace,
+            &type_const_table,
+            &const_table,
+            &axiom_table,
+            &class_predicate_table,
+        );
+
+        let resolved = parser.resolve(qualified("qux.quux"));
+        assert_eq!(resolved, qualified("qux.quux"));
+        assert!(parser.namespace_table.contains_key(&path("qux")));
+        assert_eq!(
+            parser.namespace_table[&Path::toplevel()]
+                .use_table
+                .get(&Name::from_str("qux")),
+            Some(&qualified("qux"))
+        );
+    }
+
+    #[test]
+    fn resolve_resolves_each_segment_without_parent_alias_entry_with_tail() {
+        let file = Arc::new(File::new("<test>", ""));
+        let mut lex = Lex::new(file);
+        let tt = TokenTable::default();
+        let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
+        let top_namespace = Path::toplevel();
+        namespace_table.insert(top_namespace, Namespace::default());
+        namespace_table.insert(path("foo"), Namespace::default());
+        namespace_table.insert(path("foo.qux.real"), Namespace::default());
+        let mut qux_namespace = Namespace::default();
+        qux_namespace.add(Name::from_str("leaf"), qualified("foo.qux.real"));
+        namespace_table.insert(path("foo.qux"), qux_namespace);
+        let mut current_namespace = path("foo");
+        let type_const_table = HashMap::new();
+        let const_table = HashMap::new();
+        let axiom_table = HashMap::new();
+        let class_predicate_table = HashMap::new();
+        let mut parser = Parser::new(
+            &mut lex,
+            &tt,
+            &mut namespace_table,
+            &mut current_namespace,
+            &type_const_table,
+            &const_table,
+            &axiom_table,
+            &class_predicate_table,
+        );
+
+        let resolved = parser.resolve(qualified("qux.leaf.tail"));
+        assert_eq!(resolved, qualified("foo.qux.real.tail"));
     }
 
     #[test]
@@ -3030,5 +3479,106 @@ mod tests {
             panic!("expected local term");
         };
         assert_eq!(local_const.id, Id::from_qualified_name(&qualified("foo.f")));
+    }
+
+    #[test]
+    fn namespace_command_parses_const_with_prefixed_name() {
+        let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
+        type_consts.insert(qualified("Type"), Kind(0));
+        type_consts.insert(qualified("foo.Prop"), Kind(0));
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "namespace foo { const bar : Prop }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("namespace command parses");
+        let Cmd::Namespace(namespace_cmd) = cmd else {
+            panic!("expected namespace command");
+        };
+        assert_eq!(namespace_cmd.path, path("foo"));
+        assert_eq!(namespace_cmd.cmds.len(), 1);
+        let Cmd::Const(inner) = &namespace_cmd.cmds[0] else {
+            panic!("expected const command");
+        };
+        assert_eq!(inner.name, qualified("foo.bar"));
+    }
+
+    #[test]
+    fn namespace_qualified_declaration_creates_child_path() {
+        let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
+        type_consts.insert(qualified("Type"), Kind(0));
+        type_consts.insert(qualified("foo.bar.Prop"), Kind(0));
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "namespace foo.bar { const qux.quux : Prop }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("namespace command parses");
+        let Cmd::Namespace(namespace_cmd) = cmd else {
+            panic!("expected namespace command");
+        };
+        assert_eq!(namespace_cmd.path, path("foo.bar"));
+        assert_eq!(namespace_cmd.cmds.len(), 1);
+        let Cmd::Const(inner) = &namespace_cmd.cmds[0] else {
+            panic!("expected const command");
+        };
+        assert_eq!(inner.name, qualified("foo.bar.qux.quux"));
+    }
+
+    #[test]
+    fn qualified_def_at_top_level_creates_missing_namespace() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "def qux.quux : Prop := p",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("def command parses");
+        let Cmd::Def(def_cmd) = cmd else {
+            panic!("expected def command");
+        };
+        assert_eq!(def_cmd.name, qualified("qux.quux"));
+    }
+
+    #[test]
+    fn namespace_qualified_def_creates_missing_namespace_under_current() {
+        let (tt, mut type_consts, mut consts, axioms, class_predicates) = setup_tables();
+        type_consts.insert(qualified("foo.Prop"), Kind(0));
+        insert_prop_const(&mut consts, "foo.p");
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "namespace foo { def qux.quux : Prop := p }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("namespace command parses");
+        let Cmd::Namespace(namespace_cmd) = cmd else {
+            panic!("expected namespace command");
+        };
+        assert_eq!(namespace_cmd.path, path("foo"));
+        assert_eq!(namespace_cmd.cmds.len(), 1);
+        let Cmd::Def(def_cmd) = &namespace_cmd.cmds[0] else {
+            panic!("expected def command");
+        };
+        assert_eq!(def_cmd.name, qualified("foo.qux.quux"));
     }
 }
