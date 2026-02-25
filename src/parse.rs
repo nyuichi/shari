@@ -184,8 +184,7 @@ pub struct Parser<'a> {
     local_consts: Vec<(Name, Local)>,
     local_axioms: Vec<(Name, LocalAxiom)>,
     local_types: Vec<Name>,
-    // TODO: Vec<Name>にする
-    locals: Vec<Id>,
+    locals: Vec<Name>,
     self_ref: Option<(QualifiedName, Id)>,
     type_self_ref: Option<(QualifiedName, Id)>,
     holes: Vec<(Id, Type)>,
@@ -273,10 +272,7 @@ impl<'a> Parser<'a> {
     }
 
     fn has_local(&self, name: &Name) -> bool {
-        self.locals.iter().rev().any(|local| {
-            let local_name = local.name().expect("locals are all internalized names");
-            local_name == *name
-        })
+        self.locals.iter().rev().any(|local| local == name)
     }
 
     fn fail<R>(token: Token, message: impl Into<String>) -> Result<R, ParseError> {
@@ -574,41 +570,41 @@ impl<'a> Parser<'a> {
     }
 
     /// e.g. `"(x y : T)"`
-    fn typed_parameter(&mut self, _token: Token) -> Result<(Vec<Id>, Type), ParseError> {
-        let mut idents = vec![];
+    fn typed_parameter(&mut self, _token: Token) -> Result<(Vec<Name>, Type), ParseError> {
+        let mut names = vec![];
         // needs at least one parameter
-        idents.push(Id::from_name(&self.name()?));
+        names.push(self.name()?);
         while let Some(name) = self.name_opt() {
-            idents.push(Id::from_name(&name));
+            names.push(name);
         }
         self.expect_symbol(":")?;
         let t = self.ty()?;
         self.expect_symbol(")")?;
-        Ok((idents, t))
+        Ok((names, t))
     }
 
     /// e.g. `"(x y : T) (z : U)"`
-    fn typed_parameters(&mut self) -> Result<Vec<Local>, ParseError> {
+    fn typed_parameters(&mut self) -> Result<Vec<(Name, Type)>, ParseError> {
         let mut params = vec![];
         while let Some(token) = self.expect_symbol_opt("(") {
-            let (ids, ty) = self.typed_parameter(token)?;
-            for id in ids {
-                params.push(Local { id, ty: ty.clone() });
+            let (names, ty) = self.typed_parameter(token)?;
+            for name in names {
+                params.push((name, ty.clone()));
             }
         }
         Ok(params)
     }
 
-    fn parameters(&mut self) -> Result<Vec<(Id, Option<Type>)>, ParseError> {
+    fn parameters(&mut self) -> Result<Vec<(Name, Option<Type>)>, ParseError> {
         let mut params = vec![];
         loop {
             if let Some(token) = self.expect_symbol_opt("(") {
-                let (ids, t) = self.typed_parameter(token)?;
-                for id in ids {
-                    params.push((id, Some(t.clone())));
+                let (names, t) = self.typed_parameter(token)?;
+                for name in names {
+                    params.push((name, Some(t.clone())));
                 }
             } else if let Some(name) = self.name_opt() {
-                params.push((Id::from_name(&name), None));
+                params.push((name, None));
             } else {
                 break;
             }
@@ -659,18 +655,23 @@ impl<'a> Parser<'a> {
             return Self::fail(token, "empty binding");
         }
         let mut binders = vec![];
-        for (id, ty) in params {
+        for (name, ty) in params {
             let ty = match ty {
                 Some(ty) => ty,
                 None => mk_fresh_type_hole(),
             };
-            binders.push(Local { id, ty });
-        }
-        for x in &binders {
-            self.locals.push(x.id);
+            self.locals.push(name.clone());
+            binders.push((name, ty));
         }
         let mut m = self.subterm(0)?;
         self.locals.truncate(self.locals.len() - binders.len());
+        let binders = binders
+            .into_iter()
+            .map(|(name, ty)| Local {
+                id: Id::from_name(&name),
+                ty,
+            })
+            .collect::<Vec<_>>();
         m = m.abs(&binders);
         Ok(m)
     }
@@ -682,40 +683,45 @@ impl<'a> Parser<'a> {
             return Self::fail(token, "empty binding");
         }
         let mut binders = vec![];
-        for (id, ty) in params {
+        for (name, ty) in params {
             let ty = match ty {
                 Some(ty) => ty,
                 None => mk_fresh_type_hole(),
             };
-            binders.push(Local { id, ty });
-        }
-        for x in &binders {
-            self.locals.push(x.id);
+            self.locals.push(name.clone());
+            binders.push((name, ty));
         }
         let mut m = self.subterm(0)?;
         self.locals.truncate(self.locals.len() - binders.len());
-        for x in binders.into_iter().rev() {
+        for (name, ty) in binders.into_iter().rev() {
+            let x = Local {
+                id: Id::from_name(&name),
+                ty: ty.clone(),
+            };
             m = m.abs(slice::from_ref(&x));
             let f = mem::take(&mut m);
-            m = mk_const(binder.clone(), vec![x.ty], vec![]);
+            m = mk_const(binder.clone(), vec![ty], vec![]);
             m = m.apply(vec![f]);
         }
         Ok(m)
     }
 
     fn term_sep(&mut self, _token: Token) -> Result<Term, ParseError> {
-        let binder_id = Id::from_name(&self.name()?);
+        let binder_name = self.name()?;
         let ty;
         if let Some(_token) = self.expect_symbol_opt(":") {
             ty = self.ty()?;
         } else {
             ty = mk_fresh_type_hole();
         }
-        let x = Local { id: binder_id, ty };
         self.expect_symbol("|")?;
-        self.locals.push(x.id);
+        self.locals.push(binder_name.clone());
         let mut m = self.subterm(0)?;
         self.locals.pop();
+        let x = Local {
+            id: Id::from_name(&binder_name),
+            ty,
+        };
         m = m.abs(&[x]);
         self.expect_symbol("}")?;
         Ok(m)
@@ -886,7 +892,7 @@ impl<'a> Parser<'a> {
             unreachable!()
         };
         self.holes.push((inner.id, mk_fresh_type_hole()));
-        hole = hole.apply(self.locals.iter().map(|name| mk_local(*name)));
+        hole = hole.apply(self.locals.iter().map(|name| mk_local(Id::from_name(name))));
 
         hole
     }
@@ -987,26 +993,31 @@ impl<'a> Parser<'a> {
             match keyword.as_str() {
                 "const" => {
                     let field_name = self.name()?;
-                    let field_id = Id::from_name(&field_name);
                     self.expect_symbol(":")?;
                     let field_ty = self.ty()?;
+                    self.locals.push(field_name.clone());
                     fields.push(LocalStructureField::Const(LocalStructureConst {
                         name: field_name,
                         ty: field_ty,
                     }));
-
-                    self.locals.push(field_id);
                     num_consts += 1;
                 }
                 "axiom" => {
                     let field_name = self.name()?;
                     let params = self.typed_parameters()?;
-                    for param in &params {
-                        self.locals.push(param.id);
+                    for (param_name, _) in &params {
+                        self.locals.push(param_name.clone());
                     }
                     self.expect_symbol(":")?;
                     let mut target = self.term()?;
                     self.locals.truncate(self.locals.len() - params.len());
+                    let params = params
+                        .into_iter()
+                        .map(|(param_name, param_ty)| Local {
+                            id: Id::from_name(&param_name),
+                            ty: param_ty,
+                        })
+                        .collect::<Vec<_>>();
                     target = generalize(&target, &params);
                     fields.push(LocalStructureField::Axiom(LocalStructureAxiom {
                         name: field_name,
@@ -1216,15 +1227,15 @@ impl<'a> Parser<'a> {
                 }
                 "take" => {
                     self.expect_symbol("(")?;
-                    let local_id = Id::from_name(&self.name()?);
+                    let local_name = self.name()?;
                     self.expect_symbol(":")?;
                     let ty = self.ty()?;
                     self.expect_symbol(")")?;
                     self.expect_symbol(",")?;
-                    self.locals.push(local_id);
+                    self.locals.push(local_name.clone());
                     let e = self.expr()?;
                     self.locals.pop();
-                    mk_expr_take(local_id, ty, e)
+                    mk_expr_take(Id::from_name(&local_name), ty, e)
                 }
                 "change" => {
                     let m = self.term()?;
@@ -1255,19 +1266,19 @@ impl<'a> Parser<'a> {
                 }
                 "obtain" => {
                     self.expect_symbol("(")?;
-                    let local_id = Id::from_name(&self.name()?);
+                    let local_name = self.name()?;
                     self.expect_symbol(":")?;
                     let ty = self.ty()?;
                     self.expect_symbol(")")?;
                     self.expect_symbol(",")?;
-                    self.locals.push(local_id);
+                    self.locals.push(local_name.clone());
                     let p = self.term()?;
                     self.locals.pop();
                     let alias = self.alias_opt()?;
                     self.expect_symbol(":=")?;
                     let e1 = self.expr()?;
                     self.expect_symbol(",")?;
-                    self.locals.push(local_id);
+                    self.locals.push(local_name.clone());
                     let local_axioms_len = self.local_axioms.len();
                     if let Some(alias_name) = &alias {
                         self.local_axioms
@@ -1294,7 +1305,7 @@ impl<'a> Parser<'a> {
                     let e = mk_expr_inst(e, self.mk_term_hole());
                     let e = mk_expr_app(e, e1);
                     let e_body = mk_expr_assume(p, alias.as_ref().map(Id::from_name), e2);
-                    let e_body = mk_expr_take(local_id, ty, e_body);
+                    let e_body = mk_expr_take(Id::from_name(&local_name), ty, e_body);
                     mk_expr_app(e, e_body)
                 }
                 "calc" => {
@@ -1740,8 +1751,8 @@ impl<'a> Parser<'a> {
         }
         let local_classes = self.local_class_parameters()?;
         let params = self.typed_parameters()?;
-        for param in &params {
-            self.locals.push(param.id);
+        for (param_name, _) in &params {
+            self.locals.push(param_name.clone());
         }
         self.expect_symbol(":")?;
         let mut t = self.ty()?;
@@ -1751,9 +1762,12 @@ impl<'a> Parser<'a> {
         self.locals.truncate(self.locals.len() - params.len());
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
-        for param in params.into_iter().rev() {
-            t = t.arrow([param.ty.clone()]);
-            m = m.abs(&[param]);
+        for (param_name, param_ty) in params.into_iter().rev() {
+            t = t.arrow([param_ty.clone()]);
+            m = m.abs(&[Local {
+                id: Id::from_name(&param_name),
+                ty: param_ty,
+            }]);
         }
         Ok(CmdDef {
             name,
@@ -1775,8 +1789,8 @@ impl<'a> Parser<'a> {
         }
         let local_classes = self.local_class_parameters()?;
         let params = self.typed_parameters()?;
-        for param in &params {
-            self.locals.push(param.id);
+        for (param_name, _) in &params {
+            self.locals.push(param_name.clone());
         }
         self.expect_symbol(":")?;
         let mut target = self.term()?;
@@ -1784,6 +1798,13 @@ impl<'a> Parser<'a> {
         self.locals.truncate(self.locals.len() - params.len());
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
+        let params = params
+            .into_iter()
+            .map(|(param_name, param_ty)| Local {
+                id: Id::from_name(&param_name),
+                ty: param_ty,
+            })
+            .collect::<Vec<_>>();
         target = generalize(&target, &params);
         Ok(CmdAxiom {
             name,
@@ -1804,8 +1825,8 @@ impl<'a> Parser<'a> {
         }
         let local_classes = self.local_class_parameters()?;
         let params = self.typed_parameters()?;
-        for param in &params {
-            self.locals.push(param.id);
+        for (param_name, _) in &params {
+            self.locals.push(param_name.clone());
         }
         self.expect_symbol(":")?;
         let mut p = self.term()?;
@@ -1815,6 +1836,13 @@ impl<'a> Parser<'a> {
         self.locals.truncate(self.locals.len() - params.len());
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
+        let params = params
+            .into_iter()
+            .map(|(param_name, param_ty)| Local {
+                id: Id::from_name(&param_name),
+                ty: param_ty,
+            })
+            .collect::<Vec<_>>();
         p = generalize(&p, &params);
         for param in params.into_iter().rev() {
             e = mk_expr_take(param.id, param.ty, e);
@@ -1929,8 +1957,8 @@ impl<'a> Parser<'a> {
             self.local_types.push(ty.clone());
         }
         let params = self.typed_parameters()?;
-        for param in &params {
-            self.locals.push(param.id);
+        for (param_name, _) in &params {
+            self.locals.push(param_name.clone());
         }
         self.expect_symbol(":")?;
         let target_ty = self.ty()?;
@@ -1945,12 +1973,19 @@ impl<'a> Parser<'a> {
                 }
             }
             let ctor_params = self.typed_parameters()?;
-            for ctor_param in &ctor_params {
-                self.locals.push(ctor_param.id);
+            for (ctor_param_name, _) in &ctor_params {
+                self.locals.push(ctor_param_name.clone());
             }
             self.expect_symbol(":")?;
             let mut target = self.term()?;
             self.locals.truncate(self.locals.len() - ctor_params.len());
+            let ctor_params = ctor_params
+                .into_iter()
+                .map(|(ctor_param_name, ctor_param_ty)| Local {
+                    id: Id::from_name(&ctor_param_name),
+                    ty: ctor_param_ty,
+                })
+                .collect::<Vec<_>>();
             target = generalize(&target, &ctor_params);
             ctors.push(Constructor {
                 name: ctor_name,
@@ -1967,7 +2002,13 @@ impl<'a> Parser<'a> {
             self_id,
             local_types: local_types.iter().map(Id::from_name).collect(),
             ctors,
-            params,
+            params: params
+                .into_iter()
+                .map(|(param_name, param_ty)| Local {
+                    id: Id::from_name(&param_name),
+                    ty: param_ty,
+                })
+                .collect(),
             target_ty,
         })
     }
@@ -1995,26 +2036,31 @@ impl<'a> Parser<'a> {
             match keyword.as_str() {
                 "const" => {
                     let field_name = self.name()?;
-                    let field_id = Id::from_name(&field_name);
                     self.expect_symbol(":")?;
                     let field_ty = self.ty()?;
+                    self.locals.push(field_name.clone());
                     fields.push(StructureField::Const(StructureConst {
                         name: field_name,
                         ty: field_ty,
                     }));
-
-                    self.locals.push(field_id);
                     num_consts += 1;
                 }
                 "axiom" => {
                     let field_name = self.name()?;
                     let params = self.typed_parameters()?;
-                    for param in &params {
-                        self.locals.push(param.id);
+                    for (param_name, _) in &params {
+                        self.locals.push(param_name.clone());
                     }
                     self.expect_symbol(":")?;
                     let mut target = self.term()?;
                     self.locals.truncate(self.locals.len() - params.len());
+                    let params = params
+                        .into_iter()
+                        .map(|(param_name, param_ty)| Local {
+                            id: Id::from_name(&param_name),
+                            ty: param_ty,
+                        })
+                        .collect::<Vec<_>>();
                     target = generalize(&target, &params);
                     fields.push(StructureField::Axiom(StructureAxiom {
                         name: field_name,
@@ -2047,8 +2093,8 @@ impl<'a> Parser<'a> {
         }
         let local_classes = self.local_class_parameters()?;
         let params = self.typed_parameters()?;
-        for param in &params {
-            self.locals.push(param.id);
+        for (param_name, _) in &params {
+            self.locals.push(param_name.clone());
         }
         self.expect_symbol(":")?;
         let target_ty = self.ty()?;
@@ -2062,41 +2108,49 @@ impl<'a> Parser<'a> {
                 "def" => {
                     // TODO: allow to refer to preceding definitions in the same instance.
                     let field_name = self.name()?;
-                    let field_id = Id::from_name(&field_name);
+                    self.locals.push(field_name.clone());
                     let field_params = self.typed_parameters()?;
-                    for field_param in &field_params {
-                        self.locals.push(field_param.id);
+                    for (field_param_name, _) in &field_params {
+                        self.locals.push(field_param_name.clone());
                     }
                     self.expect_symbol(":")?;
                     let mut field_ty = self.ty()?;
                     self.expect_symbol(":=")?;
                     let mut field_target = self.term()?;
                     self.locals.truncate(self.locals.len() - field_params.len());
-                    for field_param in field_params.into_iter().rev() {
-                        field_ty = field_ty.arrow([field_param.ty.clone()]);
-                        field_target = field_target.abs(&[field_param]);
+                    for (field_param_name, field_param_ty) in field_params.into_iter().rev() {
+                        field_ty = field_ty.arrow([field_param_ty.clone()]);
+                        field_target = field_target.abs(&[Local {
+                            id: Id::from_name(&field_param_name),
+                            ty: field_param_ty,
+                        }]);
                     }
                     fields.push(InstanceField::Def(InstanceDef {
                         name: field_name,
                         ty: field_ty,
                         target: field_target,
                     }));
-
-                    self.locals.push(field_id);
                     num_defs += 1;
                 }
                 "lemma" => {
                     // TODO: allow to refer to preceding lemmas in the same instance.
                     let field_name = self.name()?;
                     let field_params = self.typed_parameters()?;
-                    for field_param in &field_params {
-                        self.locals.push(field_param.id);
+                    for (field_param_name, _) in &field_params {
+                        self.locals.push(field_param_name.clone());
                     }
                     self.expect_symbol(":")?;
                     let mut field_target = self.term()?;
                     self.expect_symbol(":=")?;
                     let mut expr = self.expr()?;
                     self.locals.truncate(self.locals.len() - field_params.len());
+                    let field_params = field_params
+                        .into_iter()
+                        .map(|(field_param_name, field_param_ty)| Local {
+                            id: Id::from_name(&field_param_name),
+                            ty: field_param_ty,
+                        })
+                        .collect::<Vec<_>>();
                     field_target = generalize(&field_target, &field_params);
                     for field_param in field_params.into_iter().rev() {
                         expr = mk_expr_take(field_param.id, field_param.ty, expr);
@@ -2121,7 +2175,13 @@ impl<'a> Parser<'a> {
             name,
             local_types: local_types.iter().map(Id::from_name).collect(),
             local_classes,
-            params,
+            params: params
+                .into_iter()
+                .map(|(param_name, param_ty)| Local {
+                    id: Id::from_name(&param_name),
+                    ty: param_ty,
+                })
+                .collect(),
             target_ty,
             fields,
         })
@@ -2150,26 +2210,31 @@ impl<'a> Parser<'a> {
             match keyword.as_str() {
                 "const" => {
                     let field_name = self.name()?;
-                    let field_id = Id::from_name(&field_name);
                     self.expect_symbol(":")?;
                     let field_ty = self.ty()?;
+                    self.locals.push(field_name.clone());
                     fields.push(ClassStructureField::Const(ClassStructureConst {
                         name: field_name,
                         ty: field_ty,
                     }));
-
-                    self.locals.push(field_id);
                     num_consts += 1;
                 }
                 "axiom" => {
                     let field_name = self.name()?;
                     let params = self.typed_parameters()?;
-                    for param in &params {
-                        self.locals.push(param.id);
+                    for (param_name, _) in &params {
+                        self.locals.push(param_name.clone());
                     }
                     self.expect_symbol(":")?;
                     let mut target = self.term()?;
                     self.locals.truncate(self.locals.len() - params.len());
+                    let params = params
+                        .into_iter()
+                        .map(|(param_name, param_ty)| Local {
+                            id: Id::from_name(&param_name),
+                            ty: param_ty,
+                        })
+                        .collect::<Vec<_>>();
                     target = generalize(&target, &params);
                     fields.push(ClassStructureField::Axiom(ClassStructureAxiom {
                         name: field_name,
@@ -2213,17 +2278,20 @@ impl<'a> Parser<'a> {
                     // TODO: allow to refer to preceding definitions in the same instance.
                     let field_name = self.name()?;
                     let field_params = self.typed_parameters()?;
-                    for field_param in &field_params {
-                        self.locals.push(field_param.id);
+                    for (field_param_name, _) in &field_params {
+                        self.locals.push(field_param_name.clone());
                     }
                     self.expect_symbol(":")?;
                     let mut field_ty = self.ty()?;
                     self.expect_symbol(":=")?;
                     let mut field_target = self.term()?;
                     self.locals.truncate(self.locals.len() - field_params.len());
-                    for field_param in field_params.into_iter().rev() {
-                        field_ty = field_ty.arrow([field_param.ty.clone()]);
-                        field_target = field_target.abs(&[field_param]);
+                    for (field_param_name, field_param_ty) in field_params.into_iter().rev() {
+                        field_ty = field_ty.arrow([field_param_ty.clone()]);
+                        field_target = field_target.abs(&[Local {
+                            id: Id::from_name(&field_param_name),
+                            ty: field_param_ty,
+                        }]);
                     }
                     fields.push(ClassInstanceField::Def(ClassInstanceDef {
                         name: field_name,
@@ -2235,14 +2303,21 @@ impl<'a> Parser<'a> {
                     // TODO: allow to refer to preceding lemmas in the same instance.
                     let field_name = self.name()?;
                     let field_params = self.typed_parameters()?;
-                    for field_param in &field_params {
-                        self.locals.push(field_param.id);
+                    for (field_param_name, _) in &field_params {
+                        self.locals.push(field_param_name.clone());
                     }
                     self.expect_symbol(":")?;
                     let mut field_target = self.term()?;
                     self.expect_symbol(":=")?;
                     let mut expr = self.expr()?;
                     self.locals.truncate(self.locals.len() - field_params.len());
+                    let field_params = field_params
+                        .into_iter()
+                        .map(|(field_param_name, field_param_ty)| Local {
+                            id: Id::from_name(&field_param_name),
+                            ty: field_param_ty,
+                        })
+                        .collect::<Vec<_>>();
                     field_target = generalize(&field_target, &field_params);
                     for field_param in field_params.into_iter().rev() {
                         expr = mk_expr_take(field_param.id, field_param.ty, expr);
@@ -2714,6 +2789,47 @@ mod tests {
         };
         assert_eq!(local_axiom.id, Id::from_name(&Name::from_str("h")));
         assert!(arg.head().is_hole());
+    }
+
+    #[test]
+    fn term_hole_uses_canonical_ids_for_local_context() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let top_namespace = Path::toplevel();
+        let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
+        namespace_table.insert(top_namespace.clone(), Namespace::default());
+        seed_namespace_table_from_globals(
+            &mut namespace_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        );
+        let mut current_namespace = top_namespace;
+        let file = Arc::new(File::new("<test>", "_"));
+        let mut lex = Lex::new(file);
+        let mut parser = Parser::new(
+            &mut lex,
+            &tt,
+            &mut namespace_table,
+            &mut current_namespace,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        );
+
+        let local_name = Name::from_str("x");
+        let generated_id = Id::fresh_with_name(local_name.clone());
+        let canonical_id = Id::from_name(&local_name);
+        assert_ne!(generated_id, canonical_id);
+        parser.locals.push(local_name);
+        let term = parser.term().expect("term parses");
+        let args = term.args();
+        assert_eq!(args.len(), 1);
+        let Term::Local(local) = args[0] else {
+            panic!("expected local argument");
+        };
+        assert_eq!(local.id, canonical_id);
     }
 
     #[test]
