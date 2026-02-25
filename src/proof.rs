@@ -189,7 +189,7 @@ pub struct ExprMetadata {
 #[derive(Debug, Clone)]
 pub enum Expr {
     Assump(Box<ExprAssump>),
-    AssumpByName(Box<ExprAssumpByName>),
+    Local(Box<ExprLocal>),
     Assume(Box<ExprAssume>),
     App(Box<ExprApp>),
     Take(Box<ExprTake>),
@@ -207,7 +207,7 @@ pub struct ExprAssump {
 }
 
 #[derive(Debug, Clone)]
-pub struct ExprAssumpByName {
+pub struct ExprLocal {
     pub metadata: ExprMetadata,
     pub id: Id,
 }
@@ -306,8 +306,8 @@ pub fn mk_expr_assump(m: Term) -> Expr {
     }))
 }
 
-pub fn mk_expr_assump_by_name(id: Id) -> Expr {
-    Expr::AssumpByName(Box::new(ExprAssumpByName {
+pub fn mk_expr_local(id: Id) -> Expr {
+    Expr::Local(Box::new(ExprLocal {
         metadata: ExprMetadata::default(),
         id,
     }))
@@ -393,7 +393,7 @@ impl std::fmt::Display for Expr {
 
         fn precedence(expr: &Expr) -> u8 {
             match expr {
-                Expr::Assump(_) | Expr::AssumpByName(_) | Expr::Const(_) => PREC_ATOM,
+                Expr::Assump(_) | Expr::Local(_) | Expr::Const(_) => PREC_ATOM,
                 Expr::Inst(_) => PREC_INST,
                 Expr::App(_) => PREC_APP,
                 Expr::Assume(_)
@@ -429,7 +429,7 @@ impl std::fmt::Display for Expr {
                 Expr::Assump(e) => {
                     write!(f, "«{}»", e.target)?;
                 }
-                Expr::AssumpByName(e) => {
+                Expr::Local(e) => {
                     write!(f, "{}", e.id)?;
                 }
                 Expr::Assume(e) => {
@@ -538,7 +538,7 @@ impl Expr {
     pub fn metadata(&self) -> &ExprMetadata {
         match self {
             Expr::Assump(inner) => &inner.metadata,
-            Expr::AssumpByName(inner) => &inner.metadata,
+            Expr::Local(inner) => &inner.metadata,
             Expr::Assume(inner) => &inner.metadata,
             Expr::App(inner) => &inner.metadata,
             Expr::Take(inner) => &inner.metadata,
@@ -560,9 +560,9 @@ impl Expr {
                 inner.metadata.span = span;
                 Expr::Assump(inner)
             }
-            Expr::AssumpByName(mut inner) => {
+            Expr::Local(mut inner) => {
                 inner.metadata.span = span;
-                Expr::AssumpByName(inner)
+                Expr::Local(inner)
             }
             Expr::Assume(mut inner) => {
                 inner.metadata.span = span;
@@ -608,7 +608,7 @@ impl Expr {
                 } = &**e;
                 target.is_ground()
             }
-            Expr::AssumpByName(_) => true,
+            Expr::Local(_) => true,
             Expr::Assume(e) => {
                 let ExprAssume {
                     metadata: _,
@@ -690,7 +690,7 @@ impl Expr {
                 } = &**e;
                 target.is_type_ground()
             }
-            Expr::AssumpByName(_) => true,
+            Expr::Local(_) => true,
             Expr::Assume(e) => {
                 let ExprAssume {
                     metadata: _,
@@ -777,7 +777,7 @@ impl Expr {
     pub fn is_instance_ground(&self) -> bool {
         match self {
             Expr::Assump(inner) => inner.target.is_instance_ground(),
-            Expr::AssumpByName(_) => true,
+            Expr::Local(_) => true,
             Expr::Assume(inner) => {
                 inner.local_axiom.is_instance_ground() && inner.expr.is_instance_ground()
             }
@@ -814,7 +814,7 @@ impl Expr {
                 let new_target = target.subst(subst);
                 *target = new_target;
             }
-            Expr::AssumpByName(_) => {}
+            Expr::Local(_) => {}
             Expr::Assume(e) => {
                 let ExprAssume {
                     metadata: _,
@@ -905,7 +905,7 @@ impl Expr {
                 } = e.as_mut();
                 *target = target.replace_hole(f);
             }
-            Expr::AssumpByName(_) => {}
+            Expr::Local(_) => {}
             Expr::Assume(e) => {
                 let ExprAssume {
                     metadata: _,
@@ -1047,8 +1047,8 @@ impl Env<'_> {
                 }
                 panic!("unknown assumption: {}", target);
             }
-            Expr::AssumpByName(e) => {
-                let ExprAssumpByName { metadata: _, id } = &**e;
+            Expr::Local(e) => {
+                let ExprLocal { metadata: _, id } = &**e;
                 for assume in local_env.assumes.iter().rev() {
                     if assume.alias == Some(*id) {
                         return assume.prop.clone();

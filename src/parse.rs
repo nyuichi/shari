@@ -8,9 +8,9 @@ use crate::cmd::{
 };
 use crate::proof::{
     Axiom, Expr, LocalStructureAxiom, LocalStructureConst, LocalStructureField, count_forall,
-    generalize, guard, mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_assump_by_name,
-    mk_expr_change, mk_expr_const, mk_expr_inst, mk_expr_let_structure, mk_expr_let_term,
-    mk_expr_take, mk_type_prop,
+    generalize, guard, mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_change, mk_expr_const,
+    mk_expr_inst, mk_expr_let_structure, mk_expr_let_term, mk_expr_local, mk_expr_take,
+    mk_type_prop,
 };
 use crate::tt::{
     Class, ClassType, Const, Id, Kind, Local, Name, Path, QualifiedName, Term, Type, mk_const,
@@ -1390,7 +1390,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     let name = Name::from_str(token.as_str());
                     if self.has_assume(&name) {
-                        mk_expr_assump_by_name(Id::from_name(&name))
+                        mk_expr_local(Id::from_name(&name))
                     } else {
                         self.expr_const(token, true)?
                     }
@@ -2301,7 +2301,7 @@ impl<'a> Parser<'a> {
 mod tests {
     use super::*;
     use crate::lex::{File, Lex};
-    use crate::proof::{ExprApp, ExprAssume, ExprAssumpByName, ExprLetTerm};
+    use crate::proof::{ExprApp, ExprAssume, ExprLetTerm, ExprLocal};
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -2652,10 +2652,10 @@ mod tests {
         let expected = mk_const(QualifiedName::from_str("p"), vec![], vec![]);
         assert!(local_axiom.alpha_eq(&expected));
 
-        let Expr::AssumpByName(assump) = body else {
+        let Expr::Local(assump) = body else {
             panic!("expected body to reference assumption alias");
         };
-        let ExprAssumpByName { metadata: _, id } = *assump;
+        let ExprLocal { metadata: _, id } = *assump;
         assert_eq!(id, Id::from_name(&Name::from_str("this")));
     }
 
@@ -2696,19 +2696,19 @@ mod tests {
         } = *inner_assume;
         assert_eq!(inner_alias, Some(Id::from_name(&Name::from_str("this"))));
         assert!(inner_axiom.alpha_eq(&expected));
-        let Expr::AssumpByName(inner_assump) = inner_body else {
+        let Expr::Local(inner_assump) = inner_body else {
             panic!("expected have body to reference alias");
         };
-        let ExprAssumpByName {
+        let ExprLocal {
             metadata: _,
             id: inner_id,
         } = *inner_assump;
         assert_eq!(inner_id, Id::from_name(&Name::from_str("this")));
 
-        let Expr::AssumpByName(have_arg) = expr2 else {
+        let Expr::Local(have_arg) = expr2 else {
             panic!("expected have argument to reference outer alias");
         };
-        let ExprAssumpByName {
+        let ExprLocal {
             metadata: _,
             id: outer_id,
         } = *have_arg;

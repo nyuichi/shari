@@ -12,8 +12,8 @@ use anyhow::{bail, ensure};
 use crate::{
     lex::Span,
     proof::{
-        self, Assume, Axiom, Expr, ExprApp, ExprAssume, ExprAssump, ExprAssumpByName, ExprChange,
-        ExprConst, ExprInst, ExprLetStructure, ExprLetTerm, ExprTake, LocalAxiom,
+        self, Assume, Axiom, Expr, ExprApp, ExprAssume, ExprAssump, ExprChange, ExprConst,
+        ExprInst, ExprLetStructure, ExprLetTerm, ExprLocal, ExprTake, LocalAxiom,
         LocalStructureAxiom, LocalStructureConst, LocalStructureField, generalize, guard,
         mk_expr_change, mk_type_prop, ungeneralize1, unguard1,
     },
@@ -467,8 +467,8 @@ impl<'a> Elaborator<'a> {
 
                 Ok(target.clone())
             }
-            Expr::AssumpByName(expr) => {
-                let ExprAssumpByName { metadata: _, id } = expr.as_ref();
+            Expr::Local(expr) => {
+                let ExprLocal { metadata: _, id } = expr.as_ref();
 
                 for assume in self.assumes.iter().rev() {
                     if assume.alias == Some(*id) {
@@ -1306,7 +1306,7 @@ impl<'a> Elaborator<'a> {
                 } = expr.as_mut();
                 *target = self.fully_inst(target);
             }
-            Expr::AssumpByName(_) => {}
+            Expr::Local(_) => {}
             Expr::Assume(expr) => {
                 let ExprAssume {
                     metadata: _,
