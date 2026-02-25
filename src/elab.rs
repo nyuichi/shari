@@ -12,10 +12,10 @@ use anyhow::{bail, ensure};
 use crate::{
     lex::Span,
     proof::{
-        self, Assume, Axiom, Expr, ExprApp, ExprAssume, ExprAssump, ExprChange, ExprConst,
-        ExprInst, ExprLetStructure, ExprLetTerm, ExprLocal, ExprTake, LocalAxiom,
-        LocalStructureAxiom, LocalStructureConst, LocalStructureField, generalize, guard,
-        mk_expr_change, mk_type_prop, ungeneralize1, unguard1,
+        self, Axiom, Expr, ExprApp, ExprAssume, ExprAssump, ExprChange, ExprConst, ExprInst,
+        ExprLetStructure, ExprLetTerm, ExprLocal, ExprTake, LocalAxiom, LocalStructureAxiom,
+        LocalStructureConst, LocalStructureField, generalize, guard, mk_expr_change, mk_type_prop,
+        ungeneralize1, unguard1,
     },
     tt::{
         self, Class, ClassInstance, ClassType, Const, Id, Instance, InstanceGlobal, Kind, Local,
@@ -130,9 +130,7 @@ struct Elaborator<'a> {
     // only used in visit
     instance_holes: Vec<(Id, Class)>,
     // only used in visit
-    local_axioms: Vec<(QualifiedName, LocalAxiom)>,
-    // only used in visit
-    assumes: Vec<Assume>,
+    local_axioms: Vec<LocalAxiom>,
 
     // only used in find_conflict
     term_constraints: Vec<(LocalEnv, Term, Term, Error)>,
@@ -176,7 +174,6 @@ impl<'a> Elaborator<'a> {
             term_holes,
             instance_holes: Default::default(),
             local_axioms: Default::default(),
-            assumes: Default::default(),
             type_constraints: Default::default(),
             term_constraints: Default::default(),
             class_constraints: Default::default(),
@@ -458,9 +455,9 @@ impl<'a> Elaborator<'a> {
 
                 // don't need strict check here
                 if !self
-                    .assumes
+                    .local_axioms
                     .iter()
-                    .any(|assume| assume.prop.maybe_alpha_eq(target))
+                    .any(|local_axiom| local_axiom.prop.maybe_alpha_eq(target))
                 {
                     bail!("assumption not found: {target}");
                 }
@@ -470,14 +467,9 @@ impl<'a> Elaborator<'a> {
             Expr::Local(expr) => {
                 let ExprLocal { metadata: _, id } = expr.as_ref();
 
-                for assume in self.assumes.iter().rev() {
-                    if assume.alias == Some(*id) {
-                        return Ok(assume.prop.clone());
-                    }
-                }
-                for (local_name, local_axiom) in self.local_axioms.iter().rev() {
-                    if *id == Id::from_qualified_name(local_name) {
-                        return Ok(local_axiom.target.clone());
+                for local_axiom in self.local_axioms.iter().rev() {
+                    if local_axiom.id == Some(*id) {
+                        return Ok(local_axiom.prop.clone());
                     }
                 }
 
@@ -498,12 +490,12 @@ impl<'a> Elaborator<'a> {
                 );
                 self.push_type_constraint(local_axiom_ty, mk_type_prop(), error);
 
-                self.assumes.push(Assume {
-                    alias: *alias,
+                self.local_axioms.push(LocalAxiom {
+                    id: *alias,
                     prop: local_axiom.clone(),
                 });
                 let mut target = self.visit_expr(inner)?;
-                let p = self.assumes.pop().unwrap();
+                let p = self.local_axioms.pop().unwrap();
                 target = guard(&target, [p.prop]);
 
                 Ok(target)
@@ -781,7 +773,7 @@ impl<'a> Elaborator<'a> {
                     ty: this_ty.clone(),
                 };
                 let mut locals: Vec<Local> = vec![];
-                let mut local_axioms: Vec<(QualifiedName, LocalAxiom)> = vec![];
+                let mut local_axioms: Vec<LocalAxiom> = vec![];
                 let mut subst = vec![];
 
                 for field in &*fields {
@@ -807,7 +799,10 @@ impl<'a> Elaborator<'a> {
                             let mut target = target.clone();
                             target = target.subst(&subst);
                             target = generalize(&target, slice::from_ref(&this));
-                            local_axioms.push((fullname, LocalAxiom { target }));
+                            local_axioms.push(LocalAxiom {
+                                id: Some(Id::from_qualified_name(&fullname)),
+                                prop: target,
+                            });
                         }
                     }
                 }
@@ -870,7 +865,10 @@ impl<'a> Elaborator<'a> {
                 }]);
                 abs = guard(&abs, guards);
                 abs = generalize(&abs, &params);
-                local_axioms.push((abs_name, LocalAxiom { target: abs }));
+                local_axioms.push(LocalAxiom {
+                    id: Some(Id::from_qualified_name(&abs_name)),
+                    prop: abs,
+                });
 
                 let local_type_len = self.tt_local_env.local_types.len();
                 let local_len = self.tt_local_env.locals.len();
@@ -2782,12 +2780,10 @@ mod tests {
         };
         let mut elab = Elaborator::new(proof_env, &mut tt_local_env, vec![]);
         let local_axiom_name = QualifiedName::from_str("foo.a");
-        elab.local_axioms.push((
-            local_axiom_name.clone(),
-            LocalAxiom {
-                target: mk_const(QualifiedName::from_str("p"), vec![], vec![]),
-            },
-        ));
+        elab.local_axioms.push(LocalAxiom {
+            id: Some(Id::from_qualified_name(&local_axiom_name)),
+            prop: mk_const(QualifiedName::from_str("p"), vec![], vec![]),
+        });
 
         let mut expr = proof::mk_expr_const(local_axiom_name, vec![], vec![]);
         let error = elab

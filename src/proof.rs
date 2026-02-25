@@ -998,19 +998,13 @@ pub struct Env<'a> {
 
 #[derive(Debug, Clone)]
 pub struct LocalAxiom {
-    pub target: Term,
-}
-
-#[derive(Debug, Clone)]
-pub struct Assume {
-    pub alias: Option<Id>,
+    pub id: Option<Id>,
     pub prop: Term,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct LocalEnv {
-    pub local_axioms: Vec<(QualifiedName, LocalAxiom)>,
-    pub assumes: Vec<Assume>,
+    pub local_axioms: Vec<LocalAxiom>,
 }
 
 impl Env<'_> {
@@ -1040,8 +1034,8 @@ impl Env<'_> {
                     metadata: _,
                     target,
                 } = &**e;
-                for assume in &local_env.assumes {
-                    if target.alpha_eq(&assume.prop) {
+                for local_axiom in &local_env.local_axioms {
+                    if target.alpha_eq(&local_axiom.prop) {
                         return target.clone();
                     }
                 }
@@ -1049,14 +1043,9 @@ impl Env<'_> {
             }
             Expr::Local(e) => {
                 let ExprLocal { metadata: _, id } = &**e;
-                for assume in local_env.assumes.iter().rev() {
-                    if assume.alias == Some(*id) {
-                        return assume.prop.clone();
-                    }
-                }
-                for (local_name, local_axiom) in local_env.local_axioms.iter().rev() {
-                    if *id == Id::from_qualified_name(local_name) {
-                        return local_axiom.target.clone();
+                for local_axiom in local_env.local_axioms.iter().rev() {
+                    if local_axiom.id == Some(*id) {
+                        return local_axiom.prop.clone();
                     }
                 }
                 panic!("unknown assumption alias: {}", id);
@@ -1069,12 +1058,12 @@ impl Env<'_> {
                     expr,
                 } = &**e;
                 self.tt_env.check_wff(tt_local_env, local_axiom);
-                local_env.assumes.push(Assume {
-                    alias: *alias,
+                local_env.local_axioms.push(LocalAxiom {
+                    id: *alias,
                     prop: local_axiom.clone(),
                 });
                 let target = self.infer_prop(tt_local_env, local_env, expr);
-                let p = local_env.assumes.pop().unwrap();
+                let p = local_env.local_axioms.pop().unwrap();
                 guard(&target, [p.prop])
             }
             Expr::App(e) => {
@@ -1098,10 +1087,10 @@ impl Env<'_> {
                     expr,
                 } = &**e;
                 self.tt_env.check_wft(tt_local_env, ty);
-                for assume in &local_env.assumes {
-                    if !assume.prop.is_fresh(std::slice::from_ref(id)) {
+                for local_axiom in &local_env.local_axioms {
+                    if !local_axiom.prop.is_fresh(std::slice::from_ref(id)) {
                         // eigenvariable condition fails
-                        panic!("eigenvariable condition violated by {}", assume.prop);
+                        panic!("eigenvariable condition violated by {}", local_axiom.prop);
                     }
                 }
                 let param = Local {
@@ -1266,7 +1255,7 @@ impl Env<'_> {
                     ty: this_ty.clone(),
                 };
                 let mut locals: Vec<Local> = vec![];
-                let mut local_axioms: Vec<(QualifiedName, LocalAxiom)> = vec![];
+                let mut local_axioms: Vec<LocalAxiom> = vec![];
                 let mut subst = vec![];
 
                 for field in fields {
@@ -1292,7 +1281,10 @@ impl Env<'_> {
                             let mut target = target.clone();
                             target = target.subst(&subst);
                             target = generalize(&target, slice::from_ref(&this));
-                            local_axioms.push((fullname, LocalAxiom { target }));
+                            local_axioms.push(LocalAxiom {
+                                id: Some(Id::from_qualified_name(&fullname)),
+                                prop: target,
+                            });
                         }
                     }
                 }
@@ -1355,7 +1347,10 @@ impl Env<'_> {
                 }]);
                 abs = guard(&abs, guards);
                 abs = generalize(&abs, &params);
-                local_axioms.push((abs_name, LocalAxiom { target: abs }));
+                local_axioms.push(LocalAxiom {
+                    id: Some(Id::from_qualified_name(&abs_name)),
+                    prop: abs,
+                });
 
                 let local_type_len = tt_local_env.local_types.len();
                 let local_len = tt_local_env.locals.len();
@@ -1397,7 +1392,7 @@ impl Env<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tt::{ClassInstance, ClassType, Const, Delta, Kappa, Kind};
+    use crate::tt::{ClassInstance, ClassType, Const, Delta, Id, Kappa, Kind};
 
     use std::collections::HashMap;
 
@@ -1427,12 +1422,10 @@ mod tests {
         };
         let mut local_env = LocalEnv::default();
         let local_axiom_name = QualifiedName::from_str("foo.a");
-        local_env.local_axioms.push((
-            local_axiom_name.clone(),
-            LocalAxiom {
-                target: mk_const(QualifiedName::from_str("p"), vec![], vec![]),
-            },
-        ));
+        local_env.local_axioms.push(LocalAxiom {
+            id: Some(Id::from_qualified_name(&local_axiom_name)),
+            prop: mk_const(QualifiedName::from_str("p"), vec![], vec![]),
+        });
         let expr = mk_expr_const(local_axiom_name, vec![], vec![]);
         let _ = env.infer_prop(&mut tt_local_env, &mut local_env, &expr);
     }

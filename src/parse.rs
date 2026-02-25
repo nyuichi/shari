@@ -166,6 +166,11 @@ struct UseDecl {
     alias: Option<Name>,
 }
 
+#[derive(Debug, Clone)]
+struct LocalAxiom {
+    target: Term,
+}
+
 // TODO: instance lemma の中で hole を作ると引数にそれまでの instance def が入っちゃって後々 elab で const に置き換えられるので無駄。あと instance 自体の引数が2回ぐらい hole の引数に入ってしまうバグがありそう。
 pub struct Parser<'a> {
     lex: &'a mut Lex,
@@ -177,11 +182,10 @@ pub struct Parser<'a> {
     axiom_table: &'a HashMap<QualifiedName, Axiom>,
     class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
     qualified_locals: Vec<(QualifiedName, Local)>,
-    local_axioms: Vec<(QualifiedName, Axiom)>,
+    local_axioms: Vec<(Id, LocalAxiom)>,
     local_types: Vec<Name>,
     // TODO: Vec<Name>にする
     locals: Vec<Id>,
-    assumes: Vec<Name>,
     self_ref: Option<(QualifiedName, Id)>,
     type_self_ref: Option<(QualifiedName, Id)>,
     holes: Vec<(Id, Type)>,
@@ -212,7 +216,6 @@ impl<'a> Parser<'a> {
             local_axioms: vec![],
             local_types: vec![],
             locals: vec![],
-            assumes: vec![],
             self_ref: None,
             type_self_ref: None,
             holes: vec![],
@@ -252,11 +255,17 @@ impl<'a> Parser<'a> {
             })
     }
 
-    fn has_local_axiom(&self, name: &QualifiedName) -> bool {
+    fn get_local_axiom(&self, id: Id) -> Option<&LocalAxiom> {
         self.local_axioms
             .iter()
             .rev()
-            .any(|(local_name, _)| local_name == name)
+            .find_map(|(local_id, local_axiom)| {
+                if *local_id == id {
+                    Some(local_axiom)
+                } else {
+                    None
+                }
+            })
     }
 
     fn has_local_type(&self, name: &Name) -> bool {
@@ -268,10 +277,6 @@ impl<'a> Parser<'a> {
             let local_name = local.name().expect("locals are all internalized names");
             local_name == *name
         })
-    }
-
-    fn has_assume(&self, name: &Name) -> bool {
-        self.assumes.iter().rev().any(|local| local == name)
     }
 
     fn fail<R>(token: Token, message: impl Into<String>) -> Result<R, ParseError> {
@@ -891,11 +896,21 @@ impl<'a> Parser<'a> {
 
     fn expr_var(&mut self, token: Token, auto_inst: bool) -> Result<Expr, ParseError> {
         let name = self.qualified_name(&token);
-        if self.has_local_axiom(&name) {
-            if auto_inst {
-                return Self::fail(token, "local axiom requires @");
+        if name.names().len() == 1 {
+            let id = Id::from_name(name.name());
+            if self.get_local_axiom(id).is_some() {
+                return Ok(mk_expr_local(id));
             }
-            return Ok(mk_expr_local(Id::from_qualified_name(&name)));
+        }
+        let id = Id::from_qualified_name(&name);
+        if let Some(local_axiom) = self.get_local_axiom(id) {
+            if auto_inst {
+                return Self::fail(
+                    token,
+                    format!("local axiom requires @: {}", local_axiom.target),
+                );
+            }
+            return Ok(mk_expr_local(id));
         }
         let name = self.resolve(name);
         let Some(axiom_info) = self.axiom_table.get(&name).cloned() else {
@@ -1020,7 +1035,7 @@ impl<'a> Parser<'a> {
         };
 
         let mut qualified_locals: Vec<(QualifiedName, Local)> = vec![];
-        let mut local_axioms: Vec<(QualifiedName, Axiom)> = vec![];
+        let mut local_axioms: Vec<(Id, LocalAxiom)> = vec![];
         let mut subst = vec![];
         for field in &fields {
             match field {
@@ -1044,14 +1059,7 @@ impl<'a> Parser<'a> {
                     let mut target = target.clone();
                     target = target.subst(&subst);
                     target = generalize(&target, slice::from_ref(&this));
-                    local_axioms.push((
-                        fullname,
-                        Axiom {
-                            local_types: vec![],
-                            local_classes: vec![],
-                            target,
-                        },
-                    ));
+                    local_axioms.push((Id::from_qualified_name(&fullname), LocalAxiom { target }));
                 }
             }
         }
@@ -1115,12 +1123,8 @@ impl<'a> Parser<'a> {
         abs = guard(&abs, guards);
         abs = generalize(&abs, &params);
         local_axioms.push((
-            abs_name,
-            Axiom {
-                local_types: vec![],
-                local_classes: vec![],
-                target: abs,
-            },
+            Id::from_qualified_name(&abs_name),
+            LocalAxiom { target: abs },
         ));
 
         let qualified_local_len = self.qualified_locals.len();
@@ -1205,21 +1209,19 @@ impl<'a> Parser<'a> {
                     let m = self.term()?;
                     let alias = self.alias_opt()?;
                     self.expect_symbol(",")?;
+                    let local_axioms_len = self.local_axioms.len();
                     if let Some(alias_name) = &alias {
-                        self.assumes.push(alias_name.clone());
+                        self.local_axioms
+                            .push((Id::from_name(alias_name), LocalAxiom { target: m.clone() }));
                     }
                     let expr = match self.expr() {
                         Ok(expr) => expr,
                         Err(err) => {
-                            if alias.is_some() {
-                                self.assumes.pop();
-                            }
+                            self.local_axioms.truncate(local_axioms_len);
                             return Err(err);
                         }
                     };
-                    if alias.is_some() {
-                        self.assumes.pop();
-                    }
+                    self.local_axioms.truncate(local_axioms_len);
                     mk_expr_assume(m, alias.as_ref().map(Id::from_name), expr)
                 }
                 "take" => {
@@ -1246,21 +1248,19 @@ impl<'a> Parser<'a> {
                     self.expect_symbol(":=")?;
                     let e1 = self.expr()?;
                     self.expect_symbol(",")?;
+                    let local_axioms_len = self.local_axioms.len();
                     if let Some(alias_name) = &alias {
-                        self.assumes.push(alias_name.clone());
+                        self.local_axioms
+                            .push((Id::from_name(alias_name), LocalAxiom { target: m.clone() }));
                     }
                     let e2 = match self.expr() {
                         Ok(expr) => expr,
                         Err(err) => {
-                            if alias.is_some() {
-                                self.assumes.pop();
-                            }
+                            self.local_axioms.truncate(local_axioms_len);
                             return Err(err);
                         }
                     };
-                    if alias.is_some() {
-                        self.assumes.pop();
-                    }
+                    self.local_axioms.truncate(local_axioms_len);
                     Self::mk_have(m, alias.as_ref().map(Id::from_name), e1, e2)
                 }
                 "obtain" => {
@@ -1278,22 +1278,20 @@ impl<'a> Parser<'a> {
                     let e1 = self.expr()?;
                     self.expect_symbol(",")?;
                     self.locals.push(local_id);
+                    let local_axioms_len = self.local_axioms.len();
                     if let Some(alias_name) = &alias {
-                        self.assumes.push(alias_name.clone());
+                        self.local_axioms
+                            .push((Id::from_name(alias_name), LocalAxiom { target: p.clone() }));
                     }
                     let e2 = match self.expr() {
                         Ok(expr) => expr,
                         Err(err) => {
-                            if alias.is_some() {
-                                self.assumes.pop();
-                            }
+                            self.local_axioms.truncate(local_axioms_len);
                             self.locals.pop();
                             return Err(err);
                         }
                     };
-                    if alias.is_some() {
-                        self.assumes.pop();
-                    }
+                    self.local_axioms.truncate(local_axioms_len);
                     self.locals.pop();
 
                     // Expand[obtain (x : τ), p := e1, e2] := exists.ind.{τ}[_, _] e1 (take (x : τ), assume p, e2)
@@ -1380,14 +1378,7 @@ impl<'a> Parser<'a> {
                         self.let_term_expr(token)?
                     }
                 }
-                _ => {
-                    let name = Name::from_str(token.as_str());
-                    if self.has_assume(&name) {
-                        mk_expr_local(Id::from_name(&name))
-                    } else {
-                        self.expr_var(token, true)?
-                    }
-                }
+                _ => self.expr_var(token, true)?,
             }
         };
         left = self.expr_with_span(start, left);
