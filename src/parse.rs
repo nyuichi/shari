@@ -181,7 +181,7 @@ pub struct Parser<'a> {
     const_table: &'a HashMap<QualifiedName, Const>,
     axiom_table: &'a HashMap<QualifiedName, Axiom>,
     class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
-    local_consts: Vec<(Name, Local)>,
+    local_consts: Vec<Name>,
     local_axioms: Vec<(Name, LocalAxiom)>,
     local_types: Vec<Name>,
     locals: Vec<Name>,
@@ -241,17 +241,8 @@ impl<'a> Parser<'a> {
         self.const_table.get(name)
     }
 
-    fn get_local_const(&self, name: &Name) -> Option<&Local> {
-        self.local_consts
-            .iter()
-            .rev()
-            .find_map(|(local_name, local)| {
-                if local_name == name {
-                    Some(local)
-                } else {
-                    None
-                }
-            })
+    fn has_local_const(&self, name: &Name) -> bool {
+        self.local_consts.iter().rev().any(|local| local == name)
     }
 
     fn get_local_axiom(&self, name: &Name) -> Option<&LocalAxiom> {
@@ -771,8 +762,8 @@ impl<'a> Parser<'a> {
                     return Ok(mk_local(*stash));
                 }
                 let local_name = Name::from_str(&name.to_string());
-                if let Some(local) = self.get_local_const(&local_name) {
-                    return Ok(mk_local(local.id));
+                if self.has_local_const(&local_name) {
+                    return Ok(mk_local(Id::from_name(&local_name)));
                 }
                 let name = self.resolve(name);
                 if let Some(stash) = self.self_ref.as_ref().and_then(|(self_name, stash)| {
@@ -1039,19 +1030,18 @@ impl<'a> Parser<'a> {
             ty: this_ty.clone(),
         };
 
-        let mut local_consts: Vec<(Name, Local)> = vec![];
+        let mut local_consts: Vec<Name> = vec![];
         let mut local_axioms: Vec<(Name, LocalAxiom)> = vec![];
         let mut subst = vec![];
         for field in &fields {
             match field {
                 LocalStructureField::Const(LocalStructureConst {
                     name: field_name,
-                    ty,
+                    ty: _,
                 }) => {
                     let fullname = Name::from_str(&format!("{structure_name}.{field_name}"));
                     let id = Id::from_name(&fullname);
-                    let ty = ty.arrow([this_ty.clone()]);
-                    local_consts.push((fullname, Local { id, ty }));
+                    local_consts.push(fullname);
                     let mut target = mk_local(id);
                     target = target.apply([mk_local(this.id)]);
                     subst.push((Id::from_name(field_name), target));
@@ -1161,14 +1151,7 @@ impl<'a> Parser<'a> {
         self.expect_symbol(",")?;
 
         let local_const_len = self.local_consts.len();
-        let id = Id::from_name(&name);
-        self.local_consts.push((
-            name.clone(),
-            Local {
-                id,
-                ty: ty.clone().unwrap_or_else(mk_fresh_type_hole),
-            },
-        ));
+        self.local_consts.push(name.clone());
         let body = match self.expr() {
             Ok(body) => body,
             Err(err) => {
