@@ -42,11 +42,7 @@ static QUALIFIED_NAME_TABLE: LazyLock<
 
 static ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static ID_NAME_TABLE: LazyLock<Mutex<HashMap<Name, Id>>> = LazyLock::new(Default::default);
-static ID_QNAME_TABLE: LazyLock<Mutex<HashMap<QualifiedName, Id>>> =
-    LazyLock::new(Default::default);
 static ID_NAME_REV_TABLE: LazyLock<Mutex<HashMap<Id, Name>>> = LazyLock::new(Default::default);
-static ID_QNAME_REV_TABLE: LazyLock<Mutex<HashMap<Id, QualifiedName>>> =
-    LazyLock::new(Default::default);
 
 impl Display for Name {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -269,12 +265,6 @@ impl Display for Id {
             }
             return write!(f, "{}", name);
         }
-        if let Some(name) = self.qualified_name() {
-            if self.is_generated() {
-                return write!(f, "{}{}", name, self.0);
-            }
-            return write!(f, "{}", name);
-        }
         write!(f, "{}", self.0)
     }
 }
@@ -306,41 +296,13 @@ impl Id {
         id
     }
 
-    pub fn from_qualified_name(qualified_name: &QualifiedName) -> Id {
-        let mut id_table = ID_QNAME_TABLE.lock().unwrap();
-        if let Some(&id) = id_table.get(qualified_name) {
-            return id;
-        }
-
-        let id = Id::fresh();
-        id_table.insert(qualified_name.clone(), id);
-        drop(id_table);
-        // This can be put here outside the critical section of ID_QNAME_TABLE
-        // because no one but this function knows of the value of `id`.
-        ID_QNAME_REV_TABLE
-            .lock()
-            .unwrap()
-            .insert(id, qualified_name.clone());
-        id
-    }
-
     pub fn name(&self) -> Option<Name> {
         ID_NAME_REV_TABLE.lock().unwrap().get(self).cloned()
-    }
-
-    fn qualified_name(&self) -> Option<QualifiedName> {
-        ID_QNAME_REV_TABLE.lock().unwrap().get(self).cloned()
     }
 
     pub fn is_generated(&self) -> bool {
         if let Some(name) = self.name() {
             let Some(&id) = ID_NAME_TABLE.lock().unwrap().get(&name) else {
-                return true;
-            };
-            return id != *self;
-        }
-        if let Some(name) = self.qualified_name() {
-            let Some(&id) = ID_QNAME_TABLE.lock().unwrap().get(&name) else {
                 return true;
             };
             return id != *self;
@@ -2689,6 +2651,10 @@ mod tests {
         env.equiv(&empty_local_env(), left, right)
     }
 
+    fn local_id(value: &str) -> Id {
+        Id::from_name(&Name::from_str(value))
+    }
+
     #[test]
     fn equiv_alpha_eq_constants() {
         let fixture = EnvFixture::new();
@@ -2739,8 +2705,7 @@ mod tests {
 
     #[test]
     fn unfold_head_uses_local_delta_for_local() {
-        let c = QualifiedName::from_str("c");
-        let c_id = Id::from_qualified_name(&c);
+        let c_id = local_id("c");
         let d = QualifiedName::from_str("d");
         let fixture = EnvFixture::new();
         let env = fixture.env();
@@ -2779,7 +2744,7 @@ mod tests {
         let env = fixture.env();
         let mut local_env = empty_local_env();
         local_env.local_deltas.push(LocalDelta {
-            id: Id::from_qualified_name(&c),
+            id: local_id("c"),
             target: mk_const(b.clone(), vec![], vec![]),
             height: 0,
         });
@@ -2796,7 +2761,7 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let unfoldable_id = Id::from_qualified_name(&QualifiedName::from_str("foo.l"));
+        let unfoldable_id = local_id("foo.l");
         let rigid_id = Id::from_name(&Name::from_str("x"));
         let local_env = LocalEnv {
             local_types: vec![],
@@ -2823,8 +2788,7 @@ mod tests {
 
     #[test]
     fn equiv_uses_local_delta() {
-        let c = QualifiedName::from_str("c");
-        let c_id = Id::from_qualified_name(&c);
+        let c_id = local_id("c");
         let d = QualifiedName::from_str("d");
         let fixture = EnvFixture::new();
         let env = fixture.env();
@@ -2877,8 +2841,7 @@ mod tests {
     fn infer_type_local_uses_id_lookup() {
         let fixture = EnvFixture::new();
         let env = fixture.env();
-        let name = QualifiedName::from_str("foo.bar");
-        let id = Id::from_qualified_name(&name);
+        let id = local_id("foo.bar");
         let mut local_env = LocalEnv {
             local_types: vec![],
             local_classes: vec![],
@@ -2899,8 +2862,8 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let a_id = Id::from_qualified_name(&QualifiedName::from_str("a"));
-        let b_id = Id::from_qualified_name(&QualifiedName::from_str("b"));
+        let a_id = local_id("a");
+        let b_id = local_id("b");
         let left = mk_local(a_id);
         let right = mk_local(a_id);
         let mismatch = mk_local(b_id);
@@ -2922,7 +2885,7 @@ mod tests {
         );
         let env = fixture.env();
         let c = QualifiedName::from_str("c");
-        let c_id = Id::from_qualified_name(&c);
+        let c_id = local_id("c");
         let mut local_env = empty_local_env();
         local_env.locals.push(Local {
             id: c_id,
@@ -2950,7 +2913,7 @@ mod tests {
             local_types: vec![],
             local_classes: vec![],
             locals: vec![Local {
-                id: Id::from_qualified_name(&c),
+                id: local_id("c"),
                 ty: mk_type_arrow(mk_type_prop(), mk_type_prop()),
             }],
             local_deltas: vec![],
@@ -2962,22 +2925,21 @@ mod tests {
     }
 
     #[test]
-    fn from_qualified_name_is_canonical() {
-        let name = QualifiedName::from_str("foo.bar");
-        let left = Id::from_qualified_name(&name);
-        let right = Id::from_qualified_name(&name);
+    fn from_name_is_canonical_for_dotted_name() {
+        let left = local_id("foo.bar");
+        let right = local_id("foo.bar");
         assert_eq!(left, right);
     }
 
     #[test]
-    fn name_returns_none_for_qualified_name_id() {
-        let id = Id::from_qualified_name(&QualifiedName::from_str("foo.bar"));
-        assert_eq!(id.name(), None);
+    fn name_returns_some_for_dotted_name_id() {
+        let id = local_id("foo.bar");
+        assert_eq!(id.name(), Some(Name::from_str("foo.bar")));
     }
 
     #[test]
-    fn mk_local_for_qualified_id_is_not_closed() {
-        let id = Id::from_qualified_name(&QualifiedName::from_str("foo.bar"));
+    fn mk_local_for_dotted_name_id_is_not_closed() {
+        let id = local_id("foo.bar");
         let local = mk_local(id);
         assert!(!local.metadata().is_closed);
     }

@@ -684,7 +684,7 @@ impl<'a> Elaborator<'a> {
 
                 let local_len = self.tt_local_env.locals.len();
                 let local_delta_len = self.tt_local_env.local_deltas.len();
-                let id = Id::from_qualified_name(name);
+                let id = Id::from_name(name);
                 self.tt_local_env.locals.push(Local { id, ty: binder_ty });
                 self.tt_local_env.local_deltas.push(LocalDelta {
                     id,
@@ -699,13 +699,12 @@ impl<'a> Elaborator<'a> {
             Expr::LetStructure(expr) => {
                 let ExprLetStructure {
                     metadata: _,
-                    name,
+                    name: structure_name,
                     fields,
                     body,
                 } = expr.as_mut();
 
-                let structure_id = Id::from_name(name);
-                let structure_name = QualifiedName::from_str(name.as_str());
+                let structure_id = Id::from_name(structure_name);
                 let locals_len = self.tt_local_env.locals.len();
                 let mut const_field_names: Vec<Name> = vec![];
                 let mut axiom_field_names: Vec<Name> = vec![];
@@ -782,8 +781,9 @@ impl<'a> Elaborator<'a> {
                             name: field_name,
                             ty,
                         }) => {
-                            let fullname = structure_name.extend(field_name.as_str());
-                            let id = Id::from_qualified_name(&fullname);
+                            let fullname =
+                                Name::from_str(&format!("{structure_name}.{field_name}"));
+                            let id = Id::from_name(&fullname);
                             let ty = ty.arrow([this_ty.clone()]);
                             locals.push(Local { id, ty });
 
@@ -795,19 +795,20 @@ impl<'a> Elaborator<'a> {
                             name: field_name,
                             target,
                         }) => {
-                            let fullname = structure_name.extend(field_name.as_str());
+                            let fullname =
+                                Name::from_str(&format!("{structure_name}.{field_name}"));
                             let mut target = target.clone();
                             target = target.subst(&subst);
                             target = generalize(&target, slice::from_ref(&this));
                             local_axioms.push(LocalAxiom {
-                                id: Some(Id::from_qualified_name(&fullname)),
+                                id: Some(Id::from_name(&fullname)),
                                 prop: target,
                             });
                         }
                     }
                 }
 
-                let abs_name = structure_name.extend("abs");
+                let abs_name = Name::from_str(&format!("{structure_name}.abs"));
                 let mut params = vec![];
                 let mut guards = vec![];
                 let mut chars = vec![];
@@ -823,8 +824,9 @@ impl<'a> Elaborator<'a> {
                                 ty: ty.clone(),
                             };
 
-                            let fullname = structure_name.extend(field_name.as_str());
-                            let id = Id::from_qualified_name(&fullname);
+                            let fullname =
+                                Name::from_str(&format!("{structure_name}.{field_name}"));
+                            let id = Id::from_name(&fullname);
                             let mut rhs = mk_local(id);
                             rhs = rhs.apply([mk_local(this.id)]);
 
@@ -866,7 +868,7 @@ impl<'a> Elaborator<'a> {
                 abs = guard(&abs, guards);
                 abs = generalize(&abs, &params);
                 local_axioms.push(LocalAxiom {
-                    id: Some(Id::from_qualified_name(&abs_name)),
+                    id: Some(Id::from_name(&abs_name)),
                     prop: abs,
                 });
 
@@ -2781,7 +2783,7 @@ mod tests {
         let mut elab = Elaborator::new(proof_env, &mut tt_local_env, vec![]);
         let local_axiom_name = QualifiedName::from_str("foo.a");
         elab.local_axioms.push(LocalAxiom {
-            id: Some(Id::from_qualified_name(&local_axiom_name)),
+            id: Some(Id::from_name(&Name::from_str("foo.a"))),
             prop: mk_const(QualifiedName::from_str("p"), vec![], vec![]),
         });
 
@@ -2919,8 +2921,8 @@ mod tests {
     #[test]
     fn mk_term_hole_uses_only_non_unfoldable_locals() {
         let x_id = Id::from_name(&Name::from_str("x"));
-        let q_id = Id::from_qualified_name(&QualifiedName::from_str("foo.q"));
-        let u_id = Id::from_qualified_name(&QualifiedName::from_str("foo.u"));
+        let q_id = Id::from_name(&Name::from_str("foo.q"));
+        let u_id = Id::from_name(&Name::from_str("foo.u"));
 
         let x_ty = mk_type_prop();
         let q_ty = mk_type_prop();
@@ -2991,7 +2993,7 @@ mod tests {
     #[test]
     fn unify_local_and_const_uses_local_unfold() {
         let c = QualifiedName::from_str("c");
-        let l_id = Id::from_qualified_name(&QualifiedName::from_str("foo.l"));
+        let l_id = Id::from_name(&Name::from_str("foo.l"));
         let c_term = mk_const(c.clone(), vec![], vec![]);
 
         let mut local_env = tt::LocalEnv {
@@ -3053,7 +3055,7 @@ mod tests {
 
     #[test]
     fn unify_local_local_with_unfoldable_side() {
-        let unfoldable_id = Id::from_qualified_name(&QualifiedName::from_str("foo.l"));
+        let unfoldable_id = Id::from_name(&Name::from_str("foo.l"));
         let rigid_id = Id::from_name(&Name::from_str("x"));
 
         let mut local_env = tt::LocalEnv {
@@ -3186,7 +3188,7 @@ mod tests {
 
     #[test]
     fn unify_same_local_delta_head_with_mismatched_args_fails_without_panic() {
-        let f_id = Id::from_qualified_name(&QualifiedName::from_str("foo.f"));
+        let f_id = Id::from_name(&Name::from_str("foo.f"));
         let x_id = Id::from_name(&Name::from_str("x"));
         let y_id = Id::from_name(&Name::from_str("y"));
         let c = QualifiedName::from_str("c");

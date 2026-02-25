@@ -253,7 +253,7 @@ pub struct ExprConst {
 #[derive(Debug, Clone)]
 pub struct ExprLetTerm {
     pub metadata: ExprMetadata,
-    pub name: QualifiedName,
+    pub name: Name,
     pub ty: Option<Type>,
     pub value: Term,
     pub body: Expr,
@@ -356,7 +356,7 @@ pub fn mk_expr_const(name: QualifiedName, ty_args: Vec<Type>, instances: Vec<Ins
     }))
 }
 
-pub fn mk_expr_let_term(name: QualifiedName, ty: Option<Type>, value: Term, body: Expr) -> Expr {
+pub fn mk_expr_let_term(name: Name, ty: Option<Type>, value: Term, body: Expr) -> Expr {
     Expr::LetTerm(Box::new(ExprLetTerm {
         metadata: ExprMetadata::default(),
         name,
@@ -1186,7 +1186,7 @@ impl Env<'_> {
 
                 let local_len = tt_local_env.locals.len();
                 let local_delta_len = tt_local_env.local_deltas.len();
-                let id = Id::from_qualified_name(name);
+                let id = Id::from_name(name);
                 tt_local_env.locals.push(Local { id, ty: binder_ty });
                 tt_local_env.local_deltas.push(LocalDelta {
                     id,
@@ -1202,13 +1202,12 @@ impl Env<'_> {
             Expr::LetStructure(e) => {
                 let ExprLetStructure {
                     metadata: _,
-                    name,
+                    name: structure_name,
                     fields,
                     body,
                 } = &**e;
 
-                let structure_id = Id::from_name(name);
-                let structure_name = QualifiedName::from_str(name.as_str());
+                let structure_id = Id::from_name(structure_name);
                 let mut const_field_names: Vec<Name> = vec![];
                 let mut axiom_field_names: Vec<Name> = vec![];
                 let mut num_consts = 0;
@@ -1264,8 +1263,9 @@ impl Env<'_> {
                             name: field_name,
                             ty,
                         }) => {
-                            let fullname = structure_name.extend(field_name.as_str());
-                            let id = Id::from_qualified_name(&fullname);
+                            let fullname =
+                                Name::from_str(&format!("{structure_name}.{field_name}"));
+                            let id = Id::from_name(&fullname);
                             let ty = ty.arrow([this_ty.clone()]);
                             locals.push(Local { id, ty });
 
@@ -1277,19 +1277,20 @@ impl Env<'_> {
                             name: field_name,
                             target,
                         }) => {
-                            let fullname = structure_name.extend(field_name.as_str());
+                            let fullname =
+                                Name::from_str(&format!("{structure_name}.{field_name}"));
                             let mut target = target.clone();
                             target = target.subst(&subst);
                             target = generalize(&target, slice::from_ref(&this));
                             local_axioms.push(LocalAxiom {
-                                id: Some(Id::from_qualified_name(&fullname)),
+                                id: Some(Id::from_name(&fullname)),
                                 prop: target,
                             });
                         }
                     }
                 }
 
-                let abs_name = structure_name.extend("abs");
+                let abs_name = Name::from_str(&format!("{structure_name}.abs"));
                 let mut params = vec![];
                 let mut guards = vec![];
                 let mut chars = vec![];
@@ -1305,8 +1306,9 @@ impl Env<'_> {
                                 ty: ty.clone(),
                             };
 
-                            let fullname = structure_name.extend(field_name.as_str());
-                            let id = Id::from_qualified_name(&fullname);
+                            let fullname =
+                                Name::from_str(&format!("{structure_name}.{field_name}"));
+                            let id = Id::from_name(&fullname);
                             let mut rhs = mk_local(id);
                             rhs = rhs.apply([mk_local(this.id)]);
 
@@ -1348,7 +1350,7 @@ impl Env<'_> {
                 abs = guard(&abs, guards);
                 abs = generalize(&abs, &params);
                 local_axioms.push(LocalAxiom {
-                    id: Some(Id::from_qualified_name(&abs_name)),
+                    id: Some(Id::from_name(&abs_name)),
                     prop: abs,
                 });
 
@@ -1392,7 +1394,7 @@ impl Env<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tt::{ClassInstance, ClassType, Const, Delta, Id, Kappa, Kind};
+    use crate::tt::{ClassInstance, ClassType, Const, Delta, Kappa, Kind};
 
     use std::collections::HashMap;
 
@@ -1423,7 +1425,7 @@ mod tests {
         let mut local_env = LocalEnv::default();
         let local_axiom_name = QualifiedName::from_str("foo.a");
         local_env.local_axioms.push(LocalAxiom {
-            id: Some(Id::from_qualified_name(&local_axiom_name)),
+            id: Some(Id::from_name(&Name::from_str("foo.a"))),
             prop: mk_const(QualifiedName::from_str("p"), vec![], vec![]),
         });
         let expr = mk_expr_const(local_axiom_name, vec![], vec![]);

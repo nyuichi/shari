@@ -1,0 +1,12 @@
+---
+source: tests/proof_error_snapshots.rs
+expression: formatted
+---
+error chain:
+  - parse error
+  - parse error: expected symbol ':=' at tests/proof_errors/let_expr_term_qualified_name.shari:7:10
+
+  let Foo.bar := p,
+         ^^^^
+
+fixture: tests/proof_errors/let_expr_term_qualified_name.shari
