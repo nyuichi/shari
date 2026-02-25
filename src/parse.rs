@@ -153,10 +153,7 @@ impl TokenTable {
 #[derive(Debug, Error)]
 pub enum ParseError {
     #[error("tokenize error")]
-    Lex {
-        #[from]
-        lex_error: LexError,
-    },
+    Lex(#[from] LexError),
     #[error("parse error: {message} at {span}")]
     Parse { message: String, span: Span },
     #[error("unexpected end of input at {span}")]
@@ -2782,6 +2779,29 @@ mod tests {
     }
 
     #[test]
+    fn use_target_rewrites_alias_head_without_target_validation() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        use_table.insert(Name::from_str("bar"), qualified("foo"));
+        let cmd = parse_cmd_with_tables(
+            "use bar.baz as qux",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("use command parses");
+        let Cmd::Use(CmdUse { decls }) = cmd else {
+            panic!("expected use command");
+        };
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0].alias, Name::from_str("qux"));
+        assert_eq!(decls[0].target, qualified("foo.baz"));
+    }
+
+    #[test]
     fn use_shadowing_rebinds_alias_to_new_target() {
         let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
         insert_prop_const(&mut consts, "foo");
@@ -3035,6 +3055,71 @@ mod tests {
         }) = cmd
         else {
             panic!("expected infix command");
+        };
+        assert_eq!(entity, qualified("foo.baz"));
+    }
+
+    #[test]
+    fn prefix_entity_rewrites_alias_head_without_target_validation() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        parse_cmd_with_tables(
+            "use foo as bar",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("use command parses");
+        let cmd = parse_cmd_with_tables(
+            "prefix ! : 50 := bar.baz",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("prefix command parses");
+        let Cmd::Prefix(CmdPrefix {
+            op: _,
+            prec: _,
+            entity,
+        }) = cmd
+        else {
+            panic!("expected prefix command");
+        };
+        assert_eq!(entity, qualified("foo.baz"));
+    }
+
+    #[test]
+    fn nofix_entity_rewrites_alias_head_without_target_validation() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        parse_cmd_with_tables(
+            "use foo as bar",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("use command parses");
+        let cmd = parse_cmd_with_tables(
+            "nofix ! := bar.baz",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("nofix command parses");
+        let Cmd::Nofix(CmdNofix { op: _, entity }) = cmd else {
+            panic!("expected nofix command");
         };
         assert_eq!(entity, qualified("foo.baz"));
     }
