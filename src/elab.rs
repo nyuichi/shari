@@ -475,6 +475,11 @@ impl<'a> Elaborator<'a> {
                         return Ok(assume.prop.clone());
                     }
                 }
+                for (local_name, local_axiom) in self.local_axioms.iter().rev() {
+                    if *id == Id::from_qualified_name(local_name) {
+                        return Ok(local_axiom.target.clone());
+                    }
+                }
 
                 bail!("assumption alias not found: {id}");
             }
@@ -622,17 +627,6 @@ impl<'a> Elaborator<'a> {
                 Ok(ret)
             }
             Expr::Const(e) => {
-                for (local_name, local_axiom) in self.local_axioms.iter().rev() {
-                    if local_name == &e.name {
-                        if !e.ty_args.is_empty() {
-                            bail!("local axiom expects no type arguments");
-                        }
-                        if !e.instances.is_empty() {
-                            bail!("local axiom expects no class instances");
-                        }
-                        return Ok(local_axiom.target.clone());
-                    }
-                }
                 let Some(Axiom {
                     local_types,
                     local_classes,
@@ -2763,6 +2757,44 @@ mod tests {
         },
     };
     use std::collections::HashMap;
+
+    #[test]
+    fn const_expr_does_not_resolve_local_axiom_from_local_table() {
+        let mut tt_local_env = tt::LocalEnv::default();
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let mut elab = Elaborator::new(proof_env, &mut tt_local_env, vec![]);
+        let local_axiom_name = QualifiedName::from_str("foo.a");
+        elab.local_axioms.push((
+            local_axiom_name.clone(),
+            LocalAxiom {
+                target: mk_const(QualifiedName::from_str("p"), vec![], vec![]),
+            },
+        ));
+
+        let mut expr = proof::mk_expr_const(local_axiom_name, vec![], vec![]);
+        let error = elab
+            .visit_expr(&mut expr)
+            .expect_err("const expression should not resolve via local axiom table");
+        assert!(error.to_string().contains("proposition not found"));
+    }
 
     #[test]
     fn unify_fails_for_inhabited_terms() {

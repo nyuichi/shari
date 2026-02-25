@@ -252,15 +252,6 @@ impl<'a> Parser<'a> {
             })
     }
 
-    fn get_axiom(&self, name: &QualifiedName) -> Option<&Axiom> {
-        for (local_name, info) in self.local_axioms.iter().rev() {
-            if local_name == name {
-                return Some(info);
-            }
-        }
-        self.axiom_table.get(name)
-    }
-
     fn has_local_axiom(&self, name: &QualifiedName) -> bool {
         self.local_axioms
             .iter()
@@ -898,14 +889,16 @@ impl<'a> Parser<'a> {
         self.subexpr(0)
     }
 
-    fn expr_const(&mut self, token: Token, auto_inst: bool) -> Result<Expr, ParseError> {
+    fn expr_var(&mut self, token: Token, auto_inst: bool) -> Result<Expr, ParseError> {
         let name = self.qualified_name(&token);
-        let name = if self.has_local_axiom(&name) {
-            name
-        } else {
-            self.resolve(name)
-        };
-        let Some(axiom_info) = self.get_axiom(&name).cloned() else {
+        if self.has_local_axiom(&name) {
+            if auto_inst {
+                return Self::fail(token, "local axiom requires @");
+            }
+            return Ok(mk_expr_local(Id::from_qualified_name(&name)));
+        }
+        let name = self.resolve(name);
+        let Some(axiom_info) = self.axiom_table.get(&name).cloned() else {
             return Self::fail(token, "unknown variable");
         };
         let mut ty_args = vec![];
@@ -1203,7 +1196,7 @@ impl<'a> Parser<'a> {
             }
             if let Some(_token) = self.expect_symbol_opt("@") {
                 let token = self.ident()?;
-                let expr = self.expr_const(token, false)?;
+                let expr = self.expr_var(token, false)?;
                 break 'left expr;
             }
             let token = self.ident()?;
@@ -1392,7 +1385,7 @@ impl<'a> Parser<'a> {
                     if self.has_assume(&name) {
                         mk_expr_local(Id::from_name(&name))
                     } else {
-                        self.expr_const(token, true)?
+                        self.expr_var(token, true)?
                     }
                 }
             }
@@ -3564,6 +3557,35 @@ mod tests {
             panic!("expected local term");
         };
         assert_eq!(local_const.id, Id::from_qualified_name(&qualified("foo.f")));
+    }
+
+    #[test]
+    fn let_structure_local_axiom_is_parsed_as_local_expr() {
+        let expr = parse_expr("let structure foo := { const f : Prop axiom a : f }, @foo.a");
+        let Expr::LetStructure(let_structure) = expr else {
+            panic!("expected let structure expression");
+        };
+        let Expr::Local(local_axiom) = let_structure.body else {
+            panic!("expected local expression in let structure body");
+        };
+        assert_eq!(local_axiom.id, Id::from_qualified_name(&qualified("foo.a")));
+    }
+
+    #[test]
+    fn let_structure_local_axiom_with_auto_inst_is_rejected() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let err = parse_expr_with_tables(
+            "let structure foo := { const f : Prop axiom a : f }, foo.a",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect_err("expression should be rejected");
+        assert!(err.to_string().contains("local axiom requires @"));
     }
 
     #[test]

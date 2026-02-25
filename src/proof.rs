@@ -1054,6 +1054,11 @@ impl Env<'_> {
                         return assume.prop.clone();
                     }
                 }
+                for (local_name, local_axiom) in local_env.local_axioms.iter().rev() {
+                    if *id == Id::from_qualified_name(local_name) {
+                        return local_axiom.target.clone();
+                    }
+                }
                 panic!("unknown assumption alias: {}", id);
             }
             Expr::Assume(e) => {
@@ -1129,25 +1134,6 @@ impl Env<'_> {
                     ty_args,
                     instances,
                 } = &**e;
-                for (local_name, local_axiom) in local_env.local_axioms.iter().rev() {
-                    if local_name == name {
-                        if !ty_args.is_empty() {
-                            panic!(
-                                "local axiom {:?} expects 0 type arguments but got {}",
-                                name,
-                                ty_args.len()
-                            );
-                        }
-                        if !instances.is_empty() {
-                            panic!(
-                                "local axiom {:?} expects 0 class arguments but got {}",
-                                name,
-                                instances.len()
-                            );
-                        }
-                        return local_axiom.target.clone();
-                    }
-                }
                 let Axiom {
                     local_types,
                     local_classes,
@@ -1405,5 +1391,49 @@ impl Env<'_> {
                 target.clone()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tt::{ClassInstance, ClassType, Const, Delta, Kappa, Kind};
+
+    use std::collections::HashMap;
+
+    #[test]
+    #[should_panic(expected = "unknown axiom")]
+    fn const_expr_does_not_resolve_local_axiom_from_local_table() {
+        let mut tt_local_env = tt::LocalEnv::default();
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, Axiom> = HashMap::new();
+
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let env = Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let mut local_env = LocalEnv::default();
+        let local_axiom_name = QualifiedName::from_str("foo.a");
+        local_env.local_axioms.push((
+            local_axiom_name.clone(),
+            LocalAxiom {
+                target: mk_const(QualifiedName::from_str("p"), vec![], vec![]),
+            },
+        ));
+        let expr = mk_expr_const(local_axiom_name, vec![], vec![]);
+        let _ = env.infer_prop(&mut tt_local_env, &mut local_env, &expr);
     }
 }
