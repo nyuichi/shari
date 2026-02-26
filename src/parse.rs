@@ -429,7 +429,7 @@ impl<'a> Parser<'a> {
         let mut path = (*self.current_namespace).clone();
         for name in name.names() {
             path = if let Some(target) = self.namespace_table[&path].use_table.get(&name) {
-                target.to_path()
+                target.clone()
             } else {
                 Path::from_parts(path, name)
             };
@@ -442,7 +442,7 @@ impl<'a> Parser<'a> {
                     .unwrap()
                     .use_table
                     .entry(name.clone())
-                    .or_insert_with(|| QualifiedName::from_parts(parent.clone(), name.clone()));
+                    .or_insert_with(|| Path::from_parts(parent.clone(), name.clone()));
             }
         }
         let (parent, name) = path.to_parts().unwrap();
@@ -453,7 +453,7 @@ impl<'a> Parser<'a> {
         self.namespace_table
             .get_mut(name.path())
             .unwrap()
-            .add(name.name().clone(), name.clone());
+            .add(name.name().clone(), name.to_path());
     }
 
     fn alias_opt(&mut self) -> Result<Option<Name>, ParseError> {
@@ -1619,8 +1619,11 @@ impl<'a> Parser<'a> {
             self.namespace_table
                 .get_mut(&current_namespace)
                 .expect("current namespace must exist")
-                .add(alias.clone(), target.clone());
-            decls.push(CmdUseDecl { alias, target });
+                .add(alias.clone(), target.to_path());
+            decls.push(CmdUseDecl {
+                alias,
+                target: target.to_path(),
+            });
         }
 
         Ok(CmdUse { decls })
@@ -2383,7 +2386,7 @@ mod tests {
                 .expect("parent namespace must exist")
                 .use_table
                 .entry(segment.clone())
-                .or_insert_with(|| QualifiedName::from_parts(parent.clone(), segment.clone()));
+                .or_insert_with(|| Path::from_parts(parent.clone(), segment.clone()));
             parent = child;
         }
     }
@@ -2399,7 +2402,7 @@ mod tests {
             .expect("owner namespace must exist")
             .use_table
             .entry(name.name().clone())
-            .or_insert_with(|| name.clone());
+            .or_insert_with(|| name.to_path());
     }
 
     fn seed_namespace_table_from_globals(
@@ -2421,7 +2424,7 @@ mod tests {
 
     fn parse_expr(input: &str) -> Expr {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         let top_namespace = Path::toplevel();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
         namespace_table.insert(
@@ -2463,7 +2466,7 @@ mod tests {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
         let tt = TokenTable::default();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         let top_namespace = Path::toplevel();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
         namespace_table.insert(
@@ -2494,7 +2497,7 @@ mod tests {
     fn parse_cmd_with_tables(
         input: &str,
         tt: &TokenTable,
-        use_table: &mut HashMap<Name, QualifiedName>,
+        use_table: &mut HashMap<Name, Path>,
         type_const_table: &HashMap<QualifiedName, Kind>,
         const_table: &HashMap<QualifiedName, Const>,
         axiom_table: &HashMap<QualifiedName, Axiom>,
@@ -2539,7 +2542,7 @@ mod tests {
     fn parse_term_with_tables(
         input: &str,
         tt: &TokenTable,
-        use_table: &mut HashMap<Name, QualifiedName>,
+        use_table: &mut HashMap<Name, Path>,
         type_const_table: &HashMap<QualifiedName, Kind>,
         const_table: &HashMap<QualifiedName, Const>,
         axiom_table: &HashMap<QualifiedName, Axiom>,
@@ -2584,7 +2587,7 @@ mod tests {
     fn parse_expr_with_tables(
         input: &str,
         tt: &TokenTable,
-        use_table: &mut HashMap<Name, QualifiedName>,
+        use_table: &mut HashMap<Name, Path>,
         type_const_table: &HashMap<QualifiedName, Kind>,
         const_table: &HashMap<QualifiedName, Const>,
         axiom_table: &HashMap<QualifiedName, Axiom>,
@@ -2824,7 +2827,7 @@ mod tests {
         let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
         insert_prop_const(&mut consts, "prod.fst");
         insert_prop_const(&mut consts, "prod.snd");
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         let cmd = parse_cmd_with_tables(
             "use prod.{fst, snd}",
             &tt,
@@ -2840,17 +2843,17 @@ mod tests {
         };
         assert_eq!(decls.len(), 2);
         assert_eq!(decls[0].alias, Name::from_str("fst"));
-        assert_eq!(decls[0].target, qualified("prod.fst"));
+        assert_eq!(decls[0].target, path("prod.fst"));
         assert_eq!(decls[1].alias, Name::from_str("snd"));
-        assert_eq!(decls[1].target, qualified("prod.snd"));
+        assert_eq!(decls[1].target, path("prod.snd"));
     }
 
     #[test]
     fn use_chain_normalizes_alias_target() {
         let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
         insert_prop_const(&mut consts, "foo");
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
-        use_table.insert(Name::from_str("bar"), qualified("foo"));
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        use_table.insert(Name::from_str("bar"), path("foo"));
         let cmd = parse_cmd_with_tables(
             "use bar as baz",
             &tt,
@@ -2866,14 +2869,14 @@ mod tests {
         };
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].alias, Name::from_str("baz"));
-        assert_eq!(decls[0].target, qualified("foo"));
+        assert_eq!(decls[0].target, path("foo"));
     }
 
     #[test]
     fn use_target_rewrites_alias_head_without_target_validation() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
-        use_table.insert(Name::from_str("bar"), qualified("foo"));
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        use_table.insert(Name::from_str("bar"), path("foo"));
         let cmd = parse_cmd_with_tables(
             "use bar.baz as qux",
             &tt,
@@ -2889,7 +2892,7 @@ mod tests {
         };
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].alias, Name::from_str("qux"));
-        assert_eq!(decls[0].target, qualified("foo.baz"));
+        assert_eq!(decls[0].target, path("foo.baz"));
     }
 
     #[test]
@@ -2897,8 +2900,8 @@ mod tests {
         let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
         insert_prop_const(&mut consts, "foo");
         insert_prop_const(&mut consts, "bar");
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
-        use_table.insert(Name::from_str("name"), qualified("foo"));
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        use_table.insert(Name::from_str("name"), path("foo"));
         let cmd = parse_cmd_with_tables(
             "use bar as name",
             &tt,
@@ -2914,14 +2917,14 @@ mod tests {
         };
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].alias, Name::from_str("name"));
-        assert_eq!(decls[0].target, qualified("bar"));
+        assert_eq!(decls[0].target, path("bar"));
     }
 
     #[test]
     fn use_group_alias_chain_is_resolved_left_to_right() {
         let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
         insert_prop_const(&mut consts, "hoge");
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         let cmd = parse_cmd_with_tables(
             "use {hoge as fuga, fuga as piyo}",
             &tt,
@@ -2937,15 +2940,15 @@ mod tests {
         };
         assert_eq!(decls.len(), 2);
         assert_eq!(decls[0].alias, Name::from_str("fuga"));
-        assert_eq!(decls[0].target, qualified("hoge"));
+        assert_eq!(decls[0].target, path("hoge"));
         assert_eq!(decls[1].alias, Name::from_str("piyo"));
-        assert_eq!(decls[1].target, qualified("hoge"));
+        assert_eq!(decls[1].target, path("hoge"));
     }
 
     #[test]
     fn use_unknown_target_is_accepted() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         let cmd = parse_cmd_with_tables(
             "use future.symbol as fs",
             &tt,
@@ -2961,13 +2964,13 @@ mod tests {
         };
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].alias, Name::from_str("fs"));
-        assert_eq!(decls[0].target, qualified("future.symbol"));
+        assert_eq!(decls[0].target, path("future.symbol"));
     }
 
     #[test]
     fn use_unknown_target_chain_in_same_group() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         let cmd = parse_cmd_with_tables(
             "use {future as f, f as g}",
             &tt,
@@ -2983,15 +2986,15 @@ mod tests {
         };
         assert_eq!(decls.len(), 2);
         assert_eq!(decls[0].alias, Name::from_str("f"));
-        assert_eq!(decls[0].target, qualified("future"));
+        assert_eq!(decls[0].target, path("future"));
         assert_eq!(decls[1].alias, Name::from_str("g"));
-        assert_eq!(decls[1].target, qualified("future"));
+        assert_eq!(decls[1].target, path("future"));
     }
 
     #[test]
     fn use_unknown_target_fails_when_referenced() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         parse_cmd_with_tables(
             "use unknown as a",
             &tt,
@@ -3031,7 +3034,7 @@ mod tests {
     #[test]
     fn use_unknown_target_alias_fails_in_def_body() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         parse_cmd_with_tables(
             "use unknown as a",
             &tt,
@@ -3071,7 +3074,7 @@ mod tests {
     #[test]
     fn inductive_self_reference_does_not_use_resolved_alias() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         parse_cmd_with_tables(
             "use foo as alias",
             &tt,
@@ -3101,7 +3104,7 @@ mod tests {
     #[test]
     fn type_inductive_self_reference_does_not_use_resolved_alias() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         parse_cmd_with_tables(
             "use foo as alias",
             &tt,
@@ -3133,7 +3136,7 @@ mod tests {
         let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
         insert_prop_const(&mut consts, "prod.fst");
         insert_prop_const(&mut consts, "prod.snd");
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         let err = parse_cmd_with_tables(
             "use prod.fst, prod.snd",
             &tt,
@@ -3157,8 +3160,8 @@ mod tests {
     fn term_resolution_rewrites_use_alias_head() {
         let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
         insert_prop_const(&mut consts, "prod.fst.default");
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
-        use_table.insert(Name::from_str("fst"), qualified("prod.fst"));
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        use_table.insert(Name::from_str("fst"), path("prod.fst"));
         let term = parse_term_with_tables(
             "fst.default",
             &tt,
@@ -3178,7 +3181,7 @@ mod tests {
     #[test]
     fn infix_entity_rewrites_alias_head_without_target_validation() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         parse_cmd_with_tables(
             "use foo as bar",
             &tt,
@@ -3213,7 +3216,7 @@ mod tests {
     #[test]
     fn prefix_entity_rewrites_alias_head_without_target_validation() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         parse_cmd_with_tables(
             "use foo as bar",
             &tt,
@@ -3248,7 +3251,7 @@ mod tests {
     #[test]
     fn nofix_entity_rewrites_alias_head_without_target_validation() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         parse_cmd_with_tables(
             "use foo as bar",
             &tt,
@@ -3278,7 +3281,7 @@ mod tests {
     #[test]
     fn infix_entity_resolves_aliases_left_to_right_across_namespaces() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         let cmd = parse_cmd_with_tables(
             "namespace foo { use qux as inner namespace qux { use real as leaf } infix * : 50 := inner.leaf.tail }",
             &tt,
@@ -3307,8 +3310,8 @@ mod tests {
     #[test]
     fn declaration_name_resolution_rewrites_use_alias_head() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
-        use_table.insert(Name::from_str("alias"), qualified("prod"));
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        use_table.insert(Name::from_str("alias"), path("prod"));
         let cmd = parse_cmd_with_tables(
             "type const alias.elem : Type",
             &tt,
@@ -3328,8 +3331,8 @@ mod tests {
     #[test]
     fn type_inductive_ctor_resolution_rewrites_use_alias_head() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
-        use_table.insert(Name::from_str("alias"), qualified("prod"));
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        use_table.insert(Name::from_str("alias"), path("prod"));
         let cmd = parse_cmd_with_tables(
             "type inductive alias.list | alias.nil : alias.list",
             &tt,
@@ -3357,7 +3360,7 @@ mod tests {
     #[test]
     fn type_inductive_ctor_registers_top_level_alias() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         parse_cmd_with_tables(
             "type inductive foo | ctor : foo",
             &tt,
@@ -3385,7 +3388,7 @@ mod tests {
         namespace_table.insert(path("foo"), Namespace::default());
         namespace_table.insert(path("foo.qux.real"), Namespace::default());
         let mut qux_namespace = Namespace::default();
-        qux_namespace.add(Name::from_str("leaf"), qualified("foo.qux.real"));
+        qux_namespace.add(Name::from_str("leaf"), path("foo.qux.real"));
         namespace_table.insert(path("foo.qux"), qux_namespace);
         let mut current_namespace = path("foo");
         let type_const_table = HashMap::new();
@@ -3418,7 +3421,7 @@ mod tests {
         namespace_table.insert(path("foo"), Namespace::default());
         namespace_table.insert(path("foo.qux.real"), Namespace::default());
         let mut qux_namespace = Namespace::default();
-        qux_namespace.add(Name::from_str("leaf"), qualified("foo.qux.real"));
+        qux_namespace.add(Name::from_str("leaf"), path("foo.qux.real"));
         namespace_table.insert(path("foo.qux"), qux_namespace);
         let mut current_namespace = path("foo");
         let type_const_table = HashMap::new();
@@ -3471,7 +3474,7 @@ mod tests {
             parser.namespace_table[&Path::toplevel()]
                 .use_table
                 .get(&Name::from_str("qux")),
-            Some(&qualified("qux"))
+            Some(&path("qux"))
         );
     }
 
@@ -3486,7 +3489,7 @@ mod tests {
         namespace_table.insert(path("foo"), Namespace::default());
         namespace_table.insert(path("foo.qux.real"), Namespace::default());
         let mut qux_namespace = Namespace::default();
-        qux_namespace.add(Name::from_str("leaf"), qualified("foo.qux.real"));
+        qux_namespace.add(Name::from_str("leaf"), path("foo.qux.real"));
         namespace_table.insert(path("foo.qux"), qux_namespace);
         let mut current_namespace = path("foo");
         let type_const_table = HashMap::new();
@@ -3564,7 +3567,7 @@ mod tests {
     #[test]
     fn let_term_expr_rejects_qualified_binder() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         let err = parse_expr_with_tables(
             "let Foo.bar := p, assume Foo.bar as h, h",
             &tt,
@@ -3581,7 +3584,7 @@ mod tests {
     #[test]
     fn let_term_expr_rejects_qualified_binder_with_whitespace() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         let err = parse_expr_with_tables(
             "let Foo .bar := p, assume Foo .bar as h, h",
             &tt,
@@ -3599,8 +3602,8 @@ mod tests {
     fn let_term_binder_name_is_not_resolved_and_shadows_globals() {
         let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
         insert_prop_const(&mut consts, "global.target");
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
-        use_table.insert(Name::from_str("c"), qualified("global.target"));
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        use_table.insert(Name::from_str("c"), path("global.target"));
         let expr = parse_expr_with_tables(
             "let c := p, assume c as h, h",
             &tt,
@@ -3690,7 +3693,7 @@ mod tests {
     fn let_structure_local_has_priority_over_global_const() {
         let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
         insert_prop_const(&mut consts, "foo.f");
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         let expr = parse_expr_with_tables(
             "let structure foo := { const f : Prop }, assume foo.f as h, h",
             &tt,
@@ -3769,7 +3772,7 @@ mod tests {
         let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
         type_consts.insert(qualified("Type"), Kind(0));
         type_consts.insert(qualified("foo.Prop"), Kind(0));
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         let cmd = parse_cmd_with_tables(
             "namespace foo { const bar : Prop }",
             &tt,
@@ -3796,7 +3799,7 @@ mod tests {
         let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
         type_consts.insert(qualified("Type"), Kind(0));
         type_consts.insert(qualified("foo.bar.Prop"), Kind(0));
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         let cmd = parse_cmd_with_tables(
             "namespace foo.bar { const qux.quux : Prop }",
             &tt,
@@ -3821,7 +3824,7 @@ mod tests {
     #[test]
     fn qualified_def_at_top_level_creates_missing_namespace() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         let cmd = parse_cmd_with_tables(
             "def qux.quux : Prop := p",
             &tt,
@@ -3843,7 +3846,7 @@ mod tests {
         let (tt, mut type_consts, mut consts, axioms, class_predicates) = setup_tables();
         type_consts.insert(qualified("foo.Prop"), Kind(0));
         insert_prop_const(&mut consts, "foo.p");
-        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
         let cmd = parse_cmd_with_tables(
             "namespace foo { def qux.quux : Prop := p }",
             &tt,

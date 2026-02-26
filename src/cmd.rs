@@ -14,6 +14,17 @@ use crate::{
     },
 };
 
+#[derive(Clone, Debug, Default)]
+pub struct Namespace {
+    pub use_table: HashMap<Name, Path>,
+}
+
+impl Namespace {
+    pub fn add(&mut self, alias: Name, target: Path) {
+        self.use_table.insert(alias, target);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Cmd {
     Namespace(CmdNamespace),
@@ -76,17 +87,6 @@ pub struct CmdNofix {
     pub entity: QualifiedName,
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct Namespace {
-    pub use_table: HashMap<Name, QualifiedName>,
-}
-
-impl Namespace {
-    pub fn add(&mut self, alias: Name, target: QualifiedName) {
-        self.use_table.insert(alias, target);
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct CmdUse {
     pub decls: Vec<UseDecl>,
@@ -95,7 +95,7 @@ pub struct CmdUse {
 #[derive(Clone, Debug)]
 pub struct UseDecl {
     pub alias: Name,
-    pub target: QualifiedName,
+    pub target: Path,
 }
 
 #[derive(Clone, Debug)]
@@ -2322,5 +2322,32 @@ impl Eval {
             method_table,
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Namespace, UseDecl};
+    use crate::tt::{Name, Path};
+
+    #[test]
+    fn namespace_add_stores_path_target() {
+        let mut namespace = Namespace::default();
+        let alias = Name::from_str("alias");
+        let target = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        namespace.add(alias.clone(), target.clone());
+        assert_eq!(namespace.use_table.get(&alias), Some(&target));
+    }
+
+    #[test]
+    fn use_decl_stores_path_target() {
+        let alias = Name::from_str("alias");
+        let target = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        let decl = UseDecl {
+            alias: alias.clone(),
+            target: target.clone(),
+        };
+        assert_eq!(decl.alias, alias);
+        assert_eq!(decl.target, target);
     }
 }
