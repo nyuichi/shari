@@ -26,7 +26,7 @@ Status: initial draft
 - `use prod.fst`
 - `use prod.fst as first`
 - `use prod.{fst, snd}`
-- `use .{foo, bar}` (equivalent to `use {.foo, .bar}`)
+- `use .{foo, bar}`
 - `use bar as baz` (where `bar` is an existing alias)
 - `use {foo as bar, baz.{hoge as piyo, fuga as piyopiyo}}`
 
@@ -38,7 +38,7 @@ Rules:
 - `use foo` is valid even if `foo` has no current global declaration; unresolved targets are allowed.
 - Braced `use` trees contain comma-separated entries and nested `prefix.{...}` entries.
 - `use .{...}` is a top-level absolute group; each entry resolves from top-level namespace.
-- Absolute entries are not allowed inside scoped groups (`use foo.{.bar}` is invalid).
+- Absolute entries are not allowed inside any use group (`use {.foo}` and `use foo.{.bar}` are invalid).
 - `use` trees are expanded left-to-right into a flat sequence of leaf `use` entries.
 - Comma-separated `use` targets are only valid inside `{...}`.
 - `use prod.fst, prod.snd` is invalid; write `use prod.{fst, snd}`.

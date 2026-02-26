@@ -164,7 +164,6 @@ pub enum ParseError {
 struct UseDecl {
     target: QualifiedName,
     alias: Option<Name>,
-    absolute: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1646,14 +1645,13 @@ impl<'a> Parser<'a> {
     fn use_group(
         &mut self,
         prefix: Option<&QualifiedName>,
-        prefix_absolute: bool,
         decls: &mut Vec<UseDecl>,
     ) -> Result<(), ParseError> {
         if self.expect_symbol_opt("}").is_some() {
             return Ok(());
         }
         loop {
-            self.use_entry(prefix, prefix_absolute, decls)?;
+            self.use_entry(prefix, true, decls)?;
             if self.expect_symbol_opt(",").is_some() {
                 if let Some(token) = self.peek_opt()
                     && token.is_symbol()
@@ -1671,45 +1669,44 @@ impl<'a> Parser<'a> {
     fn use_entry(
         &mut self,
         prefix: Option<&QualifiedName>,
-        prefix_absolute: bool,
+        in_group: bool,
         decls: &mut Vec<UseDecl>,
     ) -> Result<(), ParseError> {
         if self.expect_symbol_opt("{").is_some() {
-            return self.use_group(prefix, prefix_absolute, decls);
+            return self.use_group(prefix, decls);
         }
         let token = self.any_token()?;
         if !token.is_ident() && !token.is_field() {
             return Self::fail(token, "expected identifier");
         }
-        if prefix.is_some() && token.is_field() {
-            return Self::fail(token, "absolute path is not allowed in scoped use group");
+        if in_group && token.is_field() {
+            return Self::fail(token, "absolute path is not allowed in use group");
         }
         let mut target = self.qualified_name(&token);
-        let absolute = token.is_field() || prefix_absolute;
         if let Some(prefix) = prefix {
             target = prefix.append(&target);
         }
         if self.expect_symbol_opt(".{").is_some() {
-            return self.use_group(Some(&target), absolute, decls);
+            return self.use_group(Some(&target), decls);
         }
         let alias = self.alias_opt()?;
-        decls.push(UseDecl {
-            target,
-            alias,
-            absolute,
-        });
+        decls.push(UseDecl { target, alias });
         Ok(())
     }
 
     fn use_cmd(&mut self, _token: Token) -> Result<CmdUse, ParseError> {
         let mut parsed_decls = vec![];
-        if self.expect_symbol_opt(".{").is_some() {
-            self.use_group(None, true, &mut parsed_decls)?;
+        let absolute = if self.expect_symbol_opt(".{").is_some() {
+            self.use_group(None, &mut parsed_decls)?;
+            true
         } else if self.expect_symbol_opt("{").is_some() {
-            self.use_group(None, false, &mut parsed_decls)?;
+            self.use_group(None, &mut parsed_decls)?;
+            false
         } else {
+            let absolute = self.peek_opt().is_some_and(|token| token.is_field());
             self.use_entry(None, false, &mut parsed_decls)?;
-        }
+            absolute
+        };
         if let Some(token) = self.expect_symbol_opt(",") {
             return Self::fail(
                 token,
@@ -1718,22 +1715,16 @@ impl<'a> Parser<'a> {
         }
 
         let mut decls = vec![];
-        let current_namespace = self.current_namespace.clone();
         for decl in parsed_decls {
-            let UseDecl {
-                target,
-                alias,
-                absolute,
-            } = decl;
-            let base = if absolute {
-                Path::toplevel()
+            let UseDecl { target, alias } = decl;
+            let target = if absolute {
+                self.resolve(Path::toplevel(), target)
             } else {
-                current_namespace.clone()
+                self.resolve(self.current_namespace.clone(), target)
             };
-            let target = self.resolve(base, target);
             let alias = alias.unwrap_or_else(|| target.name().clone());
             self.namespace_table
-                .get_mut(&current_namespace)
+                .get_mut(self.current_namespace)
                 .expect("current namespace must exist")
                 .add(alias.clone(), target.to_path());
             decls.push(CmdUseDecl {
@@ -3387,6 +3378,31 @@ mod tests {
     }
 
     #[test]
+    fn use_absolute_scoped_group_is_resolved_from_toplevel() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "namespace local { use .root.{leaf as l} }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("namespace command parses");
+        let Cmd::Namespace(namespace_cmd) = cmd else {
+            panic!("expected namespace command");
+        };
+        let Cmd::Use(CmdUse { decls }) = &namespace_cmd.cmds[0] else {
+            panic!("expected use command");
+        };
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0].alias, Name::from_str("l"));
+        assert_eq!(decls[0].target, path("root.leaf"));
+    }
+
+    #[test]
     fn use_scoped_group_rejects_absolute_entry() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let inputs = ["use .field.{.bar}", "use field.{.bar}"];
@@ -3405,8 +3421,28 @@ mod tests {
             let ParseError::Parse { message, span: _ } = err else {
                 panic!("expected parse error");
             };
-            assert_eq!(message, "absolute path is not allowed in scoped use group");
+            assert_eq!(message, "absolute path is not allowed in use group");
         }
+    }
+
+    #[test]
+    fn use_group_rejects_top_level_absolute_entries() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        let err = parse_cmd_with_tables(
+            "use {.foo, .bar}",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect_err("absolute entries in use group should be rejected");
+        let ParseError::Parse { message, span: _ } = err else {
+            panic!("expected parse error");
+        };
+        assert_eq!(message, "absolute path is not allowed in use group");
     }
 
     #[test]
