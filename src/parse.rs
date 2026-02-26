@@ -1703,7 +1703,9 @@ impl<'a> Parser<'a> {
 
     fn use_cmd(&mut self, _token: Token) -> Result<CmdUse, ParseError> {
         let mut parsed_decls = vec![];
-        if self.expect_symbol_opt("{").is_some() {
+        if self.expect_symbol_opt(".{").is_some() {
+            self.use_group(None, true, &mut parsed_decls)?;
+        } else if self.expect_symbol_opt("{").is_some() {
             self.use_group(None, false, &mut parsed_decls)?;
         } else {
             self.use_entry(None, false, &mut parsed_decls)?;
@@ -3305,6 +3307,83 @@ mod tests {
         assert_eq!(decls[0].target, path("prod.fst"));
         assert_eq!(decls[1].alias, Name::from_str("snd"));
         assert_eq!(decls[1].target, path("prod.snd"));
+    }
+
+    #[test]
+    fn use_absolute_group_expands_to_leaf_decls() {
+        let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
+        insert_prop_const(&mut consts, "foo");
+        insert_prop_const(&mut consts, "bar");
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "use .{foo, bar}",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("use command parses");
+        let Cmd::Use(CmdUse { decls }) = cmd else {
+            panic!("expected use command");
+        };
+        assert_eq!(decls.len(), 2);
+        assert_eq!(decls[0].alias, Name::from_str("foo"));
+        assert_eq!(decls[0].target, path("foo"));
+        assert_eq!(decls[1].alias, Name::from_str("bar"));
+        assert_eq!(decls[1].target, path("bar"));
+    }
+
+    #[test]
+    fn use_absolute_group_in_namespace_is_resolved_from_toplevel() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "namespace local { use .{foo, bar.baz} }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("namespace command parses");
+        let Cmd::Namespace(namespace_cmd) = cmd else {
+            panic!("expected namespace command");
+        };
+        let Cmd::Use(CmdUse { decls }) = &namespace_cmd.cmds[0] else {
+            panic!("expected use command");
+        };
+        assert_eq!(decls.len(), 2);
+        assert_eq!(decls[0].alias, Name::from_str("foo"));
+        assert_eq!(decls[0].target, path("foo"));
+        assert_eq!(decls[1].alias, Name::from_str("baz"));
+        assert_eq!(decls[1].target, path("bar.baz"));
+    }
+
+    #[test]
+    fn use_absolute_group_supports_aliases_and_nested_groups() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "use .{foo as f, bar.{baz as q}}",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("use command parses");
+        let Cmd::Use(CmdUse { decls }) = cmd else {
+            panic!("expected use command");
+        };
+        assert_eq!(decls.len(), 2);
+        assert_eq!(decls[0].alias, Name::from_str("f"));
+        assert_eq!(decls[0].target, path("foo"));
+        assert_eq!(decls[1].alias, Name::from_str("q"));
+        assert_eq!(decls[1].target, path("bar.baz"));
     }
 
     #[test]
