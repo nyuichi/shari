@@ -176,7 +176,7 @@ pub struct Parser<'a> {
     lex: &'a mut Lex,
     tt: &'a TokenTable,
     namespace_table: &'a mut HashMap<Path, Namespace>,
-    current_namespace: &'a mut Path,
+    current_namespace: &'a Path,
     type_const_table: &'a HashMap<QualifiedName, Kind>,
     const_table: &'a HashMap<QualifiedName, Const>,
     axiom_table: &'a HashMap<QualifiedName, Axiom>,
@@ -196,7 +196,7 @@ impl<'a> Parser<'a> {
         lex: &'a mut Lex,
         tt: &'a TokenTable,
         namespace_table: &'a mut HashMap<Path, Namespace>,
-        current_namespace: &'a mut Path,
+        current_namespace: &'a Path,
         type_const_table: &'a HashMap<QualifiedName, Kind>,
         const_table: &'a HashMap<QualifiedName, Const>,
         axiom_table: &'a HashMap<QualifiedName, Axiom>,
@@ -481,7 +481,7 @@ impl<'a> Parser<'a> {
         if token.is_field() {
             Ok(self.resolve(Path::toplevel(), literal_name))
         } else {
-            Ok(self.resolve((*self.current_namespace).clone(), literal_name))
+            Ok(self.resolve(self.current_namespace.clone(), literal_name))
         }
     }
 
@@ -500,7 +500,7 @@ impl<'a> Parser<'a> {
             return Self::fail(token, "expected identifier");
         }
         let literal_name = self.qualified_name(&token);
-        Ok(self.resolve((*self.current_namespace).clone(), literal_name))
+        Ok(self.resolve(self.current_namespace.clone(), literal_name))
     }
 
     fn register_name(&mut self, name: &QualifiedName) {
@@ -551,7 +551,7 @@ impl<'a> Parser<'a> {
             }) {
                 return Ok(mk_type_local(*stash));
             }
-            let name = self.resolve((*self.current_namespace).clone(), name);
+            let name = self.resolve(self.current_namespace.clone(), name);
             if self.type_const_table.contains_key(&name) {
                 Ok(mk_type_const(name))
             } else if name == *SUB_NAME {
@@ -828,7 +828,7 @@ impl<'a> Parser<'a> {
                         let local_name = Name::from_str(&name.to_string());
                         return Ok(mk_local(Id::from_name(&local_name)));
                     }
-                    self.resolve((*self.current_namespace).clone(), name)
+                    self.resolve(self.current_namespace.clone(), name)
                 } else if token.is_field() {
                     self.resolve(Path::toplevel(), name)
                 } else {
@@ -963,7 +963,7 @@ impl<'a> Parser<'a> {
                 }
                 return Ok(expr);
             }
-            self.resolve((*self.current_namespace).clone(), name)
+            self.resolve(self.current_namespace.clone(), name)
         } else if token.is_field() {
             self.resolve(Path::toplevel(), name)
         } else {
@@ -2516,14 +2516,14 @@ mod tests {
             &axioms,
             &class_predicates,
         );
-        let mut current_namespace = top_namespace;
+        let current_namespace = top_namespace;
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
         let mut parser = Parser::new(
             &mut lex,
             &tt,
             &mut namespace_table,
-            &mut current_namespace,
+            &current_namespace,
             &type_consts,
             &consts,
             &axioms,
@@ -2551,7 +2551,7 @@ mod tests {
                 use_table: std::mem::take(&mut use_table),
             },
         );
-        let mut current_namespace = top_namespace;
+        let current_namespace = top_namespace;
         let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
         let const_table: HashMap<QualifiedName, Const> = HashMap::new();
         let axiom_table: HashMap<QualifiedName, Axiom> = HashMap::new();
@@ -2560,7 +2560,7 @@ mod tests {
             &mut lex,
             &tt,
             &mut namespace_table,
-            &mut current_namespace,
+            &current_namespace,
             &type_const_table,
             &const_table,
             &axiom_table,
@@ -2596,12 +2596,12 @@ mod tests {
             axiom_table,
             class_predicate_table,
         );
-        let mut current_namespace = top_namespace.clone();
+        let current_namespace = top_namespace.clone();
         let mut parser = Parser::new(
             &mut lex,
             tt,
             &mut namespace_table,
-            &mut current_namespace,
+            &current_namespace,
             type_const_table,
             const_table,
             axiom_table,
@@ -2641,30 +2641,29 @@ mod tests {
             axiom_table,
             class_predicate_table,
         );
-        let mut current_namespace = top_namespace.clone();
-        let mut parser = Parser::new(
-            &mut lex,
-            tt,
-            &mut namespace_table,
-            &mut current_namespace,
-            type_const_table,
-            const_table,
-            axiom_table,
-            class_predicate_table,
-        );
         let mut cmds = vec![];
         let mut namespace_stack = vec![];
-        while parser.peek_opt().is_some() {
+        let mut current_namespace = top_namespace.clone();
+        while !lex.is_eof() {
+            let mut parser = Parser::new(
+                &mut lex,
+                tt,
+                &mut namespace_table,
+                &current_namespace,
+                type_const_table,
+                const_table,
+                axiom_table,
+                class_predicate_table,
+            );
             let cmd = parser.cmd()?;
             match &cmd {
                 Cmd::NamespaceStart(CmdNamespaceStart { path }) => {
-                    let previous_namespace = parser.current_namespace.clone();
-                    namespace_stack.push(previous_namespace);
-                    *parser.current_namespace = path.clone();
+                    namespace_stack.push(current_namespace.clone());
+                    current_namespace = path.clone();
                 }
                 Cmd::BlockEnd => {
                     if let Some(previous_namespace) = namespace_stack.pop() {
-                        *parser.current_namespace = previous_namespace;
+                        current_namespace = previous_namespace;
                     }
                 }
                 _ => {}
@@ -2704,12 +2703,12 @@ mod tests {
             axiom_table,
             class_predicate_table,
         );
-        let mut current_namespace = top_namespace.clone();
+        let current_namespace = top_namespace.clone();
         let mut parser = Parser::new(
             &mut lex,
             tt,
             &mut namespace_table,
-            &mut current_namespace,
+            &current_namespace,
             type_const_table,
             const_table,
             axiom_table,
@@ -2749,12 +2748,12 @@ mod tests {
             axiom_table,
             class_predicate_table,
         );
-        let mut current_namespace = top_namespace.clone();
+        let current_namespace = top_namespace.clone();
         let mut parser = Parser::new(
             &mut lex,
             tt,
             &mut namespace_table,
-            &mut current_namespace,
+            &current_namespace,
             type_const_table,
             const_table,
             axiom_table,
@@ -2927,14 +2926,14 @@ mod tests {
             &axioms,
             &class_predicates,
         );
-        let mut current_namespace = top_namespace;
+        let current_namespace = top_namespace;
         let file = Arc::new(File::new("<test>", "_"));
         let mut lex = Lex::new(file);
         let mut parser = Parser::new(
             &mut lex,
             &tt,
             &mut namespace_table,
-            &mut current_namespace,
+            &current_namespace,
             &type_consts,
             &consts,
             &axioms,
@@ -2968,14 +2967,14 @@ mod tests {
             &axioms,
             &class_predicates,
         );
-        let mut current_namespace = top_namespace;
+        let current_namespace = top_namespace;
         let file = Arc::new(File::new("<test>", ""));
         let mut lex = Lex::new(file);
         let mut parser = Parser::new(
             &mut lex,
             &tt,
             &mut namespace_table,
-            &mut current_namespace,
+            &current_namespace,
             &type_consts,
             &consts,
             &axioms,
@@ -4020,7 +4019,7 @@ mod tests {
         let mut qux_namespace = Namespace::default();
         qux_namespace.add(Name::from_str("leaf"), path("foo.qux.real"));
         namespace_table.insert(path("foo.qux"), qux_namespace);
-        let mut current_namespace = path("foo");
+        let current_namespace = path("foo");
         let type_const_table = HashMap::new();
         let const_table = HashMap::new();
         let axiom_table = HashMap::new();
@@ -4029,7 +4028,7 @@ mod tests {
             &mut lex,
             &tt,
             &mut namespace_table,
-            &mut current_namespace,
+            &current_namespace,
             &type_const_table,
             &const_table,
             &axiom_table,
@@ -4055,7 +4054,7 @@ mod tests {
         let mut qux_namespace = Namespace::default();
         qux_namespace.add(Name::from_str("leaf"), path("foo.qux.real"));
         namespace_table.insert(path("foo.qux"), qux_namespace);
-        let mut current_namespace = path("foo");
+        let current_namespace = path("foo");
         let type_const_table = HashMap::new();
         let const_table = HashMap::new();
         let axiom_table = HashMap::new();
@@ -4064,7 +4063,7 @@ mod tests {
             &mut lex,
             &tt,
             &mut namespace_table,
-            &mut current_namespace,
+            &current_namespace,
             &type_const_table,
             &const_table,
             &axiom_table,
@@ -4083,7 +4082,7 @@ mod tests {
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
         let top_namespace = Path::toplevel();
         namespace_table.insert(top_namespace.clone(), Namespace::default());
-        let mut current_namespace = top_namespace;
+        let current_namespace = top_namespace;
         let type_const_table = HashMap::new();
         let const_table = HashMap::new();
         let axiom_table = HashMap::new();
@@ -4092,7 +4091,7 @@ mod tests {
             &mut lex,
             &tt,
             &mut namespace_table,
-            &mut current_namespace,
+            &current_namespace,
             &type_const_table,
             &const_table,
             &axiom_table,
@@ -4123,7 +4122,7 @@ mod tests {
         let mut qux_namespace = Namespace::default();
         qux_namespace.add(Name::from_str("leaf"), path("foo.qux.real"));
         namespace_table.insert(path("foo.qux"), qux_namespace);
-        let mut current_namespace = path("foo");
+        let current_namespace = path("foo");
         let type_const_table = HashMap::new();
         let const_table = HashMap::new();
         let axiom_table = HashMap::new();
@@ -4132,7 +4131,7 @@ mod tests {
             &mut lex,
             &tt,
             &mut namespace_table,
-            &mut current_namespace,
+            &current_namespace,
             &type_const_table,
             &const_table,
             &axiom_table,

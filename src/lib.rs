@@ -24,7 +24,7 @@ pub fn process(file: Arc<File>) -> anyhow::Result<()> {
             &mut lex,
             &eval.tt,
             &mut eval.namespace_table,
-            &mut eval.current_namespace,
+            &eval.current_namespace,
             &eval.type_const_table,
             &eval.const_table,
             &eval.axiom_table,
