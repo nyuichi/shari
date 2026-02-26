@@ -43,5 +43,54 @@ pub fn process(file: Arc<File>) -> anyhow::Result<()> {
         eval.run_cmd(cmd.clone()).context("command error")?;
     }
 
+    if !eval.namespace_stack.is_empty() {
+        // TODO: move unclosed-block detection to parser and report EOF parse error with span.
+        return Err(anyhow::anyhow!("unclosed namespace block")).context("command error");
+    }
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn error_chain(err: &anyhow::Error) -> Vec<String> {
+        err.chain().map(ToString::to_string).collect()
+    }
+
+    #[test]
+    fn top_level_closing_brace_is_command_error() {
+        let file = Arc::new(File::new("<test>", "}"));
+        let err = process(file).expect_err("top-level block end should fail");
+        let chain = error_chain(&err);
+        assert!(
+            chain.iter().any(|msg| msg == "command error"),
+            "expected command error in chain: {chain:?}"
+        );
+    }
+
+    #[test]
+    fn unclosed_namespace_is_command_error() {
+        let file = Arc::new(File::new("<test>", "namespace foo {"));
+        let err = process(file).expect_err("unclosed namespace should fail");
+        let chain = error_chain(&err);
+        assert!(
+            chain.iter().any(|msg| msg == "command error"),
+            "expected command error in chain: {chain:?}"
+        );
+    }
+
+    #[test]
+    fn namespace_allows_referencing_prior_declaration() {
+        let file = Arc::new(File::new(
+            "<test>",
+            "namespace foo {
+                 type const U : Type
+                 const c : U
+                 def d : U := c
+             }",
+        ));
+        process(file).expect("namespace declarations should be resolved incrementally");
+    }
 }
