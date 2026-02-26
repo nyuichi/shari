@@ -181,8 +181,8 @@ pub struct Parser<'a> {
     const_table: &'a HashMap<QualifiedName, Const>,
     axiom_table: &'a HashMap<QualifiedName, Axiom>,
     class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
-    local_consts: Vec<Name>,
-    local_axioms: Vec<(Name, LocalAxiom)>,
+    local_consts: Vec<QualifiedName>,
+    local_axioms: Vec<(QualifiedName, LocalAxiom)>,
     local_types: Vec<Name>,
     locals: Vec<Name>,
     self_ref: Option<(QualifiedName, Id)>,
@@ -241,11 +241,11 @@ impl<'a> Parser<'a> {
         self.const_table.get(name)
     }
 
-    fn has_local_const(&self, name: &Name) -> bool {
+    fn has_local_const(&self, name: &QualifiedName) -> bool {
         self.local_consts.iter().rev().any(|local| local == name)
     }
 
-    fn get_local_axiom(&self, name: &Name) -> Option<&LocalAxiom> {
+    fn get_local_axiom(&self, name: &QualifiedName) -> Option<&LocalAxiom> {
         self.local_axioms
             .iter()
             .rev()
@@ -762,8 +762,8 @@ impl<'a> Parser<'a> {
                 }) {
                     return Ok(mk_local(*stash));
                 }
-                let local_name = Name::from_str(&name.to_string());
-                if self.has_local_const(&local_name) {
+                if self.has_local_const(&name) {
+                    let local_name = Name::from_str(&name.to_string());
                     return Ok(mk_local(Id::from_name(&local_name)));
                 }
                 self.resolve(name)
@@ -885,8 +885,8 @@ impl<'a> Parser<'a> {
 
     fn expr_var(&mut self, token: Token, auto_inst: bool) -> Result<Expr, ParseError> {
         let name = self.qualified_name(&token);
-        let local_name = Name::from_str(&name.to_string());
-        if let Some(local_axiom) = self.get_local_axiom(&local_name) {
+        if let Some(local_axiom) = self.get_local_axiom(&name) {
+            let local_name = Name::from_str(&name.to_string());
             let mut expr = mk_expr_local(Id::from_name(&local_name));
             if auto_inst {
                 for _ in 0..count_forall(&local_axiom.target) {
@@ -960,7 +960,7 @@ impl<'a> Parser<'a> {
         {
             return Self::fail(token, "local structure name must be an identifier");
         }
-        let structure_name = Name::from_str(ident.as_str());
+        let name = Name::from_str(ident.as_str());
         if let Some(token) = self.peek_opt()
             && token.is_ident()
         {
@@ -1014,15 +1014,16 @@ impl<'a> Parser<'a> {
         self.locals.truncate(self.locals.len() - num_consts);
         self.expect_symbol(",")?;
 
-        let structure_id = Id::from_name(&structure_name);
+        let structure_id = Id::from_name(&name);
         let this_ty = mk_type_local(structure_id);
         let this = Local {
             id: Id::fresh_with_name(Name::from_str("this")),
             ty: this_ty.clone(),
         };
 
-        let mut local_consts: Vec<Name> = vec![];
-        let mut local_axioms: Vec<(Name, LocalAxiom)> = vec![];
+        let mut local_consts: Vec<QualifiedName> = vec![];
+        let mut local_axioms: Vec<(QualifiedName, LocalAxiom)> = vec![];
+        let structure_name = QualifiedName::from_str(name.as_str());
         let mut subst = vec![];
         for field in &fields {
             match field {
@@ -1030,9 +1031,10 @@ impl<'a> Parser<'a> {
                     name: field_name,
                     ty: _,
                 }) => {
-                    let fullname = Name::from_str(&format!("{structure_name}.{field_name}"));
-                    let id = Id::from_name(&fullname);
-                    local_consts.push(fullname);
+                    let fullname = structure_name.extend(field_name.as_str());
+                    let local_name = Name::from_str(&fullname.to_string());
+                    let id = Id::from_name(&local_name);
+                    local_consts.push(fullname.clone());
                     let mut target = mk_local(id);
                     target = target.apply([mk_local(this.id)]);
                     subst.push((Id::from_name(field_name), target));
@@ -1041,7 +1043,7 @@ impl<'a> Parser<'a> {
                     name: field_name,
                     target,
                 }) => {
-                    let fullname = Name::from_str(&format!("{structure_name}.{field_name}"));
+                    let fullname = structure_name.extend(field_name.as_str());
                     let mut target = target.clone();
                     target = target.subst(&subst);
                     target = generalize(&target, slice::from_ref(&this));
@@ -1050,7 +1052,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let abs_name = Name::from_str(&format!("{structure_name}.abs"));
+        let abs_name = structure_name.extend("abs");
         let mut params = vec![];
         let mut guards = vec![];
         let mut chars = vec![];
@@ -1066,8 +1068,9 @@ impl<'a> Parser<'a> {
                         ty: ty.clone(),
                     };
 
-                    let fullname = Name::from_str(&format!("{structure_name}.{field_name}"));
-                    let id = Id::from_name(&fullname);
+                    let fullname = structure_name.extend(field_name.as_str());
+                    let local_name = Name::from_str(&fullname.to_string());
+                    let id = Id::from_name(&local_name);
                     let mut rhs = mk_local(id);
                     rhs = rhs.apply([mk_local(this.id)]);
 
@@ -1114,7 +1117,7 @@ impl<'a> Parser<'a> {
         let local_axiom_len = self.local_axioms.len();
         self.local_consts.extend(local_consts);
         self.local_axioms.extend(local_axioms);
-        self.local_types.push(structure_name.clone());
+        self.local_types.push(name.clone());
         let body = match self.expr() {
             Ok(body) => body,
             Err(err) => {
@@ -1127,7 +1130,7 @@ impl<'a> Parser<'a> {
         self.local_axioms.truncate(local_axiom_len);
         self.local_consts.truncate(local_const_len);
         self.local_types.pop();
-        Ok(mk_expr_let_structure(structure_name, fields, body))
+        Ok(mk_expr_let_structure(name, fields, body))
     }
 
     fn let_term_expr(&mut self, _let_token: Token) -> Result<Expr, ParseError> {
@@ -1142,7 +1145,8 @@ impl<'a> Parser<'a> {
         self.expect_symbol(",")?;
 
         let local_const_len = self.local_consts.len();
-        self.local_consts.push(name.clone());
+        self.local_consts
+            .push(QualifiedName::from_str(name.as_str()));
         let body = match self.expr() {
             Ok(body) => body,
             Err(err) => {
@@ -1186,8 +1190,10 @@ impl<'a> Parser<'a> {
                     self.expect_symbol(",")?;
                     let local_axioms_len = self.local_axioms.len();
                     if let Some(alias_name) = &alias {
-                        self.local_axioms
-                            .push((alias_name.clone(), LocalAxiom { target: m.clone() }));
+                        self.local_axioms.push((
+                            QualifiedName::from_str(alias_name.as_str()),
+                            LocalAxiom { target: m.clone() },
+                        ));
                     }
                     let expr = match self.expr() {
                         Ok(expr) => expr,
@@ -1225,8 +1231,10 @@ impl<'a> Parser<'a> {
                     self.expect_symbol(",")?;
                     let local_axioms_len = self.local_axioms.len();
                     if let Some(alias_name) = &alias {
-                        self.local_axioms
-                            .push((alias_name.clone(), LocalAxiom { target: m.clone() }));
+                        self.local_axioms.push((
+                            QualifiedName::from_str(alias_name.as_str()),
+                            LocalAxiom { target: m.clone() },
+                        ));
                     }
                     let e2 = match self.expr() {
                         Ok(expr) => expr,
@@ -1255,8 +1263,10 @@ impl<'a> Parser<'a> {
                     self.locals.push(local_name.clone());
                     let local_axioms_len = self.local_axioms.len();
                     if let Some(alias_name) = &alias {
-                        self.local_axioms
-                            .push((alias_name.clone(), LocalAxiom { target: p.clone() }));
+                        self.local_axioms.push((
+                            QualifiedName::from_str(alias_name.as_str()),
+                            LocalAxiom { target: p.clone() },
+                        ));
                     }
                     let e2 = match self.expr() {
                         Ok(expr) => expr,
@@ -2807,6 +2817,47 @@ mod tests {
             panic!("expected local argument");
         };
         assert_eq!(local.id, canonical_id);
+    }
+
+    #[test]
+    fn parser_local_bindings_use_qualified_name_keys() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let top_namespace = Path::toplevel();
+        let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
+        namespace_table.insert(top_namespace.clone(), Namespace::default());
+        seed_namespace_table_from_globals(
+            &mut namespace_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        );
+        let mut current_namespace = top_namespace;
+        let file = Arc::new(File::new("<test>", ""));
+        let mut lex = Lex::new(file);
+        let mut parser = Parser::new(
+            &mut lex,
+            &tt,
+            &mut namespace_table,
+            &mut current_namespace,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        );
+
+        let local_const_name = qualified("foo.c");
+        let local_axiom_name = qualified("foo.a");
+        parser.local_consts.push(local_const_name.clone());
+        parser.local_axioms.push((
+            local_axiom_name.clone(),
+            LocalAxiom {
+                target: mk_const(qualified("p"), vec![], vec![]),
+            },
+        ));
+
+        assert!(parser.has_local_const(&local_const_name));
+        assert!(parser.get_local_axiom(&local_axiom_name).is_some());
     }
 
     #[test]
