@@ -149,6 +149,10 @@ impl Token {
         self.kind == TokenKind::Ident
     }
 
+    pub fn is_field(&self) -> bool {
+        self.kind == TokenKind::Field
+    }
+
     pub fn is_symbol(&self) -> bool {
         self.kind == TokenKind::Symbol
     }

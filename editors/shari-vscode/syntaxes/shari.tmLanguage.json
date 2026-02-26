@@ -15,6 +15,9 @@
       "include": "#contextualKeywords"
     },
     {
+      "include": "#identifiers"
+    },
+    {
       "include": "#delimiters"
     }
   ],
@@ -101,6 +104,18 @@
         {
           "name": "keyword.control.contextual.shari",
           "match": "\\b(?:have|obtain|assume|change|calc|take|let)\\b"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.field.shari",
+          "match": "\\.[\\p{Alphabetic}_][\\p{Alphabetic}\\p{Number}_']*"
+        },
+        {
+          "name": "variable.other.shari",
+          "match": "\\b[\\p{Alphabetic}_][\\p{Alphabetic}\\p{Number}_']*\\b"
         }
       ]
     },
