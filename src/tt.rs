@@ -12,14 +12,8 @@ use crate::{lex::Span, proof::mk_type_prop};
 #[derive(Debug, Clone, Ord, PartialOrd, Default)]
 pub struct Name(Arc<String>);
 
-#[derive(Debug, Clone, Ord, PartialOrd, Default)]
-pub struct Path(Option<Arc<PathInner>>);
-
-#[derive(Debug, Clone, PartialEq, Eq, Ord, Hash, PartialOrd)]
-struct PathInner {
-    parent: Path,
-    name: Name,
-}
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Default)]
+pub struct Path(Option<QualifiedName>);
 
 #[derive(Debug, Clone, Ord, PartialOrd, Default)]
 pub struct QualifiedName(Arc<QualifiedNameInner>);
@@ -34,8 +28,6 @@ struct QualifiedNameInner {
 pub struct Id(usize);
 
 static NAME_TABLE: LazyLock<Mutex<HashMap<String, Weak<String>>>> = LazyLock::new(Default::default);
-static PATH_TABLE: LazyLock<Mutex<HashMap<PathInner, Weak<PathInner>>>> =
-    LazyLock::new(Default::default);
 static QUALIFIED_NAME_TABLE: LazyLock<
     Mutex<HashMap<QualifiedNameInner, Weak<QualifiedNameInner>>>,
 > = LazyLock::new(Default::default);
@@ -101,41 +93,25 @@ impl Path {
     }
 
     pub fn from_parts(parent: Path, name: Name) -> Path {
-        let value = PathInner { parent, name };
-
-        let mut table = PATH_TABLE.lock().unwrap();
-        if let Some(existing) = table.get(&value).and_then(|weak| weak.upgrade()) {
-            return Path(Some(existing));
-        }
-
-        let owned = Arc::new(value.clone());
-        table.insert(value, Arc::downgrade(&owned));
-        Path(Some(owned))
+        Path(Some(QualifiedName::from_parts(parent, name)))
     }
 
     pub fn name(&self) -> Option<&Name> {
-        self.0.as_ref().map(|inner| &inner.name)
+        self.0.as_ref().map(QualifiedName::name)
     }
 
     pub fn parent(&self) -> Option<&Path> {
-        self.0.as_ref().map(|inner| &inner.parent)
+        self.0.as_ref().map(QualifiedName::path)
     }
 
     pub fn to_parts(&self) -> Option<(&Path, &Name)> {
         self.0
             .as_ref()
-            .map(|inner| (&inner.as_ref().parent, &inner.as_ref().name))
+            .map(|qualified_name| (qualified_name.path(), qualified_name.name()))
     }
 
     pub fn names(&self) -> Vec<Name> {
-        let mut names = vec![];
-        let mut current = self;
-        while let Some(inner) = &current.0 {
-            names.push(inner.name.clone());
-            current = &inner.parent;
-        }
-        names.reverse();
-        names
+        self.0.as_ref().map_or_else(Vec::new, QualifiedName::names)
     }
 
     pub fn append(&self, suffix: &Path) -> Path {
@@ -149,27 +125,6 @@ impl Path {
     pub fn extend(&self, suffix: impl AsRef<str>) -> Path {
         let name = Name::from_str(suffix.as_ref());
         Path::from_parts(self.clone(), name)
-    }
-}
-
-impl PartialEq for Path {
-    fn eq(&self, other: &Self) -> bool {
-        match (&self.0, &other.0) {
-            (None, None) => true,
-            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
-            _ => false,
-        }
-    }
-}
-
-impl Eq for Path {}
-
-impl Hash for Path {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        match &self.0 {
-            Some(inner) => Arc::as_ptr(inner).hash(state),
-            None => 0usize.hash(state),
-        }
     }
 }
 
@@ -2958,6 +2913,17 @@ mod tests {
         let left = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
         let right = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
         assert_eq!(left, right);
+    }
+
+    #[test]
+    fn path_from_parts_wraps_qualified_name() {
+        let path = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        let Path(Some(qualified_name)) = path else {
+            panic!("path must not be toplevel");
+        };
+
+        assert_eq!(qualified_name.path(), &Path::toplevel());
+        assert_eq!(qualified_name.name(), &Name::from_str("foo"));
     }
 
     #[test]
