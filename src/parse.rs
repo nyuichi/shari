@@ -488,7 +488,6 @@ impl<'a> Parser<'a> {
             if name.prefix().is_none() && self.has_local_type(name.name()) {
                 return Ok(mk_type_local(Id::from_name(name.name())));
             }
-            let name = self.resolve(name);
             if let Some(stash) = self.type_self_ref.as_ref().and_then(|(self_name, stash)| {
                 if self_name == &name {
                     Some(stash)
@@ -496,8 +495,10 @@ impl<'a> Parser<'a> {
                     None
                 }
             }) {
-                Ok(mk_type_local(*stash))
-            } else if self.type_const_table.contains_key(&name) {
+                return Ok(mk_type_local(*stash));
+            }
+            let name = self.resolve(name);
+            if self.type_const_table.contains_key(&name) {
                 Ok(mk_type_const(name))
             } else if name == *SUB_NAME {
                 let t = self.subty(1024)?;
@@ -765,17 +766,7 @@ impl<'a> Parser<'a> {
                 if self.has_local_const(&local_name) {
                     return Ok(mk_local(Id::from_name(&local_name)));
                 }
-                let name = self.resolve(name);
-                if let Some(stash) = self.self_ref.as_ref().and_then(|(self_name, stash)| {
-                    if self_name == &name {
-                        Some(stash)
-                    } else {
-                        None
-                    }
-                }) {
-                    return Ok(mk_local(*stash));
-                }
-                name
+                self.resolve(name)
             }
         };
         let Some(const_info) = self.get_const(&name).cloned() else {
@@ -1876,15 +1867,15 @@ impl<'a> Parser<'a> {
 
     fn type_inductive_cmd(&mut self, _token: Token) -> Result<CmdTypeInductive, ParseError> {
         let ident = self.ident()?;
-        let name = self.qualified_name(&ident);
-        let name = self.resolve(name);
+        let literal_name = self.qualified_name(&ident);
+        let name = self.resolve(literal_name.clone());
         self.register_name(&name);
         let self_id = Id::fresh();
         debug_assert!(
             self.type_self_ref.is_none(),
             "nested type inductive definitions are not supported"
         );
-        self.type_self_ref = Some((name.clone(), self_id));
+        self.type_self_ref = Some((literal_name, self_id));
 
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
@@ -1926,15 +1917,15 @@ impl<'a> Parser<'a> {
 
     fn inductive_cmd(&mut self, _token: Token) -> Result<CmdInductive, ParseError> {
         let ident = self.ident()?;
-        let name = self.qualified_name(&ident);
-        let name = self.resolve(name);
+        let literal_name = self.qualified_name(&ident);
+        let name = self.resolve(literal_name.clone());
         self.register_name(&name);
         let self_id = Id::fresh();
         debug_assert!(
             self.self_ref.is_none(),
             "nested inductive definitions are not supported"
         );
-        self.self_ref = Some((name.clone(), self_id));
+        self.self_ref = Some((literal_name, self_id));
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -3075,6 +3066,66 @@ mod tests {
             panic!("expected parse error");
         };
         assert_eq!(message, "unknown variable");
+    }
+
+    #[test]
+    fn inductive_self_reference_does_not_use_resolved_alias() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        parse_cmd_with_tables(
+            "use foo as alias",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("use command parses");
+        let err = parse_cmd_with_tables(
+            "inductive foo : Prop | mk : alias",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect_err("constructor target must not treat alias as self");
+        let ParseError::Parse { message, span: _ } = err else {
+            panic!("expected parse error");
+        };
+        assert_eq!(message, "unknown variable");
+    }
+
+    #[test]
+    fn type_inductive_self_reference_does_not_use_resolved_alias() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        parse_cmd_with_tables(
+            "use foo as alias",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("use command parses");
+        let err = parse_cmd_with_tables(
+            "type inductive foo | mk : alias",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect_err("constructor type must not treat alias as self");
+        let ParseError::Parse { message, span: _ } = err else {
+            panic!("expected parse error");
+        };
+        assert_eq!(message, "unknown type constant");
     }
 
     #[test]
