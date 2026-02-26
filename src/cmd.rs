@@ -1,4 +1,4 @@
-use std::{collections::HashMap, iter::zip, mem, slice, vec};
+use std::{collections::HashMap, iter::zip, slice, vec};
 
 use anyhow::bail;
 
@@ -27,7 +27,8 @@ impl Namespace {
 
 #[derive(Debug, Clone)]
 pub enum Cmd {
-    Namespace(CmdNamespace),
+    NamespaceStart(CmdNamespaceStart),
+    BlockEnd,
     Use(CmdUse),
     Infix(CmdInfix),
     Infixr(CmdInfixr),
@@ -48,9 +49,8 @@ pub enum Cmd {
 }
 
 #[derive(Clone, Debug)]
-pub struct CmdNamespace {
+pub struct CmdNamespaceStart {
     pub path: Path,
-    pub cmds: Vec<Cmd>,
 }
 
 #[derive(Clone, Debug)]
@@ -283,16 +283,8 @@ pub struct ClassInstanceLemma {
 impl std::fmt::Display for Cmd {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Cmd::Namespace(cmd) => write!(
-                f,
-                "namespace {} {{\n{}\n}}",
-                cmd.path,
-                cmd.cmds
-                    .iter()
-                    .map(|cmd| format!("  {}", cmd))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            ),
+            Cmd::NamespaceStart(cmd) => write!(f, "namespace {} {{", cmd.path),
+            Cmd::BlockEnd => write!(f, "}}"),
             Cmd::Use(cmd) => write!(
                 f,
                 "use {}",
@@ -485,6 +477,7 @@ pub struct Eval {
     pub pp: OpTable,
     pub namespace_table: HashMap<Path, Namespace>,
     pub current_namespace: Path,
+    pub namespace_stack: Vec<Path>,
     pub type_const_table: HashMap<QualifiedName, Kind>,
     pub const_table: HashMap<QualifiedName, Const>,
     pub axiom_table: HashMap<QualifiedName, Axiom>,
@@ -506,6 +499,7 @@ impl Default for Eval {
             pp: OpTable::default(),
             namespace_table,
             current_namespace,
+            namespace_stack: vec![],
             type_const_table: HashMap::new(),
             const_table: HashMap::new(),
             axiom_table: HashMap::new(),
@@ -802,20 +796,23 @@ impl Eval {
 
     pub fn run_cmd(&mut self, cmd: Cmd) -> anyhow::Result<()> {
         match cmd {
-            Cmd::Namespace(inner) => {
-                let CmdNamespace { path, cmds } = inner;
+            Cmd::NamespaceStart(inner) => {
+                let CmdNamespaceStart { path } = inner;
                 if !self.namespace_table.contains_key(&path) {
                     self.namespace_table
                         .insert(path.clone(), Namespace::default());
                 }
-                let prev_namespace = mem::replace(&mut self.current_namespace, path);
-                for cmd in cmds {
-                    if let Err(err) = self.run_cmd(cmd) {
-                        self.current_namespace = prev_namespace;
-                        return Err(err);
-                    }
-                }
-                self.current_namespace = prev_namespace;
+                let previous_namespace = self.current_namespace.clone();
+                self.namespace_stack.push(previous_namespace);
+                self.current_namespace = path;
+                Ok(())
+            }
+            Cmd::BlockEnd => {
+                let Some(previous_namespace) = self.namespace_stack.pop() else {
+                    // TODO: this should become unreachable once parser reports brace mismatch as parse error.
+                    bail!("unexpected block end");
+                };
+                self.current_namespace = previous_namespace;
                 Ok(())
             }
             Cmd::Use(inner) => {
@@ -2327,7 +2324,7 @@ impl Eval {
 
 #[cfg(test)]
 mod tests {
-    use super::{Namespace, UseDecl};
+    use super::{Cmd, CmdNamespaceStart, Eval, Namespace, UseDecl};
     use crate::tt::{Name, Path};
 
     #[test]
@@ -2349,5 +2346,26 @@ mod tests {
         };
         assert_eq!(decl.alias, alias);
         assert_eq!(decl.target, target);
+    }
+
+    #[test]
+    fn block_end_without_open_namespace_is_error() {
+        let mut eval = Eval::default();
+        let err = eval
+            .run_cmd(Cmd::BlockEnd)
+            .expect_err("block end should fail at top level");
+        assert_eq!(err.to_string(), "unexpected block end");
+    }
+
+    #[test]
+    fn block_end_restores_previous_namespace() {
+        let mut eval = Eval::default();
+        let path = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        eval.run_cmd(Cmd::NamespaceStart(CmdNamespaceStart { path }))
+            .expect("namespace start should succeed");
+        eval.run_cmd(Cmd::BlockEnd)
+            .expect("block end should close opened namespace");
+        assert_eq!(eval.current_namespace, Path::toplevel());
+        assert!(eval.namespace_stack.is_empty());
     }
 }

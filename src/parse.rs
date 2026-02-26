@@ -2,7 +2,7 @@ use crate::cmd::{
     ClassInstanceDef, ClassInstanceField, ClassInstanceLemma, ClassStructureAxiom,
     ClassStructureConst, ClassStructureField, Cmd, CmdAxiom, CmdClassInstance, CmdClassStructure,
     CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdInstance, CmdLemma,
-    CmdNamespace, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive, CmdUse,
+    CmdNamespaceStart, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive, CmdUse,
     Constructor, DataConstructor, Fixity, InstanceDef, InstanceField, InstanceLemma, Namespace,
     Operator, StructureAxiom, StructureConst, StructureField, UseDecl as CmdUseDecl,
 };
@@ -1524,11 +1524,19 @@ impl<'a> Parser<'a> {
     }
 
     pub fn cmd(&mut self) -> Result<Cmd, ParseError> {
+        if let Some(token) = self.peek_opt()
+            && token.is_symbol()
+            && token.as_str() == "}"
+        {
+            self.advance();
+            // TODO: track block depth in parser and report unmatched '}' as parse error.
+            return Ok(Cmd::BlockEnd);
+        }
         let keyword = self.keyword()?;
         let cmd = match keyword.as_str() {
             "namespace" => {
                 let namespace_cmd = self.namespace_cmd(keyword)?;
-                Cmd::Namespace(namespace_cmd)
+                Cmd::NamespaceStart(namespace_cmd)
             }
             "use" => {
                 let use_cmd = self.use_cmd(keyword)?;
@@ -1621,25 +1629,12 @@ impl<'a> Parser<'a> {
         Ok(cmd)
     }
 
-    fn namespace_cmd(&mut self, _token: Token) -> Result<CmdNamespace, ParseError> {
+    fn namespace_cmd(&mut self, _token: Token) -> Result<CmdNamespaceStart, ParseError> {
         let name = self.global_reference_name(None)?;
         self.register_name(&name);
         let path = name.to_path();
         self.expect_symbol("{")?;
-        let prev_namespace = self.current_namespace.clone();
-        *self.current_namespace = path.clone();
-        let mut cmds = vec![];
-        while self.expect_symbol_opt("}").is_none() {
-            match self.cmd() {
-                Ok(cmd) => cmds.push(cmd),
-                Err(err) => {
-                    *self.current_namespace = prev_namespace;
-                    return Err(err);
-                }
-            }
-        }
-        *self.current_namespace = prev_namespace;
-        Ok(CmdNamespace { path, cmds })
+        Ok(CmdNamespaceStart { path })
     }
 
     fn use_group(
@@ -2620,6 +2615,69 @@ mod tests {
         cmd
     }
 
+    fn parse_cmds_with_tables(
+        input: &str,
+        tt: &TokenTable,
+        use_table: &mut HashMap<Name, Path>,
+        type_const_table: &HashMap<QualifiedName, Kind>,
+        const_table: &HashMap<QualifiedName, Const>,
+        axiom_table: &HashMap<QualifiedName, Axiom>,
+        class_predicate_table: &HashMap<QualifiedName, ClassType>,
+    ) -> Result<Vec<Cmd>, ParseError> {
+        let file = Arc::new(File::new("<test>", input));
+        let mut lex = Lex::new(file);
+        let top_namespace = Path::toplevel();
+        let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
+        namespace_table.insert(
+            top_namespace.clone(),
+            Namespace {
+                use_table: std::mem::take(use_table),
+            },
+        );
+        seed_namespace_table_from_globals(
+            &mut namespace_table,
+            type_const_table,
+            const_table,
+            axiom_table,
+            class_predicate_table,
+        );
+        let mut current_namespace = top_namespace.clone();
+        let mut parser = Parser::new(
+            &mut lex,
+            tt,
+            &mut namespace_table,
+            &mut current_namespace,
+            type_const_table,
+            const_table,
+            axiom_table,
+            class_predicate_table,
+        );
+        let mut cmds = vec![];
+        let mut namespace_stack = vec![];
+        while parser.peek_opt().is_some() {
+            let cmd = parser.cmd()?;
+            match &cmd {
+                Cmd::NamespaceStart(CmdNamespaceStart { path }) => {
+                    let previous_namespace = parser.current_namespace.clone();
+                    namespace_stack.push(previous_namespace);
+                    *parser.current_namespace = path.clone();
+                }
+                Cmd::BlockEnd => {
+                    if let Some(previous_namespace) = namespace_stack.pop() {
+                        *parser.current_namespace = previous_namespace;
+                    }
+                }
+                _ => {}
+            }
+            cmds.push(cmd);
+        }
+        let top_entry = namespace_table
+            .remove(&top_namespace)
+            .expect("top-level namespace entry must exist");
+        *use_table = top_entry.use_table;
+        Ok(cmds)
+    }
+
     fn parse_term_with_tables(
         input: &str,
         tt: &TokenTable,
@@ -2990,7 +3048,7 @@ mod tests {
     fn absolute_type_reference_is_resolved_from_toplevel() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, Path> = HashMap::new();
-        let cmd = parse_cmd_with_tables(
+        let cmds = parse_cmds_with_tables(
             "namespace foo { const x : .Prop }",
             &tt,
             &mut use_table,
@@ -2999,16 +3057,13 @@ mod tests {
             &axioms,
             &class_predicates,
         )
-        .expect("command parses");
-        let Cmd::Namespace(namespace_cmd) = cmd else {
-            panic!("expected namespace command");
-        };
+        .expect("commands parse");
         let Cmd::Const(CmdConst {
             name: _,
             local_types: _,
             local_classes: _,
             ty,
-        }) = &namespace_cmd.cmds[0]
+        }) = &cmds[1]
         else {
             panic!("expected const command");
         };
@@ -3020,7 +3075,7 @@ mod tests {
         let (tt, type_consts, consts, axioms, mut class_predicates) = setup_tables();
         class_predicates.insert(qualified("C"), ClassType { arity: 0 });
         let mut use_table: HashMap<Name, Path> = HashMap::new();
-        let cmd = parse_cmd_with_tables(
+        let cmds = parse_cmds_with_tables(
             "namespace foo { const x [.C] : .Prop }",
             &tt,
             &mut use_table,
@@ -3029,16 +3084,13 @@ mod tests {
             &axioms,
             &class_predicates,
         )
-        .expect("command parses");
-        let Cmd::Namespace(namespace_cmd) = cmd else {
-            panic!("expected namespace command");
-        };
+        .expect("commands parse");
         let Cmd::Const(CmdConst {
             name: _,
             local_types: _,
             local_classes,
             ty: _,
-        }) = &namespace_cmd.cmds[0]
+        }) = &cmds[1]
         else {
             panic!("expected const command");
         };
@@ -3050,7 +3102,7 @@ mod tests {
     fn absolute_term_reference_is_resolved_from_toplevel() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, Path> = HashMap::new();
-        let cmd = parse_cmd_with_tables(
+        let cmds = parse_cmds_with_tables(
             "namespace foo { def x : .Prop := .p }",
             &tt,
             &mut use_table,
@@ -3059,17 +3111,14 @@ mod tests {
             &axioms,
             &class_predicates,
         )
-        .expect("command parses");
-        let Cmd::Namespace(namespace_cmd) = cmd else {
-            panic!("expected namespace command");
-        };
+        .expect("commands parse");
         let Cmd::Def(CmdDef {
             name: _,
             local_types: _,
             local_classes: _,
             ty: _,
             target,
-        }) = &namespace_cmd.cmds[0]
+        }) = &cmds[1]
         else {
             panic!("expected def command");
         };
@@ -3091,7 +3140,7 @@ mod tests {
             },
         );
         let mut use_table: HashMap<Name, Path> = HashMap::new();
-        let cmd = parse_cmd_with_tables(
+        let cmds = parse_cmds_with_tables(
             "namespace foo { lemma l : .p := @.h }",
             &tt,
             &mut use_table,
@@ -3100,10 +3149,7 @@ mod tests {
             &axioms,
             &class_predicates,
         )
-        .expect("command parses");
-        let Cmd::Namespace(namespace_cmd) = cmd else {
-            panic!("expected namespace command");
-        };
+        .expect("commands parse");
         let Cmd::Lemma(CmdLemma {
             name: _,
             local_types: _,
@@ -3111,7 +3157,7 @@ mod tests {
             target: _,
             holes: _,
             expr,
-        }) = &namespace_cmd.cmds[0]
+        }) = &cmds[1]
         else {
             panic!("expected lemma command");
         };
@@ -3131,7 +3177,7 @@ mod tests {
     fn absolute_namespace_target_is_resolved_from_toplevel() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, Path> = HashMap::new();
-        let cmd = parse_cmd_with_tables(
+        let cmds = parse_cmds_with_tables(
             "namespace foo { namespace .bar { } }",
             &tt,
             &mut use_table,
@@ -3140,22 +3186,24 @@ mod tests {
             &axioms,
             &class_predicates,
         )
-        .expect("command parses");
-        let Cmd::Namespace(outer) = cmd else {
-            panic!("expected outer namespace command");
+        .expect("commands parse");
+        let Cmd::NamespaceStart(outer) = &cmds[0] else {
+            panic!("expected outer namespace start");
         };
         assert_eq!(outer.path, path("foo"));
-        let Cmd::Namespace(inner) = &outer.cmds[0] else {
-            panic!("expected inner namespace command");
+        let Cmd::NamespaceStart(inner) = &cmds[1] else {
+            panic!("expected inner namespace start");
         };
         assert_eq!(inner.path, path("bar"));
+        assert!(matches!(cmds[2], Cmd::BlockEnd));
+        assert!(matches!(cmds[3], Cmd::BlockEnd));
     }
 
     #[test]
     fn absolute_use_target_is_resolved_from_toplevel() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, Path> = HashMap::new();
-        let cmd = parse_cmd_with_tables(
+        let cmds = parse_cmds_with_tables(
             "namespace foo { use .bar as baz }",
             &tt,
             &mut use_table,
@@ -3164,11 +3212,8 @@ mod tests {
             &axioms,
             &class_predicates,
         )
-        .expect("command parses");
-        let Cmd::Namespace(namespace_cmd) = cmd else {
-            panic!("expected namespace command");
-        };
-        let Cmd::Use(CmdUse { decls }) = &namespace_cmd.cmds[0] else {
+        .expect("commands parse");
+        let Cmd::Use(CmdUse { decls }) = &cmds[1] else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 1);
@@ -3188,7 +3233,7 @@ mod tests {
         for (command, label) in scenarios {
             let input = format!("namespace foo {{ {command} }}");
             let mut use_table: HashMap<Name, Path> = HashMap::new();
-            let cmd = parse_cmd_with_tables(
+            let cmds = parse_cmds_with_tables(
                 &input,
                 &tt,
                 &mut use_table,
@@ -3197,11 +3242,8 @@ mod tests {
                 &axioms,
                 &class_predicates,
             )
-            .expect("command parses");
-            let Cmd::Namespace(namespace_cmd) = cmd else {
-                panic!("expected namespace command");
-            };
-            let entity = match &namespace_cmd.cmds[0] {
+            .expect("commands parse");
+            let entity = match &cmds[1] {
                 Cmd::Infixr(cmd) => &cmd.entity,
                 Cmd::Infixl(cmd) => &cmd.entity,
                 Cmd::Infix(cmd) => &cmd.entity,
@@ -3330,7 +3372,7 @@ mod tests {
     fn use_absolute_group_in_namespace_is_resolved_from_toplevel() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, Path> = HashMap::new();
-        let cmd = parse_cmd_with_tables(
+        let cmds = parse_cmds_with_tables(
             "namespace local { use .{foo, bar.baz} }",
             &tt,
             &mut use_table,
@@ -3339,11 +3381,8 @@ mod tests {
             &axioms,
             &class_predicates,
         )
-        .expect("namespace command parses");
-        let Cmd::Namespace(namespace_cmd) = cmd else {
-            panic!("expected namespace command");
-        };
-        let Cmd::Use(CmdUse { decls }) = &namespace_cmd.cmds[0] else {
+        .expect("namespace commands parse");
+        let Cmd::Use(CmdUse { decls }) = &cmds[1] else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 2);
@@ -3381,7 +3420,7 @@ mod tests {
     fn use_absolute_scoped_group_is_resolved_from_toplevel() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, Path> = HashMap::new();
-        let cmd = parse_cmd_with_tables(
+        let cmds = parse_cmds_with_tables(
             "namespace local { use .root.{leaf as l} }",
             &tt,
             &mut use_table,
@@ -3390,11 +3429,8 @@ mod tests {
             &axioms,
             &class_predicates,
         )
-        .expect("namespace command parses");
-        let Cmd::Namespace(namespace_cmd) = cmd else {
-            panic!("expected namespace command");
-        };
-        let Cmd::Use(CmdUse { decls }) = &namespace_cmd.cmds[0] else {
+        .expect("namespace commands parse");
+        let Cmd::Use(CmdUse { decls }) = &cmds[1] else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 1);
@@ -3879,7 +3915,7 @@ mod tests {
     fn infix_entity_resolves_aliases_left_to_right_across_namespaces() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, Path> = HashMap::new();
-        let cmd = parse_cmd_with_tables(
+        let cmds = parse_cmds_with_tables(
             "namespace foo { use qux as inner namespace qux { use real as leaf } infix * : 50 := inner.leaf.tail }",
             &tt,
             &mut use_table,
@@ -3888,16 +3924,13 @@ mod tests {
             &axioms,
             &class_predicates,
         )
-        .expect("namespace command parses");
-        let Cmd::Namespace(namespace_cmd) = cmd else {
-            panic!("expected namespace command");
-        };
-        assert_eq!(namespace_cmd.cmds.len(), 3);
+        .expect("namespace commands parse");
+        assert_eq!(cmds.len(), 7);
         let Cmd::Infix(CmdInfix {
             op: _,
             prec: _,
             entity,
-        }) = &namespace_cmd.cmds[2]
+        }) = &cmds[5]
         else {
             panic!("expected infix command");
         };
@@ -4372,7 +4405,7 @@ mod tests {
         type_consts.insert(qualified("Type"), Kind(0));
         type_consts.insert(qualified("foo.Prop"), Kind(0));
         let mut use_table: HashMap<Name, Path> = HashMap::new();
-        let cmd = parse_cmd_with_tables(
+        let cmds = parse_cmds_with_tables(
             "namespace foo { const bar : Prop }",
             &tt,
             &mut use_table,
@@ -4381,16 +4414,35 @@ mod tests {
             &axioms,
             &class_predicates,
         )
-        .expect("namespace command parses");
-        let Cmd::Namespace(namespace_cmd) = cmd else {
-            panic!("expected namespace command");
+        .expect("namespace commands parse");
+        let Cmd::NamespaceStart(namespace_start) = &cmds[0] else {
+            panic!("expected namespace start");
         };
-        assert_eq!(namespace_cmd.path, path("foo"));
-        assert_eq!(namespace_cmd.cmds.len(), 1);
-        let Cmd::Const(inner) = &namespace_cmd.cmds[0] else {
+        assert_eq!(namespace_start.path, path("foo"));
+        let Cmd::Const(inner) = &cmds[1] else {
             panic!("expected const command");
         };
         assert_eq!(inner.name, qualified("foo.bar"));
+        assert!(matches!(cmds[2], Cmd::BlockEnd));
+    }
+
+    #[test]
+    fn namespace_block_is_parsed_incrementally() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        let cmds = parse_cmds_with_tables(
+            "namespace foo { }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("namespace block parses");
+        assert_eq!(cmds.len(), 2);
+        assert_eq!(format!("{}", cmds[0]), "namespace foo {");
+        assert_eq!(format!("{}", cmds[1]), "}");
     }
 
     #[test]
@@ -4399,7 +4451,7 @@ mod tests {
         type_consts.insert(qualified("Type"), Kind(0));
         type_consts.insert(qualified("foo.bar.Prop"), Kind(0));
         let mut use_table: HashMap<Name, Path> = HashMap::new();
-        let cmd = parse_cmd_with_tables(
+        let cmds = parse_cmds_with_tables(
             "namespace foo.bar { const qux.quux : Prop }",
             &tt,
             &mut use_table,
@@ -4408,16 +4460,16 @@ mod tests {
             &axioms,
             &class_predicates,
         )
-        .expect("namespace command parses");
-        let Cmd::Namespace(namespace_cmd) = cmd else {
-            panic!("expected namespace command");
+        .expect("namespace commands parse");
+        let Cmd::NamespaceStart(namespace_start) = &cmds[0] else {
+            panic!("expected namespace start");
         };
-        assert_eq!(namespace_cmd.path, path("foo.bar"));
-        assert_eq!(namespace_cmd.cmds.len(), 1);
-        let Cmd::Const(inner) = &namespace_cmd.cmds[0] else {
+        assert_eq!(namespace_start.path, path("foo.bar"));
+        let Cmd::Const(inner) = &cmds[1] else {
             panic!("expected const command");
         };
         assert_eq!(inner.name, qualified("foo.bar.qux.quux"));
+        assert!(matches!(cmds[2], Cmd::BlockEnd));
     }
 
     #[test]
@@ -4446,7 +4498,7 @@ mod tests {
         type_consts.insert(qualified("foo.Prop"), Kind(0));
         insert_prop_const(&mut consts, "foo.p");
         let mut use_table: HashMap<Name, Path> = HashMap::new();
-        let cmd = parse_cmd_with_tables(
+        let cmds = parse_cmds_with_tables(
             "namespace foo { def qux.quux : Prop := p }",
             &tt,
             &mut use_table,
@@ -4455,15 +4507,15 @@ mod tests {
             &axioms,
             &class_predicates,
         )
-        .expect("namespace command parses");
-        let Cmd::Namespace(namespace_cmd) = cmd else {
-            panic!("expected namespace command");
+        .expect("namespace commands parse");
+        let Cmd::NamespaceStart(namespace_start) = &cmds[0] else {
+            panic!("expected namespace start");
         };
-        assert_eq!(namespace_cmd.path, path("foo"));
-        assert_eq!(namespace_cmd.cmds.len(), 1);
-        let Cmd::Def(def_cmd) = &namespace_cmd.cmds[0] else {
+        assert_eq!(namespace_start.path, path("foo"));
+        let Cmd::Def(def_cmd) = &cmds[1] else {
             panic!("expected def command");
         };
         assert_eq!(def_cmd.name, qualified("foo.qux.quux"));
+        assert!(matches!(cmds[2], Cmd::BlockEnd));
     }
 }
