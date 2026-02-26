@@ -4,7 +4,7 @@ This document summarizes the surface syntax, proof language, and namespace syste
 
 ## Lexical conventions
 - **Whitespace and comments** – Lexing skips Unicode whitespace, line comments starting with `--`, and nested block comments delimited by `/-` … `-/`.
-- **Tokens** – Tokens are classified as identifiers, symbols, numeral literals, or keywords according to the rules in the lexer. Identifiers may contain Unicode letters, digits, underscores, apostrophes, and dot-separated namespaces. Symbols cover operators such as `:=`, `∃!`, `${`, `.{`, parentheses, and punctuation.
+- **Tokens** – Tokens are classified as identifiers, fields, symbols, numeral literals, or keywords according to the rules in the lexer. Identifiers may contain Unicode letters, digits, underscores, and apostrophes. Dotted global names are parsed as a head token plus field segments (for example `foo.bar` as `foo` + `.bar`, and absolute `.foo.bar` as `.foo` + `.bar`). Symbols cover operators such as `:=`, `∃!`, `${`, `.{`, parentheses, and punctuation.
 - **Keywords** – Reserved words recognized by the lexer are `infixr`, `infixl`, `infix`, `nofix`, `prefix`, `def`, `axiom`, `lemma`, `const`, `type`, `inductive`, `structure`, `instance`, `class`, `namespace`, `use`, and `as`. The bare glyphs `λ` and `_` are treated as symbols, not identifiers.
 
 ## Type grammar
@@ -17,7 +17,7 @@ This document summarizes the surface syntax, proof language, and namespace syste
 ## Term grammar
 - **Binders** – Lambda abstractions use `λ` followed by parameters and a comma; binders `∀`, `∃`, and `∃!` require at least one parameter tuple before the comma. Each binder inserts the parameters into scope before parsing the body.
 - **Set comprehension** – `{ x : T | e }` (or `{ x | e }`) produces a lambda with binder `x` and optional type annotation.
-- **Variables and constants** – A bare identifier resolves first to locals, otherwise to registered constants. Explicit type arguments use `.{τ₁, …, τₙ}`; omitted arguments generate metavariables. Class constraints create implicit instance holes that elaboration fills later.
+- **Variables and constants** – Global references support both relative (`foo.bar`) and absolute (`.foo.bar`) forms; whitespace before field segments is allowed (`.foo .bar`). Relative names resolve first against locals and then via the current namespace alias table, while absolute names resolve from the top-level namespace and bypass local/self-name lookup shortcuts. Explicit type arguments use `.{τ₁, …, τₙ}`; omitted arguments generate metavariables. Class constraints create implicit instance holes that elaboration fills later.
 - **Pairs** – The Lean-style bracket syntax `⟨m, n⟩` is available as sugar for `pair m n`, with both components parsed as full terms. There are also projections `.0` and `.1`.
 - **Applications and user operators** – Function application is implicit juxtaposition. Operator fixity, precedence, and entity resolution come from the token table populated by `infix`, `infixl`, `infixr`, `prefix`, and `nofix` commands.
 - **Holes** – An underscore `_` introduces a fresh metavariable applied to the current local context, tracked for later synthesis.
@@ -33,6 +33,7 @@ This document summarizes the surface syntax, proof language, and namespace syste
 ## Top-level commands
 The `cmd` dispatcher recognizes the following keywords. Each command builds a structured object in `cmd.rs` that the elaborator consumes.
 
+- **Declaration heads** – Declaration names for `def`, `axiom`, `lemma`, `const`, `type const`, `type inductive` (including constructor names), `inductive` (including constructor names), `structure`, `instance`, `class structure`, and `class instance` must start with an identifier head. Absolute heads such as `.foo` are rejected in declaration positions.
 - **Operator registration** – `infix`, `infixl`, `infixr`, `prefix`, and `nofix` map a symbol to an existing constant with a given precedence. Binary operators take precedence levels as natural numbers.
 - **Definitions** – `def name.{tyvars} [class params] (args : τ) : σ := t` declares computable constants. Types are generalized over parameters before being stored.
 - **Axioms and lemmas** – `axiom` and `lemma` share parameter syntax; lemmas additionally require a proof script and record any metavariable holes for later solving.
@@ -41,8 +42,8 @@ The `cmd` dispatcher recognizes the following keywords. Each command builds a st
 - **Inductive propositions** – `inductive` declares propositional inductives with parameters and constructor blocks separated by `|`. Constructor targets are automatically generalized over constructor parameters.
 - **Structures and instances** – `structure` declares record-like bundles of constants and axioms; `instance` supplies implementations of those fields for a target type, including derived lemmas. Within a structure body, `const` and `axiom` fields may be freely interleaved.
 - **Type classes** – `class structure` and `class instance` mirror structures/instances but live in the class namespace and accept class arguments on fields.
-- **Namespaces** – `namespace foo.bar { ... }` opens a scoped namespace block. Declarations inside are stored with fully qualified names; qualified declaration heads like `def qux.quux := ...` create missing child namespaces under the current namespace.
-- **Use aliases** – `use` introduces parser-time alias mappings for qualified names in the current namespace table. Supported forms include `use foo.bar`, `use foo.bar as baz`, grouped imports such as `use foo.{bar, baz}`, and nested groups such as `use {foo as bar, baz.{hoge as piyo}}`. Alias expansion is resolved during parsing and stored as fully qualified names in AST.
+- **Namespaces** – `namespace foo.bar { ... }` opens a scoped namespace block. Namespace targets also allow absolute form (`namespace .foo.bar { ... }`). Declarations inside are stored with fully qualified names; qualified declaration heads like `def qux.quux := ...` create missing child namespaces under the current namespace.
+- **Use aliases** – `use` introduces parser-time alias mappings for qualified names in the current namespace table. Targets may be relative (`use foo.bar`) or absolute (`use .foo.bar`). Supported forms include `use foo.bar as baz`, grouped imports such as `use foo.{bar, baz}`, and nested groups such as `use {foo as bar, baz.{hoge as piyo}}`. Alias expansion is resolved during parsing and stored as fully qualified names in AST.
 
 ## Type classes and implicit arguments
 - Class parameters `[C]` record constraints that become implicit instance arguments when using the resulting constants or lemmas.

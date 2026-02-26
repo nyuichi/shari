@@ -103,7 +103,7 @@ impl TokenTable {
     fn get_led(&self, token: &Token) -> Option<Led> {
         match token.kind {
             TokenKind::Ident => Some(Led::App),
-            TokenKind::Field => None,
+            TokenKind::Field => Some(Led::App),
             TokenKind::Symbol => {
                 let lit = token.as_str();
                 match self.led.get(lit) {
@@ -129,7 +129,7 @@ impl TokenTable {
     fn get_nud(&self, token: &Token) -> Option<Nud> {
         match token.kind {
             TokenKind::Ident => Some(Nud::Var),
-            TokenKind::Field => None,
+            TokenKind::Field => Some(Nud::Var),
             TokenKind::Symbol => {
                 let lit = token.as_str();
                 match lit {
@@ -164,6 +164,7 @@ pub enum ParseError {
 struct UseDecl {
     target: QualifiedName,
     alias: Option<Name>,
+    absolute: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -408,7 +409,17 @@ impl<'a> Parser<'a> {
     }
 
     fn qualified_name(&mut self, token: &Token) -> QualifiedName {
-        let mut name = QualifiedName::from_str(token.as_str());
+        let mut name = match token.kind {
+            TokenKind::Ident => QualifiedName::from_str(token.as_str()),
+            TokenKind::Field => {
+                let segment = token
+                    .as_str()
+                    .strip_prefix('.')
+                    .expect("field token must start with '.'");
+                QualifiedName::from_str(segment)
+            }
+            _ => unreachable!("qualified_name token must be an identifier or field"),
+        };
         while let Some(field) = self.peek_opt() {
             if field.kind != TokenKind::Field {
                 break;
@@ -425,8 +436,8 @@ impl<'a> Parser<'a> {
         name
     }
 
-    fn resolve(&mut self, name: QualifiedName) -> QualifiedName {
-        let mut path = (*self.current_namespace).clone();
+    fn resolve(&mut self, base: Path, name: QualifiedName) -> QualifiedName {
+        let mut path = base;
         for name in name.names() {
             path = if let Some(target) = self.namespace_table[&path].use_table.get(&name) {
                 target.clone()
@@ -447,6 +458,50 @@ impl<'a> Parser<'a> {
         }
         let (parent, name) = path.to_parts().unwrap();
         QualifiedName::from_parts(parent.clone(), name.clone())
+    }
+
+    fn global_reference_name(
+        &mut self,
+        token: Option<&Token>,
+    ) -> Result<QualifiedName, ParseError> {
+        let token = match token {
+            Some(token) => token.clone(),
+            None => {
+                let token = self.any_token()?;
+                if !token.is_ident() && !token.is_field() {
+                    return Self::fail(token, "expected identifier");
+                }
+                token
+            }
+        };
+        assert!(
+            token.is_ident() || token.is_field(),
+            "global reference token must be identifier or field"
+        );
+        let literal_name = self.qualified_name(&token);
+        if token.is_field() {
+            Ok(self.resolve(Path::toplevel(), literal_name))
+        } else {
+            Ok(self.resolve((*self.current_namespace).clone(), literal_name))
+        }
+    }
+
+    fn global_declaration_name(
+        &mut self,
+        token: Option<&Token>,
+    ) -> Result<QualifiedName, ParseError> {
+        let token = match token {
+            Some(token) => token.clone(),
+            None => self.any_token()?,
+        };
+        if token.is_field() {
+            return Self::fail(token, "absolute path is not allowed in declaration head");
+        }
+        if !token.is_ident() {
+            return Self::fail(token, "expected identifier");
+        }
+        let literal_name = self.qualified_name(&token);
+        Ok(self.resolve((*self.current_namespace).clone(), literal_name))
     }
 
     fn register_name(&mut self, name: &QualifiedName) {
@@ -497,7 +552,7 @@ impl<'a> Parser<'a> {
             }) {
                 return Ok(mk_type_local(*stash));
             }
-            let name = self.resolve(name);
+            let name = self.resolve((*self.current_namespace).clone(), name);
             if self.type_const_table.contains_key(&name) {
                 Ok(mk_type_const(name))
             } else if name == *SUB_NAME {
@@ -505,6 +560,14 @@ impl<'a> Parser<'a> {
                 Ok(mk_type_arrow(t, mk_type_prop()))
             } else if name == *NAT_NAME {
                 Ok(mk_type_const(QualifiedName::from_str("nat")))
+            } else {
+                Self::fail(token, "unknown type constant")
+            }
+        } else if token.is_field() {
+            let name = self.qualified_name(&token);
+            let name = self.resolve(Path::toplevel(), name);
+            if self.type_const_table.contains_key(&name) {
+                Ok(mk_type_const(name))
             } else {
                 Self::fail(token, "unknown type constant")
             }
@@ -606,11 +669,10 @@ impl<'a> Parser<'a> {
 
     fn class(&mut self) -> Result<Class, ParseError> {
         let token = self.any_token()?;
-        if !token.is_ident() {
+        if !token.is_ident() && !token.is_field() {
             return Self::fail(token, "expected class name");
         }
-        let name = self.qualified_name(&token);
-        let name = self.resolve(name);
+        let name = self.global_reference_name(Some(&token))?;
         if !self.class_predicate_table.contains_key(&name) {
             return Self::fail(token, "unknown class");
         }
@@ -750,23 +812,29 @@ impl<'a> Parser<'a> {
             Some(entity) => entity,
             None => {
                 let name = self.qualified_name(&token);
-                if name.prefix().is_none() && self.has_local(name.name()) {
-                    return Ok(mk_local(Id::from_name(name.name())));
-                }
-                if let Some(stash) = self.self_ref.as_ref().and_then(|(self_name, stash)| {
-                    if self_name == &name {
-                        Some(stash)
-                    } else {
-                        None
+                if token.is_ident() {
+                    if name.prefix().is_none() && self.has_local(name.name()) {
+                        return Ok(mk_local(Id::from_name(name.name())));
                     }
-                }) {
-                    return Ok(mk_local(*stash));
+                    if let Some(stash) = self.self_ref.as_ref().and_then(|(self_name, stash)| {
+                        if self_name == &name {
+                            Some(stash)
+                        } else {
+                            None
+                        }
+                    }) {
+                        return Ok(mk_local(*stash));
+                    }
+                    if self.has_local_const(&name) {
+                        let local_name = Name::from_str(&name.to_string());
+                        return Ok(mk_local(Id::from_name(&local_name)));
+                    }
+                    self.resolve((*self.current_namespace).clone(), name)
+                } else if token.is_field() {
+                    self.resolve(Path::toplevel(), name)
+                } else {
+                    unreachable!("term variable token must be identifier or field")
                 }
-                if self.has_local_const(&name) {
-                    let local_name = Name::from_str(&name.to_string());
-                    return Ok(mk_local(Id::from_name(&local_name)));
-                }
-                self.resolve(name)
             }
         };
         let Some(const_info) = self.get_const(&name).cloned() else {
@@ -885,17 +953,23 @@ impl<'a> Parser<'a> {
 
     fn expr_var(&mut self, token: Token, auto_inst: bool) -> Result<Expr, ParseError> {
         let name = self.qualified_name(&token);
-        if let Some(local_axiom) = self.get_local_axiom(&name) {
-            let local_name = Name::from_str(&name.to_string());
-            let mut expr = mk_expr_local(Id::from_name(&local_name));
-            if auto_inst {
-                for _ in 0..count_forall(&local_axiom.target) {
-                    expr = mk_expr_inst(expr, self.mk_term_hole());
+        let name = if token.is_ident() {
+            if let Some(local_axiom) = self.get_local_axiom(&name) {
+                let local_name = Name::from_str(&name.to_string());
+                let mut expr = mk_expr_local(Id::from_name(&local_name));
+                if auto_inst {
+                    for _ in 0..count_forall(&local_axiom.target) {
+                        expr = mk_expr_inst(expr, self.mk_term_hole());
+                    }
                 }
+                return Ok(expr);
             }
-            return Ok(expr);
-        }
-        let name = self.resolve(name);
+            self.resolve((*self.current_namespace).clone(), name)
+        } else if token.is_field() {
+            self.resolve(Path::toplevel(), name)
+        } else {
+            unreachable!("expression variable token must be identifier or field")
+        };
         let Some(axiom_info) = self.axiom_table.get(&name).cloned() else {
             return Self::fail(token, "unknown variable");
         };
@@ -1178,11 +1252,20 @@ impl<'a> Parser<'a> {
                 break 'left mk_expr_assump(prop);
             }
             if let Some(_token) = self.expect_symbol_opt("@") {
-                let token = self.ident()?;
+                let token = self.any_token()?;
+                if !token.is_ident() && !token.is_field() {
+                    return Self::fail(token, "expected identifier");
+                }
                 let expr = self.expr_var(token, false)?;
                 break 'left expr;
             }
-            let token = self.ident()?;
+            let token = self.any_token()?;
+            if !token.is_ident() && !token.is_field() {
+                return Self::fail(token, "expected identifier");
+            }
+            if token.is_field() {
+                break 'left self.expr_var(token, true)?;
+            }
             match token.as_str() {
                 "assume" => {
                     let m = self.term()?;
@@ -1379,6 +1462,7 @@ impl<'a> Parser<'a> {
                     || token.as_str() == "«"
                     || token.as_str() == "@"
                     || token.is_ident()
+                    || token.is_field()
                 {
                     (ExprLed::App, 1024)
                 } else {
@@ -1539,9 +1623,7 @@ impl<'a> Parser<'a> {
     }
 
     fn namespace_cmd(&mut self, _token: Token) -> Result<CmdNamespace, ParseError> {
-        let name = self.ident()?;
-        let name = self.qualified_name(&name);
-        let name = self.resolve(name);
+        let name = self.global_reference_name(None)?;
         self.register_name(&name);
         let path = name.to_path();
         self.expect_symbol("{")?;
@@ -1564,13 +1646,14 @@ impl<'a> Parser<'a> {
     fn use_group(
         &mut self,
         prefix: Option<&QualifiedName>,
+        prefix_absolute: bool,
         decls: &mut Vec<UseDecl>,
     ) -> Result<(), ParseError> {
         if self.expect_symbol_opt("}").is_some() {
             return Ok(());
         }
         loop {
-            self.use_entry(prefix, decls)?;
+            self.use_entry(prefix, prefix_absolute, decls)?;
             if self.expect_symbol_opt(",").is_some() {
                 if let Some(token) = self.peek_opt()
                     && token.is_symbol()
@@ -1588,30 +1671,42 @@ impl<'a> Parser<'a> {
     fn use_entry(
         &mut self,
         prefix: Option<&QualifiedName>,
+        prefix_absolute: bool,
         decls: &mut Vec<UseDecl>,
     ) -> Result<(), ParseError> {
         if self.expect_symbol_opt("{").is_some() {
-            return self.use_group(prefix, decls);
+            return self.use_group(prefix, prefix_absolute, decls);
         }
-        let token = self.ident()?;
+        let token = self.any_token()?;
+        if !token.is_ident() && !token.is_field() {
+            return Self::fail(token, "expected identifier");
+        }
+        if prefix.is_some() && token.is_field() {
+            return Self::fail(token, "absolute path is not allowed in scoped use group");
+        }
         let mut target = self.qualified_name(&token);
+        let absolute = token.is_field() || prefix_absolute;
         if let Some(prefix) = prefix {
             target = prefix.append(&target);
         }
         if self.expect_symbol_opt(".{").is_some() {
-            return self.use_group(Some(&target), decls);
+            return self.use_group(Some(&target), absolute, decls);
         }
         let alias = self.alias_opt()?;
-        decls.push(UseDecl { target, alias });
+        decls.push(UseDecl {
+            target,
+            alias,
+            absolute,
+        });
         Ok(())
     }
 
     fn use_cmd(&mut self, _token: Token) -> Result<CmdUse, ParseError> {
         let mut parsed_decls = vec![];
         if self.expect_symbol_opt("{").is_some() {
-            self.use_group(None, &mut parsed_decls)?;
+            self.use_group(None, false, &mut parsed_decls)?;
         } else {
-            self.use_entry(None, &mut parsed_decls)?;
+            self.use_entry(None, false, &mut parsed_decls)?;
         }
         if let Some(token) = self.expect_symbol_opt(",") {
             return Self::fail(
@@ -1623,8 +1718,17 @@ impl<'a> Parser<'a> {
         let mut decls = vec![];
         let current_namespace = self.current_namespace.clone();
         for decl in parsed_decls {
-            let UseDecl { target, alias } = decl;
-            let target = self.resolve(target);
+            let UseDecl {
+                target,
+                alias,
+                absolute,
+            } = decl;
+            let base = if absolute {
+                Path::toplevel()
+            } else {
+                current_namespace.clone()
+            };
+            let target = self.resolve(base, target);
             let alias = alias.unwrap_or_else(|| target.name().clone());
             self.namespace_table
                 .get_mut(&current_namespace)
@@ -1648,9 +1752,7 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let ident = self.ident()?;
-        let entity = self.qualified_name(&ident);
-        let entity = self.resolve(entity);
+        let entity = self.global_reference_name(None)?;
         Ok(CmdInfixr {
             op: op.as_str().to_owned(),
             prec,
@@ -1667,9 +1769,7 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let ident = self.ident()?;
-        let entity = self.qualified_name(&ident);
-        let entity = self.resolve(entity);
+        let entity = self.global_reference_name(None)?;
         Ok(CmdInfixl {
             op: op.as_str().to_owned(),
             prec,
@@ -1686,9 +1786,7 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let ident = self.ident()?;
-        let entity = self.qualified_name(&ident);
-        let entity = self.resolve(entity);
+        let entity = self.global_reference_name(None)?;
         Ok(CmdInfix {
             op: op.as_str().to_owned(),
             prec,
@@ -1705,9 +1803,7 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let ident = self.ident()?;
-        let entity = self.qualified_name(&ident);
-        let entity = self.resolve(entity);
+        let entity = self.global_reference_name(None)?;
         Ok(CmdPrefix {
             op: op.as_str().to_owned(),
             prec,
@@ -1718,9 +1814,7 @@ impl<'a> Parser<'a> {
     fn nofix_cmd(&mut self, _token: Token) -> Result<CmdNofix, ParseError> {
         let op = self.symbol()?;
         self.expect_symbol(":=")?;
-        let ident = self.ident()?;
-        let entity = self.qualified_name(&ident);
-        let entity = self.resolve(entity);
+        let entity = self.global_reference_name(None)?;
         Ok(CmdNofix {
             op: op.as_str().to_owned(),
             entity,
@@ -1728,9 +1822,7 @@ impl<'a> Parser<'a> {
     }
 
     fn def_cmd(&mut self, _token: Token) -> Result<CmdDef, ParseError> {
-        let ident = self.ident()?;
-        let name = self.qualified_name(&ident);
-        let name = self.resolve(name);
+        let name = self.global_declaration_name(None)?;
         self.register_name(&name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
@@ -1766,9 +1858,7 @@ impl<'a> Parser<'a> {
     }
 
     fn axiom_cmd(&mut self, _token: Token) -> Result<CmdAxiom, ParseError> {
-        let ident = self.ident()?;
-        let name = self.qualified_name(&ident);
-        let name = self.resolve(name);
+        let name = self.global_declaration_name(None)?;
         self.register_name(&name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
@@ -1802,9 +1892,7 @@ impl<'a> Parser<'a> {
     }
 
     fn lemma_cmd(&mut self, _token: Token) -> Result<CmdLemma, ParseError> {
-        let ident = self.ident()?;
-        let name = self.qualified_name(&ident);
-        let name = self.resolve(name);
+        let name = self.global_declaration_name(None)?;
         self.register_name(&name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
@@ -1846,9 +1934,7 @@ impl<'a> Parser<'a> {
     }
 
     fn const_cmd(&mut self, _token: Token) -> Result<CmdConst, ParseError> {
-        let ident = self.ident()?;
-        let name = self.qualified_name(&ident);
-        let name = self.resolve(name);
+        let name = self.global_declaration_name(None)?;
         self.register_name(&name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
@@ -1869,9 +1955,7 @@ impl<'a> Parser<'a> {
     }
 
     fn type_const_cmd(&mut self, _token: Token) -> Result<CmdTypeConst, ParseError> {
-        let ident = self.ident()?;
-        let name = self.qualified_name(&ident);
-        let name = self.resolve(name);
+        let name = self.global_declaration_name(None)?;
         self.register_name(&name);
         self.expect_symbol(":")?;
         let kind = self.kind()?;
@@ -1879,9 +1963,11 @@ impl<'a> Parser<'a> {
     }
 
     fn type_inductive_cmd(&mut self, _token: Token) -> Result<CmdTypeInductive, ParseError> {
-        let ident = self.ident()?;
-        let literal_name = self.qualified_name(&ident);
-        let name = self.resolve(literal_name.clone());
+        let token = self.ident()?;
+        let state = self.lex.save();
+        let literal_name = self.qualified_name(&token);
+        self.lex.restore(state);
+        let name = self.global_declaration_name(Some(&token))?;
         self.register_name(&name);
         let self_id = Id::fresh();
         debug_assert!(
@@ -1902,8 +1988,7 @@ impl<'a> Parser<'a> {
         let mut ctors: Vec<DataConstructor> = vec![];
         while let Some(_token) = self.expect_symbol_opt("|") {
             let token = self.ident()?;
-            let ctor_name = self.qualified_name(&token);
-            let ctor_name = self.resolve(ctor_name);
+            let ctor_name = self.global_declaration_name(Some(&token))?;
             for ctor in &ctors {
                 if ctor_name == ctor.name {
                     return Self::fail(token, "duplicate constructor")?;
@@ -1930,8 +2015,10 @@ impl<'a> Parser<'a> {
 
     fn inductive_cmd(&mut self, _token: Token) -> Result<CmdInductive, ParseError> {
         let ident = self.ident()?;
+        let state = self.lex.save();
         let literal_name = self.qualified_name(&ident);
-        let name = self.resolve(literal_name.clone());
+        self.lex.restore(state);
+        let name = self.global_declaration_name(Some(&ident))?;
         self.register_name(&name);
         let self_id = Id::fresh();
         debug_assert!(
@@ -1952,8 +2039,7 @@ impl<'a> Parser<'a> {
         let mut ctors: Vec<Constructor> = vec![];
         while let Some(_token) = self.expect_symbol_opt("|") {
             let token = self.ident()?;
-            let ctor_name = self.qualified_name(&token);
-            let ctor_name = self.resolve(ctor_name);
+            let ctor_name = self.global_declaration_name(Some(&token))?;
             for ctor in &ctors {
                 if ctor_name == ctor.name {
                     return Self::fail(token, "duplicate constructor")?;
@@ -2001,9 +2087,7 @@ impl<'a> Parser<'a> {
     }
 
     fn structure_cmd(&mut self, _token: Token) -> Result<CmdStructure, ParseError> {
-        let ident = self.ident()?;
-        let name = self.qualified_name(&ident);
-        let name = self.resolve(name);
+        let name = self.global_declaration_name(None)?;
         self.register_name(&name);
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
@@ -2070,9 +2154,7 @@ impl<'a> Parser<'a> {
     }
 
     fn instance_cmd(&mut self, _token: Token) -> Result<CmdInstance, ParseError> {
-        let ident = self.ident()?;
-        let name = self.qualified_name(&ident);
-        let name = self.resolve(name);
+        let name = self.global_declaration_name(None)?;
         self.register_name(&name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
@@ -2175,9 +2257,7 @@ impl<'a> Parser<'a> {
     }
 
     fn class_structure_cmd(&mut self, _token: Token) -> Result<CmdClassStructure, ParseError> {
-        let ident = self.ident()?;
-        let name = self.qualified_name(&ident);
-        let name = self.resolve(name);
+        let name = self.global_declaration_name(None)?;
         self.register_name(&name);
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
@@ -2244,9 +2324,7 @@ impl<'a> Parser<'a> {
     }
 
     fn class_instance_cmd(&mut self, _token: Token) -> Result<CmdClassInstance, ParseError> {
-        let ident = self.ident()?;
-        let name = self.qualified_name(&ident);
-        let name = self.resolve(name);
+        let name = self.global_declaration_name(None)?;
         self.register_name(&name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
@@ -2337,7 +2415,7 @@ impl<'a> Parser<'a> {
 mod tests {
     use super::*;
     use crate::lex::{File, Lex};
-    use crate::proof::{ExprApp, ExprAssume, ExprInst, ExprLetTerm, ExprLocal};
+    use crate::proof::{ExprApp, ExprAssume, ExprConst, ExprInst, ExprLetTerm, ExprLocal};
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -2671,6 +2749,13 @@ mod tests {
         );
     }
 
+    fn assert_declaration_head_error(err: ParseError, expected: &str) {
+        let ParseError::Parse { message, span: _ } = err else {
+            panic!("expected parse error");
+        };
+        assert_eq!(message, expected);
+    }
+
     #[test]
     fn assume_alias_is_resolved_by_name() {
         let expr = parse_expr("assume p as this, this");
@@ -2874,6 +2959,329 @@ mod tests {
     }
 
     #[test]
+    fn absolute_global_term_name_parses_with_and_without_whitespace() {
+        let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
+        insert_prop_const(&mut consts, "foo.bar");
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        let without = parse_term_with_tables(
+            ".foo.bar",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("term without whitespace parses");
+        let with = parse_term_with_tables(
+            ".foo .bar",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("term with whitespace parses");
+        let Term::Const(without_const) = without else {
+            panic!("expected constant term without whitespace");
+        };
+        let Term::Const(with_const) = with else {
+            panic!("expected constant term with whitespace");
+        };
+        assert_eq!(without_const.name, qualified("foo.bar"));
+        assert_eq!(with_const.name, without_const.name);
+    }
+
+    #[test]
+    fn absolute_type_reference_is_resolved_from_toplevel() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "namespace foo { const x : .Prop }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("command parses");
+        let Cmd::Namespace(namespace_cmd) = cmd else {
+            panic!("expected namespace command");
+        };
+        let Cmd::Const(CmdConst {
+            name: _,
+            local_types: _,
+            local_classes: _,
+            ty,
+        }) = &namespace_cmd.cmds[0]
+        else {
+            panic!("expected const command");
+        };
+        assert_eq!(ty, &mk_type_const(qualified("Prop")));
+    }
+
+    #[test]
+    fn absolute_class_reference_is_resolved_from_toplevel() {
+        let (tt, type_consts, consts, axioms, mut class_predicates) = setup_tables();
+        class_predicates.insert(qualified("C"), ClassType { arity: 0 });
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "namespace foo { const x [.C] : .Prop }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("command parses");
+        let Cmd::Namespace(namespace_cmd) = cmd else {
+            panic!("expected namespace command");
+        };
+        let Cmd::Const(CmdConst {
+            name: _,
+            local_types: _,
+            local_classes,
+            ty: _,
+        }) = &namespace_cmd.cmds[0]
+        else {
+            panic!("expected const command");
+        };
+        assert_eq!(local_classes.len(), 1);
+        assert_eq!(local_classes[0].name, qualified("C"));
+    }
+
+    #[test]
+    fn absolute_term_reference_is_resolved_from_toplevel() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "namespace foo { def x : .Prop := .p }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("command parses");
+        let Cmd::Namespace(namespace_cmd) = cmd else {
+            panic!("expected namespace command");
+        };
+        let Cmd::Def(CmdDef {
+            name: _,
+            local_types: _,
+            local_classes: _,
+            ty: _,
+            target,
+        }) = &namespace_cmd.cmds[0]
+        else {
+            panic!("expected def command");
+        };
+        let Term::Const(const_term) = target else {
+            panic!("expected constant in def body");
+        };
+        assert_eq!(const_term.name, qualified("p"));
+    }
+
+    #[test]
+    fn absolute_expr_reference_is_resolved_from_toplevel() {
+        let (tt, type_consts, consts, mut axioms, class_predicates) = setup_tables();
+        axioms.insert(
+            qualified("h"),
+            Axiom {
+                local_types: vec![],
+                local_classes: vec![],
+                target: mk_const(qualified("p"), vec![], vec![]),
+            },
+        );
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "namespace foo { lemma l : .p := @.h }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("command parses");
+        let Cmd::Namespace(namespace_cmd) = cmd else {
+            panic!("expected namespace command");
+        };
+        let Cmd::Lemma(CmdLemma {
+            name: _,
+            local_types: _,
+            local_classes: _,
+            target: _,
+            holes: _,
+            expr,
+        }) = &namespace_cmd.cmds[0]
+        else {
+            panic!("expected lemma command");
+        };
+        let Expr::Const(expr_const) = expr else {
+            panic!("expected proof constant expression");
+        };
+        let ExprConst {
+            metadata: _,
+            name,
+            ty_args: _,
+            instances: _,
+        } = &**expr_const;
+        assert_eq!(name, &qualified("h"));
+    }
+
+    #[test]
+    fn absolute_namespace_target_is_resolved_from_toplevel() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "namespace foo { namespace .bar { } }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("command parses");
+        let Cmd::Namespace(outer) = cmd else {
+            panic!("expected outer namespace command");
+        };
+        assert_eq!(outer.path, path("foo"));
+        let Cmd::Namespace(inner) = &outer.cmds[0] else {
+            panic!("expected inner namespace command");
+        };
+        assert_eq!(inner.path, path("bar"));
+    }
+
+    #[test]
+    fn absolute_use_target_is_resolved_from_toplevel() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, Path> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "namespace foo { use .bar as baz }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("command parses");
+        let Cmd::Namespace(namespace_cmd) = cmd else {
+            panic!("expected namespace command");
+        };
+        let Cmd::Use(CmdUse { decls }) = &namespace_cmd.cmds[0] else {
+            panic!("expected use command");
+        };
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0].target, path("bar"));
+    }
+
+    #[test]
+    fn absolute_fixity_entities_are_resolved_from_toplevel() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let scenarios = [
+            ("infixr * : 50 := .p", "infixr"),
+            ("infixl * : 50 := .p", "infixl"),
+            ("infix * : 50 := .p", "infix"),
+            ("prefix ! : 50 := .p", "prefix"),
+            ("nofix ! := .p", "nofix"),
+        ];
+        for (command, label) in scenarios {
+            let input = format!("namespace foo {{ {command} }}");
+            let mut use_table: HashMap<Name, Path> = HashMap::new();
+            let cmd = parse_cmd_with_tables(
+                &input,
+                &tt,
+                &mut use_table,
+                &type_consts,
+                &consts,
+                &axioms,
+                &class_predicates,
+            )
+            .expect("command parses");
+            let Cmd::Namespace(namespace_cmd) = cmd else {
+                panic!("expected namespace command");
+            };
+            let entity = match &namespace_cmd.cmds[0] {
+                Cmd::Infixr(cmd) => &cmd.entity,
+                Cmd::Infixl(cmd) => &cmd.entity,
+                Cmd::Infix(cmd) => &cmd.entity,
+                Cmd::Prefix(cmd) => &cmd.entity,
+                Cmd::Nofix(cmd) => &cmd.entity,
+                _ => panic!("expected fixity command"),
+            };
+            assert_eq!(entity, &qualified("p"), "label = {label}");
+        }
+    }
+
+    #[test]
+    fn declaration_heads_reject_absolute_paths() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let inputs = [
+            (
+                "def .x : Prop := p",
+                "absolute path is not allowed in declaration head",
+            ),
+            (
+                "axiom .x : p",
+                "absolute path is not allowed in declaration head",
+            ),
+            (
+                "lemma .x : p := p",
+                "absolute path is not allowed in declaration head",
+            ),
+            (
+                "const .x : Prop",
+                "absolute path is not allowed in declaration head",
+            ),
+            (
+                "type const .x : Type",
+                "absolute path is not allowed in declaration head",
+            ),
+            ("type inductive .x", "expected identifier"),
+            ("type inductive x | .mk : x", "expected identifier"),
+            ("inductive .x : Prop", "expected identifier"),
+            ("inductive x : Prop | .mk : x", "expected identifier"),
+            (
+                "structure .x := { }",
+                "absolute path is not allowed in declaration head",
+            ),
+            (
+                "instance .x : Prop := { }",
+                "absolute path is not allowed in declaration head",
+            ),
+            (
+                "class structure .x := { }",
+                "absolute path is not allowed in declaration head",
+            ),
+            (
+                "class instance .x : C := { }",
+                "absolute path is not allowed in declaration head",
+            ),
+        ];
+        for (input, expected_message) in inputs {
+            let mut use_table: HashMap<Name, Path> = HashMap::new();
+            let err = parse_cmd_with_tables(
+                input,
+                &tt,
+                &mut use_table,
+                &type_consts,
+                &consts,
+                &axioms,
+                &class_predicates,
+            )
+            .expect_err("absolute declaration head should be rejected");
+            assert_declaration_head_error(err, expected_message);
+        }
+    }
+
+    #[test]
     fn use_scoped_group_expands_to_leaf_decls() {
         let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
         insert_prop_const(&mut consts, "prod.fst");
@@ -2897,6 +3305,29 @@ mod tests {
         assert_eq!(decls[0].target, path("prod.fst"));
         assert_eq!(decls[1].alias, Name::from_str("snd"));
         assert_eq!(decls[1].target, path("prod.snd"));
+    }
+
+    #[test]
+    fn use_scoped_group_rejects_absolute_entry() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let inputs = ["use .field.{.bar}", "use field.{.bar}"];
+        for input in inputs {
+            let mut use_table: HashMap<Name, Path> = HashMap::new();
+            let err = parse_cmd_with_tables(
+                input,
+                &tt,
+                &mut use_table,
+                &type_consts,
+                &consts,
+                &axioms,
+                &class_predicates,
+            )
+            .expect_err("absolute entry in scoped use group should be rejected");
+            let ParseError::Parse { message, span: _ } = err else {
+                panic!("expected parse error");
+            };
+            assert_eq!(message, "absolute path is not allowed in scoped use group");
+        }
     }
 
     #[test]
@@ -3457,7 +3888,9 @@ mod tests {
             &class_predicate_table,
         );
 
-        let resolved = parser.resolve(qualified("qux.leaf")).to_path();
+        let resolved = parser
+            .resolve(parser.current_namespace.clone(), qualified("qux.leaf"))
+            .to_path();
         assert_eq!(resolved, path("foo.qux.real"));
     }
 
@@ -3490,7 +3923,7 @@ mod tests {
             &class_predicate_table,
         );
 
-        let resolved = parser.resolve(qualified("qux.leaf"));
+        let resolved = parser.resolve(parser.current_namespace.clone(), qualified("qux.leaf"));
         assert_eq!(resolved, qualified("foo.qux.real"));
     }
 
@@ -3518,7 +3951,7 @@ mod tests {
             &class_predicate_table,
         );
 
-        let resolved = parser.resolve(qualified("qux.quux"));
+        let resolved = parser.resolve(parser.current_namespace.clone(), qualified("qux.quux"));
         assert_eq!(resolved, qualified("qux.quux"));
         assert!(parser.namespace_table.contains_key(&path("qux")));
         assert_eq!(
@@ -3558,7 +3991,7 @@ mod tests {
             &class_predicate_table,
         );
 
-        let resolved = parser.resolve(qualified("qux.leaf.tail"));
+        let resolved = parser.resolve(parser.current_namespace.clone(), qualified("qux.leaf.tail"));
         assert_eq!(resolved, qualified("foo.qux.real.tail"));
     }
 
