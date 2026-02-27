@@ -170,7 +170,7 @@ impl QualifiedName {
         Path::from_qualified_name(self)
     }
 
-    // TODO: 消す
+    // TODO: parse専用の型ができたら消す
     pub fn append(&self, suffix: &QualifiedName) -> QualifiedName {
         let mut path = self.clone().into_path();
         for name in suffix.path().names() {
