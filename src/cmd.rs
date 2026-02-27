@@ -540,7 +540,7 @@ impl Eval {
     fn declare_name(&mut self, name: &QualifiedName) {
         let mut parent = Path::root();
         for name in name.names() {
-            let child = Path::from_parts(parent.clone(), name);
+            let child = QualifiedName::from_parts(parent.clone(), name).into_path();
             self.namespace_table.entry(child.clone()).or_default();
             parent = child;
         }
@@ -559,13 +559,13 @@ impl Eval {
                 .get(&path)
                 .expect("namespace path must exist");
             let Some(target) = namespace.use_table.get(&name) else {
-                path = Path::from_parts(path, name);
+                path = QualifiedName::from_parts(path, name).into_path();
                 for tail in names {
-                    path = Path::from_parts(path, tail);
+                    path = QualifiedName::from_parts(path, tail).into_path();
                 }
                 return path.into_qualified_name().unwrap();
             };
-            path = target.to_path();
+            path = target.clone().into_path();
         }
         path.into_qualified_name().unwrap()
     }
@@ -844,7 +844,7 @@ impl Eval {
                 let CmdNamespaceStart { path } = inner;
                 let mut parent = Path::root();
                 for name in path.names() {
-                    let child = Path::from_parts(parent.clone(), name);
+                    let child = QualifiedName::from_parts(parent.clone(), name).into_path();
                     self.namespace_table.entry(child.clone()).or_default();
                     parent = child;
                 }
@@ -2388,7 +2388,7 @@ mod tests {
             return path;
         }
         for part in value.split('.') {
-            path = Path::from_parts(path, Name::from_str(part));
+            path = QualifiedName::from_parts(path, Name::from_str(part)).into_path();
         }
         path
     }
@@ -2436,7 +2436,7 @@ mod tests {
     #[test]
     fn block_end_restores_previous_namespace() {
         let mut eval = Eval::default();
-        let path = Path::from_parts(Path::root(), Name::from_str("foo"));
+        let path = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
         eval.run_cmd(Cmd::NamespaceStart(CmdNamespaceStart { path }))
             .expect("namespace start should succeed");
         eval.run_cmd(Cmd::BlockEnd)
@@ -2448,7 +2448,7 @@ mod tests {
     #[test]
     fn namespace_start_registers_namespace_alias() {
         let mut eval = Eval::default();
-        let path = Path::from_parts(Path::root(), Name::from_str("foo"));
+        let path = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
         eval.run_cmd(Cmd::NamespaceStart(CmdNamespaceStart {
             path: path.clone(),
         }))
@@ -2477,7 +2477,7 @@ mod tests {
     #[test]
     fn type_const_command_registers_declaration_alias() {
         let mut eval = Eval::default();
-        let foo_path = Path::from_parts(Path::root(), Name::from_str("foo"));
+        let foo_path = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
         eval.namespace_table
             .insert(foo_path.clone(), Namespace::default());
         eval.namespace_table

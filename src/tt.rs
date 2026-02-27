@@ -102,39 +102,13 @@ impl Path {
         self.0
     }
 
-    // TODO: from_qualified_name(QualifiedName) -> Pathを作ってこのメソッドは消す
-    pub fn from_parts(parent: Path, name: Name) -> Path {
-        Path(Some(QualifiedName::from_parts(parent, name)))
-    }
-
-    // TODO: 消す
-    pub fn name(&self) -> Option<&Name> {
-        self.0.as_ref().map(QualifiedName::name)
-    }
-
-    // TODO: 消す
-    pub fn parent(&self) -> Option<&Path> {
-        self.0.as_ref().map(QualifiedName::path)
+    pub fn from_qualified_name(name: QualifiedName) -> Path {
+        Path(Some(name))
     }
 
     // TODO: 消す
     pub fn names(&self) -> Vec<Name> {
         self.0.as_ref().map_or_else(Vec::new, QualifiedName::names)
-    }
-
-    // TODO: 消す
-    pub fn append(&self, suffix: &Path) -> Path {
-        let mut path = self.clone();
-        for name in suffix.names() {
-            path = Path::from_parts(path, name);
-        }
-        path
-    }
-
-    // TODO: suffixはNameにする
-    pub fn extend(&self, suffix: impl AsRef<str>) -> Path {
-        let name = Name::from_str(suffix.as_ref());
-        Path::from_parts(self.clone(), name)
     }
 }
 
@@ -166,7 +140,7 @@ impl QualifiedName {
         QualifiedName(owned)
     }
 
-    // TODO: これは消して Path::root().extend(Name::from(value)) に置き換えたい。ただ、parseでQualifiedNameを相対パス名にも流用しているせいで相対パスの作成にも使ってしまっているので、型の分離が終わってから着手する。
+    // TODO: parse専用の型ができたら消す
     pub fn from_str(value: &str) -> QualifiedName {
         Self::from_parts(Path::root(), Name::from_str(value))
     }
@@ -181,9 +155,7 @@ impl QualifiedName {
 
     // TODO: parse専用の型ができたら消す
     pub fn prefix(&self) -> Option<QualifiedName> {
-        let name = self.path().name()?.clone();
-        let parent = self.path().parent().cloned().unwrap_or_else(Path::root);
-        Some(QualifiedName::from_parts(parent, name))
+        self.path().as_qualified_name().cloned()
     }
 
     // TODO: parse専用の型ができたら消す
@@ -194,20 +166,23 @@ impl QualifiedName {
         names
     }
 
-    pub fn to_path(&self) -> Path {
-        self.path().extend(self.name().as_str())
+    pub fn into_path(self) -> Path {
+        Path::from_qualified_name(self)
     }
 
     // TODO: 消す
     pub fn append(&self, suffix: &QualifiedName) -> QualifiedName {
-        let path = self.to_path().append(suffix.path());
+        let mut path = self.clone().into_path();
+        for name in suffix.path().names() {
+            path = QualifiedName::from_parts(path, name).into_path();
+        }
         Self::from_parts(path, suffix.name().clone())
     }
 
-    // TODO: このメソッドは消してself.to_path().extend(suffix)に置き換える
+    // TODO: suffix: Nameにする (&Nameかも)
     pub fn extend(&self, suffix: impl AsRef<str>) -> QualifiedName {
         let name = Name::from_str(suffix.as_ref());
-        Self::from_parts(self.to_path(), name)
+        Self::from_parts(self.clone().into_path(), name)
     }
 }
 
@@ -2917,20 +2892,19 @@ mod tests {
         let left = Path::root();
         let right = Path::root();
         assert_eq!(left, right);
-        assert!(left.parent().is_none());
-        assert!(left.name().is_none());
+        assert!(left.as_qualified_name().is_none());
     }
 
     #[test]
     fn path_from_parts_is_canonical() {
-        let left = Path::from_parts(Path::root(), Name::from_str("foo"));
-        let right = Path::from_parts(Path::root(), Name::from_str("foo"));
+        let left = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
+        let right = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
         assert_eq!(left, right);
     }
 
     #[test]
-    fn path_from_parts_wraps_qualified_name() {
-        let path = Path::from_parts(Path::root(), Name::from_str("foo"));
+    fn path_from_qualified_name_wraps_qualified_name() {
+        let path = QualifiedName::from_str("foo").into_path();
         let Path(Some(qualified_name)) = path else {
             panic!("path must not be root");
         };
@@ -2941,7 +2915,7 @@ mod tests {
 
     #[test]
     fn path_as_qualified_name_matches_wrapped_value() {
-        let path = Path::from_parts(Path::root(), Name::from_str("foo"));
+        let path = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
         let Some(qualified_name) = path.as_qualified_name() else {
             panic!("path must provide a qualified name");
         };
@@ -2952,7 +2926,7 @@ mod tests {
 
     #[test]
     fn path_into_qualified_name_returns_owned_value() {
-        let path = Path::from_parts(Path::root(), Name::from_str("foo"));
+        let path = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
         let Some(qualified_name) = path.into_qualified_name() else {
             panic!("path must provide a qualified name");
         };
@@ -2963,10 +2937,17 @@ mod tests {
 
     #[test]
     fn qualified_name_stores_path_and_name_separately() {
-        let path = Path::from_parts(Path::root(), Name::from_str("foo"));
+        let path = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
         let name = QualifiedName::from_parts(path.clone(), Name::from_str("bar"));
         assert_eq!(name.path(), &path);
         assert_eq!(name.name().as_str(), "bar");
         assert_eq!(name.to_string(), "foo.bar");
+    }
+
+    #[test]
+    fn qualified_name_into_path_roundtrips() {
+        let name = QualifiedName::from_str("foo");
+        let path = name.clone().into_path();
+        assert_eq!(path.into_qualified_name(), Some(name));
     }
 }

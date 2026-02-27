@@ -438,13 +438,13 @@ impl<'a> Parser<'a> {
                 .get(&path)
                 .expect("namespace path must exist");
             let Some(target) = namespace.use_table.get(&name) else {
-                path = Path::from_parts(path, name);
+                path = QualifiedName::from_parts(path, name).into_path();
                 for tail in names {
-                    path = Path::from_parts(path, tail);
+                    path = QualifiedName::from_parts(path, tail).into_path();
                 }
                 return path.into_qualified_name().unwrap();
             };
-            path = target.to_path();
+            path = target.clone().into_path();
         }
         path.into_qualified_name().unwrap()
     }
@@ -1614,7 +1614,7 @@ impl<'a> Parser<'a> {
 
     fn namespace_cmd(&mut self, _token: Token) -> Result<CmdNamespaceStart, ParseError> {
         let name = self.global_reference_name(None)?;
-        let path = name.to_path();
+        let path = name.into_path();
         self.expect_symbol("{")?;
         Ok(CmdNamespaceStart { path })
     }
@@ -2405,7 +2405,7 @@ mod tests {
 
         let mut parent = Path::root();
         for segment in namespace.names() {
-            let child = Path::from_parts(parent.clone(), segment.clone());
+            let child = QualifiedName::from_parts(parent.clone(), segment.clone()).into_path();
             if !namespace_table.contains_key(&child) {
                 namespace_table.insert(child.clone(), Namespace::default());
             }
@@ -2462,7 +2462,8 @@ mod tests {
             .cloned()
             .collect::<Vec<_>>();
         for target in targets {
-            ensure_namespace_path_for_tests(namespace_table, &target.to_path());
+            let path = target.into_path();
+            ensure_namespace_path_for_tests(namespace_table, &path);
         }
     }
 
@@ -2479,8 +2480,8 @@ mod tests {
                 .and_then(|namespace| namespace.use_table.get(&segment))
                 .cloned();
             path = resolved
-                .map(|target| target.to_path())
-                .unwrap_or_else(|| Path::from_parts(path, segment));
+                .map(QualifiedName::into_path)
+                .unwrap_or_else(|| QualifiedName::from_parts(path, segment).into_path());
         }
         path.into_qualified_name().unwrap()
     }
@@ -2801,7 +2802,7 @@ mod tests {
             return path;
         }
         for part in value.split('.') {
-            path = Path::from_parts(path, Name::from_str(part));
+            path = QualifiedName::from_parts(path, Name::from_str(part)).into_path();
         }
         path
     }
@@ -4105,7 +4106,7 @@ mod tests {
 
         let resolved = parser
             .resolve(parser.current_namespace.clone(), qualified("qux.leaf"))
-            .to_path();
+            .into_path();
         assert_eq!(resolved, path("foo.qux.leaf"));
     }
 
