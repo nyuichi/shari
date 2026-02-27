@@ -600,7 +600,7 @@ impl<'a> Elaborator<'a> {
                 pred = pred.abs(&[x]);
 
                 let mut target = mk_const(
-                    QualifiedName::from_str("forall"),
+                    QualifiedName::from_name(Name::from_str("forall")),
                     vec![arg_ty.clone()],
                     vec![],
                 );
@@ -830,8 +830,11 @@ impl<'a> Elaborator<'a> {
                             let mut rhs = mk_local(id);
                             rhs = rhs.apply([mk_local(this.id)]);
 
-                            let mut char =
-                                mk_const(QualifiedName::from_str("eq"), vec![ty.clone()], vec![]);
+                            let mut char = mk_const(
+                                QualifiedName::from_name(Name::from_str("eq")),
+                                vec![ty.clone()],
+                                vec![],
+                            );
                             char = char.apply([mk_local(param.id), rhs]);
                             chars.push(char);
 
@@ -847,7 +850,7 @@ impl<'a> Elaborator<'a> {
                 }
 
                 let mut abs = mk_const(
-                    QualifiedName::from_str("uexists"),
+                    QualifiedName::from_name(Name::from_str("uexists")),
                     vec![this_ty.clone()],
                     vec![],
                 );
@@ -855,12 +858,20 @@ impl<'a> Elaborator<'a> {
                     let mut char = chars
                         .into_iter()
                         .reduce(|left, right| {
-                            let mut conj = mk_const(QualifiedName::from_str("and"), vec![], vec![]);
+                            let mut conj = mk_const(
+                                QualifiedName::from_name(Name::from_str("and")),
+                                vec![],
+                                vec![],
+                            );
                             conj = conj.apply([left, right]);
                             conj
                         })
                         .unwrap_or_else(|| {
-                            mk_const(QualifiedName::from_str("true"), vec![], vec![])
+                            mk_const(
+                                QualifiedName::from_name(Name::from_str("true")),
+                                vec![],
+                                vec![],
+                            )
                         });
                     char = char.abs(slice::from_ref(&this));
                     char
@@ -2566,12 +2577,12 @@ impl<'a> Elaborator<'a> {
         if let Some(instance) = self.resolve_class(
             self.tt_local_env,
             &Class {
-                name: QualifiedName::from_str("default"),
+                name: QualifiedName::from_name(Name::from_str("default")),
                 args: vec![goal.clone()],
             },
         ) {
             let mut m = mk_const(
-                QualifiedName::from_str("default").extend("value"),
+                QualifiedName::from_name(Name::from_str("default")).extend(Name::from_str("value")),
                 vec![goal.clone()],
                 vec![instance],
             );
@@ -2781,10 +2792,14 @@ mod tests {
             axiom_table: &axiom_table,
         };
         let mut elab = Elaborator::new(proof_env, &mut tt_local_env, vec![]);
-        let local_axiom_name = QualifiedName::from_str("foo.a");
+        let local_axiom_name = QualifiedName::from_name(Name::from_str("foo.a"));
         elab.local_axioms.push(LocalAxiom {
             id: Some(Id::from_name(&Name::from_str("foo.a"))),
-            prop: mk_const(QualifiedName::from_str("p"), vec![], vec![]),
+            prop: mk_const(
+                QualifiedName::from_name(Name::from_str("p")),
+                vec![],
+                vec![],
+            ),
         });
 
         let mut expr = proof::mk_expr_const(local_axiom_name, vec![], vec![]);
@@ -2798,7 +2813,7 @@ mod tests {
     fn unify_fails_for_inhabited_terms() {
         let name_u = Name::from_str("u");
         let ty_u = mk_type_local(Id::from_name(&name_u));
-        let name_is_inhabited = QualifiedName::from_str("is_inhabited");
+        let name_is_inhabited = QualifiedName::from_name(Name::from_str("is_inhabited"));
         let ty_is_inhabited_u = mk_type_app(mk_type_const(name_is_inhabited.clone()), ty_u.clone());
         let ty_u_to_prop = mk_type_arrow(ty_u.clone(), mk_type_prop());
 
@@ -2818,9 +2833,9 @@ mod tests {
         let x_id = Id::from_name(&Name::from_str("x46373"));
 
         let rep_term = mk_const(
-            QualifiedName::from_str("is_inhabited")
-                .extend("inhab")
-                .extend("rep"),
+            QualifiedName::from_name(Name::from_str("is_inhabited"))
+                .extend(Name::from_str("inhab"))
+                .extend(Name::from_str("rep")),
             vec![ty_u.clone()],
             vec![],
         );
@@ -2856,7 +2871,11 @@ mod tests {
             mk_local(x_id),
         );
 
-        let in_term = mk_const(QualifiedName::from_str("in"), vec![ty_u.clone()], vec![]);
+        let in_term = mk_const(
+            QualifiedName::from_name(Name::from_str("in")),
+            vec![ty_u.clone()],
+            vec![],
+        );
         let right = mk_app(mk_app(in_term, mk_local(x_id)), rep_applied.clone());
 
         let locals = vec![
@@ -2878,7 +2897,7 @@ mod tests {
         };
         let mut tt_local_env = local_env.clone();
 
-        let name_prop = QualifiedName::from_str("Prop");
+        let name_prop = QualifiedName::from_name(Name::from_str("Prop"));
 
         let type_const_table: HashMap<QualifiedName, Kind> = HashMap::from([
             (name_prop.clone(), Kind::base()),
@@ -2933,7 +2952,11 @@ mod tests {
             local_classes: vec![],
             local_deltas: vec![LocalDelta {
                 id: u_id,
-                target: mk_const(QualifiedName::from_str("c"), vec![], vec![]),
+                target: mk_const(
+                    QualifiedName::from_name(Name::from_str("c")),
+                    vec![],
+                    vec![],
+                ),
                 height: 0,
             }],
             locals: vec![
@@ -2992,7 +3015,7 @@ mod tests {
 
     #[test]
     fn unify_local_and_const_uses_local_unfold() {
-        let c = QualifiedName::from_str("c");
+        let c = QualifiedName::from_name(Name::from_str("c"));
         let l_id = Id::from_name(&Name::from_str("foo.l"));
         let c_term = mk_const(c.clone(), vec![], vec![]);
 
@@ -3115,8 +3138,8 @@ mod tests {
 
     #[test]
     fn unify_same_kappa_const_with_local_instance_is_reachable() {
-        let method_name = QualifiedName::from_str("m");
-        let class_name = QualifiedName::from_str("C");
+        let method_name = QualifiedName::from_name(Name::from_str("m"));
+        let class_name = QualifiedName::from_name(Name::from_str("C"));
         let x_id = Id::from_name(&Name::from_str("x"));
         let y_id = Id::from_name(&Name::from_str("y"));
         let instance = mk_instance_local(Class {
@@ -3191,7 +3214,7 @@ mod tests {
         let f_id = Id::from_name(&Name::from_str("foo.f"));
         let x_id = Id::from_name(&Name::from_str("x"));
         let y_id = Id::from_name(&Name::from_str("y"));
-        let c = QualifiedName::from_str("c");
+        let c = QualifiedName::from_name(Name::from_str("c"));
         let c_term = mk_const(c.clone(), vec![], vec![]);
 
         let mut local_env = tt::LocalEnv {
@@ -3263,8 +3286,8 @@ mod tests {
 
     #[test]
     fn unfold_constraint_keeps_head_arguments_as_is() {
-        let f = QualifiedName::from_str("f");
-        let g = QualifiedName::from_str("g");
+        let f = QualifiedName::from_name(Name::from_str("f"));
+        let g = QualifiedName::from_name(Name::from_str("g"));
         let u = Id::from_name(&Name::from_str("u"));
         let mut local_env = tt::LocalEnv {
             local_types: vec![],
@@ -3356,10 +3379,10 @@ mod tests {
 
     #[test]
     fn kappa_unfold_constraint_uses_head_type_not_receiver_instance() {
-        let method_name = QualifiedName::from_str("m");
-        let body_name = QualifiedName::from_str("id");
-        let class_name = QualifiedName::from_str("C");
-        let instance_name = QualifiedName::from_str("inst.C");
+        let method_name = QualifiedName::from_name(Name::from_str("m"));
+        let body_name = QualifiedName::from_name(Name::from_str("id"));
+        let class_name = QualifiedName::from_name(Name::from_str("C"));
+        let instance_name = QualifiedName::from_name(Name::from_str("inst.C"));
         let u = Id::from_name(&Name::from_str("u"));
         let v = Id::from_name(&Name::from_str("v"));
         let x_id = Id::from_name(&Name::from_str("x"));
@@ -3488,10 +3511,10 @@ mod tests {
 
     #[test]
     fn kappa_unfold_constraint_requires_matching_head_class() {
-        let method_name = QualifiedName::from_str("m");
-        let body_name = QualifiedName::from_str("id");
-        let class_name = QualifiedName::from_str("C");
-        let instance_name = QualifiedName::from_str("inst.C");
+        let method_name = QualifiedName::from_name(Name::from_str("m"));
+        let body_name = QualifiedName::from_name(Name::from_str("id"));
+        let class_name = QualifiedName::from_name(Name::from_str("C"));
+        let instance_name = QualifiedName::from_name(Name::from_str("inst.C"));
         let u = Id::from_name(&Name::from_str("u"));
         let v = Id::from_name(&Name::from_str("v"));
         let x_id = Id::from_name(&Name::from_str("x"));

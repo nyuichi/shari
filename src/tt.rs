@@ -150,11 +150,6 @@ impl QualifiedName {
         QualifiedName(owned)
     }
 
-    // TODO: parse専用の型ができたら消す
-    pub fn from_str(value: &str) -> QualifiedName {
-        Self::from_parts(Path::root(), Name::from_str(value))
-    }
-
     pub fn name(&self) -> &Name {
         &self.0.name
     }
@@ -163,19 +158,10 @@ impl QualifiedName {
         &self.0.path
     }
 
-    // TODO: parse専用の型ができたら消す
-    pub fn names(&self) -> Vec<Name> {
-        let mut names = vec![];
-        names.extend(self.path().names());
-        names.push(self.name().clone());
-        names
-    }
-
     pub fn into_path(self) -> Path {
         Path::from_qualified_name(self)
     }
 
-    // TODO: parse専用の型ができたら消す
     pub fn append(&self, suffix: &QualifiedName) -> QualifiedName {
         let mut path = self.clone().into_path();
         for name in suffix.path().names() {
@@ -184,10 +170,17 @@ impl QualifiedName {
         Self::from_parts(path, suffix.name().clone())
     }
 
-    // TODO: suffix: Nameにする (&Nameかも)
-    pub fn extend(&self, suffix: impl AsRef<str>) -> QualifiedName {
-        let name = Name::from_str(suffix.as_ref());
-        Self::from_parts(self.clone().into_path(), name)
+    pub fn names(&self) -> Vec<Name> {
+        self.clone().into_path().names()
+    }
+
+    // TODO: parse専用の型ができたら消す
+    pub fn from_name(name: Name) -> QualifiedName {
+        Self::from_parts(Path::root(), name)
+    }
+
+    pub fn extend(&self, suffix: Name) -> QualifiedName {
+        Self::from_parts(self.clone().into_path(), suffix)
     }
 }
 
@@ -2608,7 +2601,7 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let c = QualifiedName::from_str("c");
+        let c = QualifiedName::from_name(Name::from_str("c"));
         let left = mk_const(c.clone(), vec![], vec![]);
         let right = mk_const(c, vec![], vec![]);
 
@@ -2621,7 +2614,7 @@ mod tests {
         let env = fixture.env();
 
         let x = Name::from_str("x");
-        let a = QualifiedName::from_str("a");
+        let a = QualifiedName::from_name(Name::from_str("a"));
         let body = mk_var(0);
         let lambda = mk_abs(Some(x), mk_type_prop(), body);
         let arg = mk_const(a.clone(), vec![], vec![]);
@@ -2632,8 +2625,8 @@ mod tests {
 
     #[test]
     fn equiv_delta_unfolds_constant() {
-        let c = QualifiedName::from_str("c");
-        let d = QualifiedName::from_str("d");
+        let c = QualifiedName::from_name(Name::from_str("c"));
+        let d = QualifiedName::from_name(Name::from_str("d"));
 
         let delta = Delta {
             local_types: vec![],
@@ -2654,7 +2647,7 @@ mod tests {
     #[test]
     fn unfold_head_uses_local_delta_for_local() {
         let c_id = local_id("c");
-        let d = QualifiedName::from_str("d");
+        let d = QualifiedName::from_name(Name::from_str("d"));
         let fixture = EnvFixture::new();
         let env = fixture.env();
         let mut local_env = empty_local_env();
@@ -2677,9 +2670,9 @@ mod tests {
 
     #[test]
     fn local_delta_does_not_apply_to_global_const() {
-        let c = QualifiedName::from_str("c");
-        let a = QualifiedName::from_str("a");
-        let b = QualifiedName::from_str("b");
+        let c = QualifiedName::from_name(Name::from_str("c"));
+        let a = QualifiedName::from_name(Name::from_str("a"));
+        let b = QualifiedName::from_name(Name::from_str("b"));
         let fixture = EnvFixture::new().with_delta(
             c.clone(),
             Delta {
@@ -2737,7 +2730,7 @@ mod tests {
     #[test]
     fn equiv_uses_local_delta() {
         let c_id = local_id("c");
-        let d = QualifiedName::from_str("d");
+        let d = QualifiedName::from_name(Name::from_str("d"));
         let fixture = EnvFixture::new();
         let env = fixture.env();
         let mut local_env = empty_local_env();
@@ -2761,8 +2754,8 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let c = QualifiedName::from_str("c");
-        let d = QualifiedName::from_str("d");
+        let c = QualifiedName::from_name(Name::from_str("c"));
+        let d = QualifiedName::from_name(Name::from_str("d"));
         let left = mk_const(c, vec![], vec![]);
         let right = mk_const(d, vec![], vec![]);
 
@@ -2774,9 +2767,9 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let f = QualifiedName::from_str("f");
-        let a = QualifiedName::from_str("a");
-        let b = QualifiedName::from_str("b");
+        let f = QualifiedName::from_name(Name::from_str("f"));
+        let a = QualifiedName::from_name(Name::from_str("a"));
+        let b = QualifiedName::from_name(Name::from_str("b"));
 
         let fun = mk_const(f, vec![], vec![]);
         let left = mk_app(fun.clone(), mk_const(a, vec![], vec![]));
@@ -2824,7 +2817,7 @@ mod tests {
     #[test]
     fn local_and_const_are_not_equiv_without_unfold() {
         let fixture = EnvFixture::new().with_const(
-            QualifiedName::from_str("c"),
+            QualifiedName::from_name(Name::from_str("c")),
             Const {
                 local_types: vec![],
                 local_classes: vec![],
@@ -2832,7 +2825,7 @@ mod tests {
             },
         );
         let env = fixture.env();
-        let c = QualifiedName::from_str("c");
+        let c = QualifiedName::from_name(Name::from_str("c"));
         let c_id = local_id("c");
         let mut local_env = empty_local_env();
         local_env.locals.push(Local {
@@ -2847,7 +2840,7 @@ mod tests {
 
     #[test]
     fn infer_type_const_ignores_local_name_collision() {
-        let c = QualifiedName::from_str("c");
+        let c = QualifiedName::from_name(Name::from_str("c"));
         let fixture = EnvFixture::new().with_const(
             c.clone(),
             Const {
@@ -2909,7 +2902,7 @@ mod tests {
 
     #[test]
     fn path_from_qualified_name_wraps_qualified_name() {
-        let path = QualifiedName::from_str("foo").into_path();
+        let path = QualifiedName::from_name(Name::from_str("foo")).into_path();
         let Path(Some(qualified_name)) = path else {
             panic!("path must not be root");
         };
@@ -2951,8 +2944,15 @@ mod tests {
 
     #[test]
     fn qualified_name_into_path_roundtrips() {
-        let name = QualifiedName::from_str("foo");
+        let name = QualifiedName::from_name(Name::from_str("foo"));
         let path = name.clone().into_path();
         assert_eq!(path.into_qualified_name(), Some(name));
+    }
+
+    #[test]
+    fn qualified_name_extend_accepts_name_suffix() {
+        let name = QualifiedName::from_name(Name::from_str("foo"));
+        let extended = name.extend(Name::from_str("bar"));
+        assert_eq!(extended.to_string(), "foo.bar");
     }
 }

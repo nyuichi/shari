@@ -1115,11 +1115,11 @@ impl Eval {
             }
         }
         for ctor in &ctors {
-            let ctor_name = name.extend(ctor.name.as_str());
+            let ctor_name = name.extend(ctor.name.clone());
             if self.has_const(&ctor_name) {
                 bail!("already defined");
             }
-            let ctor_spec_name = ctor_name.extend("spec");
+            let ctor_spec_name = ctor_name.extend(Name::from_str("spec"));
             if self.has_const(&ctor_spec_name) {
                 bail!("already defined");
             }
@@ -1140,11 +1140,11 @@ impl Eval {
                 }
             }
         }
-        let ind_name = name.extend("ind");
+        let ind_name = name.extend(Name::from_str("ind"));
         if self.has_axiom(&ind_name) {
             bail!("already defined");
         }
-        let rec_name = name.extend("rec");
+        let rec_name = name.extend(Name::from_str("rec"));
         if self.has_const(&rec_name) {
             bail!("already defined");
         }
@@ -1162,7 +1162,7 @@ impl Eval {
         let subst = [(self_id, target_ty.clone())];
         let mut cs = vec![];
         for ctor in &ctors {
-            let ctor_name = name.extend(ctor.name.as_str());
+            let ctor_name = name.extend(ctor.name.clone());
             let ty = ctor.ty.subst(&subst);
             cs.push((ctor_name, ty));
         }
@@ -1223,7 +1223,7 @@ impl Eval {
                 ih_list.push(h);
             }
             // ∀ args, {IH} → P (C args)
-            let ctor_name = name.extend(ctor.name.as_str());
+            let ctor_name = name.extend(ctor.name.clone());
             let mut a = mk_const(
                 ctor_name,
                 local_types.iter().cloned().map(mk_type_local).collect(),
@@ -1350,7 +1350,7 @@ impl Eval {
                 rec_local_types.iter().cloned().map(mk_type_local).collect(),
                 vec![],
             );
-            let ctor_name = name.extend(ctor.name.as_str());
+            let ctor_name = name.extend(ctor.name.clone());
             let mut lhs_arg = mk_const(
                 ctor_name.clone(),
                 local_types.iter().cloned().map(mk_type_local).collect(),
@@ -1364,11 +1364,15 @@ impl Eval {
 
             let eq_ty = mk_type_local(rec_ty_var).arrow(cont_param_tys.clone());
 
-            let mut spec = mk_const(QualifiedName::from_str("eq"), vec![eq_ty], vec![]);
+            let mut spec = mk_const(
+                QualifiedName::from_name(Name::from_str("eq")),
+                vec![eq_ty],
+                vec![],
+            );
             spec = spec.apply([lhs, rhs]);
             spec = generalize(&spec, &ctor_params);
 
-            let ctor_spec_name = ctor_name.extend("spec");
+            let ctor_spec_name = ctor_name.extend(Name::from_str("spec"));
             self.add_axiom(ctor_spec_name, rec_local_types.clone(), vec![], spec);
         }
         Ok(())
@@ -1445,7 +1449,7 @@ impl Eval {
         let mut ctor_target_list = vec![];
         let mut ctor_ind_args_list = vec![];
         for ctor in &mut ctors {
-            let ctor_name = name.extend(ctor.name.as_str());
+            let ctor_name = name.extend(ctor.name.clone());
             if self.has_axiom(&ctor_name) {
                 bail!("already defined");
             }
@@ -1492,7 +1496,7 @@ impl Eval {
             ctor_ind_args_list.push(ctor_ind_args);
         }
         local_env.locals.remove(0);
-        let ind_name = name.extend("ind");
+        let ind_name = name.extend(Name::from_str("ind"));
         if self.has_axiom(&ind_name) {
             bail!("already defined");
         }
@@ -1511,7 +1515,7 @@ impl Eval {
         // | intro : ∀ y, φ → (∀ z, ψ → P M) → P N
         // ↦ axiom P.intro.{u} (x : τ) : ∀ y, φ → (∀ z, ψ → P.{u} x M) → P.{u} x N
         for ctor in &ctors {
-            let ctor_name = name.extend(ctor.name.as_str());
+            let ctor_name = name.extend(ctor.name.clone());
             let mut target = ctor.target.clone();
             // P.{u} x
             let mut stash = mk_const(
@@ -1645,7 +1649,7 @@ impl Eval {
                     ty: field_ty,
                 }) => {
                     let field_name = field_name.clone();
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     if self.has_const(&fullname) {
                         bail!("already defined");
                     }
@@ -1664,7 +1668,7 @@ impl Eval {
                     target,
                 }) => {
                     let field_name = field_name.clone();
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     if self.has_axiom(&fullname) {
                         bail!("already defined");
                     }
@@ -1676,7 +1680,7 @@ impl Eval {
                 }
             }
         }
-        let abs_name = name.extend("abs");
+        let abs_name = name.extend(Name::from_str("abs"));
         if self.has_axiom(&abs_name) {
             bail!("already defined");
         }
@@ -1706,7 +1710,7 @@ impl Eval {
                     name: field_name,
                     ty: field_ty,
                 }) => {
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     let ty = field_ty.arrow([this.ty.clone()]);
                     self.add_const(fullname.clone(), local_types.clone(), vec![], ty);
 
@@ -1723,7 +1727,7 @@ impl Eval {
                     name: field_name,
                     target,
                 }) => {
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     let mut target = target.clone();
                     let new_target = target.subst(&subst);
                     target = new_target;
@@ -1751,7 +1755,7 @@ impl Eval {
                     };
 
                     // inhab.rep this
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     let mut rhs = mk_const(
                         fullname,
                         local_types.iter().cloned().map(mk_type_local).collect(),
@@ -1761,7 +1765,7 @@ impl Eval {
 
                     // s = inhab.rep this
                     let mut char = mk_const(
-                        QualifiedName::from_str("eq"),
+                        QualifiedName::from_name(Name::from_str("eq")),
                         vec![field_ty.clone()],
                         vec![],
                     );
@@ -1782,7 +1786,7 @@ impl Eval {
             }
         }
         let mut abs = mk_const(
-            QualifiedName::from_str("uexists"),
+            QualifiedName::from_name(Name::from_str("uexists")),
             vec![this.ty.clone()],
             vec![],
         );
@@ -1790,11 +1794,21 @@ impl Eval {
             let mut char = chars
                 .into_iter()
                 .reduce(|left, right| {
-                    let mut conj = mk_const(QualifiedName::from_str("and"), vec![], vec![]);
+                    let mut conj = mk_const(
+                        QualifiedName::from_name(Name::from_str("and")),
+                        vec![],
+                        vec![],
+                    );
                     conj = conj.apply([left, right]);
                     conj
                 })
-                .unwrap_or_else(|| mk_const(QualifiedName::from_str("true"), vec![], vec![]));
+                .unwrap_or_else(|| {
+                    mk_const(
+                        QualifiedName::from_name(Name::from_str("true")),
+                        vec![],
+                        vec![],
+                    )
+                });
             char = char.abs(slice::from_ref(&this));
             char
         }]);
@@ -1889,7 +1903,7 @@ impl Eval {
                 ) => {
                     let structure_field_name = structure_field_name.clone();
                     let field_name = field_name.clone();
-                    let field_fullname = name.extend(field_name.as_str());
+                    let field_fullname = name.extend(field_name.clone());
                     if self.has_const(&field_fullname) {
                         bail!("already defined");
                     }
@@ -1923,7 +1937,7 @@ impl Eval {
                 ) => {
                     let structure_field_name = structure_field_name.clone();
                     let field_name = field_name.clone();
-                    let field_fullname = name.extend(field_name.as_str());
+                    let field_fullname = name.extend(field_name.clone());
                     if self.has_axiom(&field_fullname) {
                         bail!("already defined");
                     }
@@ -1963,7 +1977,7 @@ impl Eval {
                     *target = new_target;
                     self.elaborate_term(&mut local_env, target, ty)?;
 
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     let target_ty = ty.arrow(params.iter().map(|param| param.ty.clone()));
                     self.add_const(
                         fullname.clone(),
@@ -2009,7 +2023,7 @@ impl Eval {
                         target,
                     );
 
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     let mut target = target.clone();
                     target = generalize(&target, &params);
                     self.add_axiom(fullname, local_types.clone(), local_classes.clone(), target);
@@ -2049,20 +2063,22 @@ impl Eval {
                 continue;
             };
             let field_name = field_name.clone();
-            let spec_name = name.extend(field_name.as_str()).extend("spec");
+            let spec_name = name
+                .extend(field_name.clone())
+                .extend(Name::from_str("spec"));
             if self.has_axiom(&spec_name) {
                 bail!("already defined");
             }
 
             let mut lhs = mk_const(
-                structure_name.extend(field_name.as_str()),
+                structure_name.extend(field_name.clone()),
                 target_ty.args().into_iter().cloned().collect(),
                 vec![],
             );
             lhs = lhs.apply([this.clone()]);
 
             let mut rhs = mk_const(
-                name.extend(field_name.as_str()),
+                name.extend(field_name.clone()),
                 local_types.iter().cloned().map(mk_type_local).collect(),
                 local_classes
                     .iter()
@@ -2071,7 +2087,11 @@ impl Eval {
             );
             rhs = rhs.apply(params.iter().map(|param| mk_local(param.id)));
 
-            let mut target = mk_const(QualifiedName::from_str("eq"), vec![ty.clone()], vec![]);
+            let mut target = mk_const(
+                QualifiedName::from_name(Name::from_str("eq")),
+                vec![ty.clone()],
+                vec![],
+            );
             target = target.apply([lhs, rhs]);
             target = generalize(&target, &params);
             self.add_axiom(
@@ -2115,7 +2135,7 @@ impl Eval {
                     ty: field_ty,
                 }) => {
                     let field_name = field_name.clone();
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     if self.has_const(&fullname) {
                         bail!("already defined");
                     }
@@ -2134,7 +2154,7 @@ impl Eval {
                     target,
                 }) => {
                     let field_name = field_name.clone();
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     if self.has_axiom(&fullname) {
                         bail!("already defined");
                     }
@@ -2173,7 +2193,7 @@ impl Eval {
                     name: field_name,
                     ty,
                 }) => {
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     self.add_const(
                         fullname.clone(),
                         local_types.clone(),
@@ -2193,7 +2213,7 @@ impl Eval {
                     name: field_name,
                     target,
                 }) => {
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     let mut target = target.clone();
                     let new_target = target.subst(&subst);
                     target = new_target;
@@ -2339,7 +2359,7 @@ impl Eval {
                 }) => {
                     let field_name = field_name.clone();
                     let target = target.clone();
-                    let fullname = cmd_structure.name.extend(field_name.as_str());
+                    let fullname = cmd_structure.name.extend(field_name.clone());
                     method_table.insert(fullname, target);
                 }
                 ClassInstanceField::Lemma(_) => {}
@@ -2375,9 +2395,9 @@ mod tests {
     fn qualified(value: &str) -> QualifiedName {
         let mut parts = value.split('.');
         let first = parts.next().expect("qualified name must not be empty");
-        let mut name = QualifiedName::from_str(first);
+        let mut name = QualifiedName::from_name(Name::from_str(first));
         for part in parts {
-            name = name.extend(part);
+            name = name.extend(Name::from_str(part));
         }
         name
     }
@@ -2386,7 +2406,7 @@ mod tests {
     fn namespace_add_stores_qualified_name_target() {
         let mut namespace = Namespace::default();
         let alias = Name::from_str("alias");
-        let target = QualifiedName::from_str("foo");
+        let target = QualifiedName::from_name(Name::from_str("foo"));
         namespace.add(alias.clone(), target.clone());
         assert_eq!(namespace.use_table.get(&alias), Some(&target));
     }
@@ -2394,7 +2414,7 @@ mod tests {
     #[test]
     fn use_decl_stores_qualified_name_target() {
         let alias = Name::from_str("alias");
-        let target = QualifiedName::from_str("foo");
+        let target = QualifiedName::from_name(Name::from_str("foo"));
         let decl = UseDecl {
             alias: alias.clone(),
             target: target.clone(),
@@ -2464,7 +2484,7 @@ mod tests {
             .add(Name::from_str("foo"), qualified("foo"));
 
         eval.run_cmd(Cmd::TypeConst(CmdTypeConst {
-            name: QualifiedName::from_str("foo").extend("bar"),
+            name: QualifiedName::from_name(Name::from_str("foo")).extend(Name::from_str("bar")),
             kind: Kind(0),
         }))
         .expect("type const command should succeed");
@@ -2481,7 +2501,9 @@ mod tests {
         let mut eval = Eval::default();
 
         eval.run_cmd(Cmd::TypeConst(CmdTypeConst {
-            name: QualifiedName::from_str("foo").extend("bar").extend("baz"),
+            name: QualifiedName::from_name(Name::from_str("foo"))
+                .extend(Name::from_str("bar"))
+                .extend(Name::from_str("baz")),
             kind: Kind(0),
         }))
         .expect("type const command should succeed");

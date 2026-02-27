@@ -75,8 +75,10 @@ enum Proj {
 
 impl Proj {
     fn name(self) -> QualifiedName {
-        static FST: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::from_str("fst"));
-        static SND: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::from_str("snd"));
+        static FST: LazyLock<QualifiedName> =
+            LazyLock::new(|| QualifiedName::from_name(Name::from_str("fst")));
+        static SND: LazyLock<QualifiedName> =
+            LazyLock::new(|| QualifiedName::from_name(Name::from_str("snd")));
 
         match self {
             Self::Fst => FST.clone(),
@@ -403,13 +405,13 @@ impl<'a> Parser<'a> {
 
     fn qualified_name(&mut self, token: &Token) -> QualifiedName {
         let mut name = match token.kind {
-            TokenKind::Ident => QualifiedName::from_str(token.as_str()),
+            TokenKind::Ident => QualifiedName::from_name(Name::from_str(token.as_str())),
             TokenKind::Field => {
                 let segment = token
                     .as_str()
                     .strip_prefix('.')
                     .expect("field token must start with '.'");
-                QualifiedName::from_str(segment)
+                QualifiedName::from_name(Name::from_str(segment))
             }
             _ => unreachable!("qualified_name token must be an identifier or field"),
         };
@@ -424,7 +426,7 @@ impl<'a> Parser<'a> {
                 .as_str()
                 .strip_prefix('.')
                 .expect("field token must start with '.'");
-            name = name.extend(suffix);
+            name = name.extend(Name::from_str(suffix));
         }
         name
     }
@@ -516,8 +518,10 @@ impl<'a> Parser<'a> {
     }
 
     fn type_primary(&mut self) -> Result<Type, ParseError> {
-        static SUB_NAME: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::from_str("sub"));
-        static NAT_NAME: LazyLock<QualifiedName> = LazyLock::new(|| QualifiedName::from_str("ℕ"));
+        static SUB_NAME: LazyLock<QualifiedName> =
+            LazyLock::new(|| QualifiedName::from_name(Name::from_str("sub")));
+        static NAT_NAME: LazyLock<QualifiedName> =
+            LazyLock::new(|| QualifiedName::from_name(Name::from_str("ℕ")));
 
         let token = self.any_token()?;
         if token.is_ident() {
@@ -541,7 +545,9 @@ impl<'a> Parser<'a> {
                 let t = self.subty(1024)?;
                 Ok(mk_type_arrow(t, mk_type_prop()))
             } else if name == *NAT_NAME {
-                Ok(mk_type_const(QualifiedName::from_str("nat")))
+                Ok(mk_type_const(QualifiedName::from_name(Name::from_str(
+                    "nat",
+                ))))
             } else {
                 Self::fail(token, "unknown type constant")
             }
@@ -587,7 +593,7 @@ impl<'a> Parser<'a> {
                 }
                 self.advance();
                 let s = self.subty(34)?;
-                t = mk_type_const(QualifiedName::from_str("prod")).apply([t, s]);
+                t = mk_type_const(QualifiedName::from_name(Name::from_str("prod"))).apply([t, s]);
                 t = self.type_with_span(start, t);
             } else if token.is_ident()
                 || (token.is_symbol() && token.as_str() == "(")
@@ -769,7 +775,7 @@ impl<'a> Parser<'a> {
         let snd = self.subterm(0)?;
         self.expect_symbol("⟩")?;
         let pair = mk_const(
-            QualifiedName::from_str("pair"),
+            QualifiedName::from_name(Name::from_str("pair")),
             vec![mk_fresh_type_hole(), mk_fresh_type_hole()],
             vec![],
         );
@@ -861,9 +867,15 @@ impl<'a> Parser<'a> {
                 self.expect_symbol(")")?;
                 m
             }
-            Nud::Forall => self.term_binder(token, &QualifiedName::from_str("forall"))?,
-            Nud::Exists => self.term_binder(token, &QualifiedName::from_str("exists"))?,
-            Nud::Uexists => self.term_binder(token, &QualifiedName::from_str("uexists"))?,
+            Nud::Forall => {
+                self.term_binder(token, &QualifiedName::from_name(Name::from_str("forall")))?
+            }
+            Nud::Exists => {
+                self.term_binder(token, &QualifiedName::from_name(Name::from_str("exists")))?
+            }
+            Nud::Uexists => {
+                self.term_binder(token, &QualifiedName::from_name(Name::from_str("uexists")))?
+            }
             Nud::User(op) => match op.fixity {
                 Fixity::Nofix => self.term_var(token, Some(op.entity.clone()))?,
                 Fixity::Prefix => {
@@ -990,7 +1002,7 @@ impl<'a> Parser<'a> {
 
     fn mk_eq(lhs: Term, rhs: Term) -> Term {
         let mut eq = mk_const(
-            QualifiedName::from_str("eq"),
+            QualifiedName::from_name(Name::from_str("eq")),
             vec![mk_fresh_type_hole()],
             vec![],
         );
@@ -999,7 +1011,7 @@ impl<'a> Parser<'a> {
     }
 
     fn mk_eq_trans(&mut self, e1: Expr, e2: Expr) -> Expr {
-        let name = QualifiedName::from_str("eq").extend("trans");
+        let name = QualifiedName::from_name(Name::from_str("eq")).extend(Name::from_str("trans"));
         let ty_args = vec![mk_fresh_type_hole()];
         let instances = vec![];
         let mut eq_trans = mk_expr_const(name, ty_args, instances);
@@ -1079,7 +1091,7 @@ impl<'a> Parser<'a> {
 
         let mut local_consts: Vec<QualifiedName> = vec![];
         let mut local_axioms: Vec<(QualifiedName, LocalAxiom)> = vec![];
-        let structure_name = QualifiedName::from_str(name.as_str());
+        let structure_name = QualifiedName::from_name(name.clone());
         let mut subst = vec![];
         for field in &fields {
             match field {
@@ -1087,7 +1099,7 @@ impl<'a> Parser<'a> {
                     name: field_name,
                     ty: _,
                 }) => {
-                    let fullname = structure_name.extend(field_name.as_str());
+                    let fullname = structure_name.extend(field_name.clone());
                     let local_name = Name::from_str(&fullname.to_string());
                     let id = Id::from_name(&local_name);
                     local_consts.push(fullname.clone());
@@ -1099,7 +1111,7 @@ impl<'a> Parser<'a> {
                     name: field_name,
                     target,
                 }) => {
-                    let fullname = structure_name.extend(field_name.as_str());
+                    let fullname = structure_name.extend(field_name.clone());
                     let mut target = target.clone();
                     target = target.subst(&subst);
                     target = generalize(&target, slice::from_ref(&this));
@@ -1108,7 +1120,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let abs_name = structure_name.extend("abs");
+        let abs_name = structure_name.extend(Name::from_str("abs"));
         let mut params = vec![];
         let mut guards = vec![];
         let mut chars = vec![];
@@ -1124,14 +1136,17 @@ impl<'a> Parser<'a> {
                         ty: ty.clone(),
                     };
 
-                    let fullname = structure_name.extend(field_name.as_str());
+                    let fullname = structure_name.extend(field_name.clone());
                     let local_name = Name::from_str(&fullname.to_string());
                     let id = Id::from_name(&local_name);
                     let mut rhs = mk_local(id);
                     rhs = rhs.apply([mk_local(this.id)]);
 
-                    let mut char =
-                        mk_const(QualifiedName::from_str("eq"), vec![ty.clone()], vec![]);
+                    let mut char = mk_const(
+                        QualifiedName::from_name(Name::from_str("eq")),
+                        vec![ty.clone()],
+                        vec![],
+                    );
                     char = char.apply([mk_local(param.id), rhs]);
                     chars.push(char);
 
@@ -1149,7 +1164,7 @@ impl<'a> Parser<'a> {
         // These are visible while parsing `body` (e.g. `@foo.abs`),
         // and the target is needed to count implicit instantiations.
         let mut abs = mk_const(
-            QualifiedName::from_str("uexists"),
+            QualifiedName::from_name(Name::from_str("uexists")),
             vec![this_ty.clone()],
             vec![],
         );
@@ -1157,11 +1172,21 @@ impl<'a> Parser<'a> {
             let mut char = chars
                 .into_iter()
                 .reduce(|left, right| {
-                    let mut conj = mk_const(QualifiedName::from_str("and"), vec![], vec![]);
+                    let mut conj = mk_const(
+                        QualifiedName::from_name(Name::from_str("and")),
+                        vec![],
+                        vec![],
+                    );
                     conj = conj.apply([left, right]);
                     conj
                 })
-                .unwrap_or_else(|| mk_const(QualifiedName::from_str("true"), vec![], vec![]));
+                .unwrap_or_else(|| {
+                    mk_const(
+                        QualifiedName::from_name(Name::from_str("true")),
+                        vec![],
+                        vec![],
+                    )
+                });
             char = char.abs(slice::from_ref(&this));
             char
         }]);
@@ -1202,7 +1227,7 @@ impl<'a> Parser<'a> {
 
         let local_const_len = self.local_consts.len();
         self.local_consts
-            .push(QualifiedName::from_str(name.as_str()));
+            .push(QualifiedName::from_name(name.clone()));
         let body = match self.expr() {
             Ok(body) => body,
             Err(err) => {
@@ -1256,7 +1281,7 @@ impl<'a> Parser<'a> {
                     let local_axioms_len = self.local_axioms.len();
                     if let Some(alias_name) = &alias {
                         self.local_axioms.push((
-                            QualifiedName::from_str(alias_name.as_str()),
+                            QualifiedName::from_name(alias_name.clone()),
                             LocalAxiom { target: m.clone() },
                         ));
                     }
@@ -1297,7 +1322,7 @@ impl<'a> Parser<'a> {
                     let local_axioms_len = self.local_axioms.len();
                     if let Some(alias_name) = &alias {
                         self.local_axioms.push((
-                            QualifiedName::from_str(alias_name.as_str()),
+                            QualifiedName::from_name(alias_name.clone()),
                             LocalAxiom { target: m.clone() },
                         ));
                     }
@@ -1329,7 +1354,7 @@ impl<'a> Parser<'a> {
                     let local_axioms_len = self.local_axioms.len();
                     if let Some(alias_name) = &alias {
                         self.local_axioms.push((
-                            QualifiedName::from_str(alias_name.as_str()),
+                            QualifiedName::from_name(alias_name.clone()),
                             LocalAxiom { target: p.clone() },
                         ));
                     }
@@ -1346,7 +1371,8 @@ impl<'a> Parser<'a> {
 
                     // Expand[obtain (x : τ), p := e1, e2] := exists.ind.{τ}[_, _] e1 (take (x : τ), assume p, e2)
                     let e = mk_expr_const(
-                        QualifiedName::from_str("exists").extend("ind"),
+                        QualifiedName::from_name(Name::from_str("exists"))
+                            .extend(Name::from_str("ind")),
                         vec![ty.clone()],
                         vec![],
                     );
@@ -2373,10 +2399,10 @@ mod tests {
         let axiom_table = HashMap::new();
         let class_predicate_table = HashMap::new();
 
-        let prop = QualifiedName::from_str("Prop");
+        let prop = QualifiedName::from_name(Name::from_str("Prop"));
         type_const_table.insert(prop.clone(), Kind(0));
 
-        let p = QualifiedName::from_str("p");
+        let p = QualifiedName::from_name(Name::from_str("p"));
         const_table.insert(
             p,
             Const {
@@ -2540,7 +2566,7 @@ mod tests {
         assert!(
             parser
                 .const_table
-                .contains_key(&QualifiedName::from_str("p")),
+                .contains_key(&QualifiedName::from_name(Name::from_str("p"))),
             "const table missing p"
         );
         parser.expr().expect("expression parses")
@@ -2789,9 +2815,9 @@ mod tests {
     fn qualified(value: &str) -> QualifiedName {
         let mut parts = value.split('.');
         let first = parts.next().expect("qualified name must not be empty");
-        let mut name = QualifiedName::from_str(first);
+        let mut name = QualifiedName::from_name(Name::from_str(first));
         for part in parts {
-            name = name.extend(part);
+            name = name.extend(Name::from_str(part));
         }
         name
     }
@@ -2813,7 +2839,7 @@ mod tests {
             Const {
                 local_types: vec![],
                 local_classes: vec![],
-                ty: mk_type_const(QualifiedName::from_str("Prop")),
+                ty: mk_type_const(QualifiedName::from_name(Name::from_str("Prop"))),
             },
         );
     }
@@ -2839,7 +2865,11 @@ mod tests {
             expr: body,
         } = *assume;
         assert_eq!(alias, Some(Id::from_name(&Name::from_str("this"))));
-        let expected = mk_const(QualifiedName::from_str("p"), vec![], vec![]);
+        let expected = mk_const(
+            QualifiedName::from_name(Name::from_str("p")),
+            vec![],
+            vec![],
+        );
         assert!(local_axiom.alpha_eq(&expected));
 
         let Expr::Local(assump) = body else {
@@ -2863,7 +2893,11 @@ mod tests {
             expr: outer_body,
         } = *outer;
         assert_eq!(outer_alias, Some(Id::from_name(&Name::from_str("hp"))));
-        let expected = mk_const(QualifiedName::from_str("p"), vec![], vec![]);
+        let expected = mk_const(
+            QualifiedName::from_name(Name::from_str("p")),
+            vec![],
+            vec![],
+        );
         assert!(outer_axiom.alpha_eq(&expected));
 
         let Expr::App(app) = outer_body else {
