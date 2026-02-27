@@ -16,11 +16,11 @@ use crate::{
 
 #[derive(Clone, Debug, Default)]
 pub struct Namespace {
-    pub use_table: HashMap<Name, Path>,
+    pub use_table: HashMap<Name, QualifiedName>,
 }
 
 impl Namespace {
-    pub fn add(&mut self, alias: Name, target: Path) {
+    pub fn add(&mut self, alias: Name, target: QualifiedName) {
         self.use_table.insert(alias, target);
     }
 }
@@ -96,7 +96,7 @@ pub struct CmdUse {
 #[derive(Clone, Debug)]
 pub struct UseDecl {
     pub alias: Name,
-    pub target: Path,
+    pub target: QualifiedName,
 }
 
 #[derive(Clone, Debug)]
@@ -150,8 +150,7 @@ pub struct CmdTypeInductive {
 
 #[derive(Clone, Debug)]
 pub struct DataConstructor {
-    // TODO: Nameに変える
-    pub name: QualifiedName,
+    pub name: Name,
     pub ty: Type,
 }
 
@@ -167,8 +166,7 @@ pub struct CmdInductive {
 
 #[derive(Clone, Debug)]
 pub struct Constructor {
-    // TODO: Nameに変える
-    pub name: QualifiedName,
+    pub name: Name,
     pub target: Term,
 }
 
@@ -481,7 +479,9 @@ impl std::fmt::Display for Cmd {
 pub struct Eval {
     pub tt: TokenTable,
     pub pp: OpTable,
+    // Invariant: namespace entries are prefix-closed.
     pub namespace_table: HashMap<Path, Namespace>,
+    // Invariant: `namespace_table` always contains an entry for `current_namespace`.
     pub current_namespace: Path,
     pub namespace_stack: Vec<Path>,
     pub type_const_table: HashMap<QualifiedName, Kind>,
@@ -537,36 +537,24 @@ pub struct Operator {
 }
 
 impl Eval {
-    fn declare_name(&mut self, path: &Path, name: &Name) {
-        self.namespace_table
-            .entry(path.clone())
-            .or_default()
-            .add(name.clone(), Path::from_parts(path.clone(), name.clone()));
-    }
-
-    fn resolve(&mut self, base: Path, target: &Path) -> Path {
+    fn resolve(&self, base: Path, target: &QualifiedName) -> QualifiedName {
         let mut path = base;
-        for name in target.names() {
-            path = self
+        let mut names = target.names().into_iter();
+        while let Some(name) = names.next() {
+            let namespace = self
                 .namespace_table
                 .get(&path)
-                .expect("namespace path must exist")
-                .use_table
-                .get(&name)
-                .cloned()
-                .unwrap_or_else(|| Path::from_parts(path, name));
-            if !self.namespace_table.contains_key(&path) {
-                self.namespace_table
-                    .insert(path.clone(), Namespace::default());
-                if let Some(name) = path.as_qualified_name() {
-                    self.namespace_table
-                        .entry(name.path().clone())
-                        .or_default()
-                        .add(name.name().clone(), name.to_path());
+                .expect("namespace path must exist");
+            let Some(target) = namespace.use_table.get(&name) else {
+                path = QualifiedName::from_parts(path, name).into_path();
+                for tail in names {
+                    path = QualifiedName::from_parts(path, tail).into_path();
                 }
-            }
+                return path.into_qualified_name().unwrap();
+            };
+            path = target.clone().into_path();
         }
-        path
+        path.into_qualified_name().unwrap()
     }
 
     fn add_const(
@@ -577,7 +565,6 @@ impl Eval {
         ty: Type,
     ) {
         assert!(!self.const_table.contains_key(&name));
-        self.declare_name(name.path(), name.name());
         for local_class in &local_classes {
             self.tt_env().check_wfc(
                 &LocalEnv {
@@ -622,7 +609,6 @@ impl Eval {
         target: Term,
     ) {
         assert!(!self.axiom_table.contains_key(&name));
-        self.declare_name(name.path(), name.name());
         for local_class in &local_classes {
             self.tt_env().check_wfc(
                 &LocalEnv {
@@ -661,7 +647,6 @@ impl Eval {
 
     fn add_type_const(&mut self, name: QualifiedName, kind: Kind) {
         assert!(!self.type_const_table.contains_key(&name));
-        self.declare_name(name.path(), name.name());
 
         self.type_const_table.insert(name.clone(), kind.clone());
 
@@ -673,7 +658,6 @@ impl Eval {
 
     fn add_class_predicate(&mut self, name: QualifiedName, ty: ClassType) {
         assert!(!self.class_predicate_table.contains_key(&name));
-        self.declare_name(name.path(), name.name());
 
         self.class_predicate_table.insert(name.clone(), ty);
 
@@ -695,7 +679,6 @@ impl Eval {
         method_table: HashMap<QualifiedName, Term>,
     ) {
         assert!(!self.class_instance_table.contains_key(&name));
-        self.declare_name(name.path(), name.name());
         for local_class in &local_classes {
             self.tt_env().check_wfc(
                 &LocalEnv {
@@ -841,12 +824,11 @@ impl Eval {
         match cmd {
             Cmd::NamespaceStart(inner) => {
                 let CmdNamespaceStart { path } = inner;
-                if !self.namespace_table.contains_key(&path) {
-                    self.namespace_table
-                        .insert(path.clone(), Namespace::default());
-                }
-                if let Some(name) = path.as_qualified_name() {
-                    self.declare_name(name.path(), name.name());
+                let mut parent = Path::root();
+                for name in path.names() {
+                    let child = QualifiedName::from_parts(parent.clone(), name).into_path();
+                    self.namespace_table.entry(child.clone()).or_default();
+                    parent = child;
                 }
                 let previous_namespace = self.current_namespace.clone();
                 self.namespace_stack.push(previous_namespace);
@@ -855,7 +837,6 @@ impl Eval {
             }
             Cmd::BlockEnd => {
                 let Some(previous_namespace) = self.namespace_stack.pop() else {
-                    // TODO: this should become unreachable once parser reports brace mismatch as parse error.
                     bail!("unexpected block end");
                 };
                 self.current_namespace = previous_namespace;
@@ -1133,11 +1114,11 @@ impl Eval {
             }
         }
         for ctor in &ctors {
-            let ctor_name = name.append(&ctor.name);
+            let ctor_name = name.extend(ctor.name.clone());
             if self.has_const(&ctor_name) {
                 bail!("already defined");
             }
-            let ctor_spec_name = ctor_name.extend("spec");
+            let ctor_spec_name = ctor_name.extend(Name::from_str("spec"));
             if self.has_const(&ctor_spec_name) {
                 bail!("already defined");
             }
@@ -1158,11 +1139,11 @@ impl Eval {
                 }
             }
         }
-        let ind_name = name.extend("ind");
+        let ind_name = name.extend(Name::from_str("ind"));
         if self.has_axiom(&ind_name) {
             bail!("already defined");
         }
-        let rec_name = name.extend("rec");
+        let rec_name = name.extend(Name::from_str("rec"));
         if self.has_const(&rec_name) {
             bail!("already defined");
         }
@@ -1180,7 +1161,7 @@ impl Eval {
         let subst = [(self_id, target_ty.clone())];
         let mut cs = vec![];
         for ctor in &ctors {
-            let ctor_name = name.append(&ctor.name);
+            let ctor_name = name.extend(ctor.name.clone());
             let ty = ctor.ty.subst(&subst);
             cs.push((ctor_name, ty));
         }
@@ -1241,7 +1222,7 @@ impl Eval {
                 ih_list.push(h);
             }
             // ∀ args, {IH} → P (C args)
-            let ctor_name = name.append(&ctor.name);
+            let ctor_name = name.extend(ctor.name.clone());
             let mut a = mk_const(
                 ctor_name,
                 local_types.iter().cloned().map(mk_type_local).collect(),
@@ -1368,7 +1349,7 @@ impl Eval {
                 rec_local_types.iter().cloned().map(mk_type_local).collect(),
                 vec![],
             );
-            let ctor_name = name.append(&ctor.name);
+            let ctor_name = name.extend(ctor.name.clone());
             let mut lhs_arg = mk_const(
                 ctor_name.clone(),
                 local_types.iter().cloned().map(mk_type_local).collect(),
@@ -1382,11 +1363,15 @@ impl Eval {
 
             let eq_ty = mk_type_local(rec_ty_var).arrow(cont_param_tys.clone());
 
-            let mut spec = mk_const(QualifiedName::from_str("eq"), vec![eq_ty], vec![]);
+            let mut spec = mk_const(
+                QualifiedName::from_name(Name::from_str("eq")),
+                vec![eq_ty],
+                vec![],
+            );
             spec = spec.apply([lhs, rhs]);
             spec = generalize(&spec, &ctor_params);
 
-            let ctor_spec_name = ctor_name.extend("spec");
+            let ctor_spec_name = ctor_name.extend(Name::from_str("spec"));
             self.add_axiom(ctor_spec_name, rec_local_types.clone(), vec![], spec);
         }
         Ok(())
@@ -1463,7 +1448,7 @@ impl Eval {
         let mut ctor_target_list = vec![];
         let mut ctor_ind_args_list = vec![];
         for ctor in &mut ctors {
-            let ctor_name = name.append(&ctor.name);
+            let ctor_name = name.extend(ctor.name.clone());
             if self.has_axiom(&ctor_name) {
                 bail!("already defined");
             }
@@ -1510,7 +1495,7 @@ impl Eval {
             ctor_ind_args_list.push(ctor_ind_args);
         }
         local_env.locals.remove(0);
-        let ind_name = name.extend("ind");
+        let ind_name = name.extend(Name::from_str("ind"));
         if self.has_axiom(&ind_name) {
             bail!("already defined");
         }
@@ -1529,7 +1514,7 @@ impl Eval {
         // | intro : ∀ y, φ → (∀ z, ψ → P M) → P N
         // ↦ axiom P.intro.{u} (x : τ) : ∀ y, φ → (∀ z, ψ → P.{u} x M) → P.{u} x N
         for ctor in &ctors {
-            let ctor_name = name.append(&ctor.name);
+            let ctor_name = name.extend(ctor.name.clone());
             let mut target = ctor.target.clone();
             // P.{u} x
             let mut stash = mk_const(
@@ -1663,7 +1648,7 @@ impl Eval {
                     ty: field_ty,
                 }) => {
                     let field_name = field_name.clone();
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     if self.has_const(&fullname) {
                         bail!("already defined");
                     }
@@ -1682,7 +1667,7 @@ impl Eval {
                     target,
                 }) => {
                     let field_name = field_name.clone();
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     if self.has_axiom(&fullname) {
                         bail!("already defined");
                     }
@@ -1694,7 +1679,7 @@ impl Eval {
                 }
             }
         }
-        let abs_name = name.extend("abs");
+        let abs_name = name.extend(Name::from_str("abs"));
         if self.has_axiom(&abs_name) {
             bail!("already defined");
         }
@@ -1724,7 +1709,7 @@ impl Eval {
                     name: field_name,
                     ty: field_ty,
                 }) => {
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     let ty = field_ty.arrow([this.ty.clone()]);
                     self.add_const(fullname.clone(), local_types.clone(), vec![], ty);
 
@@ -1741,7 +1726,7 @@ impl Eval {
                     name: field_name,
                     target,
                 }) => {
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     let mut target = target.clone();
                     let new_target = target.subst(&subst);
                     target = new_target;
@@ -1769,7 +1754,7 @@ impl Eval {
                     };
 
                     // inhab.rep this
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     let mut rhs = mk_const(
                         fullname,
                         local_types.iter().cloned().map(mk_type_local).collect(),
@@ -1779,7 +1764,7 @@ impl Eval {
 
                     // s = inhab.rep this
                     let mut char = mk_const(
-                        QualifiedName::from_str("eq"),
+                        QualifiedName::from_name(Name::from_str("eq")),
                         vec![field_ty.clone()],
                         vec![],
                     );
@@ -1800,7 +1785,7 @@ impl Eval {
             }
         }
         let mut abs = mk_const(
-            QualifiedName::from_str("uexists"),
+            QualifiedName::from_name(Name::from_str("uexists")),
             vec![this.ty.clone()],
             vec![],
         );
@@ -1808,11 +1793,21 @@ impl Eval {
             let mut char = chars
                 .into_iter()
                 .reduce(|left, right| {
-                    let mut conj = mk_const(QualifiedName::from_str("and"), vec![], vec![]);
+                    let mut conj = mk_const(
+                        QualifiedName::from_name(Name::from_str("and")),
+                        vec![],
+                        vec![],
+                    );
                     conj = conj.apply([left, right]);
                     conj
                 })
-                .unwrap_or_else(|| mk_const(QualifiedName::from_str("true"), vec![], vec![]));
+                .unwrap_or_else(|| {
+                    mk_const(
+                        QualifiedName::from_name(Name::from_str("true")),
+                        vec![],
+                        vec![],
+                    )
+                });
             char = char.abs(slice::from_ref(&this));
             char
         }]);
@@ -1907,7 +1902,7 @@ impl Eval {
                 ) => {
                     let structure_field_name = structure_field_name.clone();
                     let field_name = field_name.clone();
-                    let field_fullname = name.extend(field_name.as_str());
+                    let field_fullname = name.extend(field_name.clone());
                     if self.has_const(&field_fullname) {
                         bail!("already defined");
                     }
@@ -1941,7 +1936,7 @@ impl Eval {
                 ) => {
                     let structure_field_name = structure_field_name.clone();
                     let field_name = field_name.clone();
-                    let field_fullname = name.extend(field_name.as_str());
+                    let field_fullname = name.extend(field_name.clone());
                     if self.has_axiom(&field_fullname) {
                         bail!("already defined");
                     }
@@ -1981,7 +1976,7 @@ impl Eval {
                     *target = new_target;
                     self.elaborate_term(&mut local_env, target, ty)?;
 
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     let target_ty = ty.arrow(params.iter().map(|param| param.ty.clone()));
                     self.add_const(
                         fullname.clone(),
@@ -2027,7 +2022,7 @@ impl Eval {
                         target,
                     );
 
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     let mut target = target.clone();
                     target = generalize(&target, &params);
                     self.add_axiom(fullname, local_types.clone(), local_classes.clone(), target);
@@ -2067,20 +2062,22 @@ impl Eval {
                 continue;
             };
             let field_name = field_name.clone();
-            let spec_name = name.extend(field_name.as_str()).extend("spec");
+            let spec_name = name
+                .extend(field_name.clone())
+                .extend(Name::from_str("spec"));
             if self.has_axiom(&spec_name) {
                 bail!("already defined");
             }
 
             let mut lhs = mk_const(
-                structure_name.extend(field_name.as_str()),
+                structure_name.extend(field_name.clone()),
                 target_ty.args().into_iter().cloned().collect(),
                 vec![],
             );
             lhs = lhs.apply([this.clone()]);
 
             let mut rhs = mk_const(
-                name.extend(field_name.as_str()),
+                name.extend(field_name.clone()),
                 local_types.iter().cloned().map(mk_type_local).collect(),
                 local_classes
                     .iter()
@@ -2089,7 +2086,11 @@ impl Eval {
             );
             rhs = rhs.apply(params.iter().map(|param| mk_local(param.id)));
 
-            let mut target = mk_const(QualifiedName::from_str("eq"), vec![ty.clone()], vec![]);
+            let mut target = mk_const(
+                QualifiedName::from_name(Name::from_str("eq")),
+                vec![ty.clone()],
+                vec![],
+            );
             target = target.apply([lhs, rhs]);
             target = generalize(&target, &params);
             self.add_axiom(
@@ -2133,7 +2134,7 @@ impl Eval {
                     ty: field_ty,
                 }) => {
                     let field_name = field_name.clone();
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     if self.has_const(&fullname) {
                         bail!("already defined");
                     }
@@ -2152,7 +2153,7 @@ impl Eval {
                     target,
                 }) => {
                     let field_name = field_name.clone();
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     if self.has_axiom(&fullname) {
                         bail!("already defined");
                     }
@@ -2191,7 +2192,7 @@ impl Eval {
                     name: field_name,
                     ty,
                 }) => {
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     self.add_const(
                         fullname.clone(),
                         local_types.clone(),
@@ -2211,7 +2212,7 @@ impl Eval {
                     name: field_name,
                     target,
                 }) => {
-                    let fullname = name.extend(field_name.as_str());
+                    let fullname = name.extend(field_name.clone());
                     let mut target = target.clone();
                     let new_target = target.subst(&subst);
                     target = new_target;
@@ -2357,7 +2358,7 @@ impl Eval {
                 }) => {
                     let field_name = field_name.clone();
                     let target = target.clone();
-                    let fullname = cmd_structure.name.extend(field_name.as_str());
+                    let fullname = cmd_structure.name.extend(field_name.clone());
                     method_table.insert(fullname, target);
                 }
                 ClassInstanceField::Lemma(_) => {}
@@ -2385,24 +2386,34 @@ mod tests {
             return path;
         }
         for part in value.split('.') {
-            path = Path::from_parts(path, Name::from_str(part));
+            path = QualifiedName::from_parts(path, Name::from_str(part)).into_path();
         }
         path
     }
 
+    fn qualified(value: &str) -> QualifiedName {
+        let mut parts = value.split('.');
+        let first = parts.next().expect("qualified name must not be empty");
+        let mut name = QualifiedName::from_name(Name::from_str(first));
+        for part in parts {
+            name = name.extend(Name::from_str(part));
+        }
+        name
+    }
+
     #[test]
-    fn namespace_add_stores_path_target() {
+    fn namespace_add_stores_qualified_name_target() {
         let mut namespace = Namespace::default();
         let alias = Name::from_str("alias");
-        let target = Path::from_parts(Path::root(), Name::from_str("foo"));
+        let target = QualifiedName::from_name(Name::from_str("foo"));
         namespace.add(alias.clone(), target.clone());
         assert_eq!(namespace.use_table.get(&alias), Some(&target));
     }
 
     #[test]
-    fn use_decl_stores_path_target() {
+    fn use_decl_stores_qualified_name_target() {
         let alias = Name::from_str("alias");
-        let target = Path::from_parts(Path::root(), Name::from_str("foo"));
+        let target = QualifiedName::from_name(Name::from_str("foo"));
         let decl = UseDecl {
             alias: alias.clone(),
             target: target.clone(),
@@ -2423,7 +2434,7 @@ mod tests {
     #[test]
     fn block_end_restores_previous_namespace() {
         let mut eval = Eval::default();
-        let path = Path::from_parts(Path::root(), Name::from_str("foo"));
+        let path = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
         eval.run_cmd(Cmd::NamespaceStart(CmdNamespaceStart { path }))
             .expect("namespace start should succeed");
         eval.run_cmd(Cmd::BlockEnd)
@@ -2433,45 +2444,72 @@ mod tests {
     }
 
     #[test]
-    fn namespace_start_registers_namespace_alias() {
+    fn namespace_start_does_not_register_namespace_alias() {
         let mut eval = Eval::default();
-        let path = Path::from_parts(Path::root(), Name::from_str("foo"));
+        let path = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
         eval.run_cmd(Cmd::NamespaceStart(CmdNamespaceStart {
             path: path.clone(),
         }))
         .expect("namespace start should succeed");
-        assert_eq!(
-            eval.namespace_table[&Path::root()]
+        assert!(
+            !eval.namespace_table[&Path::root()]
                 .use_table
-                .get(&Name::from_str("foo")),
-            Some(&path)
+                .contains_key(&Name::from_str("foo"))
         );
     }
 
     #[test]
-    fn type_const_command_registers_declaration_alias() {
+    fn namespace_start_creates_all_prefix_entries() {
         let mut eval = Eval::default();
-        let foo_path = Path::from_parts(Path::root(), Name::from_str("foo"));
+        let namespace_path = path("foo.bar.baz");
+        eval.run_cmd(Cmd::NamespaceStart(CmdNamespaceStart {
+            path: namespace_path,
+        }))
+        .expect("namespace start should succeed");
+        assert!(eval.namespace_table.contains_key(&path("foo")));
+        assert!(eval.namespace_table.contains_key(&path("foo.bar")));
+        assert!(eval.namespace_table.contains_key(&path("foo.bar.baz")));
+    }
+
+    #[test]
+    fn type_const_command_does_not_register_declaration_alias() {
+        let mut eval = Eval::default();
+        let foo_path = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
         eval.namespace_table
             .insert(foo_path.clone(), Namespace::default());
         eval.namespace_table
             .get_mut(&Path::root())
             .expect("root namespace must exist")
-            .add(Name::from_str("foo"), foo_path.clone());
+            .add(Name::from_str("foo"), qualified("foo"));
 
         eval.run_cmd(Cmd::TypeConst(CmdTypeConst {
-            name: QualifiedName::from_str("foo").extend("bar"),
+            name: QualifiedName::from_name(Name::from_str("foo")).extend(Name::from_str("bar")),
             kind: Kind(0),
         }))
         .expect("type const command should succeed");
 
-        let bar_path = Path::from_parts(foo_path.clone(), Name::from_str("bar"));
-        assert_eq!(
-            eval.namespace_table[&foo_path]
+        assert!(
+            !eval.namespace_table[&foo_path]
                 .use_table
-                .get(&Name::from_str("bar")),
-            Some(&bar_path)
+                .contains_key(&Name::from_str("bar"))
         );
+    }
+
+    #[test]
+    fn type_const_command_does_not_create_missing_prefixes_for_declaration_path() {
+        let mut eval = Eval::default();
+
+        eval.run_cmd(Cmd::TypeConst(CmdTypeConst {
+            name: QualifiedName::from_name(Name::from_str("foo"))
+                .extend(Name::from_str("bar"))
+                .extend(Name::from_str("baz")),
+            kind: Kind(0),
+        }))
+        .expect("type const command should succeed");
+
+        assert!(!eval.namespace_table.contains_key(&path("foo")));
+        assert!(!eval.namespace_table.contains_key(&path("foo.bar")));
+        assert!(!eval.namespace_table.contains_key(&path("foo.bar.baz")));
     }
 
     #[test]
@@ -2484,18 +2522,20 @@ mod tests {
         eval.namespace_table
             .get_mut(&root_namespace)
             .expect("root namespace must exist")
-            .add(Name::from_str("foo"), current_namespace.clone());
+            .add(Name::from_str("foo"), qualified("foo"));
         eval.namespace_table
             .get_mut(&current_namespace)
             .expect("current namespace must exist")
-            .add(Name::from_str("bar"), path("real"));
+            .add(Name::from_str("bar"), qualified("real"));
+        eval.namespace_table
+            .insert(path("real"), Namespace::default());
         eval.current_namespace = current_namespace.clone();
 
         eval.run_cmd(Cmd::Use(CmdUse {
             absolute: false,
             decls: vec![UseDecl {
                 alias: Name::from_str("baz"),
-                target: path("bar.qux"),
+                target: qualified("bar.qux"),
             }],
         }))
         .expect("use command should succeed");
@@ -2504,7 +2544,7 @@ mod tests {
             eval.namespace_table[&current_namespace]
                 .use_table
                 .get(&Name::from_str("baz")),
-            Some(&path("real.qux"))
+            Some(&qualified("real.qux"))
         );
     }
 
@@ -2518,22 +2558,22 @@ mod tests {
         eval.namespace_table
             .get_mut(&root_namespace)
             .expect("root namespace must exist")
-            .add(Name::from_str("foo"), current_namespace.clone());
+            .add(Name::from_str("foo"), qualified("foo"));
         eval.namespace_table
             .get_mut(&root_namespace)
             .expect("root namespace must exist")
-            .add(Name::from_str("bar"), path("global"));
+            .add(Name::from_str("bar"), qualified("global"));
         eval.namespace_table
             .get_mut(&current_namespace)
             .expect("current namespace must exist")
-            .add(Name::from_str("bar"), path("local"));
+            .add(Name::from_str("bar"), qualified("local"));
         eval.current_namespace = current_namespace.clone();
 
         eval.run_cmd(Cmd::Use(CmdUse {
             absolute: true,
             decls: vec![UseDecl {
                 alias: Name::from_str("baz"),
-                target: path("bar"),
+                target: qualified("bar"),
             }],
         }))
         .expect("use command should succeed");
@@ -2542,7 +2582,7 @@ mod tests {
             eval.namespace_table[&current_namespace]
                 .use_table
                 .get(&Name::from_str("baz")),
-            Some(&path("global"))
+            Some(&qualified("global"))
         );
     }
 
@@ -2553,18 +2593,18 @@ mod tests {
         eval.namespace_table
             .get_mut(&root_namespace)
             .expect("root namespace must exist")
-            .add(Name::from_str("hoge"), path("real"));
+            .add(Name::from_str("hoge"), qualified("real"));
 
         eval.run_cmd(Cmd::Use(CmdUse {
             absolute: false,
             decls: vec![
                 UseDecl {
                     alias: Name::from_str("fuga"),
-                    target: path("hoge"),
+                    target: qualified("hoge"),
                 },
                 UseDecl {
                     alias: Name::from_str("piyo"),
-                    target: path("fuga"),
+                    target: qualified("fuga"),
                 },
             ],
         }))
@@ -2574,13 +2614,76 @@ mod tests {
             eval.namespace_table[&root_namespace]
                 .use_table
                 .get(&Name::from_str("fuga")),
-            Some(&path("real"))
+            Some(&qualified("real"))
         );
         assert_eq!(
             eval.namespace_table[&root_namespace]
                 .use_table
                 .get(&Name::from_str("piyo")),
-            Some(&path("real"))
+            Some(&qualified("real"))
+        );
+    }
+
+    #[test]
+    fn use_command_does_not_create_missing_namespaces_during_resolution() {
+        let mut eval = Eval::default();
+        let root_namespace = Path::root();
+
+        eval.run_cmd(Cmd::Use(CmdUse {
+            absolute: false,
+            decls: vec![UseDecl {
+                alias: Name::from_str("alias"),
+                target: qualified("qux.quux"),
+            }],
+        }))
+        .expect("use command should succeed");
+
+        assert_eq!(
+            eval.namespace_table[&root_namespace]
+                .use_table
+                .get(&Name::from_str("alias")),
+            Some(&qualified("qux.quux"))
+        );
+        assert!(
+            !eval.namespace_table.contains_key(&path("qux")),
+            "resolve should not create intermediate namespace entries"
+        );
+        assert!(
+            !eval.namespace_table.contains_key(&path("qux.quux")),
+            "resolve should not create terminal namespace entries"
+        );
+        assert_eq!(
+            eval.namespace_table[&root_namespace]
+                .use_table
+                .get(&Name::from_str("qux")),
+            None
+        );
+    }
+
+    #[test]
+    fn use_command_stops_resolution_after_first_missing_alias() {
+        let mut eval = Eval::default();
+        let root_namespace = Path::root();
+        let missing_head_path = path("qux");
+        let mut missing_head_namespace = Namespace::default();
+        missing_head_namespace.add(Name::from_str("leaf"), qualified("real"));
+        eval.namespace_table
+            .insert(missing_head_path, missing_head_namespace);
+
+        eval.run_cmd(Cmd::Use(CmdUse {
+            absolute: false,
+            decls: vec![UseDecl {
+                alias: Name::from_str("alias"),
+                target: qualified("qux.leaf"),
+            }],
+        }))
+        .expect("use command should succeed");
+
+        assert_eq!(
+            eval.namespace_table[&root_namespace]
+                .use_table
+                .get(&Name::from_str("alias")),
+            Some(&qualified("qux.leaf"))
         );
     }
 }

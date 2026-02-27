@@ -219,7 +219,6 @@ impl<'a> Printer<'a> {
                 }
             }
             let name = head.name.clone();
-            // TODO: don't use to_string. this is inefficient. Use LazyLock to cache QualifiedName instances of "forall", "exists", "uexists".
             match name.to_string().as_str() {
                 "forall" => {
                     if args.len() == 1 {
