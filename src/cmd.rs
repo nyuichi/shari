@@ -89,6 +89,7 @@ pub struct CmdNofix {
 
 #[derive(Clone, Debug)]
 pub struct CmdUse {
+    pub absolute: bool,
     pub decls: Vec<UseDecl>,
 }
 
@@ -285,15 +286,18 @@ impl std::fmt::Display for Cmd {
         match self {
             Cmd::NamespaceStart(cmd) => write!(f, "namespace {} {{", cmd.path),
             Cmd::BlockEnd => write!(f, "}}"),
-            Cmd::Use(cmd) => write!(
-                f,
-                "use {}",
-                cmd.decls
-                    .iter()
-                    .map(|decl| format!("{} as {}", decl.target, decl.alias))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+            Cmd::Use(cmd) => {
+                let prefix = if cmd.absolute { "." } else { "" };
+                write!(
+                    f,
+                    "use {prefix}{}",
+                    cmd.decls
+                        .iter()
+                        .map(|decl| format!("{} as {}", decl.target, decl.alias))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
             Cmd::Infix(cmd) => write!(f, "infix {} {} {}", cmd.op, cmd.prec, cmd.entity),
             Cmd::Infixr(cmd) => write!(f, "infixr {} {} {}", cmd.op, cmd.prec, cmd.entity),
             Cmd::Infixl(cmd) => write!(f, "infixl {} {} {}", cmd.op, cmd.prec, cmd.entity),
@@ -536,6 +540,31 @@ impl Eval {
             .entry(path.clone())
             .or_default()
             .add(name.clone(), Path::from_parts(path.clone(), name.clone()));
+    }
+
+    fn resolve(&mut self, base: Path, target: &Path) -> Path {
+        let mut path = base;
+        for name in target.names() {
+            path = self
+                .namespace_table
+                .get(&path)
+                .expect("namespace path must exist")
+                .use_table
+                .get(&name)
+                .cloned()
+                .unwrap_or_else(|| Path::from_parts(path, name));
+            if !self.namespace_table.contains_key(&path) {
+                self.namespace_table
+                    .insert(path.clone(), Namespace::default());
+                if let Some(name) = path.as_qualified_name() {
+                    self.namespace_table
+                        .entry(name.path().clone())
+                        .or_default()
+                        .add(name.name().clone(), name.to_path());
+                }
+            }
+        }
+        path
     }
 
     fn add_const(
@@ -831,14 +860,20 @@ impl Eval {
                 Ok(())
             }
             Cmd::Use(inner) => {
-                let CmdUse { decls } = inner;
-                let namespace = self
-                    .namespace_table
-                    .get_mut(&self.current_namespace)
-                    .expect("current namespace must exist");
+                let CmdUse { absolute, decls } = inner;
+                let current_namespace = self.current_namespace.clone();
+                let base = if absolute {
+                    Path::toplevel()
+                } else {
+                    current_namespace.clone()
+                };
                 for decl in decls {
                     let UseDecl { alias, target } = decl;
-                    namespace.add(alias, target);
+                    let target = self.resolve(base.clone(), &target);
+                    self.namespace_table
+                        .get_mut(&current_namespace)
+                        .expect("current namespace must exist")
+                        .add(alias, target);
                 }
                 Ok(())
             }
@@ -2339,8 +2374,19 @@ impl Eval {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cmd, CmdNamespaceStart, CmdTypeConst, Eval, Namespace, UseDecl};
+    use super::{Cmd, CmdNamespaceStart, CmdTypeConst, CmdUse, Eval, Namespace, UseDecl};
     use crate::tt::{Kind, Name, Path, QualifiedName};
+
+    fn path(value: &str) -> Path {
+        let mut path = Path::toplevel();
+        if value.is_empty() {
+            return path;
+        }
+        for part in value.split('.') {
+            path = Path::from_parts(path, Name::from_str(part));
+        }
+        path
+    }
 
     #[test]
     fn namespace_add_stores_path_target() {
@@ -2423,6 +2469,116 @@ mod tests {
                 .use_table
                 .get(&Name::from_str("bar")),
             Some(&bar_path)
+        );
+    }
+
+    #[test]
+    fn use_command_resolves_relative_target_when_running() {
+        let mut eval = Eval::default();
+        let top_namespace = Path::toplevel();
+        let current_namespace = path("foo");
+        eval.namespace_table
+            .insert(current_namespace.clone(), Namespace::default());
+        eval.namespace_table
+            .get_mut(&top_namespace)
+            .expect("top-level namespace must exist")
+            .add(Name::from_str("foo"), current_namespace.clone());
+        eval.namespace_table
+            .get_mut(&current_namespace)
+            .expect("current namespace must exist")
+            .add(Name::from_str("bar"), path("real"));
+        eval.current_namespace = current_namespace.clone();
+
+        eval.run_cmd(Cmd::Use(CmdUse {
+            absolute: false,
+            decls: vec![UseDecl {
+                alias: Name::from_str("baz"),
+                target: path("bar.qux"),
+            }],
+        }))
+        .expect("use command should succeed");
+
+        assert_eq!(
+            eval.namespace_table[&current_namespace]
+                .use_table
+                .get(&Name::from_str("baz")),
+            Some(&path("real.qux"))
+        );
+    }
+
+    #[test]
+    fn use_command_resolves_absolute_target_when_running() {
+        let mut eval = Eval::default();
+        let top_namespace = Path::toplevel();
+        let current_namespace = path("foo");
+        eval.namespace_table
+            .insert(current_namespace.clone(), Namespace::default());
+        eval.namespace_table
+            .get_mut(&top_namespace)
+            .expect("top-level namespace must exist")
+            .add(Name::from_str("foo"), current_namespace.clone());
+        eval.namespace_table
+            .get_mut(&top_namespace)
+            .expect("top-level namespace must exist")
+            .add(Name::from_str("bar"), path("global"));
+        eval.namespace_table
+            .get_mut(&current_namespace)
+            .expect("current namespace must exist")
+            .add(Name::from_str("bar"), path("local"));
+        eval.current_namespace = current_namespace.clone();
+
+        eval.run_cmd(Cmd::Use(CmdUse {
+            absolute: true,
+            decls: vec![UseDecl {
+                alias: Name::from_str("baz"),
+                target: path("bar"),
+            }],
+        }))
+        .expect("use command should succeed");
+
+        assert_eq!(
+            eval.namespace_table[&current_namespace]
+                .use_table
+                .get(&Name::from_str("baz")),
+            Some(&path("global"))
+        );
+    }
+
+    #[test]
+    fn use_command_resolves_decls_left_to_right() {
+        let mut eval = Eval::default();
+        let top_namespace = Path::toplevel();
+        eval.namespace_table
+            .get_mut(&top_namespace)
+            .expect("top-level namespace must exist")
+            .add(Name::from_str("hoge"), path("real"));
+
+        eval.run_cmd(Cmd::Use(CmdUse {
+            absolute: false,
+            decls: vec![
+                UseDecl {
+                    alias: Name::from_str("fuga"),
+                    target: path("hoge"),
+                },
+                UseDecl {
+                    alias: Name::from_str("piyo"),
+                    target: path("fuga"),
+                },
+            ],
+        }))
+        .expect("use command should succeed");
+
+        assert_eq!(
+            eval.namespace_table[&top_namespace]
+                .use_table
+                .get(&Name::from_str("fuga")),
+            Some(&path("real"))
+        );
+        assert_eq!(
+            eval.namespace_table[&top_namespace]
+                .use_table
+                .get(&Name::from_str("piyo")),
+            Some(&path("real"))
         );
     }
 }
