@@ -92,6 +92,10 @@ impl Path {
         Path(None)
     }
 
+    pub fn as_qualified_name(&self) -> Option<&QualifiedName> {
+        self.0.as_ref()
+    }
+
     pub fn from_parts(parent: Path, name: Name) -> Path {
         Path(Some(QualifiedName::from_parts(parent, name)))
     }
@@ -2924,6 +2928,17 @@ mod tests {
 
         assert_eq!(qualified_name.path(), &Path::toplevel());
         assert_eq!(qualified_name.name(), &Name::from_str("foo"));
+    }
+
+    #[test]
+    fn path_as_qualified_name_matches_wrapped_value() {
+        let path = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        let Some(qualified_name) = path.as_qualified_name() else {
+            panic!("path must provide a qualified name");
+        };
+        assert_eq!(qualified_name.path(), &Path::toplevel());
+        assert_eq!(qualified_name.name(), &Name::from_str("foo"));
+        assert!(Path::toplevel().as_qualified_name().is_none());
     }
 
     #[test]
