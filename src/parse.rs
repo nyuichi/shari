@@ -522,7 +522,7 @@ impl<'a> Parser<'a> {
         let token = self.any_token()?;
         if token.is_ident() {
             let name = self.qualified_name(&token);
-            if name.prefix().is_none() && self.has_local_type(name.name()) {
+            if name.path().is_root() && self.has_local_type(name.name()) {
                 return Ok(mk_type_local(Id::from_name(name.name())));
             }
             if let Some(stash) = self.type_self_ref.as_ref().and_then(|(self_name, stash)| {
@@ -795,7 +795,7 @@ impl<'a> Parser<'a> {
             None => {
                 let name = self.qualified_name(&token);
                 if token.is_ident() {
-                    if name.prefix().is_none() && self.has_local(name.name()) {
+                    if name.path().is_root() && self.has_local(name.name()) {
                         return Ok(mk_local(Id::from_name(name.name())));
                     }
                     if let Some(stash) = self.self_ref.as_ref().and_then(|(self_name, stash)| {

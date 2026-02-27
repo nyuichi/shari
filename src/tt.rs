@@ -94,6 +94,10 @@ impl Path {
         Path(None)
     }
 
+    pub fn is_root(&self) -> bool {
+        self.0.is_none()
+    }
+
     pub fn as_qualified_name(&self) -> Option<&QualifiedName> {
         self.0.as_ref()
     }
@@ -106,9 +110,15 @@ impl Path {
         Path(Some(name))
     }
 
-    // TODO: 消す
     pub fn names(&self) -> Vec<Name> {
-        self.0.as_ref().map_or_else(Vec::new, QualifiedName::names)
+        let mut names = vec![];
+        let mut p = self;
+        while let Some(name) = p.as_qualified_name() {
+            names.push(name.name().clone());
+            p = name.path();
+        }
+        names.reverse();
+        names
     }
 }
 
@@ -151,11 +161,6 @@ impl QualifiedName {
 
     pub fn path(&self) -> &Path {
         &self.0.path
-    }
-
-    // TODO: parse専用の型ができたら消す
-    pub fn prefix(&self) -> Option<QualifiedName> {
-        self.path().as_qualified_name().cloned()
     }
 
     // TODO: parse専用の型ができたら消す
