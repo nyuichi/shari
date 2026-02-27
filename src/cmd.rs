@@ -531,6 +531,13 @@ pub struct Operator {
 }
 
 impl Eval {
+    fn declare_name(&mut self, path: &Path, name: &Name) {
+        self.namespace_table
+            .entry(path.clone())
+            .or_default()
+            .add(name.clone(), Path::from_parts(path.clone(), name.clone()));
+    }
+
     fn add_const(
         &mut self,
         name: QualifiedName,
@@ -539,6 +546,7 @@ impl Eval {
         ty: Type,
     ) {
         assert!(!self.const_table.contains_key(&name));
+        self.declare_name(name.path(), name.name());
         for local_class in &local_classes {
             self.tt_env().check_wfc(
                 &LocalEnv {
@@ -583,6 +591,7 @@ impl Eval {
         target: Term,
     ) {
         assert!(!self.axiom_table.contains_key(&name));
+        self.declare_name(name.path(), name.name());
         for local_class in &local_classes {
             self.tt_env().check_wfc(
                 &LocalEnv {
@@ -621,6 +630,7 @@ impl Eval {
 
     fn add_type_const(&mut self, name: QualifiedName, kind: Kind) {
         assert!(!self.type_const_table.contains_key(&name));
+        self.declare_name(name.path(), name.name());
 
         self.type_const_table.insert(name.clone(), kind.clone());
 
@@ -632,6 +642,7 @@ impl Eval {
 
     fn add_class_predicate(&mut self, name: QualifiedName, ty: ClassType) {
         assert!(!self.class_predicate_table.contains_key(&name));
+        self.declare_name(name.path(), name.name());
 
         self.class_predicate_table.insert(name.clone(), ty);
 
@@ -653,6 +664,7 @@ impl Eval {
         method_table: HashMap<QualifiedName, Term>,
     ) {
         assert!(!self.class_instance_table.contains_key(&name));
+        self.declare_name(name.path(), name.name());
         for local_class in &local_classes {
             self.tt_env().check_wfc(
                 &LocalEnv {
@@ -801,6 +813,9 @@ impl Eval {
                 if !self.namespace_table.contains_key(&path) {
                     self.namespace_table
                         .insert(path.clone(), Namespace::default());
+                }
+                if let Some(name) = path.as_qualified_name() {
+                    self.declare_name(name.path(), name.name());
                 }
                 let previous_namespace = self.current_namespace.clone();
                 self.namespace_stack.push(previous_namespace);
@@ -2324,8 +2339,8 @@ impl Eval {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cmd, CmdNamespaceStart, Eval, Namespace, UseDecl};
-    use crate::tt::{Name, Path};
+    use super::{Cmd, CmdNamespaceStart, CmdTypeConst, Eval, Namespace, UseDecl};
+    use crate::tt::{Kind, Name, Path, QualifiedName};
 
     #[test]
     fn namespace_add_stores_path_target() {
@@ -2367,5 +2382,47 @@ mod tests {
             .expect("block end should close opened namespace");
         assert_eq!(eval.current_namespace, Path::toplevel());
         assert!(eval.namespace_stack.is_empty());
+    }
+
+    #[test]
+    fn namespace_start_registers_namespace_alias() {
+        let mut eval = Eval::default();
+        let path = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        eval.run_cmd(Cmd::NamespaceStart(CmdNamespaceStart {
+            path: path.clone(),
+        }))
+        .expect("namespace start should succeed");
+        assert_eq!(
+            eval.namespace_table[&Path::toplevel()]
+                .use_table
+                .get(&Name::from_str("foo")),
+            Some(&path)
+        );
+    }
+
+    #[test]
+    fn type_const_command_registers_declaration_alias() {
+        let mut eval = Eval::default();
+        let foo_path = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        eval.namespace_table
+            .insert(foo_path.clone(), Namespace::default());
+        eval.namespace_table
+            .get_mut(&Path::toplevel())
+            .expect("top-level namespace must exist")
+            .add(Name::from_str("foo"), foo_path.clone());
+
+        eval.run_cmd(Cmd::TypeConst(CmdTypeConst {
+            name: QualifiedName::from_str("foo").extend("bar"),
+            kind: Kind(0),
+        }))
+        .expect("type const command should succeed");
+
+        let bar_path = Path::from_parts(foo_path.clone(), Name::from_str("bar"));
+        assert_eq!(
+            eval.namespace_table[&foo_path]
+                .use_table
+                .get(&Name::from_str("bar")),
+            Some(&bar_path)
+        );
     }
 }

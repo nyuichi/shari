@@ -503,13 +503,6 @@ impl<'a> Parser<'a> {
         Ok(self.resolve(self.current_namespace.clone(), literal_name))
     }
 
-    fn register_name(&mut self, name: &QualifiedName) {
-        self.namespace_table
-            .get_mut(name.path())
-            .unwrap()
-            .add(name.name().clone(), name.to_path());
-    }
-
     fn alias_opt(&mut self) -> Result<Option<Name>, ParseError> {
         if let Some(token) = self.peek_opt()
             && token.kind == TokenKind::Keyword
@@ -1631,7 +1624,6 @@ impl<'a> Parser<'a> {
 
     fn namespace_cmd(&mut self, _token: Token) -> Result<CmdNamespaceStart, ParseError> {
         let name = self.global_reference_name(None)?;
-        self.register_name(&name);
         let path = name.to_path();
         self.expect_symbol("{")?;
         Ok(CmdNamespaceStart { path })
@@ -1811,7 +1803,6 @@ impl<'a> Parser<'a> {
 
     fn def_cmd(&mut self, _token: Token) -> Result<CmdDef, ParseError> {
         let name = self.global_declaration_name(None)?;
-        self.register_name(&name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -1847,7 +1838,6 @@ impl<'a> Parser<'a> {
 
     fn axiom_cmd(&mut self, _token: Token) -> Result<CmdAxiom, ParseError> {
         let name = self.global_declaration_name(None)?;
-        self.register_name(&name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -1881,7 +1871,6 @@ impl<'a> Parser<'a> {
 
     fn lemma_cmd(&mut self, _token: Token) -> Result<CmdLemma, ParseError> {
         let name = self.global_declaration_name(None)?;
-        self.register_name(&name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -1923,7 +1912,6 @@ impl<'a> Parser<'a> {
 
     fn const_cmd(&mut self, _token: Token) -> Result<CmdConst, ParseError> {
         let name = self.global_declaration_name(None)?;
-        self.register_name(&name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -1944,7 +1932,6 @@ impl<'a> Parser<'a> {
 
     fn type_const_cmd(&mut self, _token: Token) -> Result<CmdTypeConst, ParseError> {
         let name = self.global_declaration_name(None)?;
-        self.register_name(&name);
         self.expect_symbol(":")?;
         let kind = self.kind()?;
         Ok(CmdTypeConst { name, kind })
@@ -1956,7 +1943,6 @@ impl<'a> Parser<'a> {
         let literal_name = self.qualified_name(&token);
         self.lex.restore(state);
         let name = self.global_declaration_name(Some(&token))?;
-        self.register_name(&name);
         let self_id = Id::fresh();
         debug_assert!(
             self.type_self_ref.is_none(),
@@ -2007,7 +1993,6 @@ impl<'a> Parser<'a> {
         let literal_name = self.qualified_name(&ident);
         self.lex.restore(state);
         let name = self.global_declaration_name(Some(&ident))?;
-        self.register_name(&name);
         let self_id = Id::fresh();
         debug_assert!(
             self.self_ref.is_none(),
@@ -2076,7 +2061,6 @@ impl<'a> Parser<'a> {
 
     fn structure_cmd(&mut self, _token: Token) -> Result<CmdStructure, ParseError> {
         let name = self.global_declaration_name(None)?;
-        self.register_name(&name);
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
             let tv = Name::from_str(token.as_str());
@@ -2143,7 +2127,6 @@ impl<'a> Parser<'a> {
 
     fn instance_cmd(&mut self, _token: Token) -> Result<CmdInstance, ParseError> {
         let name = self.global_declaration_name(None)?;
-        self.register_name(&name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
@@ -2246,7 +2229,6 @@ impl<'a> Parser<'a> {
 
     fn class_structure_cmd(&mut self, _token: Token) -> Result<CmdClassStructure, ParseError> {
         let name = self.global_declaration_name(None)?;
-        self.register_name(&name);
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
             let tv = Name::from_str(token.as_str());
@@ -2313,7 +2295,6 @@ impl<'a> Parser<'a> {
 
     fn class_instance_cmd(&mut self, _token: Token) -> Result<CmdClassInstance, ParseError> {
         let name = self.global_declaration_name(None)?;
-        self.register_name(&name);
         let local_types = self.local_type_parameters()?;
         for ty in &local_types {
             self.local_types.push(ty.clone());
