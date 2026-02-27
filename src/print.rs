@@ -64,6 +64,7 @@ struct Printer<'a> {
     local_type_names: &'a HashMap<Id, String>,
 }
 
+// TODO: グローバル名の表示にPathとかQualifiedNameのDisplay実装を使わず、現在のnamespaceを理解した表示にする。
 impl<'a> Printer<'a> {
     fn new(op_table: &'a OpTable, local_type_names: &'a HashMap<Id, String>) -> Self {
         Printer {
