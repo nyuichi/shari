@@ -481,7 +481,9 @@ impl std::fmt::Display for Cmd {
 pub struct Eval {
     pub tt: TokenTable,
     pub pp: OpTable,
+    // Invariant: namespace entries are prefix-closed.
     pub namespace_table: HashMap<Path, Namespace>,
+    // Invariant: `namespace_table` always contains an entry for `current_namespace`.
     pub current_namespace: Path,
     pub namespace_stack: Vec<Path>,
     pub type_const_table: HashMap<QualifiedName, Kind>,
@@ -537,34 +539,35 @@ pub struct Operator {
 }
 
 impl Eval {
-    fn declare_name(&mut self, path: &Path, name: &Name) {
+    fn declare_name(&mut self, name: &QualifiedName) {
+        let mut parent = Path::root();
+        for name in name.names() {
+            let child = Path::from_parts(parent.clone(), name);
+            self.namespace_table.entry(child.clone()).or_default();
+            parent = child;
+        }
         self.namespace_table
-            .entry(path.clone())
+            .entry(name.path().clone())
             .or_default()
-            .add(name.clone(), Path::from_parts(path.clone(), name.clone()));
+            .add(name.name().clone(), name.to_path());
     }
 
     fn resolve(&mut self, base: Path, target: &Path) -> Path {
         let mut path = base;
-        for name in target.names() {
-            path = self
+        let mut names = target.names().into_iter().peekable();
+        while let Some(name) = names.next() {
+            let namespace = self
                 .namespace_table
                 .get(&path)
-                .expect("namespace path must exist")
-                .use_table
-                .get(&name)
-                .cloned()
-                .unwrap_or_else(|| Path::from_parts(path, name));
-            if !self.namespace_table.contains_key(&path) {
-                self.namespace_table
-                    .insert(path.clone(), Namespace::default());
-                if let Some(name) = path.as_qualified_name() {
-                    self.namespace_table
-                        .entry(name.path().clone())
-                        .or_default()
-                        .add(name.name().clone(), name.to_path());
+                .expect("namespace path must exist");
+            let Some(target) = namespace.use_table.get(&name) else {
+                path = Path::from_parts(path, name);
+                for tail in names {
+                    path = Path::from_parts(path, tail);
                 }
-            }
+                return path;
+            };
+            path = target.clone();
         }
         path
     }
@@ -577,7 +580,7 @@ impl Eval {
         ty: Type,
     ) {
         assert!(!self.const_table.contains_key(&name));
-        self.declare_name(name.path(), name.name());
+        self.declare_name(&name);
         for local_class in &local_classes {
             self.tt_env().check_wfc(
                 &LocalEnv {
@@ -622,7 +625,7 @@ impl Eval {
         target: Term,
     ) {
         assert!(!self.axiom_table.contains_key(&name));
-        self.declare_name(name.path(), name.name());
+        self.declare_name(&name);
         for local_class in &local_classes {
             self.tt_env().check_wfc(
                 &LocalEnv {
@@ -661,7 +664,7 @@ impl Eval {
 
     fn add_type_const(&mut self, name: QualifiedName, kind: Kind) {
         assert!(!self.type_const_table.contains_key(&name));
-        self.declare_name(name.path(), name.name());
+        self.declare_name(&name);
 
         self.type_const_table.insert(name.clone(), kind.clone());
 
@@ -673,7 +676,7 @@ impl Eval {
 
     fn add_class_predicate(&mut self, name: QualifiedName, ty: ClassType) {
         assert!(!self.class_predicate_table.contains_key(&name));
-        self.declare_name(name.path(), name.name());
+        self.declare_name(&name);
 
         self.class_predicate_table.insert(name.clone(), ty);
 
@@ -695,7 +698,7 @@ impl Eval {
         method_table: HashMap<QualifiedName, Term>,
     ) {
         assert!(!self.class_instance_table.contains_key(&name));
-        self.declare_name(name.path(), name.name());
+        self.declare_name(&name);
         for local_class in &local_classes {
             self.tt_env().check_wfc(
                 &LocalEnv {
@@ -841,12 +844,14 @@ impl Eval {
         match cmd {
             Cmd::NamespaceStart(inner) => {
                 let CmdNamespaceStart { path } = inner;
-                if !self.namespace_table.contains_key(&path) {
-                    self.namespace_table
-                        .insert(path.clone(), Namespace::default());
+                let mut parent = Path::root();
+                for name in path.names() {
+                    let child = Path::from_parts(parent.clone(), name);
+                    self.namespace_table.entry(child.clone()).or_default();
+                    parent = child;
                 }
                 if let Some(name) = path.as_qualified_name() {
-                    self.declare_name(name.path(), name.name());
+                    self.declare_name(name);
                 }
                 let previous_namespace = self.current_namespace.clone();
                 self.namespace_stack.push(previous_namespace);
@@ -2449,6 +2454,19 @@ mod tests {
     }
 
     #[test]
+    fn namespace_start_creates_all_prefix_entries() {
+        let mut eval = Eval::default();
+        let namespace_path = path("foo.bar.baz");
+        eval.run_cmd(Cmd::NamespaceStart(CmdNamespaceStart {
+            path: namespace_path,
+        }))
+        .expect("namespace start should succeed");
+        assert!(eval.namespace_table.contains_key(&path("foo")));
+        assert!(eval.namespace_table.contains_key(&path("foo.bar")));
+        assert!(eval.namespace_table.contains_key(&path("foo.bar.baz")));
+    }
+
+    #[test]
     fn type_const_command_registers_declaration_alias() {
         let mut eval = Eval::default();
         let foo_path = Path::from_parts(Path::root(), Name::from_str("foo"));
@@ -2475,6 +2493,30 @@ mod tests {
     }
 
     #[test]
+    fn type_const_command_creates_missing_prefixes_for_declaration_path() {
+        let mut eval = Eval::default();
+
+        eval.run_cmd(Cmd::TypeConst(CmdTypeConst {
+            name: QualifiedName::from_str("foo").extend("bar").extend("baz"),
+            kind: Kind(0),
+        }))
+        .expect("type const command should succeed");
+
+        assert!(
+            eval.namespace_table.contains_key(&path("foo")),
+            "prefix namespace should be created"
+        );
+        assert!(
+            eval.namespace_table.contains_key(&path("foo.bar")),
+            "declaration path namespace should be created"
+        );
+        assert!(
+            eval.namespace_table.contains_key(&path("foo.bar.baz")),
+            "declared namespace should be created"
+        );
+    }
+
+    #[test]
     fn use_command_resolves_relative_target_when_running() {
         let mut eval = Eval::default();
         let root_namespace = Path::root();
@@ -2489,6 +2531,8 @@ mod tests {
             .get_mut(&current_namespace)
             .expect("current namespace must exist")
             .add(Name::from_str("bar"), path("real"));
+        eval.namespace_table
+            .insert(path("real"), Namespace::default());
         eval.current_namespace = current_namespace.clone();
 
         eval.run_cmd(Cmd::Use(CmdUse {
@@ -2581,6 +2625,69 @@ mod tests {
                 .use_table
                 .get(&Name::from_str("piyo")),
             Some(&path("real"))
+        );
+    }
+
+    #[test]
+    fn use_command_does_not_create_missing_namespaces_during_resolution() {
+        let mut eval = Eval::default();
+        let root_namespace = Path::root();
+
+        eval.run_cmd(Cmd::Use(CmdUse {
+            absolute: false,
+            decls: vec![UseDecl {
+                alias: Name::from_str("alias"),
+                target: path("qux.quux"),
+            }],
+        }))
+        .expect("use command should succeed");
+
+        assert_eq!(
+            eval.namespace_table[&root_namespace]
+                .use_table
+                .get(&Name::from_str("alias")),
+            Some(&path("qux.quux"))
+        );
+        assert!(
+            !eval.namespace_table.contains_key(&path("qux")),
+            "resolve should not create intermediate namespace entries"
+        );
+        assert!(
+            !eval.namespace_table.contains_key(&path("qux.quux")),
+            "resolve should not create terminal namespace entries"
+        );
+        assert_eq!(
+            eval.namespace_table[&root_namespace]
+                .use_table
+                .get(&Name::from_str("qux")),
+            None
+        );
+    }
+
+    #[test]
+    fn use_command_stops_resolution_after_first_missing_alias() {
+        let mut eval = Eval::default();
+        let root_namespace = Path::root();
+        let missing_head_path = path("qux");
+        let mut missing_head_namespace = Namespace::default();
+        missing_head_namespace.add(Name::from_str("leaf"), path("real"));
+        eval.namespace_table
+            .insert(missing_head_path, missing_head_namespace);
+
+        eval.run_cmd(Cmd::Use(CmdUse {
+            absolute: false,
+            decls: vec![UseDecl {
+                alias: Name::from_str("alias"),
+                target: path("qux.leaf"),
+            }],
+        }))
+        .expect("use command should succeed");
+
+        assert_eq!(
+            eval.namespace_table[&root_namespace]
+                .use_table
+                .get(&Name::from_str("alias")),
+            Some(&path("qux.leaf"))
         );
     }
 }

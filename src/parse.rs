@@ -431,23 +431,21 @@ impl<'a> Parser<'a> {
 
     fn resolve(&mut self, base: Path, name: QualifiedName) -> QualifiedName {
         let mut path = base;
-        for name in name.names() {
-            path = if let Some(target) = self.namespace_table[&path].use_table.get(&name) {
-                target.clone()
-            } else {
-                Path::from_parts(path, name)
-            };
-            if !self.namespace_table.contains_key(&path) {
-                self.namespace_table
-                    .insert(path.clone(), Namespace::default());
+        let mut names = name.names().into_iter().peekable();
+        while let Some(name) = names.next() {
+            let namespace = self
+                .namespace_table
+                .get(&path)
+                .expect("namespace path must exist");
+            let Some(target) = namespace.use_table.get(&name) else {
+                path = Path::from_parts(path, name);
+                for tail in names {
+                    path = Path::from_parts(path, tail);
+                }
                 let (parent, name) = path.to_parts().unwrap();
-                self.namespace_table
-                    .get_mut(parent)
-                    .unwrap()
-                    .use_table
-                    .entry(name.clone())
-                    .or_insert_with(|| Path::from_parts(parent.clone(), name.clone()));
-            }
+                return QualifiedName::from_parts(parent.clone(), name.clone());
+            };
+            path = target.clone();
         }
         let (parent, name) = path.to_parts().unwrap();
         QualifiedName::from_parts(parent.clone(), name.clone())
@@ -2457,6 +2455,22 @@ mod tests {
         }
     }
 
+    fn ensure_use_target_prefixes_for_tests(
+        namespace_table: &mut HashMap<Path, Namespace>,
+        current_namespace: &Path,
+    ) {
+        let targets = namespace_table
+            .get(current_namespace)
+            .expect("current namespace must exist")
+            .use_table
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for target in targets {
+            ensure_namespace_path_for_tests(namespace_table, &target);
+        }
+    }
+
     fn resolve_use_target_for_tests(
         namespace_table: &mut HashMap<Path, Namespace>,
         base: Path,
@@ -2467,12 +2481,9 @@ mod tests {
         for segment in target.names() {
             let resolved = namespace_table
                 .get(&path)
-                .expect("namespace path must exist")
-                .use_table
-                .get(&segment)
+                .and_then(|namespace| namespace.use_table.get(&segment))
                 .cloned();
             path = resolved.unwrap_or_else(|| Path::from_parts(path, segment));
-            ensure_namespace_path_for_tests(namespace_table, &path);
         }
         path
     }
@@ -2596,6 +2607,7 @@ mod tests {
             class_predicate_table,
         );
         let current_namespace = root_namespace.clone();
+        ensure_use_target_prefixes_for_tests(&mut namespace_table, &current_namespace);
         let mut parser = Parser::new(
             &mut lex,
             tt,
@@ -2647,6 +2659,7 @@ mod tests {
         let mut namespace_stack = vec![];
         let mut current_namespace = root_namespace.clone();
         while !lex.is_eof() {
+            ensure_use_target_prefixes_for_tests(&mut namespace_table, &current_namespace);
             let mut parser = Parser::new(
                 &mut lex,
                 tt,
@@ -2663,6 +2676,7 @@ mod tests {
             }
             match &cmd {
                 Cmd::NamespaceStart(CmdNamespaceStart { path }) => {
+                    ensure_namespace_path_for_tests(&mut namespace_table, path);
                     namespace_stack.push(current_namespace.clone());
                     current_namespace = path.clone();
                 }
@@ -2709,6 +2723,7 @@ mod tests {
             class_predicate_table,
         );
         let current_namespace = root_namespace.clone();
+        ensure_use_target_prefixes_for_tests(&mut namespace_table, &current_namespace);
         let mut parser = Parser::new(
             &mut lex,
             tt,
@@ -2754,6 +2769,7 @@ mod tests {
             class_predicate_table,
         );
         let current_namespace = root_namespace.clone();
+        ensure_use_target_prefixes_for_tests(&mut namespace_table, &current_namespace);
         let mut parser = Parser::new(
             &mut lex,
             tt,
@@ -4031,7 +4047,7 @@ mod tests {
     }
 
     #[test]
-    fn type_inductive_ctor_registers_top_level_alias() {
+    fn type_inductive_ctor_parse_does_not_mutate_top_level_use_table() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, Path> = HashMap::new();
         parse_cmd_with_tables(
@@ -4045,13 +4061,13 @@ mod tests {
         )
         .expect("type inductive command parses");
         assert!(
-            use_table.contains_key(&Name::from_str("ctor")),
-            "constructor alias should be registered in the current namespace"
+            !use_table.contains_key(&Name::from_str("ctor")),
+            "parsing must not mutate current namespace aliases"
         );
     }
 
     #[test]
-    fn resolve_to_path_resolves_each_segment_without_parent_alias_entry() {
+    fn resolve_to_path_stops_after_first_missing_alias() {
         let file = Arc::new(File::new("<test>", ""));
         let mut lex = Lex::new(file);
         let tt = TokenTable::default();
@@ -4082,11 +4098,11 @@ mod tests {
         let resolved = parser
             .resolve(parser.current_namespace.clone(), qualified("qux.leaf"))
             .to_path();
-        assert_eq!(resolved, path("foo.qux.real"));
+        assert_eq!(resolved, path("foo.qux.leaf"));
     }
 
     #[test]
-    fn resolve_resolves_each_segment_without_parent_alias_entry() {
+    fn resolve_stops_after_first_missing_alias() {
         let file = Arc::new(File::new("<test>", ""));
         let mut lex = Lex::new(file);
         let tt = TokenTable::default();
@@ -4115,11 +4131,11 @@ mod tests {
         );
 
         let resolved = parser.resolve(parser.current_namespace.clone(), qualified("qux.leaf"));
-        assert_eq!(resolved, qualified("foo.qux.real"));
+        assert_eq!(resolved, qualified("foo.qux.leaf"));
     }
 
     #[test]
-    fn resolve_creates_missing_namespaces_along_path() {
+    fn resolve_does_not_create_missing_namespaces_along_path() {
         let file = Arc::new(File::new("<test>", ""));
         let mut lex = Lex::new(file);
         let tt = TokenTable::default();
@@ -4144,17 +4160,24 @@ mod tests {
 
         let resolved = parser.resolve(parser.current_namespace.clone(), qualified("qux.quux"));
         assert_eq!(resolved, qualified("qux.quux"));
-        assert!(parser.namespace_table.contains_key(&path("qux")));
+        assert!(
+            !parser.namespace_table.contains_key(&path("qux")),
+            "resolve should not create intermediate namespace entries"
+        );
+        assert!(
+            !parser.namespace_table.contains_key(&path("qux.quux")),
+            "resolve should not create terminal namespace entries"
+        );
         assert_eq!(
             parser.namespace_table[&Path::root()]
                 .use_table
                 .get(&Name::from_str("qux")),
-            Some(&path("qux"))
+            None
         );
     }
 
     #[test]
-    fn resolve_resolves_each_segment_without_parent_alias_entry_with_tail() {
+    fn resolve_preserves_remaining_tail_after_first_missing_alias() {
         let file = Arc::new(File::new("<test>", ""));
         let mut lex = Lex::new(file);
         let tt = TokenTable::default();
@@ -4183,7 +4206,7 @@ mod tests {
         );
 
         let resolved = parser.resolve(parser.current_namespace.clone(), qualified("qux.leaf.tail"));
-        assert_eq!(resolved, qualified("foo.qux.real.tail"));
+        assert_eq!(resolved, qualified("foo.qux.leaf.tail"));
     }
 
     #[test]
