@@ -150,8 +150,7 @@ pub struct CmdTypeInductive {
 
 #[derive(Clone, Debug)]
 pub struct DataConstructor {
-    // TODO: Nameに変える
-    pub name: QualifiedName,
+    pub name: Name,
     pub ty: Type,
 }
 
@@ -167,8 +166,7 @@ pub struct CmdInductive {
 
 #[derive(Clone, Debug)]
 pub struct Constructor {
-    // TODO: Nameに変える
-    pub name: QualifiedName,
+    pub name: Name,
     pub target: Term,
 }
 
@@ -1138,7 +1136,7 @@ impl Eval {
             }
         }
         for ctor in &ctors {
-            let ctor_name = name.append(&ctor.name);
+            let ctor_name = name.extend(ctor.name.as_str());
             if self.has_const(&ctor_name) {
                 bail!("already defined");
             }
@@ -1185,7 +1183,7 @@ impl Eval {
         let subst = [(self_id, target_ty.clone())];
         let mut cs = vec![];
         for ctor in &ctors {
-            let ctor_name = name.append(&ctor.name);
+            let ctor_name = name.extend(ctor.name.as_str());
             let ty = ctor.ty.subst(&subst);
             cs.push((ctor_name, ty));
         }
@@ -1246,7 +1244,7 @@ impl Eval {
                 ih_list.push(h);
             }
             // ∀ args, {IH} → P (C args)
-            let ctor_name = name.append(&ctor.name);
+            let ctor_name = name.extend(ctor.name.as_str());
             let mut a = mk_const(
                 ctor_name,
                 local_types.iter().cloned().map(mk_type_local).collect(),
@@ -1373,7 +1371,7 @@ impl Eval {
                 rec_local_types.iter().cloned().map(mk_type_local).collect(),
                 vec![],
             );
-            let ctor_name = name.append(&ctor.name);
+            let ctor_name = name.extend(ctor.name.as_str());
             let mut lhs_arg = mk_const(
                 ctor_name.clone(),
                 local_types.iter().cloned().map(mk_type_local).collect(),
@@ -1468,7 +1466,7 @@ impl Eval {
         let mut ctor_target_list = vec![];
         let mut ctor_ind_args_list = vec![];
         for ctor in &mut ctors {
-            let ctor_name = name.append(&ctor.name);
+            let ctor_name = name.extend(ctor.name.as_str());
             if self.has_axiom(&ctor_name) {
                 bail!("already defined");
             }
@@ -1534,7 +1532,7 @@ impl Eval {
         // | intro : ∀ y, φ → (∀ z, ψ → P M) → P N
         // ↦ axiom P.intro.{u} (x : τ) : ∀ y, φ → (∀ z, ψ → P.{u} x M) → P.{u} x N
         for ctor in &ctors {
-            let ctor_name = name.append(&ctor.name);
+            let ctor_name = name.extend(ctor.name.as_str());
             let mut target = ctor.target.clone();
             // P.{u} x
             let mut stash = mk_const(

@@ -1933,7 +1933,7 @@ impl<'a> Parser<'a> {
         let mut ctors: Vec<DataConstructor> = vec![];
         while let Some(_token) = self.expect_symbol_opt("|") {
             let token = self.ident()?;
-            let ctor_name = self.global_declaration_name(Some(&token))?;
+            let ctor_name = Name::from_str(token.as_str());
             for ctor in &ctors {
                 if ctor_name == ctor.name {
                     return Self::fail(token, "duplicate constructor")?;
@@ -1983,7 +1983,7 @@ impl<'a> Parser<'a> {
         let mut ctors: Vec<Constructor> = vec![];
         while let Some(_token) = self.expect_symbol_opt("|") {
             let token = self.ident()?;
-            let ctor_name = self.global_declaration_name(Some(&token))?;
+            let ctor_name = Name::from_str(token.as_str());
             for ctor in &ctors {
                 if ctor_name == ctor.name {
                     return Self::fail(token, "duplicate constructor")?;
@@ -4015,12 +4015,11 @@ mod tests {
     }
 
     #[test]
-    fn type_inductive_ctor_resolution_rewrites_use_alias_head() {
+    fn type_inductive_constructor_rejects_dotted_name() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
-        use_table.insert(Name::from_str("alias"), qualified("prod"));
-        let cmd = parse_cmd_with_tables(
-            "type inductive alias.list | alias.nil : alias.list",
+        let err = parse_cmd_with_tables(
+            "type inductive foo | bar.baz : foo",
             &tt,
             &mut use_table,
             &type_consts,
@@ -4028,19 +4027,31 @@ mod tests {
             &axioms,
             &class_predicates,
         )
-        .expect("type inductive command parses");
-        let Cmd::TypeInductive(CmdTypeInductive {
-            name,
-            self_id: _,
-            local_types: _,
-            ctors,
-        }) = cmd
-        else {
-            panic!("expected type_inductive command");
+        .expect_err("dotted constructor name should be rejected");
+        let ParseError::Parse { message, span: _ } = err else {
+            panic!("expected parse error");
         };
-        assert_eq!(name, qualified("prod.list"));
-        assert_eq!(ctors.len(), 1);
-        assert_eq!(ctors[0].name, qualified("prod.nil"));
+        assert_eq!(message, "expected symbol ':'");
+    }
+
+    #[test]
+    fn inductive_constructor_rejects_dotted_name() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let err = parse_cmd_with_tables(
+            "inductive foo : Prop | bar.baz : foo",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect_err("dotted constructor name should be rejected");
+        let ParseError::Parse { message, span: _ } = err else {
+            panic!("expected parse error");
+        };
+        assert_eq!(message, "expected symbol ':'");
     }
 
     #[test]
