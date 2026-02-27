@@ -431,7 +431,7 @@ impl<'a> Parser<'a> {
         name
     }
 
-    fn resolve(&mut self, base: Path, name: QualifiedName) -> QualifiedName {
+    fn resolve(&self, base: Path, name: QualifiedName) -> QualifiedName {
         let mut path = base;
         let mut names = name.names().into_iter();
         while let Some(name) = names.next() {
@@ -4127,7 +4127,7 @@ mod tests {
         let const_table = HashMap::new();
         let axiom_table = HashMap::new();
         let class_predicate_table = HashMap::new();
-        let mut parser = Parser::new(
+        let parser = Parser::new(
             &mut lex,
             &tt,
             &namespace_table,
@@ -4162,7 +4162,7 @@ mod tests {
         let const_table = HashMap::new();
         let axiom_table = HashMap::new();
         let class_predicate_table = HashMap::new();
-        let mut parser = Parser::new(
+        let parser = Parser::new(
             &mut lex,
             &tt,
             &namespace_table,
@@ -4190,7 +4190,7 @@ mod tests {
         let const_table = HashMap::new();
         let axiom_table = HashMap::new();
         let class_predicate_table = HashMap::new();
-        let mut parser = Parser::new(
+        let parser = Parser::new(
             &mut lex,
             &tt,
             &namespace_table,
@@ -4237,7 +4237,7 @@ mod tests {
         let const_table = HashMap::new();
         let axiom_table = HashMap::new();
         let class_predicate_table = HashMap::new();
-        let mut parser = Parser::new(
+        let parser = Parser::new(
             &mut lex,
             &tt,
             &namespace_table,

@@ -537,7 +537,7 @@ pub struct Operator {
 }
 
 impl Eval {
-    fn resolve(&mut self, base: Path, target: &QualifiedName) -> QualifiedName {
+    fn resolve(&self, base: Path, target: &QualifiedName) -> QualifiedName {
         let mut path = base;
         let mut names = target.names().into_iter();
         while let Some(name) = names.next() {
