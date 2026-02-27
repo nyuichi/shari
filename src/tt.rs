@@ -15,6 +15,7 @@ pub struct Name(Arc<String>);
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Default)]
 pub struct Path(Option<QualifiedName>);
 
+// TODO: parseの中でrelative pathを処理するためにこの型が使われているが、この型はabsolute pathを表すものなので、parseの中で専用の型を使うべき。
 #[derive(Debug, Clone, Ord, PartialOrd, Default)]
 pub struct QualifiedName(Arc<QualifiedNameInner>);
 
@@ -73,6 +74,7 @@ impl Hash for Name {
     }
 }
 
+// TODO: .始まりの完全修飾で表示するようにする。QualifiedNameも同様。
 impl Display for Path {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let names = self.names();
@@ -92,32 +94,39 @@ impl Path {
         Path(None)
     }
 
+    // TODO: qualified_nameにリネーム
     pub fn as_qualified_name(&self) -> Option<&QualifiedName> {
         self.0.as_ref()
     }
 
+    // TODO: from_qualified_name(QualifiedName) -> Pathを作ってこのメソッドは消す
     pub fn from_parts(parent: Path, name: Name) -> Path {
         Path(Some(QualifiedName::from_parts(parent, name)))
     }
 
+    // TODO: 消す
     pub fn name(&self) -> Option<&Name> {
         self.0.as_ref().map(QualifiedName::name)
     }
 
+    // TODO: 消す
     pub fn parent(&self) -> Option<&Path> {
         self.0.as_ref().map(QualifiedName::path)
     }
 
+    // TODO: 消す
     pub fn to_parts(&self) -> Option<(&Path, &Name)> {
         self.0
             .as_ref()
             .map(|qualified_name| (qualified_name.path(), qualified_name.name()))
     }
 
+    // TODO: 消す
     pub fn names(&self) -> Vec<Name> {
         self.0.as_ref().map_or_else(Vec::new, QualifiedName::names)
     }
 
+    // TODO: 消す
     pub fn append(&self, suffix: &Path) -> Path {
         let mut path = self.clone();
         for name in suffix.names() {
@@ -126,6 +135,7 @@ impl Path {
         path
     }
 
+    // TODO: suffixはNameにする
     pub fn extend(&self, suffix: impl AsRef<str>) -> Path {
         let name = Name::from_str(suffix.as_ref());
         Path::from_parts(self.clone(), name)
@@ -160,7 +170,7 @@ impl QualifiedName {
         QualifiedName(owned)
     }
 
-    // TODO: deprecate this method in favor of from_parts
+    // TODO: これは消して Path::root().extend(Name::from(value)) に置き換えたい。ただ、parseでQualifiedNameを相対パス名にも流用しているせいで相対パスの作成にも使ってしまっているので、型の分離が終わってから着手する。
     pub fn from_str(value: &str) -> QualifiedName {
         Self::from_parts(Path::root(), Name::from_str(value))
     }
@@ -173,12 +183,14 @@ impl QualifiedName {
         &self.0.path
     }
 
+    // TODO: parse専用の型ができたら消す
     pub fn prefix(&self) -> Option<QualifiedName> {
         let name = self.path().name()?.clone();
         let parent = self.path().parent().cloned().unwrap_or_else(Path::root);
         Some(QualifiedName::from_parts(parent, name))
     }
 
+    // TODO: parse専用の型ができたら消す
     pub fn names(&self) -> Vec<Name> {
         let mut names = vec![];
         names.extend(self.path().names());
@@ -190,12 +202,13 @@ impl QualifiedName {
         self.path().extend(self.name().as_str())
     }
 
+    // TODO: 消す
     pub fn append(&self, suffix: &QualifiedName) -> QualifiedName {
         let path = self.to_path().append(suffix.path());
         Self::from_parts(path, suffix.name().clone())
     }
 
-    // TODO: deprecate this method in favor of append
+    // TODO: このメソッドは消してself.to_path().extend(suffix)に置き換える
     pub fn extend(&self, suffix: impl AsRef<str>) -> QualifiedName {
         let name = Name::from_str(suffix.as_ref());
         Self::from_parts(self.to_path(), name)

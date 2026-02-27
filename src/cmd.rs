@@ -150,6 +150,7 @@ pub struct CmdTypeInductive {
 
 #[derive(Clone, Debug)]
 pub struct DataConstructor {
+    // TODO: Nameに変える
     pub name: QualifiedName,
     pub ty: Type,
 }
@@ -166,6 +167,7 @@ pub struct CmdInductive {
 
 #[derive(Clone, Debug)]
 pub struct Constructor {
+    // TODO: Nameに変える
     pub name: QualifiedName,
     pub target: Term,
 }
