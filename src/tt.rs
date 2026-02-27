@@ -115,13 +115,6 @@ impl Path {
     }
 
     // TODO: 消す
-    pub fn to_parts(&self) -> Option<(&Path, &Name)> {
-        self.0
-            .as_ref()
-            .map(|qualified_name| (qualified_name.path(), qualified_name.name()))
-    }
-
-    // TODO: 消す
     pub fn names(&self) -> Vec<Name> {
         self.0.as_ref().map_or_else(Vec::new, QualifiedName::names)
     }

@@ -16,11 +16,11 @@ use crate::{
 
 #[derive(Clone, Debug, Default)]
 pub struct Namespace {
-    pub use_table: HashMap<Name, Path>,
+    pub use_table: HashMap<Name, QualifiedName>,
 }
 
 impl Namespace {
-    pub fn add(&mut self, alias: Name, target: Path) {
+    pub fn add(&mut self, alias: Name, target: QualifiedName) {
         self.use_table.insert(alias, target);
     }
 }
@@ -549,10 +549,10 @@ impl Eval {
         self.namespace_table
             .entry(name.path().clone())
             .or_default()
-            .add(name.name().clone(), name.to_path());
+            .add(name.name().clone(), name.clone());
     }
 
-    fn resolve(&mut self, base: Path, target: &QualifiedName) -> Path {
+    fn resolve(&mut self, base: Path, target: &QualifiedName) -> QualifiedName {
         let mut path = base;
         let mut names = target.names().into_iter().peekable();
         while let Some(name) = names.next() {
@@ -565,11 +565,11 @@ impl Eval {
                 for tail in names {
                     path = Path::from_parts(path, tail);
                 }
-                return path;
+                return path.as_qualified_name().unwrap().clone();
             };
-            path = target.clone();
+            path = target.to_path();
         }
-        path
+        path.as_qualified_name().unwrap().clone()
     }
 
     fn add_const(
@@ -2406,10 +2406,10 @@ mod tests {
     }
 
     #[test]
-    fn namespace_add_stores_path_target() {
+    fn namespace_add_stores_qualified_name_target() {
         let mut namespace = Namespace::default();
         let alias = Name::from_str("alias");
-        let target = Path::from_parts(Path::root(), Name::from_str("foo"));
+        let target = QualifiedName::from_str("foo");
         namespace.add(alias.clone(), target.clone());
         assert_eq!(namespace.use_table.get(&alias), Some(&target));
     }
@@ -2459,7 +2459,7 @@ mod tests {
             eval.namespace_table[&Path::root()]
                 .use_table
                 .get(&Name::from_str("foo")),
-            Some(&path)
+            Some(&qualified("foo"))
         );
     }
 
@@ -2485,7 +2485,7 @@ mod tests {
         eval.namespace_table
             .get_mut(&Path::root())
             .expect("root namespace must exist")
-            .add(Name::from_str("foo"), foo_path.clone());
+            .add(Name::from_str("foo"), qualified("foo"));
 
         eval.run_cmd(Cmd::TypeConst(CmdTypeConst {
             name: QualifiedName::from_str("foo").extend("bar"),
@@ -2493,12 +2493,11 @@ mod tests {
         }))
         .expect("type const command should succeed");
 
-        let bar_path = Path::from_parts(foo_path.clone(), Name::from_str("bar"));
         assert_eq!(
             eval.namespace_table[&foo_path]
                 .use_table
                 .get(&Name::from_str("bar")),
-            Some(&bar_path)
+            Some(&qualified("foo.bar"))
         );
     }
 
@@ -2536,11 +2535,11 @@ mod tests {
         eval.namespace_table
             .get_mut(&root_namespace)
             .expect("root namespace must exist")
-            .add(Name::from_str("foo"), current_namespace.clone());
+            .add(Name::from_str("foo"), qualified("foo"));
         eval.namespace_table
             .get_mut(&current_namespace)
             .expect("current namespace must exist")
-            .add(Name::from_str("bar"), path("real"));
+            .add(Name::from_str("bar"), qualified("real"));
         eval.namespace_table
             .insert(path("real"), Namespace::default());
         eval.current_namespace = current_namespace.clone();
@@ -2558,7 +2557,7 @@ mod tests {
             eval.namespace_table[&current_namespace]
                 .use_table
                 .get(&Name::from_str("baz")),
-            Some(&path("real.qux"))
+            Some(&qualified("real.qux"))
         );
     }
 
@@ -2572,15 +2571,15 @@ mod tests {
         eval.namespace_table
             .get_mut(&root_namespace)
             .expect("root namespace must exist")
-            .add(Name::from_str("foo"), current_namespace.clone());
+            .add(Name::from_str("foo"), qualified("foo"));
         eval.namespace_table
             .get_mut(&root_namespace)
             .expect("root namespace must exist")
-            .add(Name::from_str("bar"), path("global"));
+            .add(Name::from_str("bar"), qualified("global"));
         eval.namespace_table
             .get_mut(&current_namespace)
             .expect("current namespace must exist")
-            .add(Name::from_str("bar"), path("local"));
+            .add(Name::from_str("bar"), qualified("local"));
         eval.current_namespace = current_namespace.clone();
 
         eval.run_cmd(Cmd::Use(CmdUse {
@@ -2596,7 +2595,7 @@ mod tests {
             eval.namespace_table[&current_namespace]
                 .use_table
                 .get(&Name::from_str("baz")),
-            Some(&path("global"))
+            Some(&qualified("global"))
         );
     }
 
@@ -2607,7 +2606,7 @@ mod tests {
         eval.namespace_table
             .get_mut(&root_namespace)
             .expect("root namespace must exist")
-            .add(Name::from_str("hoge"), path("real"));
+            .add(Name::from_str("hoge"), qualified("real"));
 
         eval.run_cmd(Cmd::Use(CmdUse {
             absolute: false,
@@ -2628,13 +2627,13 @@ mod tests {
             eval.namespace_table[&root_namespace]
                 .use_table
                 .get(&Name::from_str("fuga")),
-            Some(&path("real"))
+            Some(&qualified("real"))
         );
         assert_eq!(
             eval.namespace_table[&root_namespace]
                 .use_table
                 .get(&Name::from_str("piyo")),
-            Some(&path("real"))
+            Some(&qualified("real"))
         );
     }
 
@@ -2656,7 +2655,7 @@ mod tests {
             eval.namespace_table[&root_namespace]
                 .use_table
                 .get(&Name::from_str("alias")),
-            Some(&path("qux.quux"))
+            Some(&qualified("qux.quux"))
         );
         assert!(
             !eval.namespace_table.contains_key(&path("qux")),
@@ -2680,7 +2679,7 @@ mod tests {
         let root_namespace = Path::root();
         let missing_head_path = path("qux");
         let mut missing_head_namespace = Namespace::default();
-        missing_head_namespace.add(Name::from_str("leaf"), path("real"));
+        missing_head_namespace.add(Name::from_str("leaf"), qualified("real"));
         eval.namespace_table
             .insert(missing_head_path, missing_head_namespace);
 
@@ -2697,7 +2696,7 @@ mod tests {
             eval.namespace_table[&root_namespace]
                 .use_table
                 .get(&Name::from_str("alias")),
-            Some(&path("qux.leaf"))
+            Some(&qualified("qux.leaf"))
         );
     }
 }
