@@ -898,26 +898,30 @@ lemma set.ext.{u} (s t : sub u) : (∀ x, x ∈ s ↔ x ∈ t) → s = t :=
 assume ∀ x, x ∈ s ↔ x ∈ t,
 fun_ext (take (x : u), prop_ext («∀ x, x ∈ s ↔ x ∈ t»[x]))
 
-lemma subset.trans.{u} (s t r : sub u) : s ⊆ t → t ⊆ r → s ⊆ r :=
-assume s ⊆ t,
-assume t ⊆ r,
-take (x : u),
-assume x ∈ s,
-have x ∈ t := «s ⊆ t»[x] «x ∈ s»,
-«t ⊆ r»[x] «x ∈ t»
+namespace subset {
+  use .{iff, set, sub}
 
-lemma subset.refl.{u} (s : sub u) : s ⊆ s :=
-take (x : u),
-assume x ∈ s,
-«x ∈ s»
-
-lemma subset.antisymm.{u} (s t : sub u) : s ⊆ t → t ⊆ s → s = t :=
-assume s ⊆ t,
-assume t ⊆ s,
-have ∀ x, x ∈ s ↔ x ∈ t :=
+  lemma trans.{u} (s t r : sub u) : s ⊆ t → t ⊆ r → s ⊆ r :=
+  assume s ⊆ t,
+  assume t ⊆ r,
   take (x : u),
-  iff.intro («s ⊆ t»[x]) («t ⊆ s»[x]),
-set.ext «∀ x, x ∈ s ↔ x ∈ t»
+  assume x ∈ s,
+  have x ∈ t := «s ⊆ t»[x] «x ∈ s»,
+  «t ⊆ r»[x] «x ∈ t»
+
+  lemma refl.{u} (s : sub u) : s ⊆ s :=
+  take (x : u),
+  assume x ∈ s,
+  «x ∈ s»
+
+  lemma antisymm.{u} (s t : sub u) : s ⊆ t → t ⊆ s → s = t :=
+  assume s ⊆ t,
+  assume t ⊆ s,
+  have ∀ x, x ∈ s ↔ x ∈ t :=
+    take (x : u),
+    iff.intro («s ⊆ t»[x]) («t ⊆ s»[x]),
+  set.ext «∀ x, x ∈ s ↔ x ∈ t»
+}
 
 -- Note: Consolas does not display well the cap and bigcap symbols:
 --
