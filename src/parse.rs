@@ -473,7 +473,7 @@ impl<'a> Parser<'a> {
         );
         let literal_name = self.qualified_name(&token);
         if token.is_field() {
-            Ok(self.resolve(Path::toplevel(), literal_name))
+            Ok(self.resolve(Path::root(), literal_name))
         } else {
             Ok(self.resolve(self.current_namespace.clone(), literal_name))
         }
@@ -551,7 +551,7 @@ impl<'a> Parser<'a> {
             }
         } else if token.is_field() {
             let name = self.qualified_name(&token);
-            let name = self.resolve(Path::toplevel(), name);
+            let name = self.resolve(Path::root(), name);
             if self.type_const_table.contains_key(&name) {
                 Ok(mk_type_const(name))
             } else {
@@ -817,7 +817,7 @@ impl<'a> Parser<'a> {
                     }
                     self.resolve(self.current_namespace.clone(), name)
                 } else if token.is_field() {
-                    self.resolve(Path::toplevel(), name)
+                    self.resolve(Path::root(), name)
                 } else {
                     unreachable!("term variable token must be identifier or field")
                 }
@@ -952,7 +952,7 @@ impl<'a> Parser<'a> {
             }
             self.resolve(self.current_namespace.clone(), name)
         } else if token.is_field() {
-            self.resolve(Path::toplevel(), name)
+            self.resolve(Path::root(), name)
         } else {
             unreachable!("expression variable token must be identifier or field")
         };
@@ -2406,11 +2406,11 @@ mod tests {
         namespace_table: &mut HashMap<Path, Namespace>,
         namespace: &Path,
     ) {
-        if namespace == &Path::toplevel() {
+        if namespace == &Path::root() {
             return;
         }
 
-        let mut parent = Path::toplevel();
+        let mut parent = Path::root();
         for segment in namespace.names() {
             let child = Path::from_parts(parent.clone(), segment.clone());
             if !namespace_table.contains_key(&child) {
@@ -2484,7 +2484,7 @@ mod tests {
     ) {
         ensure_namespace_path_for_tests(namespace_table, current_namespace);
         let base = if cmd.absolute {
-            Path::toplevel()
+            Path::root()
         } else {
             current_namespace.clone()
         };
@@ -2500,10 +2500,10 @@ mod tests {
     fn parse_expr(input: &str) -> Expr {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, Path> = HashMap::new();
-        let top_namespace = Path::toplevel();
+        let root_namespace = Path::root();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
         namespace_table.insert(
-            top_namespace.clone(),
+            root_namespace.clone(),
             Namespace {
                 use_table: std::mem::take(&mut use_table),
             },
@@ -2515,7 +2515,7 @@ mod tests {
             &axioms,
             &class_predicates,
         );
-        let current_namespace = top_namespace;
+        let current_namespace = root_namespace;
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
         let mut parser = Parser::new(
@@ -2542,15 +2542,15 @@ mod tests {
         let mut lex = Lex::new(file);
         let tt = TokenTable::default();
         let mut use_table: HashMap<Name, Path> = HashMap::new();
-        let top_namespace = Path::toplevel();
+        let root_namespace = Path::root();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
         namespace_table.insert(
-            top_namespace.clone(),
+            root_namespace.clone(),
             Namespace {
                 use_table: std::mem::take(&mut use_table),
             },
         );
-        let current_namespace = top_namespace;
+        let current_namespace = root_namespace;
         let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
         let const_table: HashMap<QualifiedName, Const> = HashMap::new();
         let axiom_table: HashMap<QualifiedName, Axiom> = HashMap::new();
@@ -2580,10 +2580,10 @@ mod tests {
     ) -> Result<Cmd, ParseError> {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
-        let top_namespace = Path::toplevel();
+        let root_namespace = Path::root();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
         namespace_table.insert(
-            top_namespace.clone(),
+            root_namespace.clone(),
             Namespace {
                 use_table: std::mem::take(use_table),
             },
@@ -2595,7 +2595,7 @@ mod tests {
             axiom_table,
             class_predicate_table,
         );
-        let current_namespace = top_namespace.clone();
+        let current_namespace = root_namespace.clone();
         let mut parser = Parser::new(
             &mut lex,
             tt,
@@ -2611,8 +2611,8 @@ mod tests {
             apply_use_cmd_for_tests(&mut namespace_table, &current_namespace, use_cmd);
         }
         let top_entry = namespace_table
-            .remove(&top_namespace)
-            .expect("top-level namespace entry must exist");
+            .remove(&root_namespace)
+            .expect("root namespace entry must exist");
         *use_table = top_entry.use_table;
         cmd
     }
@@ -2628,10 +2628,10 @@ mod tests {
     ) -> Result<Vec<Cmd>, ParseError> {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
-        let top_namespace = Path::toplevel();
+        let root_namespace = Path::root();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
         namespace_table.insert(
-            top_namespace.clone(),
+            root_namespace.clone(),
             Namespace {
                 use_table: std::mem::take(use_table),
             },
@@ -2645,7 +2645,7 @@ mod tests {
         );
         let mut cmds = vec![];
         let mut namespace_stack = vec![];
-        let mut current_namespace = top_namespace.clone();
+        let mut current_namespace = root_namespace.clone();
         while !lex.is_eof() {
             let mut parser = Parser::new(
                 &mut lex,
@@ -2676,8 +2676,8 @@ mod tests {
             cmds.push(cmd);
         }
         let top_entry = namespace_table
-            .remove(&top_namespace)
-            .expect("top-level namespace entry must exist");
+            .remove(&root_namespace)
+            .expect("root namespace entry must exist");
         *use_table = top_entry.use_table;
         Ok(cmds)
     }
@@ -2693,10 +2693,10 @@ mod tests {
     ) -> Result<Term, ParseError> {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
-        let top_namespace = Path::toplevel();
+        let root_namespace = Path::root();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
         namespace_table.insert(
-            top_namespace.clone(),
+            root_namespace.clone(),
             Namespace {
                 use_table: std::mem::take(use_table),
             },
@@ -2708,7 +2708,7 @@ mod tests {
             axiom_table,
             class_predicate_table,
         );
-        let current_namespace = top_namespace.clone();
+        let current_namespace = root_namespace.clone();
         let mut parser = Parser::new(
             &mut lex,
             tt,
@@ -2721,8 +2721,8 @@ mod tests {
         );
         let term = parser.term();
         let top_entry = namespace_table
-            .remove(&top_namespace)
-            .expect("top-level namespace entry must exist");
+            .remove(&root_namespace)
+            .expect("root namespace entry must exist");
         *use_table = top_entry.use_table;
         term
     }
@@ -2738,10 +2738,10 @@ mod tests {
     ) -> Result<Expr, ParseError> {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
-        let top_namespace = Path::toplevel();
+        let root_namespace = Path::root();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
         namespace_table.insert(
-            top_namespace.clone(),
+            root_namespace.clone(),
             Namespace {
                 use_table: std::mem::take(use_table),
             },
@@ -2753,7 +2753,7 @@ mod tests {
             axiom_table,
             class_predicate_table,
         );
-        let current_namespace = top_namespace.clone();
+        let current_namespace = root_namespace.clone();
         let mut parser = Parser::new(
             &mut lex,
             tt,
@@ -2766,8 +2766,8 @@ mod tests {
         );
         let expr = parser.expr();
         let top_entry = namespace_table
-            .remove(&top_namespace)
-            .expect("top-level namespace entry must exist");
+            .remove(&root_namespace)
+            .expect("root namespace entry must exist");
         *use_table = top_entry.use_table;
         expr
     }
@@ -2783,7 +2783,7 @@ mod tests {
     }
 
     fn path(value: &str) -> Path {
-        let mut path = Path::toplevel();
+        let mut path = Path::root();
         if value.is_empty() {
             return path;
         }
@@ -2921,9 +2921,9 @@ mod tests {
     #[test]
     fn term_hole_uses_canonical_ids_for_local_context() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let top_namespace = Path::toplevel();
+        let root_namespace = Path::root();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
-        namespace_table.insert(top_namespace.clone(), Namespace::default());
+        namespace_table.insert(root_namespace.clone(), Namespace::default());
         seed_namespace_table_from_globals(
             &mut namespace_table,
             &type_consts,
@@ -2931,7 +2931,7 @@ mod tests {
             &axioms,
             &class_predicates,
         );
-        let current_namespace = top_namespace;
+        let current_namespace = root_namespace;
         let file = Arc::new(File::new("<test>", "_"));
         let mut lex = Lex::new(file);
         let mut parser = Parser::new(
@@ -2962,9 +2962,9 @@ mod tests {
     #[test]
     fn parser_local_bindings_use_qualified_name_keys() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
-        let top_namespace = Path::toplevel();
+        let root_namespace = Path::root();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
-        namespace_table.insert(top_namespace.clone(), Namespace::default());
+        namespace_table.insert(root_namespace.clone(), Namespace::default());
         seed_namespace_table_from_globals(
             &mut namespace_table,
             &type_consts,
@@ -2972,7 +2972,7 @@ mod tests {
             &axioms,
             &class_predicates,
         );
-        let current_namespace = top_namespace;
+        let current_namespace = root_namespace;
         let file = Arc::new(File::new("<test>", ""));
         let mut lex = Lex::new(file);
         let mut parser = Parser::new(
@@ -3049,7 +3049,7 @@ mod tests {
     }
 
     #[test]
-    fn absolute_type_reference_is_resolved_from_toplevel() {
+    fn absolute_type_reference_is_resolved_from_root() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, Path> = HashMap::new();
         let cmds = parse_cmds_with_tables(
@@ -3075,7 +3075,7 @@ mod tests {
     }
 
     #[test]
-    fn absolute_class_reference_is_resolved_from_toplevel() {
+    fn absolute_class_reference_is_resolved_from_root() {
         let (tt, type_consts, consts, axioms, mut class_predicates) = setup_tables();
         class_predicates.insert(qualified("C"), ClassType { arity: 0 });
         let mut use_table: HashMap<Name, Path> = HashMap::new();
@@ -3103,7 +3103,7 @@ mod tests {
     }
 
     #[test]
-    fn absolute_term_reference_is_resolved_from_toplevel() {
+    fn absolute_term_reference_is_resolved_from_root() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, Path> = HashMap::new();
         let cmds = parse_cmds_with_tables(
@@ -3133,7 +3133,7 @@ mod tests {
     }
 
     #[test]
-    fn absolute_expr_reference_is_resolved_from_toplevel() {
+    fn absolute_expr_reference_is_resolved_from_root() {
         let (tt, type_consts, consts, mut axioms, class_predicates) = setup_tables();
         axioms.insert(
             qualified("h"),
@@ -3178,7 +3178,7 @@ mod tests {
     }
 
     #[test]
-    fn absolute_namespace_target_is_resolved_from_toplevel() {
+    fn absolute_namespace_target_is_resolved_from_root() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, Path> = HashMap::new();
         let cmds = parse_cmds_with_tables(
@@ -3204,7 +3204,7 @@ mod tests {
     }
 
     #[test]
-    fn absolute_use_target_is_resolved_from_toplevel() {
+    fn absolute_use_target_is_resolved_from_root() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, Path> = HashMap::new();
         let cmds = parse_cmds_with_tables(
@@ -3226,7 +3226,7 @@ mod tests {
     }
 
     #[test]
-    fn absolute_fixity_entities_are_resolved_from_toplevel() {
+    fn absolute_fixity_entities_are_resolved_from_root() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let scenarios = [
             ("infixr * : 50 := .p", "infixr"),
@@ -3374,7 +3374,7 @@ mod tests {
     }
 
     #[test]
-    fn use_absolute_group_in_namespace_is_resolved_from_toplevel() {
+    fn use_absolute_group_in_namespace_is_resolved_from_root() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, Path> = HashMap::new();
         let cmds = parse_cmds_with_tables(
@@ -3422,7 +3422,7 @@ mod tests {
     }
 
     #[test]
-    fn use_absolute_scoped_group_is_resolved_from_toplevel() {
+    fn use_absolute_scoped_group_is_resolved_from_root() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, Path> = HashMap::new();
         let cmds = parse_cmds_with_tables(
@@ -3491,11 +3491,11 @@ mod tests {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let file = Arc::new(File::new("<test>", "use bar as baz"));
         let mut lex = Lex::new(file);
-        let top_namespace = Path::toplevel();
+        let root_namespace = Path::root();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
         let mut top_entry = Namespace::default();
         top_entry.add(Name::from_str("bar"), path("foo"));
-        namespace_table.insert(top_namespace.clone(), top_entry);
+        namespace_table.insert(root_namespace.clone(), top_entry);
         seed_namespace_table_from_globals(
             &mut namespace_table,
             &type_consts,
@@ -3503,7 +3503,7 @@ mod tests {
             &axioms,
             &class_predicates,
         );
-        let current_namespace = top_namespace.clone();
+        let current_namespace = root_namespace.clone();
         let mut parser = Parser::new(
             &mut lex,
             &tt,
@@ -3516,7 +3516,7 @@ mod tests {
         );
         let _ = parser.cmd().expect("use command parses");
         assert_eq!(
-            namespace_table[&top_namespace]
+            namespace_table[&root_namespace]
                 .use_table
                 .get(&Name::from_str("baz")),
             None
@@ -4056,8 +4056,8 @@ mod tests {
         let mut lex = Lex::new(file);
         let tt = TokenTable::default();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
-        let top_namespace = Path::toplevel();
-        namespace_table.insert(top_namespace, Namespace::default());
+        let root_namespace = Path::root();
+        namespace_table.insert(root_namespace, Namespace::default());
         namespace_table.insert(path("foo"), Namespace::default());
         namespace_table.insert(path("foo.qux.real"), Namespace::default());
         let mut qux_namespace = Namespace::default();
@@ -4091,8 +4091,8 @@ mod tests {
         let mut lex = Lex::new(file);
         let tt = TokenTable::default();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
-        let top_namespace = Path::toplevel();
-        namespace_table.insert(top_namespace, Namespace::default());
+        let root_namespace = Path::root();
+        namespace_table.insert(root_namespace, Namespace::default());
         namespace_table.insert(path("foo"), Namespace::default());
         namespace_table.insert(path("foo.qux.real"), Namespace::default());
         let mut qux_namespace = Namespace::default();
@@ -4124,9 +4124,9 @@ mod tests {
         let mut lex = Lex::new(file);
         let tt = TokenTable::default();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
-        let top_namespace = Path::toplevel();
-        namespace_table.insert(top_namespace.clone(), Namespace::default());
-        let current_namespace = top_namespace;
+        let root_namespace = Path::root();
+        namespace_table.insert(root_namespace.clone(), Namespace::default());
+        let current_namespace = root_namespace;
         let type_const_table = HashMap::new();
         let const_table = HashMap::new();
         let axiom_table = HashMap::new();
@@ -4146,7 +4146,7 @@ mod tests {
         assert_eq!(resolved, qualified("qux.quux"));
         assert!(parser.namespace_table.contains_key(&path("qux")));
         assert_eq!(
-            parser.namespace_table[&Path::toplevel()]
+            parser.namespace_table[&Path::root()]
                 .use_table
                 .get(&Name::from_str("qux")),
             Some(&path("qux"))
@@ -4159,8 +4159,8 @@ mod tests {
         let mut lex = Lex::new(file);
         let tt = TokenTable::default();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
-        let top_namespace = Path::toplevel();
-        namespace_table.insert(top_namespace, Namespace::default());
+        let root_namespace = Path::root();
+        namespace_table.insert(root_namespace, Namespace::default());
         namespace_table.insert(path("foo"), Namespace::default());
         namespace_table.insert(path("foo.qux.real"), Namespace::default());
         let mut qux_namespace = Namespace::default();

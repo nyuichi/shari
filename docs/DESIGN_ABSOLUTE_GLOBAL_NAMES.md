@@ -5,7 +5,7 @@ Status: draft
 ## Goals
 
 - Add absolute global name syntax: `.foo.bar`.
-- Resolve absolute names from top-level namespace, not `current_namespace`.
+- Resolve absolute names from root namespace, not `current_namespace`.
 - Allow whitespace between field segments (`.foo .bar` is valid, same as `.foo.bar`).
 - Apply support to all global-name parse points in `src/parse.rs`.
 - Reject absolute paths in declaration heads (e.g. `const .foo : Prop`).
@@ -33,7 +33,7 @@ Status: draft
 ### Resolution
 
 - Relative names: keep existing behavior (resolve from `current_namespace`).
-- Absolute names: resolve from `Path::toplevel()`.
+- Absolute names: resolve from `Path::root()`.
 - Alias rewrite rules stay the same; only the starting namespace changes.
 
 ## Scope in `parse.rs`
@@ -96,7 +96,7 @@ Add only small helpers:
 
 - `global_reference_name(head: &Token) -> QualifiedName`
   - Parse with `qualified_name(head)`.
-  - If `head.kind == TokenKind::Field`, call `resolve(Path::toplevel(), name)`.
+  - If `head.kind == TokenKind::Field`, call `resolve(Path::root(), name)`.
   - Otherwise call `resolve(self.current_namespace.clone(), name)`.
 - `global_declaration_name() -> Result<QualifiedName, ParseError>`
   - Reject `TokenKind::Field` with `absolute path is not allowed in declaration head`.
