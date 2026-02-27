@@ -541,10 +541,13 @@ impl Eval {
         let mut path = base;
         let mut names = target.names().into_iter();
         while let Some(name) = names.next() {
-            let namespace = self
-                .namespace_table
-                .get(&path)
-                .expect("namespace path must exist");
+            let Some(namespace) = self.namespace_table.get(&path) else {
+                path = QualifiedName::from_parts(path, name).into_path();
+                for tail in names {
+                    path = QualifiedName::from_parts(path, tail).into_path();
+                }
+                return path.into_qualified_name().unwrap();
+            };
             let Some(target) = namespace.use_table.get(&name) else {
                 path = QualifiedName::from_parts(path, name).into_path();
                 for tail in names {
@@ -2684,6 +2687,39 @@ mod tests {
                 .use_table
                 .get(&Name::from_str("alias")),
             Some(&qualified("qux.leaf"))
+        );
+    }
+
+    #[test]
+    fn use_command_resolves_alias_tail_without_namespace_entry_for_alias_target() {
+        let mut eval = Eval::default();
+        let current_namespace = path("subset");
+        eval.namespace_table
+            .insert(current_namespace.clone(), Namespace::default());
+        eval.namespace_table
+            .get_mut(&current_namespace)
+            .expect("current namespace must exist")
+            .add(Name::from_str("iff"), qualified("iff"));
+        eval.current_namespace = current_namespace.clone();
+
+        eval.run_cmd(Cmd::Use(CmdUse {
+            absolute: false,
+            decls: vec![UseDecl {
+                alias: Name::from_str("iff_intro"),
+                target: qualified("iff.intro"),
+            }],
+        }))
+        .expect("use command should succeed");
+
+        assert_eq!(
+            eval.namespace_table[&current_namespace]
+                .use_table
+                .get(&Name::from_str("iff_intro")),
+            Some(&qualified("iff.intro"))
+        );
+        assert!(
+            !eval.namespace_table.contains_key(&path("iff")),
+            "resolve should not require or create namespace entries for alias target paths"
         );
     }
 }

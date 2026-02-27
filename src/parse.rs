@@ -435,10 +435,13 @@ impl<'a> Parser<'a> {
         let mut path = base;
         let mut names = name.names().into_iter();
         while let Some(name) = names.next() {
-            let namespace = self
-                .namespace_table
-                .get(&path)
-                .expect("namespace path must exist");
+            let Some(namespace) = self.namespace_table.get(&path) else {
+                path = QualifiedName::from_parts(path, name).into_path();
+                for tail in names {
+                    path = QualifiedName::from_parts(path, tail).into_path();
+                }
+                return path.into_qualified_name().unwrap();
+            };
             let Some(target) = namespace.use_table.get(&name) else {
                 path = QualifiedName::from_parts(path, name).into_path();
                 for tail in names {
@@ -4245,6 +4248,41 @@ mod tests {
 
         let resolved = parser.resolve(parser.current_namespace.clone(), qualified("qux.leaf.tail"));
         assert_eq!(resolved, qualified("foo.qux.leaf.tail"));
+    }
+
+    #[test]
+    fn resolve_alias_tail_without_namespace_entry_for_alias_target() {
+        let file = Arc::new(File::new("<test>", ""));
+        let mut lex = Lex::new(file);
+        let tt = TokenTable::default();
+        let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
+        let root_namespace = Path::root();
+        namespace_table.insert(root_namespace.clone(), Namespace::default());
+        let current_namespace = path("subset");
+        let mut subset_namespace = Namespace::default();
+        subset_namespace.add(Name::from_str("iff"), qualified("iff"));
+        namespace_table.insert(current_namespace.clone(), subset_namespace);
+        let type_const_table = HashMap::new();
+        let const_table = HashMap::new();
+        let axiom_table = HashMap::new();
+        let class_predicate_table = HashMap::new();
+        let parser = Parser::new(
+            &mut lex,
+            &tt,
+            &namespace_table,
+            &current_namespace,
+            &type_const_table,
+            &const_table,
+            &axiom_table,
+            &class_predicate_table,
+        );
+
+        let resolved = parser.resolve(parser.current_namespace.clone(), qualified("iff.intro"));
+        assert_eq!(resolved, qualified("iff.intro"));
+        assert!(
+            !parser.namespace_table.contains_key(&path("iff")),
+            "resolve should not require or create namespace entries for alias target paths"
+        );
     }
 
     #[test]
