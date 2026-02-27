@@ -23,7 +23,7 @@ pub fn process(file: Arc<File>) -> anyhow::Result<()> {
         let cmd = match Parser::new(
             &mut lex,
             &eval.tt,
-            &mut eval.namespace_table,
+            &eval.namespace_table,
             &eval.current_namespace,
             &eval.type_const_table,
             &eval.const_table,

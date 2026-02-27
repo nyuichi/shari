@@ -169,7 +169,7 @@ struct LocalAxiom {
 pub struct Parser<'a> {
     lex: &'a mut Lex,
     tt: &'a TokenTable,
-    namespace_table: &'a mut HashMap<Path, Namespace>,
+    namespace_table: &'a HashMap<Path, Namespace>,
     current_namespace: &'a Path,
     type_const_table: &'a HashMap<QualifiedName, Kind>,
     const_table: &'a HashMap<QualifiedName, Const>,
@@ -189,7 +189,7 @@ impl<'a> Parser<'a> {
     pub fn new(
         lex: &'a mut Lex,
         tt: &'a TokenTable,
-        namespace_table: &'a mut HashMap<Path, Namespace>,
+        namespace_table: &'a HashMap<Path, Namespace>,
         current_namespace: &'a Path,
         type_const_table: &'a HashMap<QualifiedName, Kind>,
         const_table: &'a HashMap<QualifiedName, Const>,
@@ -2529,7 +2529,7 @@ mod tests {
         let mut parser = Parser::new(
             &mut lex,
             &tt,
-            &mut namespace_table,
+            &namespace_table,
             &current_namespace,
             &type_consts,
             &consts,
@@ -2566,7 +2566,7 @@ mod tests {
         let mut parser = Parser::new(
             &mut lex,
             &tt,
-            &mut namespace_table,
+            &namespace_table,
             &current_namespace,
             &type_const_table,
             &const_table,
@@ -2608,7 +2608,7 @@ mod tests {
         let mut parser = Parser::new(
             &mut lex,
             tt,
-            &mut namespace_table,
+            &namespace_table,
             &current_namespace,
             type_const_table,
             const_table,
@@ -2660,7 +2660,7 @@ mod tests {
             let mut parser = Parser::new(
                 &mut lex,
                 tt,
-                &mut namespace_table,
+                &namespace_table,
                 &current_namespace,
                 type_const_table,
                 const_table,
@@ -2724,7 +2724,7 @@ mod tests {
         let mut parser = Parser::new(
             &mut lex,
             tt,
-            &mut namespace_table,
+            &namespace_table,
             &current_namespace,
             type_const_table,
             const_table,
@@ -2770,7 +2770,7 @@ mod tests {
         let mut parser = Parser::new(
             &mut lex,
             tt,
-            &mut namespace_table,
+            &namespace_table,
             &current_namespace,
             type_const_table,
             const_table,
@@ -2950,7 +2950,7 @@ mod tests {
         let mut parser = Parser::new(
             &mut lex,
             &tt,
-            &mut namespace_table,
+            &namespace_table,
             &current_namespace,
             &type_consts,
             &consts,
@@ -2991,7 +2991,7 @@ mod tests {
         let mut parser = Parser::new(
             &mut lex,
             &tt,
-            &mut namespace_table,
+            &namespace_table,
             &current_namespace,
             &type_consts,
             &consts,
@@ -3520,7 +3520,7 @@ mod tests {
         let mut parser = Parser::new(
             &mut lex,
             &tt,
-            &mut namespace_table,
+            &namespace_table,
             &current_namespace,
             &type_consts,
             &consts,
@@ -4084,7 +4084,7 @@ mod tests {
         let mut parser = Parser::new(
             &mut lex,
             &tt,
-            &mut namespace_table,
+            &namespace_table,
             &current_namespace,
             &type_const_table,
             &const_table,
@@ -4119,7 +4119,7 @@ mod tests {
         let mut parser = Parser::new(
             &mut lex,
             &tt,
-            &mut namespace_table,
+            &namespace_table,
             &current_namespace,
             &type_const_table,
             &const_table,
@@ -4147,7 +4147,7 @@ mod tests {
         let mut parser = Parser::new(
             &mut lex,
             &tt,
-            &mut namespace_table,
+            &namespace_table,
             &current_namespace,
             &type_const_table,
             &const_table,
@@ -4194,7 +4194,7 @@ mod tests {
         let mut parser = Parser::new(
             &mut lex,
             &tt,
-            &mut namespace_table,
+            &namespace_table,
             &current_namespace,
             &type_const_table,
             &const_table,
