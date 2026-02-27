@@ -539,7 +539,7 @@ pub struct Operator {
 impl Eval {
     fn resolve(&mut self, base: Path, target: &QualifiedName) -> QualifiedName {
         let mut path = base;
-        let mut names = target.names().into_iter().peekable();
+        let mut names = target.names().into_iter();
         while let Some(name) = names.next() {
             let namespace = self
                 .namespace_table

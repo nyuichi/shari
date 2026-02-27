@@ -431,7 +431,7 @@ impl<'a> Parser<'a> {
 
     fn resolve(&mut self, base: Path, name: QualifiedName) -> QualifiedName {
         let mut path = base;
-        let mut names = name.names().into_iter().peekable();
+        let mut names = name.names().into_iter();
         while let Some(name) = names.next() {
             let namespace = self
                 .namespace_table
