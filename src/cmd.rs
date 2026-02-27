@@ -565,11 +565,11 @@ impl Eval {
                 for tail in names {
                     path = Path::from_parts(path, tail);
                 }
-                return path.as_qualified_name().unwrap().clone();
+                return path.into_qualified_name().unwrap();
             };
             path = target.to_path();
         }
-        path.as_qualified_name().unwrap().clone()
+        path.into_qualified_name().unwrap()
     }
 
     fn add_const(

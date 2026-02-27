@@ -94,9 +94,12 @@ impl Path {
         Path(None)
     }
 
-    // TODO: qualified_nameにリネーム
     pub fn as_qualified_name(&self) -> Option<&QualifiedName> {
         self.0.as_ref()
+    }
+
+    pub fn into_qualified_name(self) -> Option<QualifiedName> {
+        self.0
     }
 
     // TODO: from_qualified_name(QualifiedName) -> Pathを作ってこのメソッドは消す
@@ -2945,6 +2948,17 @@ mod tests {
         assert_eq!(qualified_name.path(), &Path::root());
         assert_eq!(qualified_name.name(), &Name::from_str("foo"));
         assert!(Path::root().as_qualified_name().is_none());
+    }
+
+    #[test]
+    fn path_into_qualified_name_returns_owned_value() {
+        let path = Path::from_parts(Path::root(), Name::from_str("foo"));
+        let Some(qualified_name) = path.into_qualified_name() else {
+            panic!("path must provide a qualified name");
+        };
+        assert_eq!(qualified_name.path(), &Path::root());
+        assert_eq!(qualified_name.name(), &Name::from_str("foo"));
+        assert!(Path::root().into_qualified_name().is_none());
     }
 
     #[test]

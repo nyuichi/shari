@@ -442,11 +442,11 @@ impl<'a> Parser<'a> {
                 for tail in names {
                     path = Path::from_parts(path, tail);
                 }
-                return path.as_qualified_name().unwrap().clone();
+                return path.into_qualified_name().unwrap();
             };
             path = target.to_path();
         }
-        path.as_qualified_name().unwrap().clone()
+        path.into_qualified_name().unwrap()
     }
 
     fn global_reference_name(
@@ -2482,7 +2482,7 @@ mod tests {
                 .map(|target| target.to_path())
                 .unwrap_or_else(|| Path::from_parts(path, segment));
         }
-        path.as_qualified_name().unwrap().clone()
+        path.into_qualified_name().unwrap()
     }
 
     fn apply_use_cmd_for_tests(
