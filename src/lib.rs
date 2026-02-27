@@ -60,7 +60,7 @@ mod tests {
     }
 
     #[test]
-    fn top_level_closing_brace_is_command_error() {
+    fn root_closing_brace_is_command_error() {
         let file = Arc::new(File::new("<test>", "}"));
         let err = process(file).expect_err("top-level block end should fail");
         let chain = error_chain(&err);

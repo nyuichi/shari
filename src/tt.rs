@@ -88,7 +88,7 @@ impl Display for Path {
 }
 
 impl Path {
-    pub fn toplevel() -> Path {
+    pub fn root() -> Path {
         Path(None)
     }
 
@@ -162,7 +162,7 @@ impl QualifiedName {
 
     // TODO: deprecate this method in favor of from_parts
     pub fn from_str(value: &str) -> QualifiedName {
-        Self::from_parts(Path::toplevel(), Name::from_str(value))
+        Self::from_parts(Path::root(), Name::from_str(value))
     }
 
     pub fn name(&self) -> &Name {
@@ -175,7 +175,7 @@ impl QualifiedName {
 
     pub fn prefix(&self) -> Option<QualifiedName> {
         let name = self.path().name()?.clone();
-        let parent = self.path().parent().cloned().unwrap_or_else(Path::toplevel);
+        let parent = self.path().parent().cloned().unwrap_or_else(Path::root);
         Some(QualifiedName::from_parts(parent, name))
     }
 
@@ -2904,9 +2904,9 @@ mod tests {
     }
 
     #[test]
-    fn path_toplevel_is_canonical() {
-        let left = Path::toplevel();
-        let right = Path::toplevel();
+    fn path_root_is_canonical() {
+        let left = Path::root();
+        let right = Path::root();
         assert_eq!(left, right);
         assert!(left.parent().is_none());
         assert!(left.name().is_none());
@@ -2914,36 +2914,36 @@ mod tests {
 
     #[test]
     fn path_from_parts_is_canonical() {
-        let left = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
-        let right = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        let left = Path::from_parts(Path::root(), Name::from_str("foo"));
+        let right = Path::from_parts(Path::root(), Name::from_str("foo"));
         assert_eq!(left, right);
     }
 
     #[test]
     fn path_from_parts_wraps_qualified_name() {
-        let path = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        let path = Path::from_parts(Path::root(), Name::from_str("foo"));
         let Path(Some(qualified_name)) = path else {
-            panic!("path must not be toplevel");
+            panic!("path must not be root");
         };
 
-        assert_eq!(qualified_name.path(), &Path::toplevel());
+        assert_eq!(qualified_name.path(), &Path::root());
         assert_eq!(qualified_name.name(), &Name::from_str("foo"));
     }
 
     #[test]
     fn path_as_qualified_name_matches_wrapped_value() {
-        let path = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        let path = Path::from_parts(Path::root(), Name::from_str("foo"));
         let Some(qualified_name) = path.as_qualified_name() else {
             panic!("path must provide a qualified name");
         };
-        assert_eq!(qualified_name.path(), &Path::toplevel());
+        assert_eq!(qualified_name.path(), &Path::root());
         assert_eq!(qualified_name.name(), &Name::from_str("foo"));
-        assert!(Path::toplevel().as_qualified_name().is_none());
+        assert!(Path::root().as_qualified_name().is_none());
     }
 
     #[test]
     fn qualified_name_stores_path_and_name_separately() {
-        let path = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        let path = Path::from_parts(Path::root(), Name::from_str("foo"));
         let name = QualifiedName::from_parts(path.clone(), Name::from_str("bar"));
         assert_eq!(name.path(), &path);
         assert_eq!(name.name().as_str(), "bar");

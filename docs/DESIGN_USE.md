@@ -37,7 +37,7 @@ Rules:
 - If `as` is omitted, alias defaults to the last segment of the written target path.
 - `use foo` is valid even if `foo` has no current global declaration; unresolved targets are allowed.
 - Braced `use` trees contain comma-separated entries and nested `prefix.{...}` entries.
-- `use .{...}` is a top-level absolute group; each entry resolves from top-level namespace.
+- `use .{...}` is a top-level absolute group; each entry resolves from root namespace.
 - Absolute entries are not allowed inside any use group (`use {.foo}` and `use foo.{.bar}` are invalid).
 - `use` trees are expanded left-to-right into a flat sequence of leaf `use` entries.
 - Comma-separated `use` targets are only valid inside `{...}`.

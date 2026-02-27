@@ -30,7 +30,7 @@ struct Namespace {
 - `Path` represents namespace paths.
 - `QualifiedName` is split into `path` and terminal `name`.
 - `Path` and `QualifiedName` are interned.
-- Top-level namespace is `Path::toplevel()`.
+- Root namespace is `Path::root()`.
 
 ## Parser state and invariants
 
@@ -38,7 +38,7 @@ struct Namespace {
   - `current_namespace: Path`
   - `namespace_table: HashMap<Path, Namespace>`
 - `current_namespace` always exists in `namespace_table`.
-- Top-level namespace entry is created before parsing starts.
+- Root namespace entry is created before parsing starts.
 - `Parser::new` does not hydrate from global symbol tables; caller provides consistent tables.
 
 ## Name resolution contract

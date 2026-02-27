@@ -495,7 +495,7 @@ pub struct Eval {
 
 impl Default for Eval {
     fn default() -> Self {
-        let current_namespace = Path::toplevel();
+        let current_namespace = Path::root();
         let mut namespace_table = HashMap::new();
         namespace_table.insert(current_namespace.clone(), Namespace::default());
         Self {
@@ -863,7 +863,7 @@ impl Eval {
                 let CmdUse { absolute, decls } = inner;
                 let current_namespace = self.current_namespace.clone();
                 let base = if absolute {
-                    Path::toplevel()
+                    Path::root()
                 } else {
                     current_namespace.clone()
                 };
@@ -2378,7 +2378,7 @@ mod tests {
     use crate::tt::{Kind, Name, Path, QualifiedName};
 
     fn path(value: &str) -> Path {
-        let mut path = Path::toplevel();
+        let mut path = Path::root();
         if value.is_empty() {
             return path;
         }
@@ -2392,7 +2392,7 @@ mod tests {
     fn namespace_add_stores_path_target() {
         let mut namespace = Namespace::default();
         let alias = Name::from_str("alias");
-        let target = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        let target = Path::from_parts(Path::root(), Name::from_str("foo"));
         namespace.add(alias.clone(), target.clone());
         assert_eq!(namespace.use_table.get(&alias), Some(&target));
     }
@@ -2400,7 +2400,7 @@ mod tests {
     #[test]
     fn use_decl_stores_path_target() {
         let alias = Name::from_str("alias");
-        let target = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        let target = Path::from_parts(Path::root(), Name::from_str("foo"));
         let decl = UseDecl {
             alias: alias.clone(),
             target: target.clone(),
@@ -2421,25 +2421,25 @@ mod tests {
     #[test]
     fn block_end_restores_previous_namespace() {
         let mut eval = Eval::default();
-        let path = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        let path = Path::from_parts(Path::root(), Name::from_str("foo"));
         eval.run_cmd(Cmd::NamespaceStart(CmdNamespaceStart { path }))
             .expect("namespace start should succeed");
         eval.run_cmd(Cmd::BlockEnd)
             .expect("block end should close opened namespace");
-        assert_eq!(eval.current_namespace, Path::toplevel());
+        assert_eq!(eval.current_namespace, Path::root());
         assert!(eval.namespace_stack.is_empty());
     }
 
     #[test]
     fn namespace_start_registers_namespace_alias() {
         let mut eval = Eval::default();
-        let path = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        let path = Path::from_parts(Path::root(), Name::from_str("foo"));
         eval.run_cmd(Cmd::NamespaceStart(CmdNamespaceStart {
             path: path.clone(),
         }))
         .expect("namespace start should succeed");
         assert_eq!(
-            eval.namespace_table[&Path::toplevel()]
+            eval.namespace_table[&Path::root()]
                 .use_table
                 .get(&Name::from_str("foo")),
             Some(&path)
@@ -2449,12 +2449,12 @@ mod tests {
     #[test]
     fn type_const_command_registers_declaration_alias() {
         let mut eval = Eval::default();
-        let foo_path = Path::from_parts(Path::toplevel(), Name::from_str("foo"));
+        let foo_path = Path::from_parts(Path::root(), Name::from_str("foo"));
         eval.namespace_table
             .insert(foo_path.clone(), Namespace::default());
         eval.namespace_table
-            .get_mut(&Path::toplevel())
-            .expect("top-level namespace must exist")
+            .get_mut(&Path::root())
+            .expect("root namespace must exist")
             .add(Name::from_str("foo"), foo_path.clone());
 
         eval.run_cmd(Cmd::TypeConst(CmdTypeConst {
@@ -2475,13 +2475,13 @@ mod tests {
     #[test]
     fn use_command_resolves_relative_target_when_running() {
         let mut eval = Eval::default();
-        let top_namespace = Path::toplevel();
+        let root_namespace = Path::root();
         let current_namespace = path("foo");
         eval.namespace_table
             .insert(current_namespace.clone(), Namespace::default());
         eval.namespace_table
-            .get_mut(&top_namespace)
-            .expect("top-level namespace must exist")
+            .get_mut(&root_namespace)
+            .expect("root namespace must exist")
             .add(Name::from_str("foo"), current_namespace.clone());
         eval.namespace_table
             .get_mut(&current_namespace)
@@ -2509,17 +2509,17 @@ mod tests {
     #[test]
     fn use_command_resolves_absolute_target_when_running() {
         let mut eval = Eval::default();
-        let top_namespace = Path::toplevel();
+        let root_namespace = Path::root();
         let current_namespace = path("foo");
         eval.namespace_table
             .insert(current_namespace.clone(), Namespace::default());
         eval.namespace_table
-            .get_mut(&top_namespace)
-            .expect("top-level namespace must exist")
+            .get_mut(&root_namespace)
+            .expect("root namespace must exist")
             .add(Name::from_str("foo"), current_namespace.clone());
         eval.namespace_table
-            .get_mut(&top_namespace)
-            .expect("top-level namespace must exist")
+            .get_mut(&root_namespace)
+            .expect("root namespace must exist")
             .add(Name::from_str("bar"), path("global"));
         eval.namespace_table
             .get_mut(&current_namespace)
@@ -2547,10 +2547,10 @@ mod tests {
     #[test]
     fn use_command_resolves_decls_left_to_right() {
         let mut eval = Eval::default();
-        let top_namespace = Path::toplevel();
+        let root_namespace = Path::root();
         eval.namespace_table
-            .get_mut(&top_namespace)
-            .expect("top-level namespace must exist")
+            .get_mut(&root_namespace)
+            .expect("root namespace must exist")
             .add(Name::from_str("hoge"), path("real"));
 
         eval.run_cmd(Cmd::Use(CmdUse {
@@ -2569,13 +2569,13 @@ mod tests {
         .expect("use command should succeed");
 
         assert_eq!(
-            eval.namespace_table[&top_namespace]
+            eval.namespace_table[&root_namespace]
                 .use_table
                 .get(&Name::from_str("fuga")),
             Some(&path("real"))
         );
         assert_eq!(
-            eval.namespace_table[&top_namespace]
+            eval.namespace_table[&root_namespace]
                 .use_table
                 .get(&Name::from_str("piyo")),
             Some(&path("real"))
