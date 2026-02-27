@@ -96,7 +96,7 @@ pub struct CmdUse {
 #[derive(Clone, Debug)]
 pub struct UseDecl {
     pub alias: Name,
-    pub target: Path,
+    pub target: QualifiedName,
 }
 
 #[derive(Clone, Debug)]
@@ -552,7 +552,7 @@ impl Eval {
             .add(name.name().clone(), name.to_path());
     }
 
-    fn resolve(&mut self, base: Path, target: &Path) -> Path {
+    fn resolve(&mut self, base: Path, target: &QualifiedName) -> Path {
         let mut path = base;
         let mut names = target.names().into_iter().peekable();
         while let Some(name) = names.next() {
@@ -2395,6 +2395,16 @@ mod tests {
         path
     }
 
+    fn qualified(value: &str) -> QualifiedName {
+        let mut parts = value.split('.');
+        let first = parts.next().expect("qualified name must not be empty");
+        let mut name = QualifiedName::from_str(first);
+        for part in parts {
+            name = name.extend(part);
+        }
+        name
+    }
+
     #[test]
     fn namespace_add_stores_path_target() {
         let mut namespace = Namespace::default();
@@ -2405,9 +2415,9 @@ mod tests {
     }
 
     #[test]
-    fn use_decl_stores_path_target() {
+    fn use_decl_stores_qualified_name_target() {
         let alias = Name::from_str("alias");
-        let target = Path::from_parts(Path::root(), Name::from_str("foo"));
+        let target = QualifiedName::from_str("foo");
         let decl = UseDecl {
             alias: alias.clone(),
             target: target.clone(),
@@ -2539,7 +2549,7 @@ mod tests {
             absolute: false,
             decls: vec![UseDecl {
                 alias: Name::from_str("baz"),
-                target: path("bar.qux"),
+                target: qualified("bar.qux"),
             }],
         }))
         .expect("use command should succeed");
@@ -2577,7 +2587,7 @@ mod tests {
             absolute: true,
             decls: vec![UseDecl {
                 alias: Name::from_str("baz"),
-                target: path("bar"),
+                target: qualified("bar"),
             }],
         }))
         .expect("use command should succeed");
@@ -2604,11 +2614,11 @@ mod tests {
             decls: vec![
                 UseDecl {
                     alias: Name::from_str("fuga"),
-                    target: path("hoge"),
+                    target: qualified("hoge"),
                 },
                 UseDecl {
                     alias: Name::from_str("piyo"),
-                    target: path("fuga"),
+                    target: qualified("fuga"),
                 },
             ],
         }))
@@ -2637,7 +2647,7 @@ mod tests {
             absolute: false,
             decls: vec![UseDecl {
                 alias: Name::from_str("alias"),
-                target: path("qux.quux"),
+                target: qualified("qux.quux"),
             }],
         }))
         .expect("use command should succeed");
@@ -2678,7 +2688,7 @@ mod tests {
             absolute: false,
             decls: vec![UseDecl {
                 alias: Name::from_str("alias"),
-                target: path("qux.leaf"),
+                target: qualified("qux.leaf"),
             }],
         }))
         .expect("use command should succeed");

@@ -1669,10 +1669,7 @@ impl<'a> Parser<'a> {
             return self.use_group(Some(&target), decls);
         }
         let alias = self.alias_opt()?.unwrap_or_else(|| target.name().clone());
-        decls.push(UseDecl {
-            alias,
-            target: target.to_path(),
-        });
+        decls.push(UseDecl { alias, target });
         Ok(())
     }
 
@@ -2474,7 +2471,7 @@ mod tests {
     fn resolve_use_target_for_tests(
         namespace_table: &mut HashMap<Path, Namespace>,
         base: Path,
-        target: &Path,
+        target: &QualifiedName,
     ) -> Path {
         ensure_namespace_path_for_tests(namespace_table, &base);
         let mut path = base;
@@ -3238,7 +3235,7 @@ mod tests {
         };
         assert!(*absolute);
         assert_eq!(decls.len(), 1);
-        assert_eq!(decls[0].target, path("bar"));
+        assert_eq!(decls[0].target, qualified("bar"));
     }
 
     #[test]
@@ -3358,9 +3355,9 @@ mod tests {
         };
         assert_eq!(decls.len(), 2);
         assert_eq!(decls[0].alias, Name::from_str("fst"));
-        assert_eq!(decls[0].target, path("prod.fst"));
+        assert_eq!(decls[0].target, qualified("prod.fst"));
         assert_eq!(decls[1].alias, Name::from_str("snd"));
-        assert_eq!(decls[1].target, path("prod.snd"));
+        assert_eq!(decls[1].target, qualified("prod.snd"));
     }
 
     #[test]
@@ -3384,9 +3381,9 @@ mod tests {
         };
         assert_eq!(decls.len(), 2);
         assert_eq!(decls[0].alias, Name::from_str("foo"));
-        assert_eq!(decls[0].target, path("foo"));
+        assert_eq!(decls[0].target, qualified("foo"));
         assert_eq!(decls[1].alias, Name::from_str("bar"));
-        assert_eq!(decls[1].target, path("bar"));
+        assert_eq!(decls[1].target, qualified("bar"));
     }
 
     #[test]
@@ -3408,9 +3405,9 @@ mod tests {
         };
         assert_eq!(decls.len(), 2);
         assert_eq!(decls[0].alias, Name::from_str("foo"));
-        assert_eq!(decls[0].target, path("foo"));
+        assert_eq!(decls[0].target, qualified("foo"));
         assert_eq!(decls[1].alias, Name::from_str("baz"));
-        assert_eq!(decls[1].target, path("bar.baz"));
+        assert_eq!(decls[1].target, qualified("bar.baz"));
     }
 
     #[test]
@@ -3432,9 +3429,9 @@ mod tests {
         };
         assert_eq!(decls.len(), 2);
         assert_eq!(decls[0].alias, Name::from_str("f"));
-        assert_eq!(decls[0].target, path("foo"));
+        assert_eq!(decls[0].target, qualified("foo"));
         assert_eq!(decls[1].alias, Name::from_str("q"));
-        assert_eq!(decls[1].target, path("bar.baz"));
+        assert_eq!(decls[1].target, qualified("bar.baz"));
     }
 
     #[test]
@@ -3456,7 +3453,7 @@ mod tests {
         };
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].alias, Name::from_str("l"));
-        assert_eq!(decls[0].target, path("root.leaf"));
+        assert_eq!(decls[0].target, qualified("root.leaf"));
     }
 
     #[test]
@@ -3561,7 +3558,7 @@ mod tests {
         assert!(!absolute);
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].alias, Name::from_str("baz"));
-        assert_eq!(decls[0].target, path("bar"));
+        assert_eq!(decls[0].target, qualified("bar"));
     }
 
     #[test]
@@ -3584,7 +3581,7 @@ mod tests {
         };
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].alias, Name::from_str("qux"));
-        assert_eq!(decls[0].target, path("bar.baz"));
+        assert_eq!(decls[0].target, qualified("bar.baz"));
     }
 
     #[test]
@@ -3609,7 +3606,7 @@ mod tests {
         };
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].alias, Name::from_str("name"));
-        assert_eq!(decls[0].target, path("bar"));
+        assert_eq!(decls[0].target, qualified("bar"));
     }
 
     #[test]
@@ -3632,9 +3629,9 @@ mod tests {
         };
         assert_eq!(decls.len(), 2);
         assert_eq!(decls[0].alias, Name::from_str("fuga"));
-        assert_eq!(decls[0].target, path("hoge"));
+        assert_eq!(decls[0].target, qualified("hoge"));
         assert_eq!(decls[1].alias, Name::from_str("piyo"));
-        assert_eq!(decls[1].target, path("fuga"));
+        assert_eq!(decls[1].target, qualified("fuga"));
     }
 
     #[test]
@@ -3656,7 +3653,7 @@ mod tests {
         };
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].alias, Name::from_str("fs"));
-        assert_eq!(decls[0].target, path("future.symbol"));
+        assert_eq!(decls[0].target, qualified("future.symbol"));
     }
 
     #[test]
@@ -3678,9 +3675,9 @@ mod tests {
         };
         assert_eq!(decls.len(), 2);
         assert_eq!(decls[0].alias, Name::from_str("f"));
-        assert_eq!(decls[0].target, path("future"));
+        assert_eq!(decls[0].target, qualified("future"));
         assert_eq!(decls[1].alias, Name::from_str("g"));
-        assert_eq!(decls[1].target, path("f"));
+        assert_eq!(decls[1].target, qualified("f"));
     }
 
     #[test]
