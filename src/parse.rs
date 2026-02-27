@@ -4,7 +4,7 @@ use crate::cmd::{
     CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdInstance, CmdLemma,
     CmdNamespaceStart, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive, CmdUse,
     Constructor, DataConstructor, Fixity, InstanceDef, InstanceField, InstanceLemma, Namespace,
-    Operator, StructureAxiom, StructureConst, StructureField, UseDecl as CmdUseDecl,
+    Operator, StructureAxiom, StructureConst, StructureField, UseDecl,
 };
 use crate::proof::{
     Axiom, Expr, LocalStructureAxiom, LocalStructureConst, LocalStructureField, count_forall,
@@ -158,12 +158,6 @@ pub enum ParseError {
     Parse { message: String, span: Span },
     #[error("unexpected end of input at {span}")]
     Eof { span: Span },
-}
-
-#[derive(Debug, Clone)]
-struct UseDecl {
-    target: QualifiedName,
-    alias: Option<Name>,
 }
 
 #[derive(Debug, Clone)]
@@ -1676,22 +1670,25 @@ impl<'a> Parser<'a> {
         if self.expect_symbol_opt(".{").is_some() {
             return self.use_group(Some(&target), decls);
         }
-        let alias = self.alias_opt()?;
-        decls.push(UseDecl { target, alias });
+        let alias = self.alias_opt()?.unwrap_or_else(|| target.name().clone());
+        decls.push(UseDecl {
+            alias,
+            target: target.to_path(),
+        });
         Ok(())
     }
 
     fn use_cmd(&mut self, _token: Token) -> Result<CmdUse, ParseError> {
-        let mut parsed_decls = vec![];
+        let mut decls = vec![];
         let absolute = if self.expect_symbol_opt(".{").is_some() {
-            self.use_group(None, &mut parsed_decls)?;
+            self.use_group(None, &mut decls)?;
             true
         } else if self.expect_symbol_opt("{").is_some() {
-            self.use_group(None, &mut parsed_decls)?;
+            self.use_group(None, &mut decls)?;
             false
         } else {
             let absolute = self.peek_opt().is_some_and(|token| token.is_field());
-            self.use_entry(None, false, &mut parsed_decls)?;
+            self.use_entry(None, false, &mut decls)?;
             absolute
         };
         if let Some(token) = self.expect_symbol_opt(",") {
@@ -1701,26 +1698,7 @@ impl<'a> Parser<'a> {
             );
         }
 
-        let mut decls = vec![];
-        for decl in parsed_decls {
-            let UseDecl { target, alias } = decl;
-            let target = if absolute {
-                self.resolve(Path::toplevel(), target)
-            } else {
-                self.resolve(self.current_namespace.clone(), target)
-            };
-            let alias = alias.unwrap_or_else(|| target.name().clone());
-            self.namespace_table
-                .get_mut(self.current_namespace)
-                .expect("current namespace must exist")
-                .add(alias.clone(), target.to_path());
-            decls.push(CmdUseDecl {
-                alias,
-                target: target.to_path(),
-            });
-        }
-
-        Ok(CmdUse { decls })
+        Ok(CmdUse { absolute, decls })
     }
 
     fn infixr_cmd(&mut self, _token: Token) -> Result<CmdInfixr, ParseError> {
@@ -2479,6 +2457,46 @@ mod tests {
         }
     }
 
+    fn resolve_use_target_for_tests(
+        namespace_table: &mut HashMap<Path, Namespace>,
+        base: Path,
+        target: &Path,
+    ) -> Path {
+        ensure_namespace_path_for_tests(namespace_table, &base);
+        let mut path = base;
+        for segment in target.names() {
+            let resolved = namespace_table
+                .get(&path)
+                .expect("namespace path must exist")
+                .use_table
+                .get(&segment)
+                .cloned();
+            path = resolved.unwrap_or_else(|| Path::from_parts(path, segment));
+            ensure_namespace_path_for_tests(namespace_table, &path);
+        }
+        path
+    }
+
+    fn apply_use_cmd_for_tests(
+        namespace_table: &mut HashMap<Path, Namespace>,
+        current_namespace: &Path,
+        cmd: &CmdUse,
+    ) {
+        ensure_namespace_path_for_tests(namespace_table, current_namespace);
+        let base = if cmd.absolute {
+            Path::toplevel()
+        } else {
+            current_namespace.clone()
+        };
+        for decl in &cmd.decls {
+            let target = resolve_use_target_for_tests(namespace_table, base.clone(), &decl.target);
+            namespace_table
+                .get_mut(current_namespace)
+                .expect("current namespace must exist")
+                .add(decl.alias.clone(), target);
+        }
+    }
+
     fn parse_expr(input: &str) -> Expr {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, Path> = HashMap::new();
@@ -2589,6 +2607,9 @@ mod tests {
             class_predicate_table,
         );
         let cmd = parser.cmd();
+        if let Ok(Cmd::Use(use_cmd)) = &cmd {
+            apply_use_cmd_for_tests(&mut namespace_table, &current_namespace, use_cmd);
+        }
         let top_entry = namespace_table
             .remove(&top_namespace)
             .expect("top-level namespace entry must exist");
@@ -2637,6 +2658,9 @@ mod tests {
                 class_predicate_table,
             );
             let cmd = parser.cmd()?;
+            if let Cmd::Use(use_cmd) = &cmd {
+                apply_use_cmd_for_tests(&mut namespace_table, &current_namespace, use_cmd);
+            }
             match &cmd {
                 Cmd::NamespaceStart(CmdNamespaceStart { path }) => {
                     namespace_stack.push(current_namespace.clone());
@@ -3193,9 +3217,10 @@ mod tests {
             &class_predicates,
         )
         .expect("commands parse");
-        let Cmd::Use(CmdUse { decls }) = &cmds[1] else {
+        let Cmd::Use(CmdUse { absolute, decls }) = &cmds[1] else {
             panic!("expected use command");
         };
+        assert!(*absolute);
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].target, path("bar"));
     }
@@ -3312,7 +3337,7 @@ mod tests {
             &class_predicates,
         )
         .expect("use command parses");
-        let Cmd::Use(CmdUse { decls }) = cmd else {
+        let Cmd::Use(CmdUse { absolute: _, decls }) = cmd else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 2);
@@ -3338,7 +3363,7 @@ mod tests {
             &class_predicates,
         )
         .expect("use command parses");
-        let Cmd::Use(CmdUse { decls }) = cmd else {
+        let Cmd::Use(CmdUse { absolute: _, decls }) = cmd else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 2);
@@ -3362,7 +3387,7 @@ mod tests {
             &class_predicates,
         )
         .expect("namespace commands parse");
-        let Cmd::Use(CmdUse { decls }) = &cmds[1] else {
+        let Cmd::Use(CmdUse { absolute: _, decls }) = &cmds[1] else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 2);
@@ -3386,7 +3411,7 @@ mod tests {
             &class_predicates,
         )
         .expect("use command parses");
-        let Cmd::Use(CmdUse { decls }) = cmd else {
+        let Cmd::Use(CmdUse { absolute: _, decls }) = cmd else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 2);
@@ -3410,7 +3435,7 @@ mod tests {
             &class_predicates,
         )
         .expect("namespace commands parse");
-        let Cmd::Use(CmdUse { decls }) = &cmds[1] else {
+        let Cmd::Use(CmdUse { absolute: _, decls }) = &cmds[1] else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 1);
@@ -3462,6 +3487,43 @@ mod tests {
     }
 
     #[test]
+    fn use_cmd_parse_does_not_mutate_current_namespace_use_table() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let file = Arc::new(File::new("<test>", "use bar as baz"));
+        let mut lex = Lex::new(file);
+        let top_namespace = Path::toplevel();
+        let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
+        let mut top_entry = Namespace::default();
+        top_entry.add(Name::from_str("bar"), path("foo"));
+        namespace_table.insert(top_namespace.clone(), top_entry);
+        seed_namespace_table_from_globals(
+            &mut namespace_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        );
+        let current_namespace = top_namespace.clone();
+        let mut parser = Parser::new(
+            &mut lex,
+            &tt,
+            &mut namespace_table,
+            &current_namespace,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        );
+        let _ = parser.cmd().expect("use command parses");
+        assert_eq!(
+            namespace_table[&top_namespace]
+                .use_table
+                .get(&Name::from_str("baz")),
+            None
+        );
+    }
+
+    #[test]
     fn use_chain_normalizes_alias_target() {
         let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
         insert_prop_const(&mut consts, "foo");
@@ -3477,12 +3539,13 @@ mod tests {
             &class_predicates,
         )
         .expect("use command parses");
-        let Cmd::Use(CmdUse { decls }) = cmd else {
+        let Cmd::Use(CmdUse { absolute, decls }) = cmd else {
             panic!("expected use command");
         };
+        assert!(!absolute);
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].alias, Name::from_str("baz"));
-        assert_eq!(decls[0].target, path("foo"));
+        assert_eq!(decls[0].target, path("bar"));
     }
 
     #[test]
@@ -3500,12 +3563,12 @@ mod tests {
             &class_predicates,
         )
         .expect("use command parses");
-        let Cmd::Use(CmdUse { decls }) = cmd else {
+        let Cmd::Use(CmdUse { absolute: _, decls }) = cmd else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].alias, Name::from_str("qux"));
-        assert_eq!(decls[0].target, path("foo.baz"));
+        assert_eq!(decls[0].target, path("bar.baz"));
     }
 
     #[test]
@@ -3525,7 +3588,7 @@ mod tests {
             &class_predicates,
         )
         .expect("use command parses");
-        let Cmd::Use(CmdUse { decls }) = cmd else {
+        let Cmd::Use(CmdUse { absolute: _, decls }) = cmd else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 1);
@@ -3548,14 +3611,14 @@ mod tests {
             &class_predicates,
         )
         .expect("use command parses");
-        let Cmd::Use(CmdUse { decls }) = cmd else {
+        let Cmd::Use(CmdUse { absolute: _, decls }) = cmd else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 2);
         assert_eq!(decls[0].alias, Name::from_str("fuga"));
         assert_eq!(decls[0].target, path("hoge"));
         assert_eq!(decls[1].alias, Name::from_str("piyo"));
-        assert_eq!(decls[1].target, path("hoge"));
+        assert_eq!(decls[1].target, path("fuga"));
     }
 
     #[test]
@@ -3572,7 +3635,7 @@ mod tests {
             &class_predicates,
         )
         .expect("use command parses");
-        let Cmd::Use(CmdUse { decls }) = cmd else {
+        let Cmd::Use(CmdUse { absolute: _, decls }) = cmd else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 1);
@@ -3594,14 +3657,14 @@ mod tests {
             &class_predicates,
         )
         .expect("use command parses");
-        let Cmd::Use(CmdUse { decls }) = cmd else {
+        let Cmd::Use(CmdUse { absolute: _, decls }) = cmd else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 2);
         assert_eq!(decls[0].alias, Name::from_str("f"));
         assert_eq!(decls[0].target, path("future"));
         assert_eq!(decls[1].alias, Name::from_str("g"));
-        assert_eq!(decls[1].target, path("future"));
+        assert_eq!(decls[1].target, path("f"));
     }
 
     #[test]
