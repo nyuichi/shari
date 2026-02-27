@@ -837,7 +837,6 @@ impl Eval {
             }
             Cmd::BlockEnd => {
                 let Some(previous_namespace) = self.namespace_stack.pop() else {
-                    // TODO: this should become unreachable once parser reports brace mismatch as parse error.
                     bail!("unexpected block end");
                 };
                 self.current_namespace = previous_namespace;

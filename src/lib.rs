@@ -44,7 +44,6 @@ pub fn process(file: Arc<File>) -> anyhow::Result<()> {
     }
 
     if !eval.namespace_stack.is_empty() {
-        // TODO: move unclosed-block detection to parser and report EOF parse error with span.
         return Err(anyhow::anyhow!("unclosed namespace block")).context("command error");
     }
 

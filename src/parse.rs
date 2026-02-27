@@ -1533,12 +1533,7 @@ impl<'a> Parser<'a> {
     }
 
     pub fn cmd(&mut self) -> Result<Cmd, ParseError> {
-        if let Some(token) = self.peek_opt()
-            && token.is_symbol()
-            && token.as_str() == "}"
-        {
-            self.advance();
-            // TODO: track block depth in parser and report unmatched '}' as parse error.
+        if let Some(_token) = self.expect_symbol_opt("}") {
             return Ok(Cmd::BlockEnd);
         }
         let keyword = self.keyword()?;

@@ -488,7 +488,7 @@ impl Type {
     /// t.arrow([t1, t2]) // => t1 → t2 → t
     pub fn arrow(&self, cs: impl IntoIterator<Item = Type>) -> Type {
         let mut cod = self.clone();
-        let domains: Vec<Type> = cs.into_iter().collect(); // TODO: avoid calling collect
+        let domains: Vec<Type> = cs.into_iter().collect();
         for dom in domains.into_iter().rev() {
             cod = mk_type_arrow(dom, cod);
         }
@@ -2530,7 +2530,6 @@ impl Env<'_> {
     }
 }
 
-// TODO: add more tests for Term::equiv
 #[cfg(test)]
 mod tests {
     use super::*;
