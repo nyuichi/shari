@@ -130,7 +130,7 @@ struct Elaborator<'a> {
     // only used in visit
     instance_holes: Vec<(Id, Class)>,
     // only used in visit
-    local_axioms: Vec<LocalAxiom>,
+    local_proof_env: proof::LocalEnv,
 
     // only used in find_conflict
     term_constraints: Vec<(LocalEnv, Term, Term, Error)>,
@@ -165,6 +165,7 @@ struct Elaborator<'a> {
 impl<'a> Elaborator<'a> {
     pub fn new(
         proof_env: proof::Env<'a>,
+        proof_local_env: &proof::LocalEnv,
         tt_local_env: &'a mut tt::LocalEnv,
         term_holes: Vec<(Id, Type)>,
     ) -> Self {
@@ -173,7 +174,7 @@ impl<'a> Elaborator<'a> {
             tt_local_env,
             term_holes,
             instance_holes: Default::default(),
-            local_axioms: Default::default(),
+            local_proof_env: proof_local_env.clone(),
             type_constraints: Default::default(),
             term_constraints: Default::default(),
             class_constraints: Default::default(),
@@ -455,6 +456,7 @@ impl<'a> Elaborator<'a> {
 
                 // don't need strict check here
                 if !self
+                    .local_proof_env
                     .local_axioms
                     .iter()
                     .any(|local_axiom| local_axiom.prop.maybe_alpha_eq(target))
@@ -467,7 +469,7 @@ impl<'a> Elaborator<'a> {
             Expr::Local(expr) => {
                 let ExprLocal { metadata: _, id } = expr.as_ref();
 
-                for local_axiom in self.local_axioms.iter().rev() {
+                for local_axiom in self.local_proof_env.local_axioms.iter().rev() {
                     if local_axiom.id == Some(*id) {
                         return Ok(local_axiom.prop.clone());
                     }
@@ -490,12 +492,12 @@ impl<'a> Elaborator<'a> {
                 );
                 self.push_type_constraint(local_axiom_ty, mk_type_prop(), error);
 
-                self.local_axioms.push(LocalAxiom {
+                self.local_proof_env.local_axioms.push(LocalAxiom {
                     id: *alias,
                     prop: local_axiom.clone(),
                 });
                 let mut target = self.visit_expr(inner)?;
-                let p = self.local_axioms.pop().unwrap();
+                let p = self.local_proof_env.local_axioms.pop().unwrap();
                 target = guard(&target, [p.prop]);
 
                 Ok(target)
@@ -885,10 +887,10 @@ impl<'a> Elaborator<'a> {
 
                 let local_type_len = self.tt_local_env.local_types.len();
                 let local_len = self.tt_local_env.locals.len();
-                let local_axiom_len = self.local_axioms.len();
+                let local_axiom_len = self.local_proof_env.local_axioms.len();
                 self.tt_local_env.local_types.push(structure_id);
                 self.tt_local_env.locals.extend(locals);
-                self.local_axioms.extend(local_axioms);
+                self.local_proof_env.local_axioms.extend(local_axioms);
                 let result = match self.visit_expr(body) {
                     Ok(target) => {
                         if target.contains_type_local(structure_id) {
@@ -902,7 +904,7 @@ impl<'a> Elaborator<'a> {
                     }
                     Err(err) => Err(err),
                 };
-                self.local_axioms.truncate(local_axiom_len);
+                self.local_proof_env.local_axioms.truncate(local_axiom_len);
                 self.tt_local_env.locals.truncate(local_len);
                 self.tt_local_env.local_types.truncate(local_type_len);
                 result
@@ -2618,7 +2620,8 @@ pub fn elaborate_type(
     target: &Type,
     kind: Kind,
 ) -> anyhow::Result<()> {
-    let elab = Elaborator::new(proof_env, local_env, vec![]);
+    let proof_local_env = proof::LocalEnv::default();
+    let elab = Elaborator::new(proof_env, &proof_local_env, local_env, vec![]);
     let k = elab.visit_type(target)?;
     ensure!(k == kind);
     ensure!(target.is_ground());
@@ -2636,7 +2639,8 @@ pub fn elaborate_term(
         println!("elaborating:\n{target}");
     }
 
-    let mut elab = Elaborator::new(proof_env, local_env, vec![]);
+    let proof_local_env = proof::LocalEnv::default();
+    let mut elab = Elaborator::new(proof_env, &proof_local_env, local_env, vec![]);
 
     let t = elab.visit_term(target)?;
     let error = visit_error("type mismatch", target.span().cloned());
@@ -2665,6 +2669,7 @@ pub fn elaborate_term(
 // prop is trusted
 pub fn elaborate_expr(
     proof_env: proof::Env,
+    proof_local_env: &proof::LocalEnv,
     local_env: &mut LocalEnv,
     term_holes: Vec<(Id, Type)>,
     e: &mut Expr,
@@ -2685,7 +2690,7 @@ pub fn elaborate_expr(
         println!("elaborating:\n{e}");
     }
 
-    let mut elab = Elaborator::new(proof_env, local_env, term_holes);
+    let mut elab = Elaborator::new(proof_env, proof_local_env, local_env, term_holes);
 
     let p = elab.visit_expr(e)?;
     elab.push_term_constraint(
@@ -2791,9 +2796,14 @@ mod tests {
             tt_env,
             axiom_table: &axiom_table,
         };
-        let mut elab = Elaborator::new(proof_env, &mut tt_local_env, vec![]);
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut tt_local_env,
+            vec![],
+        );
         let local_axiom_name = QualifiedName::from_name(Name::from_str("foo.a"));
-        elab.local_axioms.push(LocalAxiom {
+        elab.local_proof_env.local_axioms.push(LocalAxiom {
             id: Some(Id::from_name(&Name::from_str("foo.a"))),
             prop: mk_const(
                 QualifiedName::from_name(Name::from_str("p")),
@@ -2924,7 +2934,12 @@ mod tests {
         };
 
         let term_holes = vec![(hole_id, hole_type)];
-        let mut elab = Elaborator::new(proof_env, &mut tt_local_env, term_holes);
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut tt_local_env,
+            term_holes,
+        );
 
         println!("left: {left}");
         println!("right: {right}");
@@ -2991,7 +3006,12 @@ mod tests {
             tt_env,
             axiom_table: &axiom_table,
         };
-        let mut elab = Elaborator::new(proof_env, &mut local_env, vec![]);
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![],
+        );
 
         let hole = elab.mk_term_hole(mk_type_prop());
         let args = hole.args();
@@ -3060,7 +3080,12 @@ mod tests {
             axiom_table: &axiom_table,
         };
         let local_env_snapshot = local_env.clone();
-        let mut elab = Elaborator::new(proof_env, &mut local_env, vec![]);
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![],
+        );
 
         let error = visit_error("expected success", None);
         elab.push_term_constraint(
@@ -3121,7 +3146,12 @@ mod tests {
             axiom_table: &axiom_table,
         };
         let local_env_snapshot = local_env.clone();
-        let mut elab = Elaborator::new(proof_env, &mut local_env, vec![]);
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![],
+        );
 
         let error = visit_error("expected success", None);
         elab.push_term_constraint(
@@ -3192,7 +3222,12 @@ mod tests {
             axiom_table: &axiom_table,
         };
         let local_env_snapshot = local_env.clone();
-        let mut elab = Elaborator::new(proof_env, &mut local_env, vec![]);
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![],
+        );
 
         let error = visit_error("expected failure", None);
         elab.push_term_constraint(
@@ -3268,7 +3303,12 @@ mod tests {
             axiom_table: &axiom_table,
         };
         let local_env_snapshot = local_env.clone();
-        let mut elab = Elaborator::new(proof_env, &mut local_env, vec![]);
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![],
+        );
 
         let error = visit_error("expected failure", None);
         elab.push_term_constraint(
@@ -3340,7 +3380,12 @@ mod tests {
             tt_env,
             axiom_table: &axiom_table,
         };
-        let mut elab = Elaborator::new(proof_env, &mut local_env, vec![]);
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![],
+        );
 
         let left_ty_arg = mk_fresh_type_hole();
         let Type::Hole(hole) = left_ty_arg else {
@@ -3477,7 +3522,12 @@ mod tests {
             tt_env,
             axiom_table: &axiom_table,
         };
-        let mut elab = Elaborator::new(proof_env, &mut local_env, vec![]);
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![],
+        );
 
         let conflict = elab.find_conflict_in_terms(
             tt::LocalEnv {
@@ -3609,7 +3659,12 @@ mod tests {
             tt_env,
             axiom_table: &axiom_table,
         };
-        let mut elab = Elaborator::new(proof_env, &mut local_env, vec![]);
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![],
+        );
 
         let conflict = elab.find_conflict_in_terms(
             tt::LocalEnv {
