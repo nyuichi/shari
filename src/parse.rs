@@ -2135,6 +2135,7 @@ impl<'a> Parser<'a> {
         let target_ty = self.ty()?;
         let mut fields = vec![];
         let mut num_defs = 0;
+        let local_axiom_len = self.local_axioms.len();
         self.expect_symbol(":=")?;
         self.expect_symbol("{")?;
         while self.expect_symbol_opt("}").is_none() {
@@ -2167,7 +2168,6 @@ impl<'a> Parser<'a> {
                     num_defs += 1;
                 }
                 "lemma" => {
-                    // TODO: allow to refer to preceding lemmas in the same instance.
                     let field_name = self.name()?;
                     let field_params = self.typed_parameters()?;
                     for (field_param_name, _) in &field_params {
@@ -2190,6 +2190,12 @@ impl<'a> Parser<'a> {
                         expr = mk_expr_take(field_param.id, field_param.ty, expr);
                     }
                     let holes = self.holes.drain(..).collect();
+                    self.local_axioms.push((
+                        QualifiedName::from_name(field_name.clone()),
+                        LocalAxiom {
+                            target: field_target.clone(),
+                        },
+                    ));
                     fields.push(InstanceField::Lemma(InstanceLemma {
                         name: field_name,
                         target: field_target,
@@ -2203,6 +2209,7 @@ impl<'a> Parser<'a> {
         // parsing finished.
         self.locals.truncate(self.locals.len() - num_defs);
         self.locals.truncate(self.locals.len() - params.len());
+        self.local_axioms.truncate(local_axiom_len);
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdInstance {
@@ -2299,6 +2306,7 @@ impl<'a> Parser<'a> {
         self.expect_symbol(":=")?;
         let mut fields = vec![];
         let mut num_defs = 0;
+        let local_axiom_len = self.local_axioms.len();
         self.expect_symbol("{")?;
         while self.expect_symbol_opt("}").is_none() {
             let keyword = self.keyword()?;
@@ -2330,7 +2338,6 @@ impl<'a> Parser<'a> {
                     num_defs += 1;
                 }
                 "lemma" => {
-                    // TODO: allow to refer to preceding lemmas in the same instance.
                     let field_name = self.name()?;
                     let field_params = self.typed_parameters()?;
                     for (field_param_name, _) in &field_params {
@@ -2353,6 +2360,12 @@ impl<'a> Parser<'a> {
                         expr = mk_expr_take(field_param.id, field_param.ty, expr);
                     }
                     let holes = self.holes.drain(..).collect();
+                    self.local_axioms.push((
+                        QualifiedName::from_name(field_name.clone()),
+                        LocalAxiom {
+                            target: field_target.clone(),
+                        },
+                    ));
                     fields.push(ClassInstanceField::Lemma(ClassInstanceLemma {
                         name: field_name,
                         target: field_target,
@@ -2365,6 +2378,7 @@ impl<'a> Parser<'a> {
         }
         // parsing finished.
         self.locals.truncate(self.locals.len() - num_defs);
+        self.local_axioms.truncate(local_axiom_len);
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdClassInstance {
@@ -3447,6 +3461,163 @@ mod tests {
             panic!("expected second definition to reference a local");
         };
         assert_eq!(local.id, Id::from_name(&Name::from_str("a")));
+    }
+
+    #[test]
+    fn instance_lemma_can_reference_preceding_lemma() {
+        let (tt, type_consts, consts, mut axioms, class_predicates) = setup_tables();
+        axioms.insert(
+            qualified("hp"),
+            Axiom {
+                local_types: vec![],
+                local_classes: vec![],
+                target: mk_const(qualified("p"), vec![], vec![]),
+            },
+        );
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "instance inst : Prop := { lemma h1 : p := hp lemma h2 : p := h1 }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("instance parses");
+        let Cmd::Instance(CmdInstance {
+            name: _,
+            local_types: _,
+            local_classes: _,
+            params: _,
+            target_ty: _,
+            fields,
+        }) = cmd
+        else {
+            panic!("expected instance command");
+        };
+        let InstanceField::Lemma(InstanceLemma {
+            name: field_name,
+            target: _,
+            holes: _,
+            expr,
+        }) = &fields[1]
+        else {
+            panic!("expected second field to be a lemma");
+        };
+        assert_eq!(field_name, &Name::from_str("h2"));
+        let Expr::Local(local) = expr else {
+            panic!("expected second lemma expression to reference a local lemma");
+        };
+        let ExprLocal { metadata: _, id } = &**local;
+        assert_eq!(*id, Id::from_name(&Name::from_str("h1")));
+    }
+
+    #[test]
+    fn class_instance_lemma_can_reference_preceding_lemma() {
+        let (tt, type_consts, consts, mut axioms, mut class_predicates) = setup_tables();
+        axioms.insert(
+            qualified("hp"),
+            Axiom {
+                local_types: vec![],
+                local_classes: vec![],
+                target: mk_const(qualified("p"), vec![], vec![]),
+            },
+        );
+        class_predicates.insert(qualified("C"), ClassType { arity: 0 });
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "class instance inst : C := { lemma h1 : p := hp lemma h2 : p := h1 }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("class instance parses");
+        let Cmd::ClassInstance(CmdClassInstance {
+            name: _,
+            local_types: _,
+            local_classes: _,
+            target: _,
+            fields,
+        }) = cmd
+        else {
+            panic!("expected class instance command");
+        };
+        let ClassInstanceField::Lemma(ClassInstanceLemma {
+            name: field_name,
+            target: _,
+            holes: _,
+            expr,
+        }) = &fields[1]
+        else {
+            panic!("expected second field to be a lemma");
+        };
+        assert_eq!(field_name, &Name::from_str("h2"));
+        let Expr::Local(local) = expr else {
+            panic!("expected second lemma expression to reference a local lemma");
+        };
+        let ExprLocal { metadata: _, id } = &**local;
+        assert_eq!(*id, Id::from_name(&Name::from_str("h1")));
+    }
+
+    #[test]
+    fn instance_lemma_self_reference_is_rejected() {
+        let (tt, type_consts, consts, mut axioms, class_predicates) = setup_tables();
+        axioms.insert(
+            qualified("hp"),
+            Axiom {
+                local_types: vec![],
+                local_classes: vec![],
+                target: mk_const(qualified("p"), vec![], vec![]),
+            },
+        );
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let err = parse_cmd_with_tables(
+            "instance inst : Prop := { lemma h1 : p := h1 }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect_err("self-referencing lemma should fail to parse");
+        let ParseError::Parse { message, span: _ } = err else {
+            panic!("expected parse error");
+        };
+        assert_eq!(message, "unknown variable");
+    }
+
+    #[test]
+    fn class_instance_lemma_self_reference_is_rejected() {
+        let (tt, type_consts, consts, mut axioms, mut class_predicates) = setup_tables();
+        axioms.insert(
+            qualified("hp"),
+            Axiom {
+                local_types: vec![],
+                local_classes: vec![],
+                target: mk_const(qualified("p"), vec![], vec![]),
+            },
+        );
+        class_predicates.insert(qualified("C"), ClassType { arity: 0 });
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let err = parse_cmd_with_tables(
+            "class instance inst : C := { lemma h1 : p := h1 }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect_err("self-referencing lemma should fail to parse");
+        let ParseError::Parse { message, span: _ } = err else {
+            panic!("expected parse error");
+        };
+        assert_eq!(message, "unknown variable");
     }
 
     #[test]

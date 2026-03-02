@@ -797,12 +797,20 @@ impl Eval {
 
     fn elaborate_expr(
         &self,
+        proof_local_env: &proof::LocalEnv,
         local_env: &mut LocalEnv,
         holes: Vec<(Id, Type)>,
         expr: &mut Expr,
         target: &Term,
     ) -> anyhow::Result<()> {
-        elab::elaborate_expr(self.proof_env(), local_env, holes, expr, target)
+        elab::elaborate_expr(
+            self.proof_env(),
+            proof_local_env,
+            local_env,
+            holes,
+            expr,
+            target,
+        )
     }
 
     fn tt_env(&self) -> tt::Env<'_> {
@@ -1027,7 +1035,13 @@ impl Eval {
                     local_env.local_classes.push(local_class.clone());
                 }
                 self.elaborate_term(&mut local_env, &mut target, &mk_type_prop())?;
-                self.elaborate_expr(&mut local_env, holes.clone(), &mut expr, &target)?;
+                self.elaborate_expr(
+                    &proof::LocalEnv::default(),
+                    &mut local_env,
+                    holes.clone(),
+                    &mut expr,
+                    &target,
+                )?;
                 self.proof_env().check_prop(
                     &mut local_env,
                     &mut proof::LocalEnv::default(),
@@ -1966,6 +1980,7 @@ impl Eval {
 
         // generate a delcaration per field first
         let mut subst = vec![];
+        let mut proof_local_env = proof::LocalEnv::default();
         for field in &mut fields {
             match field {
                 InstanceField::Def(InstanceDef {
@@ -2013,16 +2028,21 @@ impl Eval {
                 }) => {
                     let field_name = field_name.clone();
                     // e.g. lemma power.inhab.inhabited.{u} : ∃ a, a ∈ rep := (..)
-                    let new_target = target.subst(&subst);
-                    *target = new_target;
+                    *target = target.subst(&subst);
                     expr.subst(&subst);
-                    self.elaborate_expr(&mut local_env, holes.clone(), expr, target)?;
-                    self.proof_env().check_prop(
+                    self.elaborate_expr(
+                        &proof_local_env,
                         &mut local_env,
-                        &mut proof::LocalEnv::default(),
+                        holes.clone(),
                         expr,
                         target,
-                    );
+                    )?;
+                    self.proof_env()
+                        .check_prop(&mut local_env, &mut proof_local_env, expr, target);
+                    proof_local_env.local_axioms.push(proof::LocalAxiom {
+                        id: Some(Id::from_name(&field_name)),
+                        prop: target.clone(),
+                    });
 
                     let fullname = name.extend(field_name.clone());
                     let mut target = target.clone();
@@ -2281,6 +2301,7 @@ impl Eval {
             bail!("number of fields mismatch");
         }
         let mut subst = vec![];
+        let mut proof_local_env = proof::LocalEnv::default();
         for (structure_field, field) in zip(&cmd_structure.fields, &mut fields) {
             match (structure_field, field) {
                 (
@@ -2304,8 +2325,7 @@ impl Eval {
                     if structure_field_ty != *ty {
                         bail!("type mismatch");
                     }
-                    let new_target = target.subst(&subst);
-                    *target = new_target;
+                    *target = target.subst(&subst);
                     self.elaborate_term(&mut local_env, target, ty)?;
                     subst.push((Id::from_name(&field_name), target.clone()));
                 }
@@ -2331,20 +2351,24 @@ impl Eval {
                     }
                     self.elaborate_term(&mut local_env, target, &mk_type_prop())?;
                     let mut structure_field_target = structure_field_target.clone();
-                    let new_target = structure_field_target.subst_type(&type_subst);
-                    structure_field_target = new_target;
-                    let new_target = structure_field_target.subst(&subst);
-                    structure_field_target = new_target;
+                    structure_field_target = structure_field_target.subst_type(&type_subst);
+                    structure_field_target = structure_field_target.subst(&subst);
                     if !structure_field_target.alpha_eq(target) {
                         bail!("target mismatch");
                     }
-                    self.elaborate_expr(&mut local_env, holes.clone(), expr, target)?;
-                    self.proof_env().check_prop(
+                    self.elaborate_expr(
+                        &proof_local_env,
                         &mut local_env,
-                        &mut proof::LocalEnv::default(),
+                        holes.clone(),
                         expr,
                         target,
-                    );
+                    )?;
+                    self.proof_env()
+                        .check_prop(&mut local_env, &mut proof_local_env, expr, target);
+                    proof_local_env.local_axioms.push(proof::LocalAxiom {
+                        id: Some(Id::from_name(&field_name)),
+                        prop: target.clone(),
+                    });
                 }
                 (ClassStructureField::Axiom(_), _) => {
                     bail!("lemma expected");

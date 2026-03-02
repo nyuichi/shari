@@ -162,4 +162,44 @@ mod tests {
         let file = Arc::new(File::new("<test>", script));
         process(file).expect("foo_class.b and foo_class.a should be definitionally equal");
     }
+
+    #[test]
+    fn instance_lemma_can_reference_preceding_lemma() {
+        let script = format!(
+            "{}
+             const p : Prop
+             axiom hp : p
+             structure foo := {{
+                 axiom h1 : p
+                 axiom h2 : p
+             }}
+             instance bar : foo := {{
+                 lemma h1 : p := hp
+                 lemma h2 : p := h1
+             }}",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file).expect("instance lemma should resolve preceding lemma alias");
+    }
+
+    #[test]
+    fn class_instance_lemma_can_reference_preceding_lemma() {
+        let script = format!(
+            "{}
+             const p : Prop
+             axiom hp : p
+             class structure foo_class := {{
+                 axiom h1 : p
+                 axiom h2 : p
+             }}
+             class instance bar_class : foo_class := {{
+                 lemma h1 : p := hp
+                 lemma h2 : p := h1
+             }}",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file).expect("class instance lemma should resolve preceding lemma alias");
+    }
 }
