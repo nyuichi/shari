@@ -1975,8 +1975,7 @@ impl Eval {
                 }) => {
                     let field_name = field_name.clone();
                     // e.g. def power.inhab.rep.{u} (A : set u) : set (set u) := power A
-                    let new_target = target.subst(&subst);
-                    *target = new_target;
+                    *target = target.subst(&subst);
                     self.elaborate_term(&mut local_env, target, ty)?;
 
                     let fullname = name.extend(field_name.clone());
@@ -2305,6 +2304,8 @@ impl Eval {
                     if structure_field_ty != *ty {
                         bail!("type mismatch");
                     }
+                    let new_target = target.subst(&subst);
+                    *target = new_target;
                     self.elaborate_term(&mut local_env, target, ty)?;
                     subst.push((Id::from_name(&field_name), target.clone()));
                 }

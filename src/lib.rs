@@ -54,6 +54,20 @@ pub fn process(file: Arc<File>) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    fn minimal_logic_prelude() -> &'static str {
+        "type const Prop : Type
+         const imp : Prop → Prop → Prop
+         const forall.{u} : (u → Prop) → Prop
+         const uexists.{u} : (u → Prop) → Prop
+         const eq.{u} : u → u → Prop
+         const and : Prop → Prop → Prop
+         const true : Prop
+         axiom eq.refl.{u} (x : u) : eq x x
+         infixr → : 25 := imp
+         infix = : 50 := eq
+         const top : Prop"
+    }
+
     fn error_chain(err: &anyhow::Error) -> Vec<String> {
         err.chain().map(ToString::to_string).collect()
     }
@@ -91,5 +105,61 @@ mod tests {
              }",
         ));
         process(file).expect("namespace declarations should be resolved incrementally");
+    }
+
+    #[test]
+    fn class_instance_allows_referencing_prior_definition() {
+        let file = Arc::new(File::new(
+            "<test>",
+            "type const Prop : Type
+             const p : Prop
+             class structure C := {
+                 const a : Prop
+                 const b : Prop
+             }
+             class instance c_inst : C := {
+                 def a : Prop := p
+                 def b : Prop := a
+             }",
+        ));
+        process(file).expect("class instance definitions should resolve prior fields");
+    }
+
+    #[test]
+    fn instance_preceding_definition_is_definitionally_equal() {
+        let script = format!(
+            "{}
+             structure foo := {{
+                 const a : Prop
+                 const b : Prop
+             }}
+             instance bar : foo := {{
+                 def a : Prop := top
+                 def b : Prop := a
+             }}
+             lemma instance_defeq : bar.b = bar.a := eq.refl",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file).expect("bar.b and bar.a should be definitionally equal");
+    }
+
+    #[test]
+    fn class_instance_preceding_definition_is_definitionally_equal() {
+        let script = format!(
+            "{}
+             class structure foo_class := {{
+                 const a : Prop
+                 const b : Prop
+             }}
+             class instance bar_class : foo_class := {{
+                 def a : Prop := top
+                 def b : Prop := a
+             }}
+             lemma class_instance_defeq : foo_class.b = foo_class.a := eq.refl",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file).expect("foo_class.b and foo_class.a should be definitionally equal");
     }
 }

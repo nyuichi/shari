@@ -2141,7 +2141,6 @@ impl<'a> Parser<'a> {
             let keyword = self.keyword()?;
             match keyword.as_str() {
                 "def" => {
-                    // TODO: allow to refer to preceding definitions in the same instance.
                     let field_name = self.name()?;
                     self.locals.push(field_name.clone());
                     let field_params = self.typed_parameters()?;
@@ -2299,13 +2298,14 @@ impl<'a> Parser<'a> {
         let target = self.class()?;
         self.expect_symbol(":=")?;
         let mut fields = vec![];
+        let mut num_defs = 0;
         self.expect_symbol("{")?;
         while self.expect_symbol_opt("}").is_none() {
             let keyword = self.keyword()?;
             match keyword.as_str() {
                 "def" => {
-                    // TODO: allow to refer to preceding definitions in the same instance.
                     let field_name = self.name()?;
+                    self.locals.push(field_name.clone());
                     let field_params = self.typed_parameters()?;
                     for (field_param_name, _) in &field_params {
                         self.locals.push(field_param_name.clone());
@@ -2327,6 +2327,7 @@ impl<'a> Parser<'a> {
                         ty: field_ty,
                         target: field_target,
                     }));
+                    num_defs += 1;
                 }
                 "lemma" => {
                     // TODO: allow to refer to preceding lemmas in the same instance.
@@ -2363,6 +2364,7 @@ impl<'a> Parser<'a> {
             }
         }
         // parsing finished.
+        self.locals.truncate(self.locals.len() - num_defs);
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdClassInstance {
@@ -3365,6 +3367,86 @@ mod tests {
             .expect_err("absolute declaration head should be rejected");
             assert_declaration_head_error(err, expected_message);
         }
+    }
+
+    #[test]
+    fn instance_def_can_reference_preceding_definition() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "instance inst : Prop := { def a : Prop := p def b : Prop := a }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("instance parses");
+        let Cmd::Instance(CmdInstance {
+            name: _,
+            local_types: _,
+            local_classes: _,
+            params: _,
+            target_ty: _,
+            fields,
+        }) = cmd
+        else {
+            panic!("expected instance command");
+        };
+        let InstanceField::Def(InstanceDef {
+            name: field_name,
+            ty: _,
+            target,
+        }) = &fields[1]
+        else {
+            panic!("expected second field to be a definition");
+        };
+        assert_eq!(field_name, &Name::from_str("b"));
+        let Term::Local(local) = target else {
+            panic!("expected second definition to reference a local");
+        };
+        assert_eq!(local.id, Id::from_name(&Name::from_str("a")));
+    }
+
+    #[test]
+    fn class_instance_def_can_reference_preceding_definition() {
+        let (tt, type_consts, consts, axioms, mut class_predicates) = setup_tables();
+        class_predicates.insert(qualified("C"), ClassType { arity: 0 });
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "class instance inst : C := { def a : Prop := p def b : Prop := a }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("class instance parses");
+        let Cmd::ClassInstance(CmdClassInstance {
+            name: _,
+            local_types: _,
+            local_classes: _,
+            target: _,
+            fields,
+        }) = cmd
+        else {
+            panic!("expected class instance command");
+        };
+        let ClassInstanceField::Def(ClassInstanceDef {
+            name: field_name,
+            ty: _,
+            target,
+        }) = &fields[1]
+        else {
+            panic!("expected second field to be a definition");
+        };
+        assert_eq!(field_name, &Name::from_str("b"));
+        let Term::Local(local) = target else {
+            panic!("expected second definition to reference a local");
+        };
+        assert_eq!(local.id, Id::from_name(&Name::from_str("a")));
     }
 
     #[test]
