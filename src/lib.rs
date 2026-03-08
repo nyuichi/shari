@@ -26,6 +26,7 @@ pub fn process(file: Arc<File>) -> anyhow::Result<()> {
             &eval.namespace_table,
             &eval.current_namespace,
             &eval.type_const_table,
+            &eval.type_def_table,
             &eval.const_table,
             &eval.axiom_table,
             &eval.class_predicate_table,
@@ -201,5 +202,18 @@ mod tests {
         );
         let file = Arc::new(File::new("<test>", script));
         process(file).expect("class instance lemma should resolve preceding lemma alias");
+    }
+
+    #[test]
+    fn process_allows_type_definitions() {
+        let script = format!(
+            "{}
+             type const U : Type
+             type def sub u := u → Prop
+             const s : sub U",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file).expect("type def should be available in later declarations");
     }
 }
