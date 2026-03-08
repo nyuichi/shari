@@ -2,15 +2,14 @@ use crate::cmd::{
     ClassInstanceDef, ClassInstanceField, ClassInstanceLemma, ClassStructureAxiom,
     ClassStructureConst, ClassStructureField, Cmd, CmdAxiom, CmdClassInstance, CmdClassStructure,
     CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdInstance, CmdLemma,
-    CmdNamespaceStart, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeInductive, CmdUse,
-    Constructor, DataConstructor, Fixity, InstanceDef, InstanceField, InstanceLemma, Namespace,
-    Operator, StructureAxiom, StructureConst, StructureField, UseDecl,
+    CmdNamespaceStart, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeDef,
+    CmdTypeInductive, CmdUse, Constructor, DataConstructor, Fixity, InstanceDef, InstanceField,
+    InstanceLemma, Namespace, Operator, StructureAxiom, StructureConst, StructureField, UseDecl,
 };
 use crate::proof::{
     Axiom, Expr, LocalStructureAxiom, LocalStructureConst, LocalStructureField, count_forall,
     generalize, guard, mk_expr_app, mk_expr_assume, mk_expr_assump, mk_expr_change, mk_expr_const,
     mk_expr_inst, mk_expr_let_structure, mk_expr_let_term, mk_expr_local, mk_expr_take,
-    mk_type_prop,
 };
 use crate::tt::{
     Class, ClassType, Const, Id, Kind, Local, Name, Path, QualifiedName, Term, Type, mk_const,
@@ -174,6 +173,7 @@ pub struct Parser<'a> {
     namespace_table: &'a HashMap<Path, Namespace>,
     current_namespace: &'a Path,
     type_const_table: &'a HashMap<QualifiedName, Kind>,
+    type_def_table: &'a HashMap<QualifiedName, CmdTypeDef>,
     const_table: &'a HashMap<QualifiedName, Const>,
     axiom_table: &'a HashMap<QualifiedName, Axiom>,
     class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
@@ -194,6 +194,7 @@ impl<'a> Parser<'a> {
         namespace_table: &'a HashMap<Path, Namespace>,
         current_namespace: &'a Path,
         type_const_table: &'a HashMap<QualifiedName, Kind>,
+        type_def_table: &'a HashMap<QualifiedName, CmdTypeDef>,
         const_table: &'a HashMap<QualifiedName, Const>,
         axiom_table: &'a HashMap<QualifiedName, Axiom>,
         class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
@@ -204,6 +205,7 @@ impl<'a> Parser<'a> {
             namespace_table,
             current_namespace,
             type_const_table,
+            type_def_table,
             const_table,
             axiom_table,
             class_predicate_table,
@@ -520,12 +522,34 @@ impl<'a> Parser<'a> {
         Ok(Kind(kind))
     }
 
-    fn type_primary(&mut self) -> Result<Type, ParseError> {
-        static SUB_NAME: LazyLock<QualifiedName> =
-            LazyLock::new(|| QualifiedName::from_name(Name::from_str("sub")));
+    fn type_spine(&mut self, token: Token, name: QualifiedName) -> Result<Type, ParseError> {
         static NAT_NAME: LazyLock<QualifiedName> =
             LazyLock::new(|| QualifiedName::from_name(Name::from_str("ℕ")));
 
+        if self.type_const_table.contains_key(&name) {
+            return Ok(mk_type_const(name));
+        }
+        if let Some(type_def) = self.type_def_table.get(&name).cloned() {
+            let mut args = Vec::with_capacity(type_def.local_types.len());
+            for _ in &type_def.local_types {
+                args.push(self.subty(1024)?);
+            }
+            let subst = type_def
+                .local_types
+                .into_iter()
+                .zip(args)
+                .collect::<Vec<_>>();
+            return Ok(type_def.target.subst(&subst));
+        }
+        if name == *NAT_NAME {
+            return Ok(mk_type_const(QualifiedName::from_name(Name::from_str(
+                "nat",
+            ))));
+        }
+        Self::fail(token, "unknown type constant")
+    }
+
+    fn type_primary(&mut self) -> Result<Type, ParseError> {
         let token = self.any_token()?;
         if token.is_ident() {
             let name = self.qualified_name(&token);
@@ -542,26 +566,11 @@ impl<'a> Parser<'a> {
                 return Ok(mk_type_local(*stash));
             }
             let name = self.resolve(self.current_namespace.clone(), name);
-            if self.type_const_table.contains_key(&name) {
-                Ok(mk_type_const(name))
-            } else if name == *SUB_NAME {
-                let t = self.subty(1024)?;
-                Ok(mk_type_arrow(t, mk_type_prop()))
-            } else if name == *NAT_NAME {
-                Ok(mk_type_const(QualifiedName::from_name(Name::from_str(
-                    "nat",
-                ))))
-            } else {
-                Self::fail(token, "unknown type constant")
-            }
+            self.type_spine(token, name)
         } else if token.is_field() {
             let name = self.qualified_name(&token);
             let name = self.resolve(Path::root(), name);
-            if self.type_const_table.contains_key(&name) {
-                Ok(mk_type_const(name))
-            } else {
-                Self::fail(token, "unknown type constant")
-            }
+            self.type_spine(token, name)
         } else if token.is_symbol() && token.as_str() == "(" {
             let t = self.ty()?;
             self.expect_symbol(")")?;
@@ -1592,6 +1601,10 @@ impl<'a> Parser<'a> {
                         let type_const_cmd = self.type_const_cmd(keyword)?;
                         Cmd::TypeConst(type_const_cmd)
                     }
+                    "def" => {
+                        let type_def_cmd = self.type_def_cmd(keyword)?;
+                        Cmd::TypeDef(type_def_cmd)
+                    }
                     "inductive" => {
                         let type_inductive_cmd = self.type_inductive_cmd(keyword)?;
                         Cmd::TypeInductive(type_inductive_cmd)
@@ -1930,6 +1943,28 @@ impl<'a> Parser<'a> {
         self.expect_symbol(":")?;
         let kind = self.kind()?;
         Ok(CmdTypeConst { name, kind })
+    }
+
+    fn type_def_cmd(&mut self, _token: Token) -> Result<CmdTypeDef, ParseError> {
+        let name = self.global_declaration_name(None)?;
+        let mut local_types = vec![];
+        while let Some(token) = self.ident_opt() {
+            let local_type = Name::from_str(token.as_str());
+            if local_types.iter().any(|name| name == &local_type) {
+                return Self::fail(token, "duplicate type variable");
+            }
+            local_types.push(local_type.clone());
+            self.local_types.push(local_type);
+        }
+        self.expect_symbol(":=")?;
+        let target = self.ty()?;
+        self.local_types
+            .truncate(self.local_types.len() - local_types.len());
+        Ok(CmdTypeDef {
+            name,
+            local_types: local_types.iter().map(Id::from_name).collect(),
+            target,
+        })
     }
 
     fn type_inductive_cmd(&mut self, _token: Token) -> Result<CmdTypeInductive, ParseError> {
@@ -2397,7 +2432,7 @@ mod tests {
     use crate::lex::{File, Lex};
     use crate::proof::{ExprApp, ExprAssume, ExprConst, ExprInst, ExprLetTerm, ExprLocal};
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, LazyLock};
 
     #[allow(clippy::type_complexity)]
     fn setup_tables() -> (
@@ -2429,6 +2464,32 @@ mod tests {
         (
             tt,
             type_const_table,
+            const_table,
+            axiom_table,
+            class_predicate_table,
+        )
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    fn new_parser_without_type_defs<'a>(
+        lex: &'a mut Lex,
+        tt: &'a TokenTable,
+        namespace_table: &'a HashMap<Path, Namespace>,
+        current_namespace: &'a Path,
+        type_const_table: &'a HashMap<QualifiedName, Kind>,
+        const_table: &'a HashMap<QualifiedName, Const>,
+        axiom_table: &'a HashMap<QualifiedName, Axiom>,
+        class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
+    ) -> Parser<'a> {
+        static EMPTY_TYPE_DEF_TABLE: LazyLock<HashMap<QualifiedName, CmdTypeDef>> =
+            LazyLock::new(HashMap::new);
+        Parser::new(
+            lex,
+            tt,
+            namespace_table,
+            current_namespace,
+            type_const_table,
+            &EMPTY_TYPE_DEF_TABLE,
             const_table,
             axiom_table,
             class_predicate_table,
@@ -2476,12 +2537,14 @@ mod tests {
     fn seed_namespace_table_from_globals(
         namespace_table: &mut HashMap<Path, Namespace>,
         type_const_table: &HashMap<QualifiedName, Kind>,
+        type_def_table: &HashMap<QualifiedName, CmdTypeDef>,
         const_table: &HashMap<QualifiedName, Const>,
         axiom_table: &HashMap<QualifiedName, Axiom>,
         class_predicate_table: &HashMap<QualifiedName, ClassType>,
     ) {
         let mut names = vec![];
         names.extend(type_const_table.keys().cloned());
+        names.extend(type_def_table.keys().cloned());
         names.extend(const_table.keys().cloned());
         names.extend(axiom_table.keys().cloned());
         names.extend(class_predicate_table.keys().cloned());
@@ -2548,6 +2611,7 @@ mod tests {
 
     fn parse_expr(input: &str) -> Expr {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let type_defs = HashMap::new();
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
         let root_namespace = Path::root();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
@@ -2560,6 +2624,7 @@ mod tests {
         seed_namespace_table_from_globals(
             &mut namespace_table,
             &type_consts,
+            &type_defs,
             &consts,
             &axioms,
             &class_predicates,
@@ -2567,7 +2632,7 @@ mod tests {
         let current_namespace = root_namespace;
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
-        let mut parser = Parser::new(
+        let mut parser = new_parser_without_type_defs(
             &mut lex,
             &tt,
             &namespace_table,
@@ -2604,7 +2669,7 @@ mod tests {
         let const_table: HashMap<QualifiedName, Const> = HashMap::new();
         let axiom_table: HashMap<QualifiedName, Axiom> = HashMap::new();
         let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let mut parser = Parser::new(
+        let mut parser = new_parser_without_type_defs(
             &mut lex,
             &tt,
             &namespace_table,
@@ -2629,6 +2694,7 @@ mod tests {
     ) -> Result<Cmd, ParseError> {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
+        let type_def_table = HashMap::new();
         let root_namespace = Path::root();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
         namespace_table.insert(
@@ -2640,6 +2706,7 @@ mod tests {
         seed_namespace_table_from_globals(
             &mut namespace_table,
             type_const_table,
+            &type_def_table,
             const_table,
             axiom_table,
             class_predicate_table,
@@ -2652,6 +2719,7 @@ mod tests {
             &namespace_table,
             &current_namespace,
             type_const_table,
+            &type_def_table,
             const_table,
             axiom_table,
             class_predicate_table,
@@ -2678,6 +2746,8 @@ mod tests {
     ) -> Result<Vec<Cmd>, ParseError> {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
+        let mut type_const_table = type_const_table.clone();
+        let mut type_def_table: HashMap<QualifiedName, CmdTypeDef> = HashMap::new();
         let root_namespace = Path::root();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
         namespace_table.insert(
@@ -2688,7 +2758,8 @@ mod tests {
         );
         seed_namespace_table_from_globals(
             &mut namespace_table,
-            type_const_table,
+            &type_const_table,
+            &type_def_table,
             const_table,
             axiom_table,
             class_predicate_table,
@@ -2703,7 +2774,8 @@ mod tests {
                 tt,
                 &namespace_table,
                 &current_namespace,
-                type_const_table,
+                &type_const_table,
+                &type_def_table,
                 const_table,
                 axiom_table,
                 class_predicate_table,
@@ -2722,6 +2794,12 @@ mod tests {
                     if let Some(previous_namespace) = namespace_stack.pop() {
                         current_namespace = previous_namespace;
                     }
+                }
+                Cmd::TypeConst(CmdTypeConst { name, kind }) => {
+                    type_const_table.insert(name.clone(), kind.clone());
+                }
+                Cmd::TypeDef(cmd) => {
+                    type_def_table.insert(cmd.name.clone(), cmd.clone());
                 }
                 _ => {}
             }
@@ -2745,6 +2823,7 @@ mod tests {
     ) -> Result<Term, ParseError> {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
+        let type_def_table = HashMap::new();
         let root_namespace = Path::root();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
         namespace_table.insert(
@@ -2756,13 +2835,14 @@ mod tests {
         seed_namespace_table_from_globals(
             &mut namespace_table,
             type_const_table,
+            &type_def_table,
             const_table,
             axiom_table,
             class_predicate_table,
         );
         let current_namespace = root_namespace.clone();
         ensure_use_target_prefixes_for_tests(&mut namespace_table, &current_namespace);
-        let mut parser = Parser::new(
+        let mut parser = new_parser_without_type_defs(
             &mut lex,
             tt,
             &namespace_table,
@@ -2791,6 +2871,7 @@ mod tests {
     ) -> Result<Expr, ParseError> {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
+        let type_def_table = HashMap::new();
         let root_namespace = Path::root();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
         namespace_table.insert(
@@ -2802,13 +2883,14 @@ mod tests {
         seed_namespace_table_from_globals(
             &mut namespace_table,
             type_const_table,
+            &type_def_table,
             const_table,
             axiom_table,
             class_predicate_table,
         );
         let current_namespace = root_namespace.clone();
         ensure_use_target_prefixes_for_tests(&mut namespace_table, &current_namespace);
-        let mut parser = Parser::new(
+        let mut parser = new_parser_without_type_defs(
             &mut lex,
             tt,
             &namespace_table,
@@ -2983,12 +3065,14 @@ mod tests {
     #[test]
     fn term_hole_uses_canonical_ids_for_local_context() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let type_defs = HashMap::new();
         let root_namespace = Path::root();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
         namespace_table.insert(root_namespace.clone(), Namespace::default());
         seed_namespace_table_from_globals(
             &mut namespace_table,
             &type_consts,
+            &type_defs,
             &consts,
             &axioms,
             &class_predicates,
@@ -2996,7 +3080,7 @@ mod tests {
         let current_namespace = root_namespace;
         let file = Arc::new(File::new("<test>", "_"));
         let mut lex = Lex::new(file);
-        let mut parser = Parser::new(
+        let mut parser = new_parser_without_type_defs(
             &mut lex,
             &tt,
             &namespace_table,
@@ -3024,12 +3108,14 @@ mod tests {
     #[test]
     fn parser_local_bindings_use_qualified_name_keys() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let type_defs = HashMap::new();
         let root_namespace = Path::root();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
         namespace_table.insert(root_namespace.clone(), Namespace::default());
         seed_namespace_table_from_globals(
             &mut namespace_table,
             &type_consts,
+            &type_defs,
             &consts,
             &axioms,
             &class_predicates,
@@ -3037,7 +3123,7 @@ mod tests {
         let current_namespace = root_namespace;
         let file = Arc::new(File::new("<test>", ""));
         let mut lex = Lex::new(file);
-        let mut parser = Parser::new(
+        let mut parser = new_parser_without_type_defs(
             &mut lex,
             &tt,
             &namespace_table,
@@ -3788,6 +3874,7 @@ mod tests {
     #[test]
     fn use_cmd_parse_does_not_mutate_current_namespace_use_table() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let type_defs = HashMap::new();
         let file = Arc::new(File::new("<test>", "use bar as baz"));
         let mut lex = Lex::new(file);
         let root_namespace = Path::root();
@@ -3798,12 +3885,13 @@ mod tests {
         seed_namespace_table_from_globals(
             &mut namespace_table,
             &type_consts,
+            &type_defs,
             &consts,
             &axioms,
             &class_predicates,
         );
         let current_namespace = root_namespace.clone();
-        let mut parser = Parser::new(
+        let mut parser = new_parser_without_type_defs(
             &mut lex,
             &tt,
             &namespace_table,
@@ -4301,6 +4389,141 @@ mod tests {
     }
 
     #[test]
+    fn type_def_command_parses() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "type def sub u := u → Prop",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("type def command parses");
+        assert_eq!(cmd.to_string(), "type def sub.{u} := $u → Prop");
+    }
+
+    #[test]
+    fn type_def_reference_is_expanded_during_parsing() {
+        let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
+        type_consts.insert(qualified("U"), Kind(0));
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmds = parse_cmds_with_tables(
+            "type def sub u := u → Prop
+             const s : sub U",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("commands parse");
+        let Cmd::Const(CmdConst {
+            name: _,
+            local_types: _,
+            local_classes: _,
+            ty,
+        }) = &cmds[1]
+        else {
+            panic!("expected const command");
+        };
+        assert_eq!(
+            ty,
+            &mk_type_const(qualified("Prop")).arrow([mk_type_const(qualified("U"))])
+        );
+    }
+
+    #[test]
+    fn type_def_multi_argument_reference_is_expanded_left_associatively() {
+        let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
+        type_consts.insert(qualified("U"), Kind(0));
+        type_consts.insert(qualified("V"), Kind(0));
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmds = parse_cmds_with_tables(
+            "type def pairish u v := u → v → Prop
+             const s : pairish U V",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("commands parse");
+        let Cmd::Const(CmdConst {
+            name: _,
+            local_types: _,
+            local_classes: _,
+            ty,
+        }) = &cmds[1]
+        else {
+            panic!("expected const command");
+        };
+        assert_eq!(
+            ty,
+            &mk_type_const(qualified("Prop"))
+                .arrow([mk_type_const(qualified("U")), mk_type_const(qualified("V"))])
+        );
+    }
+
+    #[test]
+    fn recursive_type_def_is_rejected() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let err = parse_cmd_with_tables(
+            "type def foo := foo",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect_err("recursive type def should fail");
+        let ParseError::Parse { message, span: _ } = err else {
+            panic!("expected parse error");
+        };
+        assert_eq!(message, "unknown type constant");
+    }
+
+    #[test]
+    fn type_def_rhs_and_reference_resolve_use_aliases() {
+        let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
+        type_consts.insert(qualified("foo.U"), Kind(0));
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmds = parse_cmds_with_tables(
+            "namespace foo {
+                 use .foo as self
+                 type def sub alias := alias → self.U
+                 const s : sub U
+             }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("commands parse");
+        let Cmd::Const(CmdConst {
+            name: _,
+            local_types: _,
+            local_classes: _,
+            ty,
+        }) = &cmds[3]
+        else {
+            panic!("expected const command");
+        };
+        assert_eq!(
+            ty,
+            &mk_type_const(qualified("foo.U")).arrow([mk_type_const(qualified("foo.U"))])
+        );
+    }
+
+    #[test]
     fn type_inductive_constructor_rejects_dotted_name() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
@@ -4378,7 +4601,7 @@ mod tests {
         let const_table = HashMap::new();
         let axiom_table = HashMap::new();
         let class_predicate_table = HashMap::new();
-        let parser = Parser::new(
+        let parser = new_parser_without_type_defs(
             &mut lex,
             &tt,
             &namespace_table,
@@ -4413,7 +4636,7 @@ mod tests {
         let const_table = HashMap::new();
         let axiom_table = HashMap::new();
         let class_predicate_table = HashMap::new();
-        let parser = Parser::new(
+        let parser = new_parser_without_type_defs(
             &mut lex,
             &tt,
             &namespace_table,
@@ -4441,7 +4664,7 @@ mod tests {
         let const_table = HashMap::new();
         let axiom_table = HashMap::new();
         let class_predicate_table = HashMap::new();
-        let parser = Parser::new(
+        let parser = new_parser_without_type_defs(
             &mut lex,
             &tt,
             &namespace_table,
@@ -4488,7 +4711,7 @@ mod tests {
         let const_table = HashMap::new();
         let axiom_table = HashMap::new();
         let class_predicate_table = HashMap::new();
-        let parser = Parser::new(
+        let parser = new_parser_without_type_defs(
             &mut lex,
             &tt,
             &namespace_table,
@@ -4519,7 +4742,7 @@ mod tests {
         let const_table = HashMap::new();
         let axiom_table = HashMap::new();
         let class_predicate_table = HashMap::new();
-        let parser = Parser::new(
+        let parser = new_parser_without_type_defs(
             &mut lex,
             &tt,
             &namespace_table,

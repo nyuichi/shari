@@ -1,5 +1,5 @@
 use crate::{
-    cmd::{Fixity, Operator},
+    cmd::{CmdTypeDef, Fixity, Operator},
     proof::Axiom,
     tt::{Class, ClassType, Const, Ctor, Id, Kind, Name, QualifiedName, Term, Type},
 };
@@ -617,6 +617,39 @@ impl Display for Pretty<'_, (&QualifiedName, &Kind)> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (name, kind) = self.data;
         write!(f, "type const {} : {}", name, kind)
+    }
+}
+
+impl Display for Pretty<'_, (&QualifiedName, &CmdTypeDef)> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (
+            name,
+            CmdTypeDef {
+                name: _,
+                local_types,
+                target,
+            },
+        ) = self.data;
+        let local_type_names = create_local_type_name(local_types);
+        write!(f, "type def {}", name)?;
+        if !local_types.is_empty() {
+            write!(f, ".{{")?;
+            let mut first = true;
+            for local_type in local_types {
+                if !first {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{}", local_type_names.get(local_type).unwrap())?;
+                first = false;
+            }
+            write!(f, "}}")?;
+        }
+        write!(
+            f,
+            " := {}",
+            PrettyInner::new(self.op_table, &local_type_names, target)
+        )?;
+        Ok(())
     }
 }
 

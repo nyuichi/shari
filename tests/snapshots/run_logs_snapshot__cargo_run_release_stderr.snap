@@ -169,6 +169,7 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom lawvere_fixpoint.{u, v} : ∀ f, (∃ e, surjective e) → ∃ y, y = f y
 [<timestamp> INFO  shari::cmd] + axiom injective.unique.{u, v} : ∀ f y, injective f → unique λ x, y = f x
 [<timestamp> INFO  shari::cmd] + const split.{u, v} : (u → v) → Prop
+[<timestamp> INFO  shari::cmd] + type def sub.{u} := u → Prop
 [<timestamp> INFO  shari::cmd] + const in.{u} : u → (u → Prop) → Prop
 [<timestamp> INFO  shari::cmd] + const notin.{u} : u → (u → Prop) → Prop
 [<timestamp> INFO  shari::cmd] + const univ.{u} : u → Prop

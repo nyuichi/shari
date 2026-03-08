@@ -40,6 +40,7 @@ pub enum Cmd {
     Lemma(CmdLemma),
     Const(CmdConst),
     TypeConst(CmdTypeConst),
+    TypeDef(CmdTypeDef),
     TypeInductive(CmdTypeInductive),
     Inductive(CmdInductive),
     Structure(CmdStructure),
@@ -138,6 +139,13 @@ pub struct CmdConst {
 pub struct CmdTypeConst {
     pub name: QualifiedName,
     pub kind: Kind,
+}
+
+#[derive(Clone, Debug)]
+pub struct CmdTypeDef {
+    pub name: QualifiedName,
+    pub local_types: Vec<Id>,
+    pub target: Type,
 }
 
 #[derive(Clone, Debug)]
@@ -350,6 +358,17 @@ impl std::fmt::Display for Cmd {
                 cmd.ty
             ),
             Cmd::TypeConst(cmd) => write!(f, "type const {} : {}", cmd.name, cmd.kind),
+            Cmd::TypeDef(cmd) => write!(
+                f,
+                "type def {}.{{{}}} := {}",
+                cmd.name,
+                cmd.local_types
+                    .iter()
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                cmd.target
+            ),
             Cmd::TypeInductive(cmd) => write!(
                 f,
                 "inductive {}.{{{}}} {{\n{}\n}}",
@@ -484,7 +503,9 @@ pub struct Eval {
     // Invariant: `namespace_table` always contains an entry for `current_namespace`.
     pub current_namespace: Path,
     pub namespace_stack: Vec<Path>,
+    // Invariant: a type name appears in exactly one of `type_const_table` or `type_def_table`.
     pub type_const_table: HashMap<QualifiedName, Kind>,
+    pub type_def_table: HashMap<QualifiedName, CmdTypeDef>,
     pub const_table: HashMap<QualifiedName, Const>,
     pub axiom_table: HashMap<QualifiedName, Axiom>,
     pub delta_table: HashMap<QualifiedName, Delta>,
@@ -507,6 +528,7 @@ impl Default for Eval {
             current_namespace,
             namespace_stack: vec![],
             type_const_table: HashMap::new(),
+            type_def_table: HashMap::new(),
             const_table: HashMap::new(),
             axiom_table: HashMap::new(),
             delta_table: HashMap::new(),
@@ -659,6 +681,21 @@ impl Eval {
         );
     }
 
+    fn add_type_def(&mut self, cmd: CmdTypeDef) {
+        let name = cmd.name.clone();
+        assert!(!self.type_def_table.contains_key(&name));
+
+        self.type_def_table.insert(name, cmd.clone());
+
+        log::info!(
+            "+ {}",
+            Pretty::new(
+                &self.pp,
+                (&cmd.name, self.type_def_table.get(&cmd.name).unwrap()),
+            )
+        );
+    }
+
     fn add_class_predicate(&mut self, name: QualifiedName, ty: ClassType) {
         assert!(!self.class_predicate_table.contains_key(&name));
 
@@ -763,6 +800,14 @@ impl Eval {
 
     fn has_type_const(&self, name: &QualifiedName) -> bool {
         self.type_const_table.contains_key(name)
+    }
+
+    fn has_type_def(&self, name: &QualifiedName) -> bool {
+        self.type_def_table.contains_key(name)
+    }
+
+    fn has_type_name(&self, name: &QualifiedName) -> bool {
+        self.has_type_const(name) || self.has_type_def(name)
     }
 
     fn has_class_predicate(&self, name: &QualifiedName) -> bool {
@@ -1084,10 +1129,40 @@ impl Eval {
             }
             Cmd::TypeConst(inner) => {
                 let CmdTypeConst { name, kind } = inner;
-                if self.has_type_const(&name) {
+                if self.has_type_name(&name) {
                     bail!("already defined");
                 }
                 self.add_type_const(name, kind);
+                Ok(())
+            }
+            Cmd::TypeDef(inner) => {
+                let CmdTypeDef {
+                    name,
+                    local_types,
+                    target,
+                } = inner;
+                if self.has_type_name(&name) {
+                    bail!("already defined");
+                }
+                for i in 0..local_types.len() {
+                    for j in i + 1..local_types.len() {
+                        if local_types[i] == local_types[j] {
+                            bail!("duplicate type variables");
+                        }
+                    }
+                }
+                let mut local_env = LocalEnv {
+                    local_types: local_types.clone(),
+                    local_classes: vec![],
+                    locals: vec![],
+                    local_deltas: vec![],
+                };
+                self.elaborate_type(&mut local_env, &target, Kind::base())?;
+                self.add_type_def(CmdTypeDef {
+                    name,
+                    local_types,
+                    target,
+                });
                 Ok(())
             }
             Cmd::TypeInductive(cmd) => self.run_type_inductive_cmd(cmd),
@@ -1106,7 +1181,7 @@ impl Eval {
             local_types,
             ctors,
         } = cmd;
-        if self.has_type_const(&name) {
+        if self.has_type_name(&name) {
             bail!("already defined");
         }
         for i in 0..local_types.len() {
@@ -1640,7 +1715,7 @@ impl Eval {
             local_types,
             mut fields,
         } = cmd;
-        if self.has_type_const(&name) {
+        if self.has_type_name(&name) {
             bail!("already defined");
         }
         for i in 0..local_types.len() {

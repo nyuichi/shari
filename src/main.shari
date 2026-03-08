@@ -877,7 +877,7 @@ infixl ∪ : 65 := cup
 infix ∖ : 70 := setminus
 nofix ∅ := emptyset
 
--- TODO: type sub u := u → Prop
+type def sub u := u → Prop
 
 def in.{u} (x : u) (s : sub u) : Prop := s x
 def notin.{u} (x : u) (s : sub u) : Prop := ¬(x ∈ s)
