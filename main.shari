@@ -742,7 +742,6 @@ structure bool := {
 --
 instance bool.tt : bool := {
   def rep : Prop := ⊤
-  -- TODO: name collision
   lemma spec : rep = ⊤ ∨ rep = ⊥ := or.left eq.refl
 }
 
@@ -1639,12 +1638,6 @@ def nat.divides (a b : ℕ) : Prop := ∃ k, b = a * k
  - basic inductive types
  -/
 
--- TODO
--- one may write like
---
---  type inductive prod (u v : Type) : Type
---  | pair (x : u) (y : v) : prod
---
 type inductive unit
 | star : unit
 
