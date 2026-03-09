@@ -24,6 +24,7 @@ This directory is the system of record for durable project knowledge. Start here
 - [docs/design-docs/expr-let-terms.md](design-docs/expr-let-terms.md)
 - [docs/design-docs/local-structures-in-proof-expressions.md](design-docs/local-structures-in-proof-expressions.md)
 - [docs/design-docs/namespaces.md](design-docs/namespaces.md)
+- [docs/design-docs/obtain-instance-syntax.md](design-docs/obtain-instance-syntax.md)
 - [docs/design-docs/structure-primitive-fields.md](design-docs/structure-primitive-fields.md)
 - [docs/design-docs/structure-unique-abs.md](design-docs/structure-unique-abs.md)
 - [docs/design-docs/type-notation-commands.md](design-docs/type-notation-commands.md)

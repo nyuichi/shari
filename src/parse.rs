@@ -21,6 +21,7 @@ use crate::tt::{
 use crate::lex::{Lex, LexError, LexState, Span, Token, TokenKind};
 use anyhow::bail;
 use std::collections::HashMap;
+use std::iter::zip;
 use std::sync::{Arc, LazyLock};
 use std::{mem, slice};
 use thiserror::Error;
@@ -197,7 +198,14 @@ pub enum ParseError {
 }
 
 #[derive(Debug, Clone)]
+struct LocalConst {
+    name: QualifiedName,
+    id: Id,
+}
+
+#[derive(Debug, Clone)]
 struct LocalAxiom {
+    id: Id,
     target: Term,
 }
 
@@ -212,7 +220,8 @@ pub struct Parser<'a> {
     const_table: &'a HashMap<QualifiedName, Const>,
     axiom_table: &'a HashMap<QualifiedName, Axiom>,
     class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
-    local_consts: Vec<QualifiedName>,
+    structure_table: &'a HashMap<QualifiedName, CmdStructure>,
+    local_consts: Vec<LocalConst>,
     local_axioms: Vec<(QualifiedName, LocalAxiom)>,
     local_types: Vec<Name>,
     locals: Vec<Name>,
@@ -233,6 +242,7 @@ impl<'a> Parser<'a> {
         const_table: &'a HashMap<QualifiedName, Const>,
         axiom_table: &'a HashMap<QualifiedName, Axiom>,
         class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
+        structure_table: &'a HashMap<QualifiedName, CmdStructure>,
     ) -> Self {
         Self {
             lex,
@@ -244,6 +254,7 @@ impl<'a> Parser<'a> {
             const_table,
             axiom_table,
             class_predicate_table,
+            structure_table,
             local_consts: vec![],
             local_axioms: vec![],
             local_types: vec![],
@@ -274,8 +285,11 @@ impl<'a> Parser<'a> {
         self.const_table.get(name)
     }
 
-    fn has_local_const(&self, name: &QualifiedName) -> bool {
-        self.local_consts.iter().rev().any(|local| local == name)
+    fn get_local_const(&self, name: &QualifiedName) -> Option<&LocalConst> {
+        self.local_consts
+            .iter()
+            .rev()
+            .find(|local_const| &local_const.name == name)
     }
 
     fn get_local_axiom(&self, name: &QualifiedName) -> Option<&LocalAxiom> {
@@ -297,6 +311,14 @@ impl<'a> Parser<'a> {
 
     fn has_local(&self, name: &Name) -> bool {
         self.locals.iter().rev().any(|local| local == name)
+    }
+
+    fn push_local_const(&mut self, name: QualifiedName, id: Id) {
+        self.local_consts.push(LocalConst { name, id });
+    }
+
+    fn push_local_axiom(&mut self, name: QualifiedName, id: Id, target: Term) {
+        self.local_axioms.push((name, LocalAxiom { id, target }));
     }
 
     fn fail<R>(token: Token, message: impl Into<String>) -> Result<R, ParseError> {
@@ -913,9 +935,8 @@ impl<'a> Parser<'a> {
                     }) {
                         return Ok(mk_local(*stash));
                     }
-                    if self.has_local_const(&name) {
-                        let local_name = Name::from_str(&name.to_string());
-                        return Ok(mk_local(Id::from_name(&local_name)));
+                    if let Some(local_const) = self.get_local_const(&name) {
+                        return Ok(mk_local(local_const.id));
                     }
                     self.resolve(self.current_namespace.clone(), name)
                 } else if token.is_field() {
@@ -1049,8 +1070,7 @@ impl<'a> Parser<'a> {
         let name = self.qualified_name(&token);
         let name = if token.is_ident() {
             if let Some(local_axiom) = self.get_local_axiom(&name) {
-                let local_name = Name::from_str(&name.to_string());
-                let mut expr = mk_expr_local(Id::from_name(&local_name));
+                let mut expr = mk_expr_local(local_axiom.id);
                 if auto_inst {
                     for _ in 0..count_forall(&local_axiom.target) {
                         expr = mk_expr_inst(expr, self.mk_term_hole());
@@ -1100,6 +1120,29 @@ impl<'a> Parser<'a> {
         mk_expr_app(mk_expr_assume(m, alias, body), e)
     }
 
+    fn mk_obtain(
+        &mut self,
+        local_name: Name,
+        ty: Type,
+        p: Term,
+        alias: Option<Name>,
+        e1: Expr,
+        e2: Expr,
+    ) -> Expr {
+        // Expand[obtain (x : τ), p := e1, e2] := exists.ind.{τ}[_, _] e1 (take (x : τ), assume p, e2)
+        let e = mk_expr_const(
+            QualifiedName::from_name(Name::from_str("exists")).extend(Name::from_str("ind")),
+            vec![ty.clone()],
+            vec![],
+        );
+        let e = mk_expr_inst(e, self.mk_term_hole());
+        let e = mk_expr_inst(e, self.mk_term_hole());
+        let e = mk_expr_app(e, e1);
+        let e_body = mk_expr_assume(p, alias.as_ref().map(Id::from_name), e2);
+        let e_body = mk_expr_take(Id::from_name(&local_name), ty, e_body);
+        mk_expr_app(e, e_body)
+    }
+
     fn mk_eq(lhs: Term, rhs: Term) -> Term {
         let mut eq = mk_const(
             QualifiedName::from_name(Name::from_str("eq")),
@@ -1108,6 +1151,389 @@ impl<'a> Parser<'a> {
         );
         eq = eq.apply([lhs, rhs]);
         eq
+    }
+
+    fn local_field_name(owner: &Name, field_name: &Name) -> Name {
+        Name::from_str(
+            &QualifiedName::from_name(owner.clone())
+                .extend(field_name.clone())
+                .to_string(),
+        )
+    }
+
+    fn local_field_id(owner: &Name, field_name: &Name) -> Id {
+        Id::from_name(&Self::local_field_name(owner, field_name))
+    }
+
+    fn local_field_qualified(owner: &Name, field_name: &Name) -> QualifiedName {
+        QualifiedName::from_name(owner.clone()).extend(field_name.clone())
+    }
+
+    fn obtain_instance_expr(&mut self) -> Result<Expr, ParseError> {
+        let obtain_start = self.lex.save();
+        let local_name = self.name()?;
+        self.expect_symbol(":")?;
+        let ty_start = self.lex.save();
+        let target_ty = self.ty()?;
+        let Type::Const(structure_head) = target_ty.head() else {
+            return Err(ParseError::Parse {
+                message: "type of obtain instance must be a structure".to_string(),
+                span: self.span_since(ty_start),
+            });
+        };
+        let structure_name = structure_head.name.clone();
+        let Some(cmd_structure) = self.structure_table.get(&structure_name).cloned() else {
+            return Err(ParseError::Parse {
+                message: "type of obtain instance must be a structure".to_string(),
+                span: self.span_since(ty_start),
+            });
+        };
+
+        self.expect_symbol(":=")?;
+        self.expect_symbol("{")?;
+        let local_const_len = self.local_consts.len();
+        let local_axiom_len = self.local_axioms.len();
+        let mut fields = vec![];
+        while self.expect_symbol_opt("}").is_none() {
+            let keyword = self.keyword()?;
+            match keyword.as_str() {
+                "def" => {
+                    let field_name = self.name()?;
+                    let field_params = self.typed_parameters()?;
+                    for (field_param_name, _) in &field_params {
+                        self.locals.push(field_param_name.clone());
+                    }
+                    self.expect_symbol(":")?;
+                    let mut field_ty = self.ty()?;
+                    self.expect_symbol(":=")?;
+                    let mut field_target = self.term()?;
+                    self.locals.truncate(self.locals.len() - field_params.len());
+                    for (field_param_name, field_param_ty) in field_params.into_iter().rev() {
+                        field_ty = field_ty.arrow([field_param_ty.clone()]);
+                        field_target = field_target.abs(&[Local {
+                            id: Id::from_name(&field_param_name),
+                            ty: field_param_ty,
+                        }]);
+                    }
+                    self.push_local_const(
+                        QualifiedName::from_name(field_name.clone()),
+                        Self::local_field_id(&local_name, &field_name),
+                    );
+                    fields.push(InstanceField::Def(InstanceDef {
+                        name: field_name,
+                        ty: field_ty,
+                        target: field_target,
+                    }));
+                }
+                "lemma" => {
+                    let field_name = self.name()?;
+                    let field_params = self.typed_parameters()?;
+                    for (field_param_name, _) in &field_params {
+                        self.locals.push(field_param_name.clone());
+                    }
+                    self.expect_symbol(":")?;
+                    let mut field_target = self.term()?;
+                    self.expect_symbol(":=")?;
+                    let mut expr = self.expr()?;
+                    self.locals.truncate(self.locals.len() - field_params.len());
+                    let field_params = field_params
+                        .into_iter()
+                        .map(|(field_param_name, field_param_ty)| Local {
+                            id: Id::from_name(&field_param_name),
+                            ty: field_param_ty,
+                        })
+                        .collect::<Vec<_>>();
+                    field_target = generalize(&field_target, &field_params);
+                    for field_param in field_params.into_iter().rev() {
+                        expr = mk_expr_take(field_param.id, field_param.ty, expr);
+                    }
+                    let holes = self.holes.drain(..).collect();
+                    self.push_local_axiom(
+                        QualifiedName::from_name(field_name.clone()),
+                        Self::local_field_id(&local_name, &field_name),
+                        field_target.clone(),
+                    );
+                    fields.push(InstanceField::Lemma(InstanceLemma {
+                        name: field_name,
+                        target: field_target,
+                        holes,
+                        expr,
+                    }));
+                }
+                _ => Self::fail(keyword, "unknown command in obtain instance")?,
+            }
+        }
+
+        if cmd_structure.fields.len() != fields.len() {
+            self.local_consts.truncate(local_const_len);
+            self.local_axioms.truncate(local_axiom_len);
+            return Err(ParseError::Parse {
+                message: "number of fields mismatch".to_string(),
+                span: self.span_since(obtain_start),
+            });
+        }
+        for (structure_field, field) in zip(&cmd_structure.fields, &fields) {
+            match (structure_field, field) {
+                (
+                    StructureField::Const(StructureConst {
+                        name: structure_field_name,
+                        ..
+                    }),
+                    InstanceField::Def(InstanceDef {
+                        name: field_name, ..
+                    }),
+                )
+                | (
+                    StructureField::Axiom(StructureAxiom {
+                        name: structure_field_name,
+                        ..
+                    }),
+                    InstanceField::Lemma(InstanceLemma {
+                        name: field_name, ..
+                    }),
+                ) => {
+                    if structure_field_name != field_name {
+                        self.local_consts.truncate(local_const_len);
+                        self.local_axioms.truncate(local_axiom_len);
+                        return Err(ParseError::Parse {
+                            message: "field name mismatch".to_string(),
+                            span: self.span_since(obtain_start),
+                        });
+                    }
+                }
+                (StructureField::Const(_), _) => {
+                    self.local_consts.truncate(local_const_len);
+                    self.local_axioms.truncate(local_axiom_len);
+                    return Err(ParseError::Parse {
+                        message: "definition expected".to_string(),
+                        span: self.span_since(obtain_start),
+                    });
+                }
+                (StructureField::Axiom(_), _) => {
+                    self.local_consts.truncate(local_const_len);
+                    self.local_axioms.truncate(local_axiom_len);
+                    return Err(ParseError::Parse {
+                        message: "lemma expected".to_string(),
+                        span: self.span_since(obtain_start),
+                    });
+                }
+            }
+        }
+
+        self.local_consts.truncate(local_const_len);
+        self.local_axioms.truncate(local_axiom_len);
+        self.expect_symbol(",")?;
+
+        let body_local_const_len = self.local_consts.len();
+        let body_local_axiom_len = self.local_axioms.len();
+        self.locals.push(local_name.clone());
+        for field in &fields {
+            match field {
+                InstanceField::Def(InstanceDef {
+                    name: field_name, ..
+                }) => {
+                    self.push_local_const(
+                        Self::local_field_qualified(&local_name, field_name),
+                        Self::local_field_id(&local_name, field_name),
+                    );
+                }
+                InstanceField::Lemma(InstanceLemma {
+                    name: field_name,
+                    target,
+                    ..
+                }) => {
+                    self.push_local_axiom(
+                        Self::local_field_qualified(&local_name, field_name),
+                        Self::local_field_id(&local_name, field_name),
+                        target.clone(),
+                    );
+                }
+            }
+        }
+        let body = match self.expr() {
+            Ok(body) => body,
+            Err(err) => {
+                self.local_axioms.truncate(body_local_axiom_len);
+                self.local_consts.truncate(body_local_const_len);
+                self.locals.pop();
+                return Err(err);
+            }
+        };
+        self.local_axioms.truncate(body_local_axiom_len);
+        self.local_consts.truncate(body_local_const_len);
+        self.locals.pop();
+
+        let mut type_subst = Vec::with_capacity(cmd_structure.local_types.len());
+        for (x, t) in zip(&cmd_structure.local_types, target_ty.args()) {
+            type_subst.push((*x, t.clone()));
+        }
+
+        let mut char_terms = vec![];
+        for (structure_field, field) in zip(&cmd_structure.fields, &fields) {
+            let (
+                StructureField::Const(StructureConst {
+                    name: field_name,
+                    ty,
+                }),
+                InstanceField::Def(_),
+            ) = (structure_field, field)
+            else {
+                continue;
+            };
+            let field_id = Self::local_field_id(&local_name, field_name);
+            let mut rhs = mk_const(
+                structure_name.extend(field_name.clone()),
+                target_ty.args().into_iter().cloned().collect(),
+                vec![],
+            );
+            rhs = rhs.apply([mk_local(Id::from_name(&local_name))]);
+            let mut char_term = mk_const(
+                QualifiedName::from_name(Name::from_str("eq")),
+                vec![ty.subst(&type_subst)],
+                vec![],
+            );
+            char_term = char_term.apply([mk_local(field_id), rhs]);
+            char_terms.push(char_term);
+        }
+        let char_prop = char_terms
+            .into_iter()
+            .reduce(|left, right| {
+                let mut and = mk_const(
+                    QualifiedName::from_name(Name::from_str("and")),
+                    vec![],
+                    vec![],
+                );
+                and = and.apply([left, right]);
+                and
+            })
+            .unwrap_or_else(|| {
+                mk_const(
+                    QualifiedName::from_name(Name::from_str("true")),
+                    vec![],
+                    vec![],
+                )
+            });
+
+        let this = Local {
+            id: Id::fresh_with_name(Name::from_str("this")),
+            ty: target_ty.clone(),
+        };
+        let mut abs_char_terms = vec![];
+        for structure_field in &cmd_structure.fields {
+            let StructureField::Const(StructureConst {
+                name: field_name,
+                ty,
+            }) = structure_field
+            else {
+                continue;
+            };
+            let field_id = Self::local_field_id(&local_name, field_name);
+            let mut rhs = mk_const(
+                structure_name.extend(field_name.clone()),
+                target_ty.args().into_iter().cloned().collect(),
+                vec![],
+            );
+            rhs = rhs.apply([mk_local(this.id)]);
+            let mut char_term = mk_const(
+                QualifiedName::from_name(Name::from_str("eq")),
+                vec![ty.subst(&type_subst)],
+                vec![],
+            );
+            char_term = char_term.apply([mk_local(field_id), rhs]);
+            abs_char_terms.push(char_term);
+        }
+        let abs_char = abs_char_terms
+            .into_iter()
+            .reduce(|left, right| {
+                let mut and = mk_const(
+                    QualifiedName::from_name(Name::from_str("and")),
+                    vec![],
+                    vec![],
+                );
+                and = and.apply([left, right]);
+                and
+            })
+            .unwrap_or_else(|| {
+                mk_const(
+                    QualifiedName::from_name(Name::from_str("true")),
+                    vec![],
+                    vec![],
+                )
+            })
+            .abs(slice::from_ref(&this));
+
+        let mut abs_expr = mk_expr_const(
+            structure_name.extend(Name::from_str("abs")),
+            target_ty.args().into_iter().cloned().collect(),
+            vec![],
+        );
+        for structure_field in &cmd_structure.fields {
+            let StructureField::Const(StructureConst {
+                name: field_name, ..
+            }) = structure_field
+            else {
+                continue;
+            };
+            abs_expr = mk_expr_inst(
+                abs_expr,
+                mk_local(Self::local_field_id(&local_name, field_name)),
+            );
+        }
+        for structure_field in &cmd_structure.fields {
+            let StructureField::Axiom(StructureAxiom {
+                name: field_name, ..
+            }) = structure_field
+            else {
+                continue;
+            };
+            abs_expr = mk_expr_app(
+                abs_expr,
+                mk_expr_local(Self::local_field_id(&local_name, field_name)),
+            );
+        }
+
+        let mut exists_expr = mk_expr_const(
+            QualifiedName::from_name(Name::from_str("uexists")).extend(Name::from_str("exists")),
+            vec![target_ty.clone()],
+            vec![],
+        );
+        exists_expr = mk_expr_inst(exists_expr, abs_char);
+        let witness = mk_expr_app(exists_expr, abs_expr);
+
+        let mut expr = self.mk_obtain(
+            local_name.clone(),
+            target_ty,
+            char_prop,
+            None,
+            witness,
+            body,
+        );
+        for field in fields.into_iter().rev() {
+            expr = match field {
+                InstanceField::Def(InstanceDef {
+                    name: field_name,
+                    ty,
+                    target,
+                }) => mk_expr_let_term(
+                    Self::local_field_name(&local_name, &field_name),
+                    Some(ty),
+                    target,
+                    expr,
+                ),
+                InstanceField::Lemma(InstanceLemma {
+                    name: field_name,
+                    target,
+                    expr: proof,
+                    ..
+                }) => Self::mk_have(
+                    target,
+                    Some(Self::local_field_id(&local_name, &field_name)),
+                    proof,
+                    expr,
+                ),
+            };
+        }
+        Ok(expr)
     }
 
     fn mk_eq_trans(&mut self, e1: Expr, e2: Expr) -> Expr {
@@ -1189,7 +1615,7 @@ impl<'a> Parser<'a> {
             ty: this_ty.clone(),
         };
 
-        let mut local_consts: Vec<QualifiedName> = vec![];
+        let mut local_consts: Vec<LocalConst> = vec![];
         let mut local_axioms: Vec<(QualifiedName, LocalAxiom)> = vec![];
         let structure_name = QualifiedName::from_name(name.clone());
         let mut subst = vec![];
@@ -1202,7 +1628,10 @@ impl<'a> Parser<'a> {
                     let fullname = structure_name.extend(field_name.clone());
                     let local_name = Name::from_str(&fullname.to_string());
                     let id = Id::from_name(&local_name);
-                    local_consts.push(fullname.clone());
+                    local_consts.push(LocalConst {
+                        name: fullname.clone(),
+                        id,
+                    });
                     let mut target = mk_local(id);
                     target = target.apply([mk_local(this.id)]);
                     subst.push((Id::from_name(field_name), target));
@@ -1212,10 +1641,17 @@ impl<'a> Parser<'a> {
                     target,
                 }) => {
                     let fullname = structure_name.extend(field_name.clone());
+                    let local_name = Name::from_str(&fullname.to_string());
                     let mut target = target.clone();
                     target = target.subst(&subst);
                     target = generalize(&target, slice::from_ref(&this));
-                    local_axioms.push((fullname, LocalAxiom { target }));
+                    local_axioms.push((
+                        fullname,
+                        LocalAxiom {
+                            id: Id::from_name(&local_name),
+                            target,
+                        },
+                    ));
                 }
             }
         }
@@ -1292,7 +1728,13 @@ impl<'a> Parser<'a> {
         }]);
         abs = guard(&abs, guards);
         abs = generalize(&abs, &params);
-        local_axioms.push((abs_name, LocalAxiom { target: abs }));
+        local_axioms.push((
+            abs_name.clone(),
+            LocalAxiom {
+                id: Id::from_name(&Name::from_str(&abs_name.to_string())),
+                target: abs,
+            },
+        ));
 
         let local_const_len = self.local_consts.len();
         let local_axiom_len = self.local_axioms.len();
@@ -1326,8 +1768,7 @@ impl<'a> Parser<'a> {
         self.expect_symbol(",")?;
 
         let local_const_len = self.local_consts.len();
-        self.local_consts
-            .push(QualifiedName::from_name(name.clone()));
+        self.push_local_const(QualifiedName::from_name(name.clone()), Id::from_name(&name));
         let body = match self.expr() {
             Ok(body) => body,
             Err(err) => {
@@ -1380,10 +1821,11 @@ impl<'a> Parser<'a> {
                     self.expect_symbol(",")?;
                     let local_axioms_len = self.local_axioms.len();
                     if let Some(alias_name) = &alias {
-                        self.local_axioms.push((
+                        self.push_local_axiom(
                             QualifiedName::from_name(alias_name.clone()),
-                            LocalAxiom { target: m.clone() },
-                        ));
+                            Id::from_name(alias_name),
+                            m.clone(),
+                        );
                     }
                     let expr = match self.expr() {
                         Ok(expr) => expr,
@@ -1421,10 +1863,11 @@ impl<'a> Parser<'a> {
                     self.expect_symbol(",")?;
                     let local_axioms_len = self.local_axioms.len();
                     if let Some(alias_name) = &alias {
-                        self.local_axioms.push((
+                        self.push_local_axiom(
                             QualifiedName::from_name(alias_name.clone()),
-                            LocalAxiom { target: m.clone() },
-                        ));
+                            Id::from_name(alias_name),
+                            m.clone(),
+                        );
                     }
                     let e2 = match self.expr() {
                         Ok(expr) => expr,
@@ -1437,6 +1880,13 @@ impl<'a> Parser<'a> {
                     Self::mk_have(m, alias.as_ref().map(Id::from_name), e1, e2)
                 }
                 "obtain" => {
+                    if self
+                        .peek_opt()
+                        .is_some_and(|token| token.is_keyword() && token.as_str() == "instance")
+                    {
+                        self.advance();
+                        break 'left self.obtain_instance_expr()?;
+                    }
                     self.expect_symbol("(")?;
                     let local_name = self.name()?;
                     self.expect_symbol(":")?;
@@ -1453,10 +1903,11 @@ impl<'a> Parser<'a> {
                     self.locals.push(local_name.clone());
                     let local_axioms_len = self.local_axioms.len();
                     if let Some(alias_name) = &alias {
-                        self.local_axioms.push((
+                        self.push_local_axiom(
                             QualifiedName::from_name(alias_name.clone()),
-                            LocalAxiom { target: p.clone() },
-                        ));
+                            Id::from_name(alias_name),
+                            p.clone(),
+                        );
                     }
                     let e2 = match self.expr() {
                         Ok(expr) => expr,
@@ -1468,20 +1919,7 @@ impl<'a> Parser<'a> {
                     };
                     self.local_axioms.truncate(local_axioms_len);
                     self.locals.pop();
-
-                    // Expand[obtain (x : τ), p := e1, e2] := exists.ind.{τ}[_, _] e1 (take (x : τ), assume p, e2)
-                    let e = mk_expr_const(
-                        QualifiedName::from_name(Name::from_str("exists"))
-                            .extend(Name::from_str("ind")),
-                        vec![ty.clone()],
-                        vec![],
-                    );
-                    let e = mk_expr_inst(e, self.mk_term_hole());
-                    let e = mk_expr_inst(e, self.mk_term_hole());
-                    let e = mk_expr_app(e, e1);
-                    let e_body = mk_expr_assume(p, alias.as_ref().map(Id::from_name), e2);
-                    let e_body = mk_expr_take(Id::from_name(&local_name), ty, e_body);
-                    mk_expr_app(e, e_body)
+                    self.mk_obtain(local_name, ty, p, alias, e1, e2)
                 }
                 "calc" => {
                     // calc m₁ = m₂ := e₁
@@ -2420,12 +2858,11 @@ impl<'a> Parser<'a> {
                         expr = mk_expr_take(field_param.id, field_param.ty, expr);
                     }
                     let holes = self.holes.drain(..).collect();
-                    self.local_axioms.push((
+                    self.push_local_axiom(
                         QualifiedName::from_name(field_name.clone()),
-                        LocalAxiom {
-                            target: field_target.clone(),
-                        },
-                    ));
+                        Id::from_name(&field_name),
+                        field_target.clone(),
+                    );
                     fields.push(InstanceField::Lemma(InstanceLemma {
                         name: field_name,
                         target: field_target,
@@ -2590,12 +3027,11 @@ impl<'a> Parser<'a> {
                         expr = mk_expr_take(field_param.id, field_param.ty, expr);
                     }
                     let holes = self.holes.drain(..).collect();
-                    self.local_axioms.push((
+                    self.push_local_axiom(
                         QualifiedName::from_name(field_name.clone()),
-                        LocalAxiom {
-                            target: field_target.clone(),
-                        },
-                    ));
+                        Id::from_name(&field_name),
+                        field_target.clone(),
+                    );
                     fields.push(ClassInstanceField::Lemma(ClassInstanceLemma {
                         name: field_name,
                         target: field_target,
@@ -2678,6 +3114,8 @@ mod tests {
     ) -> Parser<'a> {
         static EMPTY_TYPE_DEF_TABLE: LazyLock<HashMap<QualifiedName, CmdTypeDef>> =
             LazyLock::new(HashMap::new);
+        static EMPTY_STRUCTURE_TABLE: LazyLock<HashMap<QualifiedName, CmdStructure>> =
+            LazyLock::new(HashMap::new);
         Parser::new(
             lex,
             tt,
@@ -2688,6 +3126,7 @@ mod tests {
             const_table,
             axiom_table,
             class_predicate_table,
+            &EMPTY_STRUCTURE_TABLE,
         )
     }
 
@@ -2883,6 +3322,7 @@ mod tests {
         );
         let current_namespace = root_namespace.clone();
         ensure_use_target_prefixes_for_tests(&mut namespace_table, &current_namespace);
+        let structure_table = HashMap::new();
         let mut parser = Parser::new(
             &mut lex,
             tt,
@@ -2893,6 +3333,7 @@ mod tests {
             const_table,
             axiom_table,
             class_predicate_table,
+            &structure_table,
         );
         let cmd = parser.cmd();
         if let Ok(Cmd::Use(use_cmd)) = &cmd {
@@ -2938,6 +3379,7 @@ mod tests {
         let mut cmds = vec![];
         let mut namespace_stack = vec![];
         let mut current_namespace = root_namespace.clone();
+        let mut structure_table: HashMap<QualifiedName, CmdStructure> = HashMap::new();
         while !lex.is_eof() {
             ensure_use_target_prefixes_for_tests(&mut namespace_table, &current_namespace);
             let mut parser = Parser::new(
@@ -2950,6 +3392,7 @@ mod tests {
                 const_table,
                 axiom_table,
                 class_predicate_table,
+                &structure_table,
             );
             let cmd = parser.cmd()?;
             if let Cmd::Use(use_cmd) = &cmd {
@@ -2971,6 +3414,9 @@ mod tests {
                 }
                 Cmd::TypeDef(cmd) => {
                     type_def_table.insert(cmd.name.clone(), cmd.clone());
+                }
+                Cmd::Structure(cmd) => {
+                    structure_table.insert(cmd.name.clone(), cmd.clone());
                 }
                 Cmd::Infix(cmd) => {
                     tt.add(Operator {
@@ -3178,6 +3624,30 @@ mod tests {
         axiom_table: &HashMap<QualifiedName, Axiom>,
         class_predicate_table: &HashMap<QualifiedName, ClassType>,
     ) -> Result<Expr, ParseError> {
+        let structure_table = HashMap::new();
+        parse_expr_with_structure_tables(
+            input,
+            tt,
+            use_table,
+            type_const_table,
+            const_table,
+            axiom_table,
+            class_predicate_table,
+            &structure_table,
+        )
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    fn parse_expr_with_structure_tables(
+        input: &str,
+        tt: &TokenTable,
+        use_table: &mut HashMap<Name, QualifiedName>,
+        type_const_table: &HashMap<QualifiedName, Kind>,
+        const_table: &HashMap<QualifiedName, Const>,
+        axiom_table: &HashMap<QualifiedName, Axiom>,
+        class_predicate_table: &HashMap<QualifiedName, ClassType>,
+        structure_table: &HashMap<QualifiedName, CmdStructure>,
+    ) -> Result<Expr, ParseError> {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
         let type_def_table = HashMap::new();
@@ -3199,15 +3669,17 @@ mod tests {
         );
         let current_namespace = root_namespace.clone();
         ensure_use_target_prefixes_for_tests(&mut namespace_table, &current_namespace);
-        let mut parser = new_parser_without_type_defs(
+        let mut parser = Parser::new(
             &mut lex,
             tt,
             &namespace_table,
             &current_namespace,
             type_const_table,
+            &type_def_table,
             const_table,
             axiom_table,
             class_predicate_table,
+            structure_table,
         );
         let expr = parser.expr();
         let top_entry = namespace_table
@@ -3445,15 +3917,17 @@ mod tests {
 
         let local_const_name = qualified("foo.c");
         let local_axiom_name = qualified("foo.a");
-        parser.local_consts.push(local_const_name.clone());
-        parser.local_axioms.push((
+        parser.push_local_const(
+            local_const_name.clone(),
+            Id::from_name(&Name::from_str("foo.c")),
+        );
+        parser.push_local_axiom(
             local_axiom_name.clone(),
-            LocalAxiom {
-                target: mk_const(qualified("p"), vec![], vec![]),
-            },
-        ));
+            Id::from_name(&Name::from_str("foo.a")),
+            mk_const(qualified("p"), vec![], vec![]),
+        );
 
-        assert!(parser.has_local_const(&local_const_name));
+        assert!(parser.get_local_const(&local_const_name).is_some());
         assert!(parser.get_local_axiom(&local_axiom_name).is_some());
     }
 
@@ -5560,6 +6034,161 @@ mod tests {
         };
         assert_eq!(local_axiom.id, Id::from_name(&Name::from_str("foo.a")));
         assert!(arg.head().is_hole());
+    }
+
+    #[test]
+    fn obtain_instance_desugars_to_let_have_and_obtain() {
+        let (tt, mut type_consts, consts, mut axioms, class_predicates) = setup_tables();
+        type_consts.insert(qualified("foo"), Kind(0));
+        axioms.insert(
+            qualified("hp"),
+            Axiom {
+                local_types: vec![],
+                local_classes: vec![],
+                target: mk_const(qualified("p"), vec![], vec![]),
+            },
+        );
+        let structure_table = HashMap::from([(
+            qualified("foo"),
+            CmdStructure {
+                name: qualified("foo"),
+                local_types: vec![],
+                fields: vec![
+                    StructureField::Const(StructureConst {
+                        name: Name::from_str("rep"),
+                        ty: mk_type_const(qualified("Prop")),
+                    }),
+                    StructureField::Axiom(StructureAxiom {
+                        name: Name::from_str("ok"),
+                        target: mk_local(Id::from_name(&Name::from_str("rep"))),
+                    }),
+                ],
+            },
+        )]);
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let expr = parse_expr_with_structure_tables(
+            "obtain instance c : foo := { def rep : Prop := p lemma ok : rep := hp }, c.ok",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+            &structure_table,
+        )
+        .expect("expression parses");
+
+        let Expr::LetTerm(let_term) = expr else {
+            panic!("expected outer let-term");
+        };
+        assert_eq!(let_term.name, Name::from_str("c.rep"));
+        let Term::Const(value_const) = let_term.value else {
+            panic!("expected let value to be a const");
+        };
+        assert_eq!(value_const.name, qualified("p"));
+
+        let Expr::App(have_app) = let_term.body else {
+            panic!("expected let body to be a have expansion");
+        };
+        let Expr::Assume(have_assume) = have_app.expr1 else {
+            panic!("expected have expansion to start with assume");
+        };
+        assert_eq!(
+            have_assume.alias,
+            Some(Id::from_name(&Name::from_str("c.ok")))
+        );
+        let Term::Local(local_axiom) = have_assume.local_axiom else {
+            panic!("expected have target to reference c.rep");
+        };
+        assert_eq!(local_axiom.id, Id::from_name(&Name::from_str("c.rep")));
+        let Expr::Const(proof) = have_app.expr2 else {
+            panic!("expected have proof to be hp");
+        };
+        assert_eq!(proof.name, qualified("hp"));
+
+        let Expr::App(obtain_app) = have_assume.expr else {
+            panic!("expected have body to be an obtain expansion");
+        };
+        let Expr::Take(take) = obtain_app.expr2 else {
+            panic!("expected obtain body to be a take");
+        };
+        assert_eq!(take.id, Id::from_name(&Name::from_str("c")));
+        let Expr::Assume(obtain_assume) = take.expr else {
+            panic!("expected obtain take body to be an assume");
+        };
+        let Expr::Local(body_local) = obtain_assume.expr else {
+            panic!("expected obtain body to use c.ok");
+        };
+        assert_eq!(body_local.id, Id::from_name(&Name::from_str("c.ok")));
+    }
+
+    #[test]
+    fn obtain_instance_later_lemma_uses_prior_field_ids() {
+        let (tt, mut type_consts, consts, mut axioms, class_predicates) = setup_tables();
+        type_consts.insert(qualified("foo"), Kind(0));
+        axioms.insert(
+            qualified("hp"),
+            Axiom {
+                local_types: vec![],
+                local_classes: vec![],
+                target: mk_const(qualified("p"), vec![], vec![]),
+            },
+        );
+        let structure_table = HashMap::from([(
+            qualified("foo"),
+            CmdStructure {
+                name: qualified("foo"),
+                local_types: vec![],
+                fields: vec![
+                    StructureField::Axiom(StructureAxiom {
+                        name: Name::from_str("ok"),
+                        target: mk_const(qualified("p"), vec![], vec![]),
+                    }),
+                    StructureField::Axiom(StructureAxiom {
+                        name: Name::from_str("ok2"),
+                        target: mk_const(qualified("p"), vec![], vec![]),
+                    }),
+                ],
+            },
+        )]);
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let expr = parse_expr_with_structure_tables(
+            "obtain instance c : foo := { lemma ok : p := hp lemma ok2 : p := ok }, c.ok2",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+            &structure_table,
+        )
+        .expect("expression parses");
+
+        let Expr::App(first_have) = expr else {
+            panic!("expected outer have expansion");
+        };
+        let Expr::Assume(first_assume) = first_have.expr1 else {
+            panic!("expected outer assume");
+        };
+        assert_eq!(
+            first_assume.alias,
+            Some(Id::from_name(&Name::from_str("c.ok")))
+        );
+
+        let Expr::App(second_have) = first_assume.expr else {
+            panic!("expected inner have expansion");
+        };
+        let Expr::Assume(second_assume) = second_have.expr1 else {
+            panic!("expected inner assume");
+        };
+        assert_eq!(
+            second_assume.alias,
+            Some(Id::from_name(&Name::from_str("c.ok2")))
+        );
+        let Expr::Local(second_proof) = second_have.expr2 else {
+            panic!("expected second proof to reference prior lemma");
+        };
+        assert_eq!(second_proof.id, Id::from_name(&Name::from_str("c.ok")));
     }
 
     #[test]
