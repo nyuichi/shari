@@ -35,6 +35,11 @@ pub enum Cmd {
     Infixl(CmdInfixl),
     Prefix(CmdPrefix),
     Nofix(CmdNofix),
+    TypeInfix(CmdTypeInfix),
+    TypeInfixr(CmdTypeInfixr),
+    TypeInfixl(CmdTypeInfixl),
+    TypePrefix(CmdTypePrefix),
+    TypeNofix(CmdTypeNofix),
     Def(CmdDef),
     Axiom(CmdAxiom),
     Lemma(CmdLemma),
@@ -84,6 +89,40 @@ pub struct CmdPrefix {
 
 #[derive(Clone, Debug)]
 pub struct CmdNofix {
+    pub op: String,
+    pub entity: QualifiedName,
+}
+
+#[derive(Clone, Debug)]
+pub struct CmdTypeInfix {
+    pub op: String,
+    pub prec: usize,
+    pub entity: QualifiedName,
+}
+
+#[derive(Clone, Debug)]
+pub struct CmdTypeInfixr {
+    pub op: String,
+    pub prec: usize,
+    pub entity: QualifiedName,
+}
+
+#[derive(Clone, Debug)]
+pub struct CmdTypeInfixl {
+    pub op: String,
+    pub prec: usize,
+    pub entity: QualifiedName,
+}
+
+#[derive(Clone, Debug)]
+pub struct CmdTypePrefix {
+    pub op: String,
+    pub prec: usize,
+    pub entity: QualifiedName,
+}
+
+#[derive(Clone, Debug)]
+pub struct CmdTypeNofix {
     pub op: String,
     pub entity: QualifiedName,
 }
@@ -309,6 +348,19 @@ impl std::fmt::Display for Cmd {
             Cmd::Infixl(cmd) => write!(f, "infixl {} {} {}", cmd.op, cmd.prec, cmd.entity),
             Cmd::Prefix(cmd) => write!(f, "prefix {} {} {}", cmd.op, cmd.prec, cmd.entity),
             Cmd::Nofix(cmd) => write!(f, "nofix {} {}", cmd.op, cmd.entity),
+            Cmd::TypeInfix(cmd) => {
+                write!(f, "type infix {} {} {}", cmd.op, cmd.prec, cmd.entity)
+            }
+            Cmd::TypeInfixr(cmd) => {
+                write!(f, "type infixr {} {} {}", cmd.op, cmd.prec, cmd.entity)
+            }
+            Cmd::TypeInfixl(cmd) => {
+                write!(f, "type infixl {} {} {}", cmd.op, cmd.prec, cmd.entity)
+            }
+            Cmd::TypePrefix(cmd) => {
+                write!(f, "type prefix {} {} {}", cmd.op, cmd.prec, cmd.entity)
+            }
+            Cmd::TypeNofix(cmd) => write!(f, "type nofix {} {}", cmd.op, cmd.entity),
             Cmd::Def(cmd) => write!(
                 f,
                 "def {}.{{{}}} : {} := {}",
@@ -945,6 +997,141 @@ impl Eval {
                 };
                 self.tt.add(op.clone())?;
                 self.pp.add(op)?;
+                Ok(())
+            }
+            Cmd::TypeInfix(inner) => {
+                let CmdTypeInfix { op, prec, entity } = inner;
+                let Some(arity) = self
+                    .type_const_table
+                    .get(&entity)
+                    .map(|kind| kind.0)
+                    .or_else(|| {
+                        self.type_def_table
+                            .get(&entity)
+                            .map(|cmd| cmd.local_types.len())
+                    })
+                else {
+                    bail!("unknown type notation target");
+                };
+                if arity != 2 {
+                    bail!("type notation target has wrong arity");
+                }
+                let op = Operator {
+                    symbol: op,
+                    fixity: Fixity::Infix,
+                    prec,
+                    entity,
+                };
+                self.tt.add_type(op.clone())?;
+                self.pp.add_type(op)?;
+                Ok(())
+            }
+            Cmd::TypeInfixr(inner) => {
+                let CmdTypeInfixr { op, prec, entity } = inner;
+                let Some(arity) = self
+                    .type_const_table
+                    .get(&entity)
+                    .map(|kind| kind.0)
+                    .or_else(|| {
+                        self.type_def_table
+                            .get(&entity)
+                            .map(|cmd| cmd.local_types.len())
+                    })
+                else {
+                    bail!("unknown type notation target");
+                };
+                if arity != 2 {
+                    bail!("type notation target has wrong arity");
+                }
+                let op = Operator {
+                    symbol: op,
+                    fixity: Fixity::Infixr,
+                    prec,
+                    entity,
+                };
+                self.tt.add_type(op.clone())?;
+                self.pp.add_type(op)?;
+                Ok(())
+            }
+            Cmd::TypeInfixl(inner) => {
+                let CmdTypeInfixl { op, prec, entity } = inner;
+                let Some(arity) = self
+                    .type_const_table
+                    .get(&entity)
+                    .map(|kind| kind.0)
+                    .or_else(|| {
+                        self.type_def_table
+                            .get(&entity)
+                            .map(|cmd| cmd.local_types.len())
+                    })
+                else {
+                    bail!("unknown type notation target");
+                };
+                if arity != 2 {
+                    bail!("type notation target has wrong arity");
+                }
+                let op = Operator {
+                    symbol: op,
+                    fixity: Fixity::Infixl,
+                    prec,
+                    entity,
+                };
+                self.tt.add_type(op.clone())?;
+                self.pp.add_type(op)?;
+                Ok(())
+            }
+            Cmd::TypePrefix(inner) => {
+                let CmdTypePrefix { op, prec, entity } = inner;
+                let Some(arity) = self
+                    .type_const_table
+                    .get(&entity)
+                    .map(|kind| kind.0)
+                    .or_else(|| {
+                        self.type_def_table
+                            .get(&entity)
+                            .map(|cmd| cmd.local_types.len())
+                    })
+                else {
+                    bail!("unknown type notation target");
+                };
+                if arity != 1 {
+                    bail!("type notation target has wrong arity");
+                }
+                let op = Operator {
+                    symbol: op,
+                    fixity: Fixity::Prefix,
+                    prec,
+                    entity,
+                };
+                self.tt.add_type(op.clone())?;
+                self.pp.add_type(op)?;
+                Ok(())
+            }
+            Cmd::TypeNofix(inner) => {
+                let CmdTypeNofix { op, entity } = inner;
+                let Some(arity) = self
+                    .type_const_table
+                    .get(&entity)
+                    .map(|kind| kind.0)
+                    .or_else(|| {
+                        self.type_def_table
+                            .get(&entity)
+                            .map(|cmd| cmd.local_types.len())
+                    })
+                else {
+                    bail!("unknown type notation target");
+                };
+                if arity != 0 {
+                    bail!("type notation target has wrong arity");
+                }
+                let op = Operator {
+                    symbol: op,
+                    fixity: Fixity::Nofix,
+                    prec: usize::MAX,
+                    entity,
+                };
+                self.tt.add_type(op.clone())?;
+                self.pp.add_type(op)?;
                 Ok(())
             }
             Cmd::Def(inner) => {

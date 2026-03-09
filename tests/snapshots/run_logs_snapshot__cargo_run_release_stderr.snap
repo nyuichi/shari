@@ -217,11 +217,11 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom prod.ind.{u, v} : ∀ x motive, (∀ x x₁, motive (prod.pair x x₁)) → motive x
 [<timestamp> INFO  shari::cmd] + const prod.rec.{u, v, u₁} : prod u v → (u → v → u₁) → u₁
 [<timestamp> INFO  shari::cmd] + axiom prod.pair.spec.{u, v, u₁} : ∀ x x₁, prod.rec (prod.pair x x₁) = λ k, k x x₁
-[<timestamp> INFO  shari::cmd] + const prod.fst.{u, v} : prod u v → u
-[<timestamp> INFO  shari::cmd] + const prod.snd.{u, v} : prod u v → v
-[<timestamp> INFO  shari::cmd] + const fst.{u, v} : prod u v → u
-[<timestamp> INFO  shari::cmd] + const snd.{u, v} : prod u v → v
-[<timestamp> INFO  shari::cmd] + const pair.{u, v} : u → v → prod u v
+[<timestamp> INFO  shari::cmd] + const prod.fst.{u, v} : u × v → u
+[<timestamp> INFO  shari::cmd] + const prod.snd.{u, v} : u × v → v
+[<timestamp> INFO  shari::cmd] + const fst.{u, v} : u × v → u
+[<timestamp> INFO  shari::cmd] + const snd.{u, v} : u × v → v
+[<timestamp> INFO  shari::cmd] + const pair.{u, v} : u → v → u × v
 [<timestamp> INFO  shari::cmd] + axiom fst.pair.{u, v} : ∀ x y, fst (pair x y) = x
 [<timestamp> INFO  shari::cmd] + axiom snd.pair.{u, v} : ∀ x y, snd (pair x y) = y
 [<timestamp> INFO  shari::cmd] + axiom prod.eta.{u, v} : ∀ p, p = pair (fst p) (snd p)
@@ -235,7 +235,7 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + const total.el.y.{u, v} : total.el u v → v
 [<timestamp> INFO  shari::cmd] + axiom total.el.spec.{u, v} : ∀ this, total.rel (total.el.rel this) (total.el.x this) (total.el.y this)
 [<timestamp> INFO  shari::cmd] + axiom total.el.abs.{u, v} : ∀ rel x y, total.rel rel x y → ∃! this, and (and (rel = total.el.rel this) (x = total.el.x this)) (y = total.el.y this)
-[<timestamp> INFO  shari::cmd] + const f.{u, v} : total.el u v → prod u (total u v)
+[<timestamp> INFO  shari::cmd] + const f.{u, v} : total.el u v → u × total u v
 [<timestamp> INFO  shari::cmd] + axiom f.surjective.{u, v} : surjective f
 [<timestamp> INFO  shari::cmd] + axiom total.choice.exists.{u, v} : ∀ r, ∃ h, ∀ x, total.rel r x (h x)
 [<timestamp> INFO  shari::cmd] + axiom ac_from_surjective_split.{u, v} : ∀ R, (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x)
@@ -295,6 +295,7 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom nat.rec.graph.succ.{u} : ∀ z f n y, nat.rec.graph z f n y → nat.rec.graph z f (succ n) (f n y)
 [<timestamp> INFO  shari::cmd] + axiom nat.rec.graph.ind.{u} : ∀ z f x x₁ motive, nat.rec.graph z f x x₁ → motive zero z → (∀ n y, nat.rec.graph z f n y → motive n y → motive (succ n) (f n y)) → motive x x₁
 [<timestamp> INFO  shari::cmd] + axiom nat.rec.exists.{u} : ∀ n z f, ∃ a, nat.rec.graph z f n a
+[<timestamp> INFO  shari::cmd] + type def ℕ := nat
 [<timestamp> INFO  shari::cmd] + const nat.add : nat → nat → nat
 [<timestamp> INFO  shari::cmd] + const nat.mul : nat → nat → nat
 [<timestamp> INFO  shari::cmd] + const bit0 : nat → nat
