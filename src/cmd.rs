@@ -90,7 +90,6 @@ pub struct CmdNofix {
 
 #[derive(Clone, Debug)]
 pub struct CmdUse {
-    pub absolute: bool,
     pub decls: Vec<UseDecl>,
 }
 
@@ -295,10 +294,9 @@ impl std::fmt::Display for Cmd {
             Cmd::NamespaceStart(cmd) => write!(f, "namespace {} {{", cmd.path),
             Cmd::BlockEnd => write!(f, "}}"),
             Cmd::Use(cmd) => {
-                let prefix = if cmd.absolute { "." } else { "" };
                 write!(
                     f,
-                    "use {prefix}{}",
+                    "use {}",
                     cmd.decls
                         .iter()
                         .map(|decl| format!("{} as {}", decl.target, decl.alias))
@@ -559,29 +557,6 @@ pub struct Operator {
 }
 
 impl Eval {
-    fn resolve(&self, base: Path, target: &QualifiedName) -> QualifiedName {
-        let mut path = base;
-        let mut names = target.names().into_iter();
-        while let Some(name) = names.next() {
-            let Some(namespace) = self.namespace_table.get(&path) else {
-                path = QualifiedName::from_parts(path, name).into_path();
-                for tail in names {
-                    path = QualifiedName::from_parts(path, tail).into_path();
-                }
-                return path.into_qualified_name().unwrap();
-            };
-            let Some(target) = namespace.use_table.get(&name) else {
-                path = QualifiedName::from_parts(path, name).into_path();
-                for tail in names {
-                    path = QualifiedName::from_parts(path, tail).into_path();
-                }
-                return path.into_qualified_name().unwrap();
-            };
-            path = target.clone().into_path();
-        }
-        path.into_qualified_name().unwrap()
-    }
-
     fn add_const(
         &mut self,
         name: QualifiedName,
@@ -899,16 +874,10 @@ impl Eval {
                 Ok(())
             }
             Cmd::Use(inner) => {
-                let CmdUse { absolute, decls } = inner;
+                let CmdUse { decls } = inner;
                 let current_namespace = self.current_namespace.clone();
-                let base = if absolute {
-                    Path::root()
-                } else {
-                    current_namespace.clone()
-                };
                 for decl in decls {
                     let UseDecl { alias, target } = decl;
-                    let target = self.resolve(base.clone(), &target);
                     self.namespace_table
                         .get_mut(&current_namespace)
                         .expect("current namespace must exist")
@@ -2616,29 +2585,17 @@ mod tests {
     }
 
     #[test]
-    fn use_command_resolves_relative_target_when_running() {
+    fn use_command_installs_resolved_relative_target_verbatim() {
         let mut eval = Eval::default();
-        let root_namespace = Path::root();
         let current_namespace = path("foo");
         eval.namespace_table
             .insert(current_namespace.clone(), Namespace::default());
-        eval.namespace_table
-            .get_mut(&root_namespace)
-            .expect("root namespace must exist")
-            .add(Name::from_str("foo"), qualified("foo"));
-        eval.namespace_table
-            .get_mut(&current_namespace)
-            .expect("current namespace must exist")
-            .add(Name::from_str("bar"), qualified("real"));
-        eval.namespace_table
-            .insert(path("real"), Namespace::default());
         eval.current_namespace = current_namespace.clone();
 
         eval.run_cmd(Cmd::Use(CmdUse {
-            absolute: false,
             decls: vec![UseDecl {
                 alias: Name::from_str("baz"),
-                target: qualified("bar.qux"),
+                target: qualified("real.qux"),
             }],
         }))
         .expect("use command should succeed");
@@ -2652,31 +2609,17 @@ mod tests {
     }
 
     #[test]
-    fn use_command_resolves_absolute_target_when_running() {
+    fn use_command_installs_resolved_absolute_target_verbatim() {
         let mut eval = Eval::default();
-        let root_namespace = Path::root();
         let current_namespace = path("foo");
         eval.namespace_table
             .insert(current_namespace.clone(), Namespace::default());
-        eval.namespace_table
-            .get_mut(&root_namespace)
-            .expect("root namespace must exist")
-            .add(Name::from_str("foo"), qualified("foo"));
-        eval.namespace_table
-            .get_mut(&root_namespace)
-            .expect("root namespace must exist")
-            .add(Name::from_str("bar"), qualified("global"));
-        eval.namespace_table
-            .get_mut(&current_namespace)
-            .expect("current namespace must exist")
-            .add(Name::from_str("bar"), qualified("local"));
         eval.current_namespace = current_namespace.clone();
 
         eval.run_cmd(Cmd::Use(CmdUse {
-            absolute: true,
             decls: vec![UseDecl {
                 alias: Name::from_str("baz"),
-                target: qualified("bar"),
+                target: qualified("global"),
             }],
         }))
         .expect("use command should succeed");
@@ -2690,20 +2633,15 @@ mod tests {
     }
 
     #[test]
-    fn use_command_resolves_decls_left_to_right() {
+    fn use_command_does_not_rewrite_targets_using_prior_decls() {
         let mut eval = Eval::default();
         let root_namespace = Path::root();
-        eval.namespace_table
-            .get_mut(&root_namespace)
-            .expect("root namespace must exist")
-            .add(Name::from_str("hoge"), qualified("real"));
 
         eval.run_cmd(Cmd::Use(CmdUse {
-            absolute: false,
             decls: vec![
                 UseDecl {
                     alias: Name::from_str("fuga"),
-                    target: qualified("hoge"),
+                    target: qualified("real"),
                 },
                 UseDecl {
                     alias: Name::from_str("piyo"),
@@ -2723,103 +2661,7 @@ mod tests {
             eval.namespace_table[&root_namespace]
                 .use_table
                 .get(&Name::from_str("piyo")),
-            Some(&qualified("real"))
-        );
-    }
-
-    #[test]
-    fn use_command_does_not_create_missing_namespaces_during_resolution() {
-        let mut eval = Eval::default();
-        let root_namespace = Path::root();
-
-        eval.run_cmd(Cmd::Use(CmdUse {
-            absolute: false,
-            decls: vec![UseDecl {
-                alias: Name::from_str("alias"),
-                target: qualified("qux.quux"),
-            }],
-        }))
-        .expect("use command should succeed");
-
-        assert_eq!(
-            eval.namespace_table[&root_namespace]
-                .use_table
-                .get(&Name::from_str("alias")),
-            Some(&qualified("qux.quux"))
-        );
-        assert!(
-            !eval.namespace_table.contains_key(&path("qux")),
-            "resolve should not create intermediate namespace entries"
-        );
-        assert!(
-            !eval.namespace_table.contains_key(&path("qux.quux")),
-            "resolve should not create terminal namespace entries"
-        );
-        assert_eq!(
-            eval.namespace_table[&root_namespace]
-                .use_table
-                .get(&Name::from_str("qux")),
-            None
-        );
-    }
-
-    #[test]
-    fn use_command_stops_resolution_after_first_missing_alias() {
-        let mut eval = Eval::default();
-        let root_namespace = Path::root();
-        let missing_head_path = path("qux");
-        let mut missing_head_namespace = Namespace::default();
-        missing_head_namespace.add(Name::from_str("leaf"), qualified("real"));
-        eval.namespace_table
-            .insert(missing_head_path, missing_head_namespace);
-
-        eval.run_cmd(Cmd::Use(CmdUse {
-            absolute: false,
-            decls: vec![UseDecl {
-                alias: Name::from_str("alias"),
-                target: qualified("qux.leaf"),
-            }],
-        }))
-        .expect("use command should succeed");
-
-        assert_eq!(
-            eval.namespace_table[&root_namespace]
-                .use_table
-                .get(&Name::from_str("alias")),
-            Some(&qualified("qux.leaf"))
-        );
-    }
-
-    #[test]
-    fn use_command_resolves_alias_tail_without_namespace_entry_for_alias_target() {
-        let mut eval = Eval::default();
-        let current_namespace = path("subset");
-        eval.namespace_table
-            .insert(current_namespace.clone(), Namespace::default());
-        eval.namespace_table
-            .get_mut(&current_namespace)
-            .expect("current namespace must exist")
-            .add(Name::from_str("iff"), qualified("iff"));
-        eval.current_namespace = current_namespace.clone();
-
-        eval.run_cmd(Cmd::Use(CmdUse {
-            absolute: false,
-            decls: vec![UseDecl {
-                alias: Name::from_str("iff_intro"),
-                target: qualified("iff.intro"),
-            }],
-        }))
-        .expect("use command should succeed");
-
-        assert_eq!(
-            eval.namespace_table[&current_namespace]
-                .use_table
-                .get(&Name::from_str("iff_intro")),
-            Some(&qualified("iff.intro"))
-        );
-        assert!(
-            !eval.namespace_table.contains_key(&path("iff")),
-            "resolve should not require or create namespace entries for alias target paths"
+            Some(&qualified("fuga"))
         );
     }
 }

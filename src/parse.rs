@@ -1658,6 +1658,7 @@ impl<'a> Parser<'a> {
 
     fn use_group(
         &mut self,
+        base: &Path,
         prefix: Option<&QualifiedName>,
         decls: &mut Vec<UseDecl>,
     ) -> Result<(), ParseError> {
@@ -1665,7 +1666,7 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
         loop {
-            self.use_entry(prefix, true, decls)?;
+            self.use_entry(base, prefix, true, decls)?;
             if self.expect_symbol_opt(",").is_some() {
                 if let Some(token) = self.peek_opt()
                     && token.is_symbol()
@@ -1682,12 +1683,13 @@ impl<'a> Parser<'a> {
 
     fn use_entry(
         &mut self,
+        base: &Path,
         prefix: Option<&QualifiedName>,
         in_group: bool,
         decls: &mut Vec<UseDecl>,
     ) -> Result<(), ParseError> {
         if self.expect_symbol_opt("{").is_some() {
-            return self.use_group(prefix, decls);
+            return self.use_group(base, prefix, decls);
         }
         let token = self.any_token()?;
         if !token.is_ident() && !token.is_field() {
@@ -1701,26 +1703,30 @@ impl<'a> Parser<'a> {
             target = prefix.append(&target);
         }
         if self.expect_symbol_opt(".{").is_some() {
-            return self.use_group(Some(&target), decls);
+            return self.use_group(base, Some(&target), decls);
         }
         let alias = self.alias_opt()?.unwrap_or_else(|| target.name().clone());
+        let target = self.resolve(base.clone(), target);
         decls.push(UseDecl { alias, target });
         Ok(())
     }
 
     fn use_cmd(&mut self, _token: Token) -> Result<CmdUse, ParseError> {
         let mut decls = vec![];
-        let absolute = if self.expect_symbol_opt(".{").is_some() {
-            self.use_group(None, &mut decls)?;
-            true
+        if self.expect_symbol_opt(".{").is_some() {
+            self.use_group(&Path::root(), None, &mut decls)?;
         } else if self.expect_symbol_opt("{").is_some() {
-            self.use_group(None, &mut decls)?;
-            false
+            let base = self.current_namespace.clone();
+            self.use_group(&base, None, &mut decls)?;
         } else {
             let absolute = self.peek_opt().is_some_and(|token| token.is_field());
-            self.use_entry(None, false, &mut decls)?;
-            absolute
-        };
+            let base = if absolute {
+                Path::root()
+            } else {
+                self.current_namespace.clone()
+            };
+            self.use_entry(&base, None, false, &mut decls)?;
+        }
         if let Some(token) = self.expect_symbol_opt(",") {
             return Self::fail(
                 token,
@@ -1728,7 +1734,7 @@ impl<'a> Parser<'a> {
             );
         }
 
-        Ok(CmdUse { absolute, decls })
+        Ok(CmdUse { decls })
     }
 
     fn infixr_cmd(&mut self, _token: Token) -> Result<CmdInfixr, ParseError> {
@@ -2570,42 +2576,17 @@ mod tests {
         }
     }
 
-    fn resolve_use_target_for_tests(
-        namespace_table: &mut HashMap<Path, Namespace>,
-        base: Path,
-        target: &QualifiedName,
-    ) -> QualifiedName {
-        ensure_namespace_path_for_tests(namespace_table, &base);
-        let mut path = base;
-        for segment in target.names() {
-            let resolved = namespace_table
-                .get(&path)
-                .and_then(|namespace| namespace.use_table.get(&segment))
-                .cloned();
-            path = resolved
-                .map(QualifiedName::into_path)
-                .unwrap_or_else(|| QualifiedName::from_parts(path, segment).into_path());
-        }
-        path.into_qualified_name().unwrap()
-    }
-
     fn apply_use_cmd_for_tests(
         namespace_table: &mut HashMap<Path, Namespace>,
         current_namespace: &Path,
         cmd: &CmdUse,
     ) {
         ensure_namespace_path_for_tests(namespace_table, current_namespace);
-        let base = if cmd.absolute {
-            Path::root()
-        } else {
-            current_namespace.clone()
-        };
         for decl in &cmd.decls {
-            let target = resolve_use_target_for_tests(namespace_table, base.clone(), &decl.target);
             namespace_table
                 .get_mut(current_namespace)
                 .expect("current namespace must exist")
-                .add(decl.alias.clone(), target);
+                .add(decl.alias.clone(), decl.target.clone());
         }
     }
 
@@ -3365,12 +3346,28 @@ mod tests {
             &class_predicates,
         )
         .expect("commands parse");
-        let Cmd::Use(CmdUse { absolute, decls }) = &cmds[1] else {
+        let Cmd::Use(CmdUse { decls }) = &cmds[1] else {
             panic!("expected use command");
         };
-        assert!(*absolute);
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].target, qualified("bar"));
+    }
+
+    #[test]
+    fn use_command_display_uses_resolved_targets_only() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmds = parse_cmds_with_tables(
+            "namespace foo { use .bar as baz }",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("commands parse");
+        assert_eq!(format!("{}", cmds[1]), "use bar as baz");
     }
 
     #[test]
@@ -3722,7 +3719,7 @@ mod tests {
             &class_predicates,
         )
         .expect("use command parses");
-        let Cmd::Use(CmdUse { absolute: _, decls }) = cmd else {
+        let Cmd::Use(CmdUse { decls }) = cmd else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 2);
@@ -3748,7 +3745,7 @@ mod tests {
             &class_predicates,
         )
         .expect("use command parses");
-        let Cmd::Use(CmdUse { absolute: _, decls }) = cmd else {
+        let Cmd::Use(CmdUse { decls }) = cmd else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 2);
@@ -3772,7 +3769,7 @@ mod tests {
             &class_predicates,
         )
         .expect("namespace commands parse");
-        let Cmd::Use(CmdUse { absolute: _, decls }) = &cmds[1] else {
+        let Cmd::Use(CmdUse { decls }) = &cmds[1] else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 2);
@@ -3796,7 +3793,7 @@ mod tests {
             &class_predicates,
         )
         .expect("use command parses");
-        let Cmd::Use(CmdUse { absolute: _, decls }) = cmd else {
+        let Cmd::Use(CmdUse { decls }) = cmd else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 2);
@@ -3820,7 +3817,7 @@ mod tests {
             &class_predicates,
         )
         .expect("namespace commands parse");
-        let Cmd::Use(CmdUse { absolute: _, decls }) = &cmds[1] else {
+        let Cmd::Use(CmdUse { decls }) = &cmds[1] else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 1);
@@ -3911,7 +3908,7 @@ mod tests {
     }
 
     #[test]
-    fn use_chain_normalizes_alias_target() {
+    fn use_chain_resolves_alias_target_during_parse() {
         let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
         insert_prop_const(&mut consts, "foo");
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
@@ -3926,17 +3923,16 @@ mod tests {
             &class_predicates,
         )
         .expect("use command parses");
-        let Cmd::Use(CmdUse { absolute, decls }) = cmd else {
+        let Cmd::Use(CmdUse { decls }) = cmd else {
             panic!("expected use command");
         };
-        assert!(!absolute);
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].alias, Name::from_str("baz"));
-        assert_eq!(decls[0].target, qualified("bar"));
+        assert_eq!(decls[0].target, qualified("foo"));
     }
 
     #[test]
-    fn use_target_rewrites_alias_head_without_target_validation() {
+    fn use_target_resolves_alias_head_without_target_validation() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
         use_table.insert(Name::from_str("bar"), qualified("foo"));
@@ -3950,12 +3946,12 @@ mod tests {
             &class_predicates,
         )
         .expect("use command parses");
-        let Cmd::Use(CmdUse { absolute: _, decls }) = cmd else {
+        let Cmd::Use(CmdUse { decls }) = cmd else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].alias, Name::from_str("qux"));
-        assert_eq!(decls[0].target, qualified("bar.baz"));
+        assert_eq!(decls[0].target, qualified("foo.baz"));
     }
 
     #[test]
@@ -3975,7 +3971,7 @@ mod tests {
             &class_predicates,
         )
         .expect("use command parses");
-        let Cmd::Use(CmdUse { absolute: _, decls }) = cmd else {
+        let Cmd::Use(CmdUse { decls }) = cmd else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 1);
@@ -3984,7 +3980,7 @@ mod tests {
     }
 
     #[test]
-    fn use_group_alias_chain_is_resolved_left_to_right() {
+    fn use_group_alias_chain_uses_command_start_snapshot() {
         let (tt, type_consts, mut consts, axioms, class_predicates) = setup_tables();
         insert_prop_const(&mut consts, "hoge");
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
@@ -3998,7 +3994,7 @@ mod tests {
             &class_predicates,
         )
         .expect("use command parses");
-        let Cmd::Use(CmdUse { absolute: _, decls }) = cmd else {
+        let Cmd::Use(CmdUse { decls }) = cmd else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 2);
@@ -4006,6 +4002,32 @@ mod tests {
         assert_eq!(decls[0].target, qualified("hoge"));
         assert_eq!(decls[1].alias, Name::from_str("piyo"));
         assert_eq!(decls[1].target, qualified("fuga"));
+    }
+
+    #[test]
+    fn use_group_swap_targets_use_command_start_snapshot() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        use_table.insert(Name::from_str("a"), qualified("left"));
+        use_table.insert(Name::from_str("b"), qualified("right"));
+        let cmd = parse_cmd_with_tables(
+            "use {a as b, b as a}",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("use command parses");
+        let Cmd::Use(CmdUse { decls }) = cmd else {
+            panic!("expected use command");
+        };
+        assert_eq!(decls.len(), 2);
+        assert_eq!(decls[0].alias, Name::from_str("b"));
+        assert_eq!(decls[0].target, qualified("left"));
+        assert_eq!(decls[1].alias, Name::from_str("a"));
+        assert_eq!(decls[1].target, qualified("right"));
     }
 
     #[test]
@@ -4022,7 +4044,7 @@ mod tests {
             &class_predicates,
         )
         .expect("use command parses");
-        let Cmd::Use(CmdUse { absolute: _, decls }) = cmd else {
+        let Cmd::Use(CmdUse { decls }) = cmd else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 1);
@@ -4044,7 +4066,7 @@ mod tests {
             &class_predicates,
         )
         .expect("use command parses");
-        let Cmd::Use(CmdUse { absolute: _, decls }) = cmd else {
+        let Cmd::Use(CmdUse { decls }) = cmd else {
             panic!("expected use command");
         };
         assert_eq!(decls.len(), 2);
