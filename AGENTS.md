@@ -1,27 +1,27 @@
-# Shari
+# Shari Agent Guide
 
-## Coding style
+Use this file as the entrypoint only. The durable project knowledge lives in [docs/README.md](docs/README.md).
 
-- Favor short, descriptive identifiers that match existing naming patterns. Spend a moment to choose names that communicate intent clearly.
-- Avoid variable names that are solely adjectives; prefer nouns instead. For example, use `name` rather than `existing` for a variable representing an existing name, and choose `existing_name` when `name` alone could cause confusion.
-- Prefer destructuring bindings when working with structs or enums. Avoid using `..` in patterns; instead, list fields explicitly and bind unused ones to `_` or `_name`.
-- Place test code at the bottom of each source file.
-- Do not use `..Default::default()` in struct literals; list fields explicitly.
-- When a simple `&items` or `&mut items` works in a `for` loop, prefer that over `.iter()`/`.iter_mut()`/`.into_iter()`.
+## Non-negotiables
 
-## Testing
+- Work in TDD order: add or update a failing test first, make it pass, then refactor.
+- Do not introduce meaningless whitespace-only diffs such as CRLF churn.
+- Run `cargo fmt`, `cargo clippy --all-targets --all-features`, and `cargo test --all --all-features --locked` after changes.
+- After tests pass, review names, helper boundaries, and overall consistency with the rest of the codebase.
+- This repository uses `cargo insta`; when a snapshot change is intentional, run `cargo insta accept`.
 
-- This repository uses snapshot testing with `cargo insta`. When snapshot tests differ and the change is intentional, run `cargo insta accept` to refresh snapshots. You don't need to ask for permission to do this.
+## Docs To Read
 
-## Development Flow
+- [docs/README.md](docs/README.md): documentation index and reading order.
+- [docs/operations/agent-docs-policy.md](docs/operations/agent-docs-policy.md): source-of-truth and doc maintenance rules.
+- [docs/operations/change-playbook.md](docs/operations/change-playbook.md): which docs and artifacts to update for each kind of change.
+- [docs/SHARI_LANGUAGE_GUIDE.md](docs/SHARI_LANGUAGE_GUIDE.md): language syntax and proof-writing reference for `.shari` files.
 
-- Always run `cargo fmt` after making changes.
-- Keep `cargo clippy` warnings at zero.
-- Ensure `cargo test` passes.
-- After running `cargo test`, review your changes for consistency with the rest of the codebase and refactor when there is room for improvement.
+## Update Routing
 
-## Shari language reference
-
-- Before editing or creating `.shari` sources, read and follow the guidance in `docs/SHARI_LANGUAGE_GUIDE.md` so generated proofs respect the language grammar and features.
-- When adding or changing Shari language features (syntax, commands, elaboration behavior), update `docs/SHARI_LANGUAGE_GUIDE.md` to keep the reference accurate.
-- If the Shari grammar or keyword set changes, update the VS Code syntax (`editors/shari-vscode/syntaxes/shari.tmLanguage.json`) and the playground highlighter (`shari-playground/public/index.html`) accordingly.
+- Agent workflow or documentation process changes belong in `docs/operations/*`, not as long prose here.
+- Language grammar, keywords, or elaboration behavior changes must update `docs/SHARI_LANGUAGE_GUIDE.md`.
+- Grammar or keyword changes must also update:
+  - `editors/shari-vscode/syntaxes/shari.tmLanguage.json`
+  - `shari-playground/public/index.html`
+- Implementation design changes belong in the matching file under `docs/design-docs/`.
