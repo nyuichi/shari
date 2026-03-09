@@ -113,10 +113,21 @@ fn docs_internal_links_resolve() {
                 continue;
             }
 
+            // Strip any `#fragment` or `?query` suffix before resolving the
+            // filesystem path — both are valid in markdown links but have no
+            // meaning on disk.
+            let path_part = target.find(['#', '?']).map_or(target, |i| &target[..i]);
+
+            // If stripping left us with an empty string the link points only
+            // to a fragment within the current file; nothing to check on disk.
+            if path_part.is_empty() {
+                continue;
+            }
+
             let resolved = path
                 .parent()
                 .expect("parent directory")
-                .join(target)
+                .join(path_part)
                 .components()
                 .collect::<PathBuf>();
             assert!(
