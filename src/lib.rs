@@ -30,6 +30,7 @@ pub fn process(file: Arc<File>) -> anyhow::Result<()> {
             &eval.const_table,
             &eval.axiom_table,
             &eval.class_predicate_table,
+            &eval.structure_table,
         )
         .cmd()
         {
@@ -59,13 +60,16 @@ mod tests {
         "type const Prop : Type
          const imp : Prop → Prop → Prop
          const forall.{u} : (u → Prop) → Prop
+         const exists.{u} : (u → Prop) → Prop
          const uexists.{u} : (u → Prop) → Prop
          const eq.{u} : u → u → Prop
          const and : Prop → Prop → Prop
          const true : Prop
-         axiom eq.refl.{u} (x : u) : eq x x
          infixr → : 25 := imp
          infix = : 50 := eq
+         axiom eq.refl.{u} (x : u) : eq x x
+         axiom exists.ind.{u} (P : u → Prop) (Q : Prop) : exists P → forall (λ (x : u), P x → Q) → Q
+         axiom uexists.exists.{u} (P : u → Prop) : uexists P → exists P
          const top : Prop"
     }
 
@@ -202,6 +206,56 @@ mod tests {
         );
         let file = Arc::new(File::new("<test>", script));
         process(file).expect("class instance lemma should resolve preceding lemma alias");
+    }
+
+    #[test]
+    fn obtain_instance_expression_processes() {
+        let script = format!(
+            "{}
+             const p : Prop
+             axiom hp : p
+             structure foo := {{
+                 const rep : Prop
+                 axiom ok : rep
+             }}
+             lemma obtain_instance_expr : p :=
+               obtain instance c : foo := {{
+                   def rep : Prop := p
+                   lemma ok : rep := hp
+               }},
+               c.ok",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file).expect("obtain instance expression should elaborate");
+    }
+
+    #[test]
+    fn obtain_instance_expression_supports_multiple_const_fields() {
+        let script = format!(
+            "{}
+             const p : Prop
+             const q : Prop
+             axiom hp : p
+             axiom hq : q
+             structure pairish := {{
+                 const left : Prop
+                 const right : Prop
+                 axiom left_ok : left
+                 axiom right_ok : right
+             }}
+             lemma obtain_instance_pairish : p :=
+               obtain instance c : pairish := {{
+                   def left : Prop := p
+                   def right : Prop := q
+                   lemma left_ok : left := hp
+                   lemma right_ok : right := hq
+               }},
+               c.left_ok",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file).expect("obtain instance should support multi-field characteristics");
     }
 
     #[test]
