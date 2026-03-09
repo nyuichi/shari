@@ -1061,6 +1061,8 @@ lemma surjective.split.{u, v} (f : u → v) : surjective f → split f := ac
 type inductive prod u v
 | pair : u → v → prod
 
+type infixr × : 35 := prod
+
 def prod.fst.{u, v} (p : u × v) : u := prod.rec p (λ a b, a)
 def prod.snd.{u, v} (p : u × v) : v := prod.rec p (λ a b, b)
 
@@ -1607,7 +1609,7 @@ nat.rec.graph.ind «nat.rec.graph z f n a₁»
     eq.congr_arg (f n) «a₁ = a₂»)
 -/
 
--- TODO: type ℕ := nat
+type def ℕ := nat
 
 def nat.add (n m : ℕ) : ℕ := nat.rec n m (λ p, succ)
 def nat.mul (n m : ℕ) : ℕ := nat.rec n zero (λ p, nat.add m)
@@ -1701,7 +1703,6 @@ structure W.el u v := {
         tree p₁.0 p₁.1 ∧ tree p₂.0 p₂.1 ∧ ∃ l a, p₂.0 = cons a l ∧ p₁.0 = l ∧ p₂.1 = f a)
 }
 
--- type infixr × : 35
 use unit.star as star
 
 lemma unit.eta_expand (x : unit) : x = star :=

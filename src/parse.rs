@@ -3,8 +3,9 @@ use crate::cmd::{
     ClassStructureConst, ClassStructureField, Cmd, CmdAxiom, CmdClassInstance, CmdClassStructure,
     CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdInstance, CmdLemma,
     CmdNamespaceStart, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeDef,
-    CmdTypeInductive, CmdUse, Constructor, DataConstructor, Fixity, InstanceDef, InstanceField,
-    InstanceLemma, Namespace, Operator, StructureAxiom, StructureConst, StructureField, UseDecl,
+    CmdTypeInductive, CmdTypeInfix, CmdTypeInfixl, CmdTypeInfixr, CmdTypeNofix, CmdTypePrefix,
+    CmdUse, Constructor, DataConstructor, Fixity, InstanceDef, InstanceField, InstanceLemma,
+    Namespace, Operator, StructureAxiom, StructureConst, StructureField, UseDecl,
 };
 use crate::proof::{
     Axiom, Expr, LocalStructureAxiom, LocalStructureConst, LocalStructureField, count_forall,
@@ -28,6 +29,8 @@ use thiserror::Error;
 pub struct TokenTable {
     led: HashMap<String, Operator>,
     nud: HashMap<String, Operator>,
+    type_led: HashMap<String, Operator>,
+    type_nud: HashMap<String, Operator>,
 }
 
 impl TokenTable {
@@ -42,6 +45,24 @@ impl TokenTable {
             Fixity::Nofix | Fixity::Prefix => {
                 let sym = op.symbol.clone();
                 if self.nud.insert(sym, op).is_some() {
+                    bail!("symbol already defined")
+                }
+            }
+        };
+        Ok(())
+    }
+
+    pub fn add_type(&mut self, op: Operator) -> anyhow::Result<()> {
+        match op.fixity {
+            Fixity::Infix | Fixity::Infixl | Fixity::Infixr => {
+                let sym = op.symbol.clone();
+                if self.type_led.insert(sym, op).is_some() {
+                    bail!("symbol already defined")
+                }
+            }
+            Fixity::Nofix | Fixity::Prefix => {
+                let sym = op.symbol.clone();
+                if self.type_nud.insert(sym, op).is_some() {
                     bail!("symbol already defined")
                 }
             }
@@ -147,6 +168,20 @@ impl TokenTable {
             }
             TokenKind::NumLit => Some(Nud::NumLit),
             TokenKind::Keyword => None,
+        }
+    }
+
+    fn get_type_led(&self, token: &Token) -> Option<Operator> {
+        match token.kind {
+            TokenKind::Symbol => self.type_led.get(token.as_str()).cloned(),
+            _ => None,
+        }
+    }
+
+    fn get_type_nud(&self, token: &Token) -> Option<Operator> {
+        match token.kind {
+            TokenKind::Ident | TokenKind::Symbol => self.type_nud.get(token.as_str()).cloned(),
+            TokenKind::Field | TokenKind::NumLit | TokenKind::Keyword => None,
         }
     }
 }
@@ -522,17 +557,57 @@ impl<'a> Parser<'a> {
         Ok(Kind(kind))
     }
 
-    fn type_spine(&mut self, token: Token, name: QualifiedName) -> Result<Type, ParseError> {
-        static NAT_NAME: LazyLock<QualifiedName> =
-            LazyLock::new(|| QualifiedName::from_name(Name::from_str("ℕ")));
-
-        if self.type_const_table.contains_key(&name) {
-            return Ok(mk_type_const(name));
-        }
-        if let Some(type_def) = self.type_def_table.get(&name).cloned() {
+    fn type_var(
+        &mut self,
+        token: Token,
+        entity: Option<QualifiedName>,
+    ) -> Result<Type, ParseError> {
+        let name = match entity {
+            Some(entity) => entity,
+            None => {
+                let name = self.qualified_name(&token);
+                if token.is_ident() {
+                    if name.path().is_root() && self.has_local_type(name.name()) {
+                        return Ok(mk_type_local(Id::from_name(name.name())));
+                    }
+                    if let Some(stash) =
+                        self.type_self_ref.as_ref().and_then(|(self_name, stash)| {
+                            if self_name == &name {
+                                Some(stash)
+                            } else {
+                                None
+                            }
+                        })
+                    {
+                        return Ok(mk_type_local(*stash));
+                    }
+                    self.resolve(self.current_namespace.clone(), name)
+                } else if token.is_field() {
+                    self.resolve(Path::root(), name)
+                } else {
+                    unreachable!("type variable token must be identifier or field")
+                }
+            }
+        };
+        let args = if let Some(type_def) = self.type_def_table.get(&name) {
             let mut args = Vec::with_capacity(type_def.local_types.len());
             for _ in &type_def.local_types {
                 args.push(self.subty(1024)?);
+            }
+            args
+        } else {
+            vec![]
+        };
+        if self.type_const_table.contains_key(&name) {
+            let mut ty = mk_type_const(name);
+            for arg in args {
+                ty = ty.apply([arg]);
+            }
+            return Ok(ty);
+        }
+        if let Some(type_def) = self.type_def_table.get(&name).cloned() {
+            if type_def.local_types.len() != args.len() {
+                return Self::fail(token, "type notation target has wrong arity");
             }
             let subst = type_def
                 .local_types
@@ -541,40 +616,36 @@ impl<'a> Parser<'a> {
                 .collect::<Vec<_>>();
             return Ok(type_def.target.subst(&subst));
         }
-        if name == *NAT_NAME {
-            return Ok(mk_type_const(QualifiedName::from_name(Name::from_str(
-                "nat",
-            ))));
-        }
         Self::fail(token, "unknown type constant")
     }
 
     fn type_primary(&mut self) -> Result<Type, ParseError> {
         let token = self.any_token()?;
-        if token.is_ident() {
-            let name = self.qualified_name(&token);
-            if name.path().is_root() && self.has_local_type(name.name()) {
-                return Ok(mk_type_local(Id::from_name(name.name())));
-            }
-            if let Some(stash) = self.type_self_ref.as_ref().and_then(|(self_name, stash)| {
-                if self_name == &name {
-                    Some(stash)
-                } else {
-                    None
-                }
-            }) {
-                return Ok(mk_type_local(*stash));
-            }
-            let name = self.resolve(self.current_namespace.clone(), name);
-            self.type_spine(token, name)
-        } else if token.is_field() {
-            let name = self.qualified_name(&token);
-            let name = self.resolve(Path::root(), name);
-            self.type_spine(token, name)
-        } else if token.is_symbol() && token.as_str() == "(" {
+        if token.is_symbol() && token.as_str() == "(" {
             let t = self.ty()?;
             self.expect_symbol(")")?;
             Ok(t)
+        } else if let Some(op) = self.tt.get_type_nud(&token) {
+            match op.fixity {
+                Fixity::Nofix => self.type_var(token, Some(op.entity)),
+                Fixity::Prefix => {
+                    let arg = self.subty(op.prec)?;
+                    if self.type_const_table.contains_key(&op.entity) {
+                        Ok(mk_type_const(op.entity).apply([arg]))
+                    } else if let Some(type_def) = self.type_def_table.get(&op.entity).cloned() {
+                        if type_def.local_types.len() != 1 {
+                            Self::fail(token, "type notation target has wrong arity")
+                        } else {
+                            Ok(type_def.target.subst(&[(type_def.local_types[0], arg)]))
+                        }
+                    } else {
+                        Self::fail(token, "unknown type constant")
+                    }
+                }
+                Fixity::Infix | Fixity::Infixl | Fixity::Infixr => unreachable!(),
+            }
+        } else if token.is_ident() || token.is_field() {
+            self.type_var(token, None)
         } else {
             Self::fail(token, "expected a primary type expression")
         }
@@ -598,17 +669,34 @@ impl<'a> Parser<'a> {
                 let rhs = self.subty(24)?;
                 t = mk_type_arrow(t, rhs);
                 t = self.type_with_span(start, t);
-            } else if token.is_symbol() && token.as_str() == "×" {
-                // type infixr × : 35
-                if rbp >= 35 {
+            } else if let Some(op) = self.tt.get_type_led(&token) {
+                if rbp >= op.prec {
                     break;
                 }
                 self.advance();
-                let s = self.subty(34)?;
-                t = mk_type_const(QualifiedName::from_name(Name::from_str("prod"))).apply([t, s]);
+                let rhs_prec = match op.fixity {
+                    Fixity::Infix | Fixity::Infixl => op.prec,
+                    Fixity::Infixr => op.prec - 1,
+                    Fixity::Nofix | Fixity::Prefix => unreachable!(),
+                };
+                let rhs = self.subty(rhs_prec)?;
+                if self.type_const_table.contains_key(&op.entity) {
+                    t = mk_type_const(op.entity).apply([t, rhs]);
+                } else if let Some(type_def) = self.type_def_table.get(&op.entity).cloned() {
+                    if type_def.local_types.len() != 2 {
+                        return Self::fail(token, "type notation target has wrong arity");
+                    }
+                    t = type_def
+                        .target
+                        .subst(&[(type_def.local_types[0], t), (type_def.local_types[1], rhs)]);
+                } else {
+                    return Self::fail(token, "unknown type constant");
+                }
                 t = self.type_with_span(start, t);
             } else if token.is_ident()
+                || token.is_field()
                 || (token.is_symbol() && token.as_str() == "(")
+                || self.tt.get_type_nud(&token).is_some()
                 || (token.is_symbol() && token.as_str() == "${")
             {
                 if rbp >= 1024 {
@@ -1597,6 +1685,26 @@ impl<'a> Parser<'a> {
             "type" => {
                 let keyword2 = self.keyword()?;
                 match keyword2.as_str() {
+                    "infixr" => {
+                        let type_infixr_cmd = self.type_infixr_cmd(keyword)?;
+                        Cmd::TypeInfixr(type_infixr_cmd)
+                    }
+                    "infixl" => {
+                        let type_infixl_cmd = self.type_infixl_cmd(keyword)?;
+                        Cmd::TypeInfixl(type_infixl_cmd)
+                    }
+                    "infix" => {
+                        let type_infix_cmd = self.type_infix_cmd(keyword)?;
+                        Cmd::TypeInfix(type_infix_cmd)
+                    }
+                    "prefix" => {
+                        let type_prefix_cmd = self.type_prefix_cmd(keyword)?;
+                        Cmd::TypePrefix(type_prefix_cmd)
+                    }
+                    "nofix" => {
+                        let type_nofix_cmd = self.type_nofix_cmd(keyword)?;
+                        Cmd::TypeNofix(type_nofix_cmd)
+                    }
                     "const" => {
                         let type_const_cmd = self.type_const_cmd(keyword)?;
                         Cmd::TypeConst(type_const_cmd)
@@ -1810,6 +1918,87 @@ impl<'a> Parser<'a> {
         self.expect_symbol(":=")?;
         let entity = self.global_reference_name(None)?;
         Ok(CmdNofix {
+            op: op.as_str().to_owned(),
+            entity,
+        })
+    }
+
+    fn type_infixr_cmd(&mut self, _token: Token) -> Result<CmdTypeInfixr, ParseError> {
+        let op = self.symbol()?;
+        self.expect_symbol(":")?;
+        let prec_token = self.num_lit()?;
+        let prec = prec_token
+            .as_str()
+            .parse::<usize>()
+            .expect("numeral literal too big");
+        self.expect_symbol(":=")?;
+        let entity = self.global_reference_name(None)?;
+        Ok(CmdTypeInfixr {
+            op: op.as_str().to_owned(),
+            prec,
+            entity,
+        })
+    }
+
+    fn type_infixl_cmd(&mut self, _token: Token) -> Result<CmdTypeInfixl, ParseError> {
+        let op = self.symbol()?;
+        self.expect_symbol(":")?;
+        let prec_token = self.num_lit()?;
+        let prec = prec_token
+            .as_str()
+            .parse::<usize>()
+            .expect("numeral literal too big");
+        self.expect_symbol(":=")?;
+        let entity = self.global_reference_name(None)?;
+        Ok(CmdTypeInfixl {
+            op: op.as_str().to_owned(),
+            prec,
+            entity,
+        })
+    }
+
+    fn type_infix_cmd(&mut self, _token: Token) -> Result<CmdTypeInfix, ParseError> {
+        let op = self.symbol()?;
+        self.expect_symbol(":")?;
+        let prec_token = self.num_lit()?;
+        let prec = prec_token
+            .as_str()
+            .parse::<usize>()
+            .expect("numeral literal too big");
+        self.expect_symbol(":=")?;
+        let entity = self.global_reference_name(None)?;
+        Ok(CmdTypeInfix {
+            op: op.as_str().to_owned(),
+            prec,
+            entity,
+        })
+    }
+
+    fn type_prefix_cmd(&mut self, _token: Token) -> Result<CmdTypePrefix, ParseError> {
+        let op = self.symbol()?;
+        self.expect_symbol(":")?;
+        let prec_token = self.num_lit()?;
+        let prec = prec_token
+            .as_str()
+            .parse::<usize>()
+            .expect("numeral literal too big");
+        self.expect_symbol(":=")?;
+        let entity = self.global_reference_name(None)?;
+        Ok(CmdTypePrefix {
+            op: op.as_str().to_owned(),
+            prec,
+            entity,
+        })
+    }
+
+    fn type_nofix_cmd(&mut self, _token: Token) -> Result<CmdTypeNofix, ParseError> {
+        let op = self.any_token()?;
+        if !op.is_ident() && !op.is_symbol() {
+            return Self::fail(op, "expected type operator");
+        }
+        self.expect_symbol(":=")?;
+        let entity = self.global_reference_name(None)?;
+        Ok(CmdTypeNofix {
             op: op.as_str().to_owned(),
             entity,
         })
@@ -2727,6 +2916,7 @@ mod tests {
     ) -> Result<Vec<Cmd>, ParseError> {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
+        let mut tt = tt.clone();
         let mut type_const_table = type_const_table.clone();
         let mut type_def_table: HashMap<QualifiedName, CmdTypeDef> = HashMap::new();
         let root_namespace = Path::root();
@@ -2752,7 +2942,7 @@ mod tests {
             ensure_use_target_prefixes_for_tests(&mut namespace_table, &current_namespace);
             let mut parser = Parser::new(
                 &mut lex,
-                tt,
+                &tt,
                 &namespace_table,
                 &current_namespace,
                 &type_const_table,
@@ -2781,6 +2971,96 @@ mod tests {
                 }
                 Cmd::TypeDef(cmd) => {
                     type_def_table.insert(cmd.name.clone(), cmd.clone());
+                }
+                Cmd::Infix(cmd) => {
+                    tt.add(Operator {
+                        symbol: cmd.op.clone(),
+                        fixity: Fixity::Infix,
+                        prec: cmd.prec,
+                        entity: cmd.entity.clone(),
+                    })
+                    .expect("term infix notation registers");
+                }
+                Cmd::Infixr(cmd) => {
+                    tt.add(Operator {
+                        symbol: cmd.op.clone(),
+                        fixity: Fixity::Infixr,
+                        prec: cmd.prec,
+                        entity: cmd.entity.clone(),
+                    })
+                    .expect("term infixr notation registers");
+                }
+                Cmd::Infixl(cmd) => {
+                    tt.add(Operator {
+                        symbol: cmd.op.clone(),
+                        fixity: Fixity::Infixl,
+                        prec: cmd.prec,
+                        entity: cmd.entity.clone(),
+                    })
+                    .expect("term infixl notation registers");
+                }
+                Cmd::Prefix(cmd) => {
+                    tt.add(Operator {
+                        symbol: cmd.op.clone(),
+                        fixity: Fixity::Prefix,
+                        prec: cmd.prec,
+                        entity: cmd.entity.clone(),
+                    })
+                    .expect("term prefix notation registers");
+                }
+                Cmd::Nofix(cmd) => {
+                    tt.add(Operator {
+                        symbol: cmd.op.clone(),
+                        fixity: Fixity::Nofix,
+                        prec: usize::MAX,
+                        entity: cmd.entity.clone(),
+                    })
+                    .expect("term nofix notation registers");
+                }
+                Cmd::TypeInfix(cmd) => {
+                    tt.add_type(Operator {
+                        symbol: cmd.op.clone(),
+                        fixity: Fixity::Infix,
+                        prec: cmd.prec,
+                        entity: cmd.entity.clone(),
+                    })
+                    .expect("type infix notation registers");
+                }
+                Cmd::TypeInfixr(cmd) => {
+                    tt.add_type(Operator {
+                        symbol: cmd.op.clone(),
+                        fixity: Fixity::Infixr,
+                        prec: cmd.prec,
+                        entity: cmd.entity.clone(),
+                    })
+                    .expect("type infixr notation registers");
+                }
+                Cmd::TypeInfixl(cmd) => {
+                    tt.add_type(Operator {
+                        symbol: cmd.op.clone(),
+                        fixity: Fixity::Infixl,
+                        prec: cmd.prec,
+                        entity: cmd.entity.clone(),
+                    })
+                    .expect("type infixl notation registers");
+                }
+                Cmd::TypePrefix(cmd) => {
+                    tt.add_type(Operator {
+                        symbol: cmd.op.clone(),
+                        fixity: Fixity::Prefix,
+                        prec: cmd.prec,
+                        entity: cmd.entity.clone(),
+                    })
+                    .expect("type prefix notation registers");
+                }
+                Cmd::TypeNofix(cmd) => {
+                    tt.add_type(Operator {
+                        symbol: cmd.op.clone(),
+                        fixity: Fixity::Nofix,
+                        prec: usize::MAX,
+                        entity: cmd.entity.clone(),
+                    })
+                    .expect("type nofix notation registers");
                 }
                 _ => {}
             }
@@ -2839,6 +3119,54 @@ mod tests {
             .expect("root namespace entry must exist");
         *use_table = top_entry.use_table;
         term
+    }
+
+    fn parse_type_with_tables(
+        input: &str,
+        tt: &TokenTable,
+        use_table: &mut HashMap<Name, QualifiedName>,
+        type_const_table: &HashMap<QualifiedName, Kind>,
+        const_table: &HashMap<QualifiedName, Const>,
+        axiom_table: &HashMap<QualifiedName, Axiom>,
+        class_predicate_table: &HashMap<QualifiedName, ClassType>,
+    ) -> Result<Type, ParseError> {
+        let file = Arc::new(File::new("<test>", input));
+        let mut lex = Lex::new(file);
+        let type_def_table = HashMap::new();
+        let root_namespace = Path::root();
+        let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
+        namespace_table.insert(
+            root_namespace.clone(),
+            Namespace {
+                use_table: std::mem::take(use_table),
+            },
+        );
+        seed_namespace_table_from_globals(
+            &mut namespace_table,
+            type_const_table,
+            &type_def_table,
+            const_table,
+            axiom_table,
+            class_predicate_table,
+        );
+        let current_namespace = root_namespace.clone();
+        ensure_use_target_prefixes_for_tests(&mut namespace_table, &current_namespace);
+        let mut parser = new_parser_without_type_defs(
+            &mut lex,
+            tt,
+            &namespace_table,
+            &current_namespace,
+            type_const_table,
+            const_table,
+            axiom_table,
+            class_predicate_table,
+        );
+        let ty = parser.ty();
+        let top_entry = namespace_table
+            .remove(&root_namespace)
+            .expect("root namespace entry must exist");
+        *use_table = top_entry.use_table;
+        ty
     }
 
     fn parse_expr_with_tables(
@@ -4428,6 +4756,100 @@ mod tests {
     }
 
     #[test]
+    fn type_fixity_commands_parse() {
+        let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
+        type_consts.insert(qualified("prod"), Kind(2));
+        type_consts.insert(qualified("sum"), Kind(2));
+        type_consts.insert(qualified("maybe"), Kind(1));
+        type_consts.insert(qualified("unit"), Kind(0));
+        let scenarios = [
+            ("type infixr × : 35 := prod", "type infixr"),
+            ("type infixl ⊕ : 35 := sum", "type infixl"),
+            ("type infix ~ : 35 := sum", "type infix"),
+            ("type prefix ‽ : 90 := maybe", "type prefix"),
+            ("type nofix One := unit", "type nofix"),
+        ];
+
+        for (input, label) in scenarios {
+            let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+            let cmd = parse_cmd_with_tables(
+                input,
+                &tt,
+                &mut use_table,
+                &type_consts,
+                &consts,
+                &axioms,
+                &class_predicates,
+            )
+            .expect("type fixity command parses");
+            match cmd {
+                Cmd::TypeInfixr(cmd) => {
+                    assert_eq!(cmd.entity, qualified("prod"), "label = {label}");
+                    assert_eq!(cmd.prec, 35, "label = {label}");
+                }
+                Cmd::TypeInfixl(cmd) => {
+                    assert_eq!(cmd.entity, qualified("sum"), "label = {label}");
+                    assert_eq!(cmd.prec, 35, "label = {label}");
+                }
+                Cmd::TypeInfix(cmd) => {
+                    assert_eq!(cmd.entity, qualified("sum"), "label = {label}");
+                    assert_eq!(cmd.prec, 35, "label = {label}");
+                }
+                Cmd::TypePrefix(cmd) => {
+                    assert_eq!(cmd.entity, qualified("maybe"), "label = {label}");
+                    assert_eq!(cmd.prec, 90, "label = {label}");
+                }
+                Cmd::TypeNofix(cmd) => {
+                    assert_eq!(cmd.entity, qualified("unit"), "label = {label}");
+                }
+                _ => panic!("expected type fixity command for {label}"),
+            }
+        }
+    }
+
+    #[test]
+    fn absolute_type_fixity_entities_are_resolved_from_root() {
+        let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
+        type_consts.insert(qualified("prod"), Kind(2));
+        type_consts.insert(qualified("sum"), Kind(2));
+        type_consts.insert(qualified("maybe"), Kind(1));
+        type_consts.insert(qualified("unit"), Kind(0));
+        let scenarios = [
+            ("type infixr × : 35 := .prod", "type infixr"),
+            ("type infixl ⊕ : 35 := .sum", "type infixl"),
+            ("type infix ~ : 35 := .sum", "type infix"),
+            ("type prefix ‽ : 90 := .maybe", "type prefix"),
+            ("type nofix One := .unit", "type nofix"),
+        ];
+        for (command, label) in scenarios {
+            let input = format!("namespace foo {{ {command} }}");
+            let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+            let cmds = parse_cmds_with_tables(
+                &input,
+                &tt,
+                &mut use_table,
+                &type_consts,
+                &consts,
+                &axioms,
+                &class_predicates,
+            )
+            .expect("commands parse");
+            let entity = match &cmds[1] {
+                Cmd::TypeInfixr(cmd) => &cmd.entity,
+                Cmd::TypeInfixl(cmd) => &cmd.entity,
+                Cmd::TypeInfix(cmd) => &cmd.entity,
+                Cmd::TypePrefix(cmd) => &cmd.entity,
+                Cmd::TypeNofix(cmd) => &cmd.entity,
+                _ => panic!("expected type fixity command"),
+            };
+            assert!(
+                entity.path().is_root(),
+                "type fixity entity must resolve from root; label = {label}"
+            );
+        }
+    }
+
+    #[test]
     fn type_def_reference_is_expanded_during_parsing() {
         let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
         type_consts.insert(qualified("U"), Kind(0));
@@ -4488,6 +4910,107 @@ mod tests {
             ty,
             &mk_type_const(qualified("Prop"))
                 .arrow([mk_type_const(qualified("U")), mk_type_const(qualified("V"))])
+        );
+    }
+
+    #[test]
+    fn declared_type_infixr_has_higher_precedence_than_arrow() {
+        let (mut tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
+        type_consts.insert(qualified("U"), Kind(0));
+        type_consts.insert(qualified("V"), Kind(0));
+        type_consts.insert(qualified("W"), Kind(0));
+        type_consts.insert(qualified("prod"), Kind(2));
+        tt.add_type(Operator {
+            symbol: "×".to_owned(),
+            fixity: Fixity::Infixr,
+            prec: 35,
+            entity: qualified("prod"),
+        })
+        .expect("register type infixr");
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let ty = parse_type_with_tables(
+            "U × V → W",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("type parses");
+        assert_eq!(
+            ty,
+            mk_type_arrow(
+                mk_type_const(qualified("prod"))
+                    .apply([mk_type_const(qualified("U")), mk_type_const(qualified("V"))]),
+                mk_type_const(qualified("W"))
+            )
+        );
+    }
+
+    #[test]
+    fn declared_type_infixr_is_right_associative() {
+        let (mut tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
+        type_consts.insert(qualified("U"), Kind(0));
+        type_consts.insert(qualified("V"), Kind(0));
+        type_consts.insert(qualified("W"), Kind(0));
+        type_consts.insert(qualified("prod"), Kind(2));
+        tt.add_type(Operator {
+            symbol: "×".to_owned(),
+            fixity: Fixity::Infixr,
+            prec: 35,
+            entity: qualified("prod"),
+        })
+        .expect("register type infixr");
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let ty = parse_type_with_tables(
+            "U × V × W",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("type parses");
+        assert_eq!(
+            ty,
+            mk_type_const(qualified("prod")).apply([
+                mk_type_const(qualified("U")),
+                mk_type_const(qualified("prod"))
+                    .apply([mk_type_const(qualified("V")), mk_type_const(qualified("W"))]),
+            ])
+        );
+    }
+
+    #[test]
+    fn declared_type_prefix_binds_tighter_than_application() {
+        let (mut tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
+        type_consts.insert(qualified("U"), Kind(0));
+        type_consts.insert(qualified("F"), Kind(1));
+        type_consts.insert(qualified("maybe"), Kind(1));
+        tt.add_type(Operator {
+            symbol: "◻".to_owned(),
+            fixity: Fixity::Prefix,
+            prec: 90,
+            entity: qualified("maybe"),
+        })
+        .expect("register type prefix");
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let ty = parse_type_with_tables(
+            "F ◻U",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("type parses");
+        assert_eq!(
+            ty,
+            mk_type_const(qualified("F"))
+                .apply([mk_type_const(qualified("maybe")).apply([mk_type_const(qualified("U"))])])
         );
     }
 

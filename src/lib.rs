@@ -216,4 +216,18 @@ mod tests {
         let file = Arc::new(File::new("<test>", script));
         process(file).expect("type def should be available in later declarations");
     }
+
+    #[test]
+    fn process_accepts_nat_alias_defined_via_type_def() {
+        let script = format!(
+            "{}
+             type const nat : Type
+             type def ℕ := nat
+             const zero : nat
+             const one : ℕ",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file).expect("ℕ alias should be provided by type def");
+    }
 }

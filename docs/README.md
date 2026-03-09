@@ -26,4 +26,5 @@ This directory is the system of record for durable project knowledge. Start here
 - [docs/design-docs/namespaces.md](design-docs/namespaces.md)
 - [docs/design-docs/structure-primitive-fields.md](design-docs/structure-primitive-fields.md)
 - [docs/design-docs/structure-unique-abs.md](design-docs/structure-unique-abs.md)
+- [docs/design-docs/type-notation-commands.md](design-docs/type-notation-commands.md)
 - [docs/design-docs/use-command.md](design-docs/use-command.md)

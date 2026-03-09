@@ -10,12 +10,21 @@ use std::{collections::HashMap, fmt::Display};
 #[derive(Debug, Default, Clone)]
 pub struct OpTable {
     op_table: HashMap<QualifiedName, Operator>,
+    type_op_table: HashMap<QualifiedName, Operator>,
 }
 
 impl OpTable {
     pub fn add(&mut self, op: Operator) -> anyhow::Result<()> {
+        Self::insert(&mut self.op_table, op)
+    }
+
+    pub fn add_type(&mut self, op: Operator) -> anyhow::Result<()> {
+        Self::insert(&mut self.type_op_table, op)
+    }
+
+    fn insert(table: &mut HashMap<QualifiedName, Operator>, op: Operator) -> anyhow::Result<()> {
         let entity = op.entity.clone();
-        if self.op_table.insert(entity, op).is_some() {
+        if table.insert(entity, op).is_some() {
             bail!("notation already defined");
         }
         Ok(())
@@ -23,6 +32,10 @@ impl OpTable {
 
     fn get(&self, name: &QualifiedName) -> Option<&Operator> {
         self.op_table.get(name)
+    }
+
+    fn get_type(&self, name: &QualifiedName) -> Option<&Operator> {
+        self.type_op_table.get(name)
     }
 }
 
@@ -376,6 +389,9 @@ impl<'a> Printer<'a> {
         t: &Type,
         prec: usize,
     ) -> std::fmt::Result {
+        if let Some(rendered) = self.try_fmt_type_operator(f, t, prec)? {
+            return Ok(rendered);
+        }
         match t {
             Type::Const(inner) => write!(f, "{}", inner.name),
             Type::Arrow(inner) => {
@@ -411,6 +427,72 @@ impl<'a> Printer<'a> {
                 }
             }
         }
+    }
+
+    fn try_fmt_type_operator(
+        &self,
+        f: &mut std::fmt::Formatter,
+        t: &Type,
+        prec: usize,
+    ) -> Result<Option<()>, std::fmt::Error> {
+        match t {
+            Type::Const(inner) => {
+                if let Some(op) = self.op_table.get_type(&inner.name)
+                    && op.fixity == Fixity::Nofix
+                {
+                    write!(f, "{}", op.symbol)?;
+                    return Ok(Some(()));
+                }
+            }
+            Type::App(inner) => {
+                if let Type::Const(fun) = &inner.fun
+                    && let Some(op) = self.op_table.get_type(&fun.name)
+                    && op.fixity == Fixity::Prefix
+                {
+                    if prec > op.prec {
+                        write!(f, "(")?;
+                    }
+                    write!(f, "{}", op.symbol)?;
+                    self.fmt_type_help(f, &inner.arg, op.prec)?;
+                    if prec > op.prec {
+                        write!(f, ")")?;
+                    }
+                    return Ok(Some(()));
+                }
+                if let Type::App(lhs) = &inner.fun
+                    && let Type::Const(head) = &lhs.fun
+                    && let Some(op) = self.op_table.get_type(&head.name)
+                {
+                    match op.fixity {
+                        Fixity::Infix | Fixity::Infixl | Fixity::Infixr => {
+                            if prec >= op.prec {
+                                write!(f, "(")?;
+                            }
+                            match op.fixity {
+                                Fixity::Infix | Fixity::Infixl => {
+                                    self.fmt_type_help(f, &lhs.arg, op.prec - 1)?;
+                                    write!(f, " {} ", op.symbol)?;
+                                    self.fmt_type_help(f, &inner.arg, op.prec)?;
+                                }
+                                Fixity::Infixr => {
+                                    self.fmt_type_help(f, &lhs.arg, op.prec)?;
+                                    write!(f, " {} ", op.symbol)?;
+                                    self.fmt_type_help(f, &inner.arg, op.prec - 1)?;
+                                }
+                                Fixity::Nofix | Fixity::Prefix => unreachable!(),
+                            }
+                            if prec >= op.prec {
+                                write!(f, ")")?;
+                            }
+                            return Ok(Some(()));
+                        }
+                        Fixity::Nofix | Fixity::Prefix => {}
+                    }
+                }
+            }
+            Type::Arrow(_) | Type::Hole(_) | Type::Local(_) => {}
+        }
+        Ok(None)
     }
 
     fn fmt_class(&self, f: &mut std::fmt::Formatter, c: &Class) -> std::fmt::Result {
@@ -661,5 +743,102 @@ impl Display for Pretty<'_, (&QualifiedName, &ClassType)> {
             write!(f, " _")?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tt::{mk_type_arrow, mk_type_const};
+
+    fn qualified(value: &str) -> QualifiedName {
+        let mut parts = value.split('.');
+        let first = parts.next().expect("qualified name must not be empty");
+        let mut name = QualifiedName::from_name(Name::from_str(first));
+        for part in parts {
+            name = name.extend(Name::from_str(part));
+        }
+        name
+    }
+
+    #[test]
+    fn pretty_prints_declared_type_infix() {
+        let mut op_table = OpTable::default();
+        op_table
+            .add_type(Operator {
+                symbol: "×".to_owned(),
+                fixity: Fixity::Infixr,
+                prec: 35,
+                entity: qualified("prod"),
+            })
+            .expect("type notation registers");
+        let ty = mk_type_const(qualified("prod"))
+            .apply([mk_type_const(qualified("U")), mk_type_const(qualified("V"))]);
+
+        let rendered = format!("{}", PrettyInner::new(&op_table, &HashMap::new(), &ty));
+
+        assert_eq!(rendered, "U × V");
+    }
+
+    #[test]
+    fn pretty_prints_type_infix_with_arrow_parentheses() {
+        let mut op_table = OpTable::default();
+        op_table
+            .add_type(Operator {
+                symbol: "×".to_owned(),
+                fixity: Fixity::Infixr,
+                prec: 35,
+                entity: qualified("prod"),
+            })
+            .expect("type notation registers");
+        let ty = mk_type_const(qualified("prod")).apply([
+            mk_type_arrow(mk_type_const(qualified("U")), mk_type_const(qualified("V"))),
+            mk_type_const(qualified("W")),
+        ]);
+
+        let rendered = format!("{}", PrettyInner::new(&op_table, &HashMap::new(), &ty));
+
+        assert_eq!(rendered, "(U → V) × W");
+    }
+
+    #[test]
+    fn pretty_prints_declared_type_prefix_and_nofix() {
+        let mut op_table = OpTable::default();
+        op_table
+            .add_type(Operator {
+                symbol: "◻".to_owned(),
+                fixity: Fixity::Prefix,
+                prec: 90,
+                entity: qualified("box"),
+            })
+            .expect("type prefix registers");
+        op_table
+            .add_type(Operator {
+                symbol: "One".to_owned(),
+                fixity: Fixity::Nofix,
+                prec: usize::MAX,
+                entity: qualified("unit"),
+            })
+            .expect("type nofix registers");
+        let prefixed = mk_type_const(qualified("box")).apply([mk_type_const(qualified("unit"))]);
+
+        assert_eq!(
+            format!(
+                "{}",
+                PrettyInner::new(&op_table, &HashMap::new(), &prefixed)
+            ),
+            "◻One"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                PrettyInner::new(
+                    &op_table,
+                    &HashMap::new(),
+                    &mk_type_const(qualified("unit"))
+                )
+            ),
+            "One"
+        );
     }
 }
