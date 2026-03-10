@@ -509,8 +509,11 @@ instance is_proposition.is_proposition.{u} : is_proposition (is_proposition u) :
     (uexists.unique (is_proposition.abs @is_proposition.proposition[x₂]))[x₁, x₂] true.intro true.intro
 }
 
--- TODO: is_prop (is_prop u)
--- TODO: is_prop u → is_prop (v → u)
+instance fun.is_proposition.{u, v} (h : is_proposition u) : is_proposition (v → u) := {
+  lemma proposition (f₁ f₂ : v → u) : f₁ = f₂ :=
+    fun_ext (take (x : v), (@is_proposition.proposition[h])[f₁ x, f₂ x])
+}
+
 -- TODO: u → is_prop u ≃ is_prop u
 -- TODO: u × is_prop u ≃ is_contr u
 -- TODO: is_prop u → u ≃ is_inhab u
@@ -533,7 +536,6 @@ instance is_contractible.is_proposition.{u} : is_proposition (is_contractible u)
 -- TODO: is_contr (is_contr u) = is_contr u
 -- TODO: u × is_contr u ≃ is_contr u
 -- TODO: u → is_contr u ≃ is_prop u
--- TODO: is_contr u → u
 
 -- A type operator sending an inhabited type to its propositional truncation.
 -- This type has several names in the literature, such as support type, bracket type, or propositional truncation.
@@ -547,9 +549,22 @@ structure is_inhabited u := {
   axiom inhabited : ∃ (a : u), ⊤
 }
 
--- TODO: u → is_inhab u
--- TODO: is_prop u → is_inhab u → u
--- TODO: is_prop u → (v → u) → is_inhab v → u
+instance is_inhabited.mk.{u} (x : u) : is_inhabited u := {
+  lemma inhabited : ∃ (a : u), ⊤ := @exists.intro[_, x] true.intro
+}
+
+instance is_proposition.is_contractible.{u} (hp : is_proposition u) (hi : is_inhabited u) : is_contractible u := {
+  lemma contractible : ∃! (a : u), ⊤ := {
+    obtain (a : u), ⊤ := @is_inhabited.inhabited[hi],
+    uexists.intro
+      (@exists.intro[_, a] true.intro)
+      (take (x₁ : u),
+       take (x₂ : u),
+       assume ⊤,
+       assume ⊤,
+       (@is_proposition.proposition[hp])[x₁, x₂])
+  }
+}
 
 instance is_inhabited.is_proposition.{u} : is_proposition (is_inhabited u) := {
   lemma proposition (x₁ x₂ : is_inhabited u) : x₁ = x₂ :=
@@ -591,6 +606,9 @@ instance is_empty.is_proposition.{u} : is_proposition (is_empty u) := {
 -- For a unary predicate φ(x), we can extract the unique element satisfying φ by first passing through the
 -- comprehension type t := { x | φ(x) }.
 const definite_description.{u} : is_contractible u → u
+
+def is_proposition.indefinite_description.{u} (hp : is_proposition u) : is_inhabited u → u :=
+λ hi, definite_description (is_proposition.is_contractible hp hi)
 
 type inductive empty
 
@@ -1457,6 +1475,9 @@ obtain (indefinite_description : is_inhabited u → u), ∀ h, ⊤ := ac «∀ (
 -- If we add locally defined types in the future, this lemma justifies the use of indefinite_description
 -- applying to such types that may contain free (term) variables.
 const indefinite_description.{u} : is_inhabited u → u
+
+def is_inhabited.rec.{u, v} (hp : is_proposition u) (f : v → u) : is_inhabited v → u :=
+λ hv, is_proposition.indefinite_description hp (is_inhabited.mk (f (indefinite_description hv)))
 
 /-
  -  Hilbert's epsilon

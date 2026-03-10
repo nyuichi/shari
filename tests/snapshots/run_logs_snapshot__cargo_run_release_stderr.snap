@@ -94,6 +94,8 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom is_proposition.abs.{u} : (∀ x₁ x₂, x₁ = x₂) → ∃! this, true
 [<timestamp> INFO  shari::cmd] + axiom is_proposition.is_proposition.proposition.{u} : ∀ x₁ x₂, x₁ = x₂
 [<timestamp> INFO  shari::cmd] + const is_proposition.is_proposition.{u} : is_proposition (is_proposition u)
+[<timestamp> INFO  shari::cmd] + axiom fun.is_proposition.proposition.{u, v} : ∀ h f₁ f₂, f₁ = f₂
+[<timestamp> INFO  shari::cmd] + const fun.is_proposition.{u, v} : is_proposition u → is_proposition (v → u)
 [<timestamp> INFO  shari::cmd] + type const is_contractible : Type → Type
 [<timestamp> INFO  shari::cmd] + axiom is_contractible.contractible.{u} : ∀ this, ∃! a, ⊤
 [<timestamp> INFO  shari::cmd] + axiom is_contractible.abs.{u} : (∃! a, ⊤) → ∃! this, true
@@ -102,6 +104,10 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + type const is_inhabited : Type → Type
 [<timestamp> INFO  shari::cmd] + axiom is_inhabited.inhabited.{u} : ∀ this, ∃ a, ⊤
 [<timestamp> INFO  shari::cmd] + axiom is_inhabited.abs.{u} : (∃ a, ⊤) → ∃! this, true
+[<timestamp> INFO  shari::cmd] + axiom is_inhabited.mk.inhabited.{u} : ∀ x, ∃ a, ⊤
+[<timestamp> INFO  shari::cmd] + const is_inhabited.mk.{u} : u → is_inhabited u
+[<timestamp> INFO  shari::cmd] + axiom is_proposition.is_contractible.contractible.{u} : ∀ hp hi, ∃! a, ⊤
+[<timestamp> INFO  shari::cmd] + const is_proposition.is_contractible.{u} : is_proposition u → is_inhabited u → is_contractible u
 [<timestamp> INFO  shari::cmd] + axiom is_inhabited.is_proposition.proposition.{u} : ∀ x₁ x₂, x₁ = x₂
 [<timestamp> INFO  shari::cmd] + const is_inhabited.is_proposition.{u} : is_proposition (is_inhabited u)
 [<timestamp> INFO  shari::cmd] + type const is_empty : Type → Type
@@ -113,6 +119,7 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom is_empty.is_proposition.proposition.{u} : ∀ x₁ x₂, x₁ = x₂
 [<timestamp> INFO  shari::cmd] + const is_empty.is_proposition.{u} : is_proposition (is_empty u)
 [<timestamp> INFO  shari::cmd] + const definite_description.{u} : is_contractible u → u
+[<timestamp> INFO  shari::cmd] + const is_proposition.indefinite_description.{u} : is_proposition u → is_inhabited u → u
 [<timestamp> INFO  shari::cmd] + type const empty : Type
 [<timestamp> INFO  shari::cmd] + axiom empty.ind : ∀ x motive, motive x
 [<timestamp> INFO  shari::cmd] + const empty.rec.{u} : empty → u
@@ -263,6 +270,7 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + axiom ac_from_some_exists.{u, v} : ∀ R, (∀ x, ∃ y, R x y) → ∃ f, ∀ x, R x (f x)
 [<timestamp> INFO  shari::cmd] + axiom indefinite_description.exists.{u} : ∃ indefinite_description, ⊤
 [<timestamp> INFO  shari::cmd] + const indefinite_description.{u} : is_inhabited u → u
+[<timestamp> INFO  shari::cmd] + const is_inhabited.rec.{u, v} : is_proposition u → (v → u) → is_inhabited v → u
 [<timestamp> INFO  shari::cmd] + type const some.singleton : Type → Type
 [<timestamp> INFO  shari::cmd] + const some.singleton.some.{u} : some.singleton u → (u → Prop) → u
 [<timestamp> INFO  shari::cmd] + axiom some.singleton.spec.{u} : ∀ this P, (∃ y, P y) → P (some.singleton.some this P)

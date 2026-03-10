@@ -284,4 +284,26 @@ mod tests {
         let file = Arc::new(File::new("<test>", script));
         process(file).expect("ℕ alias should be provided by type def");
     }
+
+    #[test]
+    fn main_prelude_supports_proposition_truncation_helpers() {
+        let script = format!(
+            "{}
+             type const test_A : Type
+             type const test_B : Type
+             const test_a : test_A
+             const test_b : test_B
+             const test_f : test_B → test_A
+             const test_hp : is_proposition test_A
+
+             def test_fun_prop : is_proposition (test_B → test_A) := fun.is_proposition test_hp
+             def test_a_inhabited : is_inhabited test_A := is_inhabited.mk test_a
+             def test_a_contractible : is_contractible test_A := is_proposition.is_contractible test_hp test_a_inhabited
+             def test_chosen_a : test_A := is_proposition.indefinite_description test_hp test_a_inhabited
+             def test_rec_a : test_A := is_inhabited.rec test_hp test_f (is_inhabited.mk test_b)",
+            include_str!("main.shari")
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file).expect("main prelude should provide proposition truncation helpers");
+    }
 }
