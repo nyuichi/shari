@@ -84,15 +84,17 @@ infix < : 50 := has_le.lt
 infix ≥ : 50 := has_le.ge
 infix > : 50 := has_le.gt
 
--- The kernel and higher-order unifier recognize three reduction rules as the definitional equivalence:
+-- The kernel recognizes four rules in definitional equality:
 --
 -- 1. β-reduction: (λ x, M) N ↦ [N/x]M
 -- 2. δ-reduction: c ↦ M  where there is a definition somewhere `def c := M`.
 -- 3. κ-reduction: c ↦ N  where c is a method from a class `C u₁ ⋯ uₙ` and c is assigned types so that
 --                              it is resolved to some concrete instance.
+-- 4. function η-equivalence: f ≈ λ x, f x
 --
--- Rules 1 and 2 are type agnostic. Also, rule 3 can be applied to partially typed terms as long as its method
--- can be resolved to a concrete term.
+-- Rules 1 and 2 are type agnostic. Rule 3 can be applied to partially typed terms as long as its method can be
+-- resolved to a concrete term. Rule 4 is a kernel conversion rule for function terms; elaborator-side metavariable
+-- solving is not fully aligned with it yet.
 --
 -- There are basically two approaches to incorporate type classes into a language.
 --
@@ -362,7 +364,7 @@ def unique.{u} (P : u → Prop) : Prop := ∀ (x₁ x₂ : u), P x₁ → P x₂
 lemma uexists.intro.{u} (P : u → Prop) : exists P → unique P → uexists P :=
 assume exists P,
 assume unique P,
--- TODO: fix this bug or make the kernel to recognize eta equality of lambdas.
+-- TODO: restore the `obtain` version after elaborator-side eta handling catches up with the kernel.
 -- obtain (x : u), P x := «exists P»,
 -- exists.intro (and.intro «P x» (take (y : u), assume P y, «unique P»[x, y] «P x» «P y»))
 @exists.ind[P, _] «exists P» (take (x : u), assume P x,
