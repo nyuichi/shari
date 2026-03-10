@@ -3200,10 +3200,7 @@ mod tests {
             visit_error("expected success", None),
         );
 
-        assert!(
-            elab.solve().is_ok(),
-            "rigid local/function eta should unify"
-        );
+        assert!(elab.solve().is_ok(), "rigid local eta should unify");
     }
 
     #[test]
@@ -3264,10 +3261,7 @@ mod tests {
             visit_error("expected success", None),
         );
 
-        assert!(
-            elab.solve().is_ok(),
-            "rigid const/function eta should unify"
-        );
+        assert!(elab.solve().is_ok(), "rigid const eta should unify");
     }
 
     #[test]
