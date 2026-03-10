@@ -1410,9 +1410,81 @@ impl Env<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tt::{ClassInstance, ClassType, Const, Delta, Kappa, Kind};
+    use crate::tt::{ClassInstance, ClassType, Const, Delta, Kappa, Kind, mk_app, mk_var};
 
     use std::collections::HashMap;
+
+    #[test]
+    fn change_accepts_function_eta_equivalence() {
+        let mut type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        type_const_table.insert(
+            QualifiedName::from_name(Name::from_str("Prop")),
+            Kind::base(),
+        );
+        let eq_name = QualifiedName::from_name(Name::from_str("eq"));
+        let u = Id::from_name(&Name::from_str("u"));
+        let prop = mk_type_prop();
+        let function_ty = prop.clone().arrow(std::iter::once(prop.clone()));
+        let mut const_table = HashMap::new();
+        const_table.insert(
+            eq_name.clone(),
+            Const {
+                local_types: vec![u],
+                local_classes: vec![],
+                ty: mk_type_prop().arrow([mk_type_local(u), mk_type_local(u)]),
+            },
+        );
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let env = Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+
+        let f_id = Id::from_name(&Name::from_str("f"));
+        let mut tt_local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![],
+            locals: vec![Local {
+                id: f_id,
+                ty: function_ty.clone(),
+            }],
+        };
+        let source = mk_const(eq_name.clone(), vec![function_ty.clone()], vec![])
+            .apply([mk_local(f_id), mk_local(f_id)]);
+        let target = mk_const(eq_name, vec![function_ty], vec![]).apply([
+            mk_local(f_id),
+            mk_abs(
+                Some(Name::from_str("x")),
+                prop,
+                mk_app(mk_local(f_id), mk_var(0)),
+            ),
+        ]);
+        let expr = mk_expr_change(target.clone(), mk_expr_assump(source.clone()));
+        let mut local_env = LocalEnv {
+            local_axioms: vec![LocalAxiom {
+                id: None,
+                prop: source,
+            }],
+        };
+
+        assert!(
+            env.infer_prop(&mut tt_local_env, &mut local_env, &expr)
+                .alpha_eq(&target)
+        );
+    }
 
     #[test]
     #[should_panic(expected = "unknown axiom")]

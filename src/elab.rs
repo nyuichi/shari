@@ -1755,67 +1755,38 @@ impl<'a> Elaborator<'a> {
             mem::swap(&mut left, &mut right);
         }
         if let Term::Abs(_) = right {
-            // solvable only when
-            // 1. L is stuck by an unfoldable constant
-            // 2. L is stuck by an unassigned hole
-            if let Term::Const(left_head) = left.head().clone() {
-                if self.proof_env.tt_env.has_kappa(&left_head.name) {
-                    if let Some(new_left) = self.inst_recv(&left) {
-                        left = new_left;
-                    }
-                    let Term::Const(updated_left_head) = left.head().clone() else {
-                        unreachable!();
-                    };
-                    if updated_left_head.instances[0].is_hole() {
-                        self.add_method_constraint(local_env, left, right, error);
-                        return None;
-                    }
-                }
-                if let Some(new_left) = self.proof_env.tt_env.unfold_head(&local_env, &left) {
+            if matches!(
+                left.head(),
+                Term::Const(left_head) if self.proof_env.tt_env.has_kappa(&left_head.name)
+            ) {
+                if let Some(new_left) = self.inst_recv(&left) {
                     left = new_left;
-                    self.push_term_constraint(local_env, left, right, error);
-                    return None;
-                } else {
-                    return Some(error);
                 }
-            } else if left.head().is_hole() {
-                // ?M t₁ ⋯ tₙ =?= λ x, N
-                // ----------------------
-                // ?M t₁ ⋯ tₙ x =?= N
-                //
-                // Note that this rule in general allows us to reason eta equivalence like
-                //
-                // ?M =?= λ x, f x
-                // ---------------
-                // ?M x =?= f x
-                // --------------- (1)  (possible in theory, but not implemented in our code!)
-                // ?M := f
-                //
-                // but in our implementation (1) is solved by choice_fr which always solves it
-                // by assigning ?M := λ x, f x, so we don't need to worry about that.
-                let TermAbs {
-                    metadata: _,
-                    binder_type: right_binder_type,
-                    binder_name: _,
-                    body: right_body,
-                } = {
-                    let Term::Abs(right_inner) = right else {
-                        unreachable!()
-                    };
-                    Arc::unwrap_or_clone(right_inner)
+                let Term::Const(left_head) = left.head() else {
+                    unreachable!();
                 };
-                let x = Local {
-                    id: Id::fresh(),
-                    ty: right_binder_type,
-                };
-                let right = right_body.open(&[mk_local(x.id)], 0);
-                left = left.apply([mk_local(x.id)]);
-                local_env.locals.push(x);
+                if left_head.instances[0].is_hole() {
+                    self.add_method_constraint(local_env, left, right, error);
+                    return None;
+                }
+            }
+            if let Some(new_left) = self.proof_env.tt_env.unfold_head(&local_env, &left) {
+                left = new_left;
                 self.push_term_constraint(local_env, left, right, error);
                 return None;
-            } else {
-                return Some(error);
             }
+            let Term::Abs(right) = right else {
+                unreachable!()
+            };
+            let x = Local {
+                id: Id::fresh(),
+                ty: right.binder_type.clone(),
+            };
+            let right = right.body.clone().open(&[mk_local(x.id)], 0);
+            left = left.apply([mk_local(x.id)]);
+            local_env.locals.push(x);
+            self.push_term_constraint(local_env, left, right, error);
+            return None;
         }
         // then each of the heads can be a local, a const, or a hole
         if let Term::Hole(right_head) = right.head() {
@@ -2259,8 +2230,6 @@ impl<'a> Elaborator<'a> {
         };
         let left_head = left_head.id;
         let left_args = c.left.args();
-        let right_args = c.right.args();
-        let right_head = c.right.head();
 
         let mut nodes = vec![];
 
@@ -2290,6 +2259,9 @@ impl<'a> Elaborator<'a> {
             })
             .collect::<Vec<_>>();
         assert_eq!(new_binders.len(), left_args.len());
+
+        let right_args = c.right.args();
+        let right_head = c.right.head();
 
         // Projection step.
         //
@@ -2364,7 +2336,6 @@ impl<'a> Elaborator<'a> {
                 })
                 .collect::<Vec<_>>();
 
-            // TODO: try eta equal condidates when the hole ?M is used twice or more among the whole set of constraints.
             let mut target = mk_local(z.id);
             target = target.apply(new_args);
             target = target.abs(&new_binders);
@@ -2444,15 +2415,23 @@ impl<'a> Elaborator<'a> {
                 })
                 .collect::<Vec<_>>();
 
-            // TODO: try eta equal condidates when the hole ?M is used twice or more among the whole set of constraints.
             let mut target = right_head.clone();
             target = target.apply(new_args);
             target = target.abs(&new_binders);
             nodes.push(Node {
                 subst: vec![(left_head, target, c.error.clone())],
                 type_constraints: vec![],
-                // This is ok because later add_subst(left_head, target) is called and the constraint is woken up again.
-                term_constraints: vec![],
+                // Replay the original constraint after the imitation substitution.
+                // For example, from ?f x =?= R.x x we may imitate with
+                // ?f := λ z, R.x (?Y z). Re-running the original constraint under
+                // that substitution yields R.x (?Y x) =?= R.x x, which is what
+                // generates the residual subproblem ?Y x =?= x.
+                term_constraints: vec![(
+                    c.local_env.clone(),
+                    c.left.clone(),
+                    c.right.clone(),
+                    c.error.clone(),
+                )],
             });
         }
 
@@ -3163,6 +3142,352 @@ mod tests {
         assert!(
             elab.solve().is_ok(),
             "local/local unification should succeed by unfolding the unfoldable side"
+        );
+    }
+
+    #[test]
+    fn unify_rigid_local_function_with_eta_expansion() {
+        let f_id = Id::from_name(&Name::from_str("f"));
+        let x_name = Name::from_str("x");
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![],
+            locals: vec![Local {
+                id: f_id,
+                ty: mk_type_prop().arrow([mk_type_prop()]),
+            }],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let local_env_snapshot = local_env.clone();
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![],
+        );
+
+        let left = mk_local(f_id);
+        let right = mk_abs(
+            Some(x_name),
+            mk_type_prop(),
+            mk_app(mk_local(f_id), mk_var(0)),
+        );
+        elab.push_term_constraint(
+            local_env_snapshot.clone(),
+            left,
+            right,
+            visit_error("expected success", None),
+        );
+
+        assert!(elab.solve().is_ok(), "rigid local eta should unify");
+    }
+
+    #[test]
+    fn unify_rigid_const_function_with_eta_expansion() {
+        let c = QualifiedName::from_name(Name::from_str("c"));
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![],
+            locals: vec![],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::from([(
+            c.clone(),
+            Const {
+                local_types: vec![],
+                local_classes: vec![],
+                ty: mk_type_prop().arrow([mk_type_prop()]),
+            },
+        )]);
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let local_env_snapshot = local_env.clone();
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![],
+        );
+
+        let left = mk_const(c.clone(), vec![], vec![]);
+        let right = mk_abs(
+            Some(Name::from_str("x")),
+            mk_type_prop(),
+            mk_app(mk_const(c, vec![], vec![]), mk_var(0)),
+        );
+        elab.push_term_constraint(
+            local_env_snapshot.clone(),
+            left,
+            right,
+            visit_error("expected success", None),
+        );
+
+        assert!(elab.solve().is_ok(), "rigid const eta should unify");
+    }
+
+    #[test]
+    fn unify_flex_function_eta_solves() {
+        let f_id = Id::from_name(&Name::from_str("f"));
+        let hole_id = Id::from_name(&Name::from_str("M"));
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![],
+            locals: vec![Local {
+                id: f_id,
+                ty: mk_type_prop().arrow([mk_type_prop()]),
+            }],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let local_env_snapshot = local_env.clone();
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![(hole_id, mk_type_prop().arrow([mk_type_prop()]))],
+        );
+
+        let left = mk_hole(hole_id);
+        let right = mk_abs(
+            Some(Name::from_str("x")),
+            mk_type_prop(),
+            mk_app(mk_local(f_id), mk_var(0)),
+        );
+        elab.push_term_constraint(
+            local_env_snapshot.clone(),
+            left,
+            right,
+            visit_error("expected success", None),
+        );
+
+        elab.solve().expect("eta-shaped flex-rigid should solve");
+        let target = elab
+            .subst_map
+            .get(&hole_id)
+            .expect("solution should be recorded");
+        let target = elab.fully_inst(target);
+        assert!(
+            elab.proof_env
+                .tt_env
+                .equiv(&local_env_snapshot, &target, &mk_local(f_id)),
+            "solution should be eta-equivalent to f, got {target}"
+        );
+    }
+
+    #[test]
+    fn imitation_requeues_original_constraint() {
+        let f_id = Id::from_name(&Name::from_str("f"));
+        let x_id = Id::from_name(&Name::from_str("x"));
+        let hole_id = Id::from_name(&Name::from_str("M"));
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![],
+            locals: vec![
+                Local {
+                    id: f_id,
+                    ty: mk_type_prop().arrow([mk_type_prop()]),
+                },
+                Local {
+                    id: x_id,
+                    ty: mk_type_prop(),
+                },
+            ],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![(hole_id, mk_type_prop().arrow([mk_type_prop()]))],
+        );
+
+        let left = mk_app(mk_hole(hole_id), mk_local(x_id));
+        let right = mk_app(mk_local(f_id), mk_local(x_id));
+        let c = EqConstraint {
+            local_env: elab.tt_local_env.clone(),
+            left: left.clone(),
+            right: right.clone(),
+            kind: ConstraintKind::FlexRigid,
+            error: visit_error("expected success", None),
+        };
+
+        let nodes = elab.choice_fr(&c);
+        assert!(
+            nodes.iter().any(|node| {
+                node.term_constraints
+                    .iter()
+                    .any(|(_, node_left, node_right, _)| {
+                        node_left.alpha_eq(&left) && node_right.alpha_eq(&right)
+                    })
+            }),
+            "imitation should replay the original constraint after assigning the head hole"
+        );
+    }
+
+    #[test]
+    fn imitation_tracks_argument_holes() {
+        let f_id = Id::from_name(&Name::from_str("f"));
+        let x_id = Id::from_name(&Name::from_str("x"));
+        let hole_id = Id::from_name(&Name::from_str("M"));
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![],
+            locals: vec![
+                Local {
+                    id: f_id,
+                    ty: mk_type_prop().arrow([mk_type_prop()]),
+                },
+                Local {
+                    id: x_id,
+                    ty: mk_type_prop(),
+                },
+            ],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let local_env_snapshot = local_env.clone();
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![(hole_id, mk_type_prop().arrow([mk_type_prop()]))],
+        );
+
+        let left = mk_app(mk_hole(hole_id), mk_local(x_id));
+        let right = mk_app(mk_local(f_id), mk_local(x_id));
+        elab.push_term_constraint(
+            local_env_snapshot.clone(),
+            left,
+            right,
+            visit_error("expected success", None),
+        );
+
+        elab.solve()
+            .expect("imitation should solve trailing arguments through tracking constraints");
+
+        let target = elab
+            .subst_map
+            .get(&hole_id)
+            .expect("solution should be recorded");
+        let target = elab.fully_inst(target);
+        assert!(
+            elab.proof_env
+                .tt_env
+                .equiv(&local_env_snapshot, &target, &mk_local(f_id)),
+            "solution should be eta-equivalent to f, got {target}"
+        );
+
+        let identity = mk_abs(Some(Name::from_str("z")), mk_type_prop(), mk_var(0));
+        assert!(
+            elab.subst_map.iter().any(|(&id, target)| {
+                id != hole_id
+                    && elab.proof_env.tt_env.equiv(
+                        &local_env_snapshot,
+                        &elab.fully_inst(target),
+                        &identity,
+                    )
+            }),
+            "imitation should leave an explicit tracked identity substitution"
         );
     }
 

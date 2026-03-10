@@ -2402,6 +2402,10 @@ impl Env<'_> {
     /// --------------------------------------------------------------------------------------- (c.{u₁ ⋯ uₙ} :≡ m)
     /// Γ ⊢ delta_reduce c.{t₁ ⋯ tₙ}[i₁ ⋯ iₘ] : c.{t₁ ⋯ tₙ}[i₁ ⋯ iₘ] ≡ [i₁ ⋯ iₘ][t₁/u₁ ⋯ tₙ/uₙ]m
     ///
+    ///
+    /// --------------------------------
+    /// Γ ⊢ eta_expand f : f ≡ λ x, f x
+    ///
     /// Both terms must be ground
     pub fn equiv(&self, local_env: &LocalEnv, m1: &Term, m2: &Term) -> bool {
         if m1.alpha_eq(m2) {
@@ -2461,7 +2465,17 @@ impl Env<'_> {
                     }
                     continue;
                 } else {
-                    return false;
+                    let Term::Abs(inner2) = &m2 else {
+                        unreachable!();
+                    };
+                    let x = Id::fresh();
+                    let local = mk_local(x);
+                    m1 = m1.apply(std::iter::once(local.clone()));
+                    m2 = inner2.body.open(&[local], 0);
+                    if m1.alpha_eq(&m2) {
+                        return true;
+                    }
+                    continue;
                 }
             }
 
@@ -2623,6 +2637,67 @@ mod tests {
     }
 
     #[test]
+    fn equiv_eta_expands_rigid_head() {
+        let fixture = EnvFixture::new();
+        let env = fixture.env();
+
+        let f_id = local_id("f");
+        let x = Name::from_str("x");
+        let domain = mk_type_prop();
+        let codomain = mk_type_prop();
+        let local_env = LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![],
+            locals: vec![Local {
+                id: f_id,
+                ty: domain.clone().arrow(std::iter::once(codomain)),
+            }],
+        };
+
+        let function = mk_local(f_id);
+        let eta = mk_abs(Some(x), domain, mk_app(function.clone(), mk_var(0)));
+
+        assert!(env.equiv(&local_env, &function, &eta));
+    }
+
+    #[test]
+    fn equiv_eta_expands_curried_function_recursively() {
+        let fixture = EnvFixture::new();
+        let env = fixture.env();
+
+        let f_id = local_id("f");
+        let x = Name::from_str("x");
+        let y = Name::from_str("y");
+        let domain = mk_type_prop();
+        let codomain = mk_type_prop();
+        let local_env = LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![],
+            locals: vec![Local {
+                id: f_id,
+                ty: domain
+                    .clone()
+                    .arrow([domain.clone(), codomain.clone()].into_iter()),
+            }],
+        };
+
+        let function = mk_local(f_id);
+        let eta = mk_abs(
+            Some(x),
+            domain.clone(),
+            mk_abs(
+                Some(y),
+                domain,
+                mk_app(mk_app(function.clone(), mk_var(1)), mk_var(0)),
+            ),
+        );
+
+        assert!(env.equiv(&local_env, &function, &eta));
+    }
+
+    #[test]
     fn equiv_delta_unfolds_constant() {
         let c = QualifiedName::from_name(Name::from_str("c"));
         let d = QualifiedName::from_name(Name::from_str("d"));
@@ -2641,6 +2716,32 @@ mod tests {
         let body = mk_const(d, vec![], vec![]);
 
         assert!(is_equiv(&env, &defined, &body));
+    }
+
+    #[test]
+    fn equiv_eta_after_delta_unfolding() {
+        let c = QualifiedName::from_name(Name::from_str("c"));
+        let g = QualifiedName::from_name(Name::from_str("g"));
+        let domain = mk_type_prop();
+
+        let delta = Delta {
+            local_types: vec![],
+            local_classes: vec![],
+            target: mk_const(g.clone(), vec![], vec![]),
+            height: 0,
+        };
+
+        let fixture = EnvFixture::new().with_delta(c.clone(), delta);
+        let env = fixture.env();
+
+        let function = mk_const(c, vec![], vec![]);
+        let eta = mk_abs(
+            Some(Name::from_str("x")),
+            domain,
+            mk_app(mk_const(g, vec![], vec![]), mk_var(0)),
+        );
+
+        assert!(is_equiv(&env, &function, &eta));
     }
 
     #[test]
@@ -2749,6 +2850,44 @@ mod tests {
     }
 
     #[test]
+    fn equiv_eta_after_local_delta_unfolding() {
+        let c_id = local_id("c");
+        let f_id = local_id("f");
+        let domain = mk_type_prop();
+        let codomain = mk_type_prop();
+        let fixture = EnvFixture::new();
+        let env = fixture.env();
+        let local_env = LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![LocalDelta {
+                id: c_id,
+                target: mk_local(f_id),
+                height: 0,
+            }],
+            locals: vec![
+                Local {
+                    id: c_id,
+                    ty: domain.clone().arrow(std::iter::once(codomain.clone())),
+                },
+                Local {
+                    id: f_id,
+                    ty: domain.clone().arrow(std::iter::once(codomain)),
+                },
+            ],
+        };
+
+        let function = mk_local(c_id);
+        let eta = mk_abs(
+            Some(Name::from_str("x")),
+            domain,
+            mk_app(mk_local(f_id), mk_var(0)),
+        );
+
+        assert!(env.equiv(&local_env, &function, &eta));
+    }
+
+    #[test]
     fn equiv_detects_constant_mismatch() {
         let fixture = EnvFixture::new();
         let env = fixture.env();
@@ -2775,6 +2914,41 @@ mod tests {
         let right = mk_app(fun, mk_const(b, vec![], vec![]));
 
         assert!(!is_equiv(&env, &left, &right));
+    }
+
+    #[test]
+    fn equiv_eta_does_not_hide_distinct_heads() {
+        let fixture = EnvFixture::new();
+        let env = fixture.env();
+
+        let f_id = local_id("f");
+        let g_id = local_id("g");
+        let domain = mk_type_prop();
+        let codomain = mk_type_prop();
+        let local_env = LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![],
+            locals: vec![
+                Local {
+                    id: f_id,
+                    ty: domain.clone().arrow(std::iter::once(codomain.clone())),
+                },
+                Local {
+                    id: g_id,
+                    ty: domain.clone().arrow(std::iter::once(codomain)),
+                },
+            ],
+        };
+
+        let left = mk_local(f_id);
+        let right = mk_abs(
+            Some(Name::from_str("x")),
+            domain,
+            mk_app(mk_local(g_id), mk_var(0)),
+        );
+
+        assert!(!env.equiv(&local_env, &left, &right));
     }
 
     #[test]
