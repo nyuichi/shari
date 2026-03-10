@@ -93,8 +93,8 @@ infix > : 50 := has_le.gt
 -- 4. function η-equivalence: f ≈ λ x, f x
 --
 -- Rules 1 and 2 are type agnostic. Rule 3 can be applied to partially typed terms as long as its method can be
--- resolved to a concrete term. Rule 4 is a kernel conversion rule for function terms; elaborator-side metavariable
--- solving is not fully aligned with it yet.
+-- resolved to a concrete term. Rule 4 is used both in the kernel and in higher-order unification for function terms,
+-- although the unifier still keeps a few explicit search-space limits around polymorphic projection.
 --
 -- There are basically two approaches to incorporate type classes into a language.
 --
@@ -364,12 +364,8 @@ def unique.{u} (P : u → Prop) : Prop := ∀ (x₁ x₂ : u), P x₁ → P x₂
 lemma uexists.intro.{u} (P : u → Prop) : exists P → unique P → uexists P :=
 assume exists P,
 assume unique P,
--- TODO: restore the `obtain` version after elaborator-side eta handling catches up with the kernel.
--- obtain (x : u), P x := «exists P»,
--- exists.intro (and.intro «P x» (take (y : u), assume P y, «unique P»[x, y] «P x» «P y»))
-@exists.ind[P, _] «exists P» (take (x : u), assume P x,
+obtain (x : u), P x := «exists P»,
 exists.intro (and.intro «P x» (take (y : u), assume P y, «unique P»[x, y] «P x» «P y»))
-)
 
 lemma uexists.exists.{u} (P : u → Prop) : uexists P → exists P :=
 assume uexists P,
@@ -861,8 +857,7 @@ assume ∀ (x : v), m₁ = m₂,
 fun_ext «∀ (x : v), m₁ = m₂»
 
 lemma eta_expand.{u, v} (f : u → v) : f = λ x, f x :=
--- FIXME: the unifier is unable to synthesize `f` (for some reasons).
-@fun_ext[f, _] (take (x : u), eq.refl)
+eq.refl
 
 /-
  - functions
@@ -1199,8 +1194,7 @@ assume ∀ x, ∃ y, R x y,
 have ∀ x, ∃! (s : inhab v), R x = inhab.rep s :=
   take (x : u),
   have ∃ (y : v), R x y := «∀ x, ∃ y, R x y»[x],
-    -- FIXME: the unifier could not synthesize `R x`
-  @inhab.uabs[R x] «∃ (y : v), R x y»,
+  inhab.uabs «∃ (y : v), R x y»,
 have ∃! (g : u → inhab v), ∀ x, R x = inhab.rep (g x) := auc «∀ x, ∃! (s : inhab v), R x = inhab.rep s»,
 obtain (g : u → inhab v), ∀ x, R x = inhab.rep (g x) := uexists.exists «∃! (g : u → inhab v), ∀ x, R x = inhab.rep (g x)»,
 @exists.intro[_, λ x, c (g x)] (take (x : u),
@@ -1541,8 +1535,7 @@ lemma ac_from_global_choice.{u, v} (R : u → v → Prop) : (∀ x, ∃ y, R x y
   assume ∀ x, ∃ y, R x y,
   have ∀ x, ∃! (h : inhab v), R x = inhab.rep h :=
     take (x : u),
-    -- FIXME: the unifier could not synthesize `R x`. Perhaps because it's a partially applied term?
-    @inhab.uabs[R x] «∀ x, ∃ y, R x y»[x],
+    inhab.uabs «∀ x, ∃ y, R x y»[x],
   have ∃! (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
     auc «∀ x, ∃! (h : inhab v), R x = inhab.rep h»,
   obtain (f : u → inhab v), ∀ x, R x = inhab.rep (f x) :=
@@ -1785,8 +1778,7 @@ have ∀ a b, mult m₁ a b = mult m₂ a b :=
                ... = mult m₂ (mult m₁ a (unit m₁)) (mult m₁ (unit m₁) b) := eq.ap (eq.symm (interchange.equates_unit «interchange m₁ m₂»))
                ... = mult m₂ a (mult m₁ (unit m₁) b)                     := eq.ap monoid.right_unit
                ... = mult m₂ a b                                         := eq.ap monoid.left_unit,
--- FIXME: remove @ from fun_ext after the bug in the unifier is fixed.
-@fun_ext[mult m₁, mult m₂] (take (a : u), @fun_ext[mult m₁ a, mult m₂ a] «∀ a b, mult m₁ a b = mult m₂ a b»[a])
+fun_ext (take (a : u), fun_ext «∀ a b, mult m₁ a b = mult m₂ a b»[a])
 
 lemma monoid.ext.{u} (m₁ m₂ : monoid u) : mult m₁ = mult m₂ → unit m₁ = unit m₂ → m₁ = m₂ :=
 assume mult m₁ = mult m₂,

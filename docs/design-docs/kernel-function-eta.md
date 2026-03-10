@@ -14,12 +14,12 @@ The kernel's definitional equality now treats a function term `f` as judgmentall
 - When `equiv` compares an abstraction against a non-abstraction, first try the existing `δ/κ/local δ` head unfolding on the non-abstraction.
 - If unfolding cannot expose an abstraction, compare the abstraction body opened with a fresh rigid local against the non-abstraction applied to that same local.
 - Let repeated single-binder eta checks account for curried functions.
-- Leave elaborator metavariable solving unchanged for now, even though some eta-shaped goals still require explicit guidance outside the kernel.
+- Align elaborator metavariable solving with the same function-η principle for rigid-vs-`λ` comparison and flex-rigid projection/imitation candidates.
 
 ## Impact
 
 - `change` and other proof-kernel conversion checks can use function eta without adding explicit propositional lemmas.
-- Comments and guides must distinguish kernel conversion from elaborator/unifier behavior so users do not assume metavariable solving has the same eta coverage.
+- Higher-order unification now uses the same function-η assumption for elaboration, although explicit search-space limits around polymorphic projection remain.
 - Existing propositional lemmas such as product eta remain valid and are still needed where the surface language does not reduce them judgmentally.
 
 ## Update Triggers

@@ -47,7 +47,7 @@ The `cmd` dispatcher recognizes the following keywords. Each command builds a st
 
 ## Type classes and implicit arguments
 - Class parameters `[C]` record constraints that become implicit instance arguments when using the resulting constants or lemmas.
-- When invoking a constant or lemma, you may override implicit type arguments with `.{…}` or explicit instance arguments with `[ … ]`. Otherwise the elaborator synthesizes them using higher-order unification and κ-reduction.
+- When invoking a constant or lemma, you may override implicit type arguments with `.{…}` or explicit instance arguments with `[ … ]`. Otherwise the elaborator synthesizes them using higher-order unification, κ-reduction, and function η-equivalence on function terms.
 
 ## Working with holes and elaboration
 - Every `_` in a term or proof registers a metavariable paired with the current local context. These are collected on the parser’s `holes` stack and emitted alongside `lemma` and `instance lemma` commands for the elaborator to solve.

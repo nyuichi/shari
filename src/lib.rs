@@ -306,4 +306,39 @@ mod tests {
         let file = Arc::new(File::new("<test>", script));
         process(file).expect("main prelude should provide proposition truncation helpers");
     }
+
+    #[test]
+    fn main_prelude_eta_goal_accepts_eq_refl() {
+        let script = format!(
+            "{}
+             type const test_U : Type
+             type const test_V : Type
+             const test_f : test_U → test_V
+
+             lemma test_eta : test_f = λ x, test_f x := eq.refl",
+            include_str!("main.shari")
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file).expect("eq.refl should solve eta-equivalent equality goals");
+    }
+
+    #[test]
+    fn main_prelude_inhab_uabs_synthesizes_partially_applied_relation() {
+        let script = format!(
+            "{}
+             type const test_U : Type
+             type const test_V : Type
+             const test_R : test_U → test_V → Prop
+
+             lemma test_uabs :
+               (∀ x, ∃ y, test_R x y) →
+               ∀ x, ∃! (h : inhab test_V), test_R x = inhab.rep h :=
+             assume ∀ x, ∃ y, test_R x y,
+             take (x : test_U),
+             inhab.uabs «∀ x, ∃ y, test_R x y»[x]",
+            include_str!("main.shari")
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file).expect("inhab.uabs should synthesize partially applied relations");
+    }
 }
