@@ -341,4 +341,16 @@ mod tests {
         let file = Arc::new(File::new("<test>", script));
         process(file).expect("inhab.uabs should synthesize partially applied relations");
     }
+
+    fn main_prelude_elaborates_eq_ap_over_applied_function_valued_nat_rec() {
+        let script = format!(
+            "{}
+             lemma test.{{u, v}} (x : u) (y : v) : nat.rec zero (λ (z : v), x) (λ (p : nat) (f : v → u) (z : v), f z) y = x := eq.ap nat.zero.spec",
+            include_str!("main.shari")
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file).expect(
+            "eq.ap nat.zero.spec should elaborate after applying a function-valued recursor result",
+        );
+    }
 }

@@ -95,6 +95,10 @@ struct ClassConstraint {
     error: Error,
 }
 
+// Reversible search-state snapshot used both for branch backtracking and for
+// iterative-deepening restarts. Immediate constraint worklists are
+// intentionally excluded, so restart checkpoints must only be taken at
+// quiescent points where those worklists are empty.
 #[derive(Debug, Clone)]
 struct Snapshot {
     trail_len: usize,
@@ -102,7 +106,10 @@ struct Snapshot {
 
 #[derive(Debug, Default)]
 struct Node {
+    // Binder-expansion iterative deepening charges only this search cost.
+    cost: usize,
     subst: Vec<(Id, Term, Error)>,
+    type_subst: Vec<(Id, Type, Error)>,
     type_constraints: Vec<(Type, Type, Error)>,
     term_constraints: Vec<(LocalEnv, Term, Term, Error)>,
 }
@@ -119,14 +126,19 @@ enum Record {
     AddSubst { id: Id },
     AddTypeSubst { id: Id },
     AddInstanceSubst { id: Id },
+    ConsumeBudget { amount: usize },
     RemoveEqConstraint(Rc<EqConstraint>),
 }
 
 struct Elaborator<'a> {
     proof_env: proof::Env<'a>,
+    // Fresh term holes are monotone: old entries are harmless across
+    // iterative-deepening restarts because later searches never reuse hole ids.
     term_holes: Vec<(Id, Type)>,
     // only used in visit
     tt_local_env: &'a mut tt::LocalEnv,
+    // Fresh instance holes follow the same monotone-allocation rule as
+    // `term_holes`, so restart checkpoints do not restore this table either.
     // only used in visit
     instance_holes: Vec<(Id, Class)>,
     // only used in visit
@@ -160,6 +172,9 @@ struct Elaborator<'a> {
     // for backjumping.
     // It extends when a new constraint is queued or a decision is made.
     trail: Vec<Record>,
+    // Remaining binder-expansion budget for iterative deepening.
+    budget: usize,
+    hit_limit: bool,
 }
 
 impl<'a> Elaborator<'a> {
@@ -192,6 +207,8 @@ impl<'a> Elaborator<'a> {
             instance_subst_map: Default::default(),
             decisions: Default::default(),
             trail: Default::default(),
+            budget: 0,
+            hit_limit: false,
         }
     }
 
@@ -1739,6 +1756,15 @@ impl<'a> Elaborator<'a> {
             self.push_term_constraint(local_env, left, right, error);
             return None;
         }
+        // TODO: cache is_type_ground in term metadata so this fast path stays cheap.
+        if left.is_ground()
+            && left.is_type_ground()
+            && right.is_ground()
+            && right.is_type_ground()
+            && self.proof_env.tt_env.equiv(&local_env, &left, &right)
+        {
+            return None;
+        }
         let new_left = self.inst_head(&left);
         let new_right = self.inst_head(&right);
         if new_left.is_some() || new_right.is_some() {
@@ -2134,6 +2160,9 @@ impl<'a> Elaborator<'a> {
                 Record::AddInstanceSubst { id } => {
                     self.instance_subst_map.remove(&id);
                 }
+                Record::ConsumeBudget { amount } => {
+                    self.budget += amount;
+                }
                 Record::RemoveEqConstraint(c) => match c.kind {
                     ConstraintKind::Unfold => {
                         self.queue_unfold.push_front(c);
@@ -2153,24 +2182,36 @@ impl<'a> Elaborator<'a> {
     }
 
     fn next(&mut self) -> bool {
-        let Some(br) = self.decisions.last_mut() else {
-            return false;
-        };
-        let Some(node) = br.nodes.next() else {
-            return false;
-        };
-        let snapshot = br.snapshot.clone();
-        self.restore(&snapshot);
-        for (x, m, error) in node.subst.into_iter().rev() {
-            self.add_subst(x, m, error);
+        loop {
+            let Some(br) = self.decisions.last_mut() else {
+                return false;
+            };
+            let Some(node) = br.nodes.next() else {
+                return false;
+            };
+            let snapshot = br.snapshot.clone();
+
+            self.restore(&snapshot);
+            if node.cost > self.budget {
+                self.hit_limit = true;
+                continue;
+            }
+            self.budget -= node.cost;
+            self.trail.push(Record::ConsumeBudget { amount: node.cost });
+            for (x, m, error) in node.subst.into_iter().rev() {
+                self.add_subst(x, m, error);
+            }
+            for (x, ty, error) in node.type_subst.into_iter().rev() {
+                self.add_type_subst(x, ty, error);
+            }
+            for (left, right, error) in node.type_constraints.into_iter().rev() {
+                self.push_type_constraint(left, right, error);
+            }
+            for (local_env, left, right, error) in node.term_constraints.into_iter().rev() {
+                self.push_term_constraint(local_env, left, right, error);
+            }
+            return true;
         }
-        for (left, right, error) in node.type_constraints.into_iter().rev() {
-            self.push_type_constraint(left, right, error);
-        }
-        for (local_env, left, right, error) in node.term_constraints.into_iter().rev() {
-            self.push_term_constraint(local_env, left, right, error);
-        }
-        true
     }
 
     fn choice_unfold(&self, c: &EqConstraint) -> Vec<Node> {
@@ -2340,7 +2381,9 @@ impl<'a> Elaborator<'a> {
             target = target.apply(new_args);
             target = target.abs(&new_binders);
             nodes.push(Node {
+                cost: 0,
                 subst: vec![(left_head, target, c.error.clone())],
+                type_subst: vec![],
                 type_constraints: vec![(t, left_ty.clone(), c.error.clone())],
                 // This is ok because later add_subst(left_head, target) is called and the constraint is woken up again.
                 term_constraints: vec![],
@@ -2419,13 +2462,43 @@ impl<'a> Elaborator<'a> {
             target = target.apply(new_args);
             target = target.abs(&new_binders);
             nodes.push(Node {
+                cost: 0,
                 subst: vec![(left_head, target, c.error.clone())],
+                type_subst: vec![],
                 type_constraints: vec![],
                 // Replay the original constraint after the imitation substitution.
                 // For example, from ?f x =?= R.x x we may imitate with
                 // ?f := λ z, R.x (?Y z). Re-running the original constraint under
                 // that substitution yields R.x (?Y x) =?= R.x x, which is what
                 // generates the residual subproblem ?Y x =?= x.
+                term_constraints: vec![(
+                    c.local_env.clone(),
+                    c.left.clone(),
+                    c.right.clone(),
+                    c.error.clone(),
+                )],
+            });
+        }
+
+        // Binder-expansion step.
+        let mut new_holes = vec![];
+        for z in &new_binders {
+            let Type::Hole(hole) = z.ty.target() else {
+                continue;
+            };
+            if new_holes.contains(&hole.id) {
+                continue;
+            }
+            new_holes.push(hole.id);
+
+            let dom = mk_fresh_type_hole();
+            let cod = mk_fresh_type_hole();
+            let new_hole = mk_type_arrow(dom, cod);
+            nodes.push(Node {
+                cost: 1,
+                subst: vec![],
+                type_subst: vec![(hole.id, new_hole, c.error.clone())],
+                type_constraints: vec![],
                 term_constraints: vec![(
                     c.local_env.clone(),
                     c.left.clone(),
@@ -2513,14 +2586,17 @@ impl<'a> Elaborator<'a> {
         self.type_constraints.clear();
         self.class_constraints.clear();
         while !self.next() {
-            if self.decisions.pop().is_none() {
+            let Some(branch) = self.decisions.pop() else {
                 return false;
-            }
+            };
+            self.restore(&branch.snapshot);
         }
         true
     }
 
-    fn solve(&mut self) -> Result<(), Error> {
+    fn solve_with_budget(&mut self, budget: usize) -> Result<(), (bool, Error)> {
+        self.budget = budget;
+        self.hit_limit = false;
         loop {
             while let Some(error) = self.find_conflict() {
                 if log::log_enabled!(log::Level::Debug) {
@@ -2528,7 +2604,7 @@ impl<'a> Elaborator<'a> {
                     println!("{sp}conflict found!");
                 }
                 if !self.backjump() {
-                    return Err(error);
+                    return Err((self.hit_limit, error));
                 }
             }
             if log::log_enabled!(log::Level::Debug) {
@@ -2540,6 +2616,23 @@ impl<'a> Elaborator<'a> {
                 return Ok(());
             }
         }
+    }
+
+    fn solve(&mut self) -> Result<(), Error> {
+        let mut last_error = None;
+        for budget in 0..=5 {
+            match self.solve_with_budget(budget) {
+                Ok(()) => return Ok(()),
+                Err((true, error)) => {
+                    last_error = Some(error);
+                    // TODO: some errors can already prove that increasing the
+                    // budget is pointless; stop early when we can classify them.
+                    continue;
+                }
+                Err((false, error)) => return Err(error),
+            }
+        }
+        Err(last_error.expect("budget exhaustion should keep the last error"))
     }
 
     // TODO: 本当は find_conflict の中でやるべき。ノードごとに生成した hole を記録して、制約がなくなった hole について inhabitant を合成する。
@@ -2746,8 +2839,8 @@ mod tests {
         proof,
         proof::mk_type_prop,
         tt::{
-            self, ClassInstance, ClassType, Const, Delta, Id, Kappa, Kind, Local, Name, mk_abs,
-            mk_app, mk_const, mk_hole, mk_local, mk_type_app, mk_type_arrow, mk_type_const,
+            self, ClassInstance, ClassType, Const, Delta, Id, Kappa, Kind, Local, Name, Type,
+            mk_abs, mk_app, mk_const, mk_hole, mk_local, mk_type_app, mk_type_arrow, mk_type_const,
             mk_type_local, mk_var,
         },
     };
@@ -3745,6 +3838,530 @@ mod tests {
             panic!("expected const head");
         };
         assert_eq!(left_head.ty_args, vec![Type::Hole(hole)]);
+    }
+
+    #[test]
+    fn choice_fr_adds_binder_expansion_branch_for_hole_tailed_projection() {
+        let c = QualifiedName::from_name(Name::from_str("c"));
+        let x_id = Id::from_name(&Name::from_str("x"));
+        let m_id = Id::from_name(&Name::from_str("M"));
+
+        let arg_ty = mk_fresh_type_hole();
+        let Type::Hole(arg_hole) = &arg_ty else {
+            unreachable!();
+        };
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![],
+            locals: vec![Local {
+                id: x_id,
+                ty: arg_ty.clone(),
+            }],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::from([(
+            c.clone(),
+            Const {
+                local_types: vec![],
+                local_classes: vec![],
+                ty: mk_type_prop(),
+            },
+        )]);
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![(m_id, mk_type_prop().arrow([arg_ty.clone()]))],
+        );
+
+        let constraint = EqConstraint {
+            local_env: tt::LocalEnv {
+                local_types: vec![],
+                local_classes: vec![],
+                local_deltas: vec![],
+                locals: vec![Local {
+                    id: x_id,
+                    ty: Type::Hole(arg_hole.clone()),
+                }],
+            },
+            left: mk_app(mk_hole(m_id), mk_local(x_id)),
+            right: mk_const(c, vec![], vec![]),
+            kind: ConstraintKind::FlexRigid,
+            error: visit_error("expected expansion", None),
+        };
+
+        let nodes = elab.choice_fr(&constraint);
+        assert!(
+            nodes.iter().any(|node| {
+                node.type_subst
+                    .iter()
+                    .any(|(id, ty, _)| *id == arg_hole.id && matches!(ty, Type::Arrow(_)))
+            }),
+            "choice_fr should add a binder-expansion branch when projection is blocked by a type hole"
+        );
+    }
+
+    #[test]
+    fn solve_with_budget_zero_keeps_existing_non_expanding_successes() {
+        let c = QualifiedName::from_name(Name::from_str("c"));
+        let l_id = Id::from_name(&Name::from_str("foo.l"));
+        let c_term = mk_const(c.clone(), vec![], vec![]);
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![LocalDelta {
+                id: l_id,
+                target: c_term.clone(),
+                height: 0,
+            }],
+            locals: vec![Local {
+                id: l_id,
+                ty: mk_type_prop(),
+            }],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::from([(
+            c.clone(),
+            Const {
+                local_types: vec![],
+                local_classes: vec![],
+                ty: mk_type_prop(),
+            },
+        )]);
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let local_env_snapshot = local_env.clone();
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![],
+        );
+
+        let error = visit_error("expected success", None);
+        elab.push_term_constraint(
+            local_env_snapshot.clone(),
+            mk_local(l_id),
+            c_term.clone(),
+            error.clone(),
+        );
+        elab.push_term_constraint(local_env_snapshot, c_term, mk_local(l_id), error);
+
+        assert!(matches!(elab.solve_with_budget(0), Ok(())));
+    }
+
+    #[test]
+    fn solve_with_budget_reports_needs_more_budget_before_binder_expansion() {
+        let x_id = Id::from_name(&Name::from_str("x"));
+        let a_id = Id::from_name(&Name::from_str("a"));
+        let m_id = Id::from_name(&Name::from_str("M"));
+
+        let alpha = mk_fresh_type_hole();
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![],
+            locals: vec![
+                Local {
+                    id: x_id,
+                    ty: alpha.clone(),
+                },
+                Local {
+                    id: a_id,
+                    ty: mk_type_prop(),
+                },
+            ],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![(m_id, mk_type_prop().arrow([alpha]))],
+        );
+
+        elab.push_term_constraint(
+            tt::LocalEnv {
+                local_types: vec![],
+                local_classes: vec![],
+                local_deltas: vec![],
+                locals: vec![
+                    Local {
+                        id: x_id,
+                        ty: mk_fresh_type_hole(),
+                    },
+                    Local {
+                        id: a_id,
+                        ty: mk_type_prop(),
+                    },
+                ],
+            },
+            mk_app(mk_hole(m_id), mk_local(x_id)),
+            mk_app(mk_local(x_id), mk_local(a_id)),
+            visit_error("expected more budget", None),
+        );
+
+        assert!(matches!(elab.solve_with_budget(0), Err((true, _))));
+    }
+
+    #[test]
+    fn solve_with_budget_one_solves_single_expansion_case() {
+        let x_id = Id::from_name(&Name::from_str("x"));
+        let a_id = Id::from_name(&Name::from_str("a"));
+        let m_id = Id::from_name(&Name::from_str("M"));
+
+        let alpha = mk_fresh_type_hole();
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![],
+            locals: vec![
+                Local {
+                    id: x_id,
+                    ty: alpha.clone(),
+                },
+                Local {
+                    id: a_id,
+                    ty: mk_type_prop(),
+                },
+            ],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![(m_id, mk_type_prop().arrow([alpha]))],
+        );
+
+        elab.push_term_constraint(
+            tt::LocalEnv {
+                local_types: vec![],
+                local_classes: vec![],
+                local_deltas: vec![],
+                locals: vec![
+                    Local {
+                        id: x_id,
+                        ty: mk_fresh_type_hole(),
+                    },
+                    Local {
+                        id: a_id,
+                        ty: mk_type_prop(),
+                    },
+                ],
+            },
+            mk_app(mk_hole(m_id), mk_local(x_id)),
+            mk_app(mk_local(x_id), mk_local(a_id)),
+            visit_error("expected success", None),
+        );
+
+        assert!(matches!(elab.solve_with_budget(1), Ok(())));
+    }
+
+    #[test]
+    fn solve_with_budget_restarts_from_budget_exhausted_checkpoint() {
+        let x_id = Id::from_name(&Name::from_str("x"));
+        let a_id = Id::from_name(&Name::from_str("a"));
+        let m_id = Id::from_name(&Name::from_str("M"));
+
+        let alpha = mk_fresh_type_hole();
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![],
+            locals: vec![
+                Local {
+                    id: x_id,
+                    ty: alpha.clone(),
+                },
+                Local {
+                    id: a_id,
+                    ty: mk_type_prop(),
+                },
+            ],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![(m_id, mk_type_prop().arrow([alpha]))],
+        );
+
+        elab.push_term_constraint(
+            tt::LocalEnv {
+                local_types: vec![],
+                local_classes: vec![],
+                local_deltas: vec![],
+                locals: vec![
+                    Local {
+                        id: x_id,
+                        ty: mk_fresh_type_hole(),
+                    },
+                    Local {
+                        id: a_id,
+                        ty: mk_type_prop(),
+                    },
+                ],
+            },
+            mk_app(mk_hole(m_id), mk_local(x_id)),
+            mk_app(mk_local(x_id), mk_local(a_id)),
+            visit_error("expected success", None),
+        );
+
+        assert!(matches!(elab.solve_with_budget(0), Err((true, _))));
+        assert!(elab.decisions.is_empty());
+        assert!(elab.term_constraints.is_empty());
+        assert!(elab.type_constraints.is_empty());
+        assert!(elab.class_constraints.is_empty());
+        assert!(matches!(elab.solve_with_budget(1), Ok(())));
+    }
+
+    #[test]
+    fn solve_returns_err_for_finite_failure_without_iterative_deepening_restart() {
+        let f_id = Id::from_name(&Name::from_str("foo.f"));
+        let x_id = Id::from_name(&Name::from_str("x"));
+        let y_id = Id::from_name(&Name::from_str("y"));
+        let c = QualifiedName::from_name(Name::from_str("c"));
+        let c_term = mk_const(c.clone(), vec![], vec![]);
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![LocalDelta {
+                id: f_id,
+                target: c_term.clone(),
+                height: 0,
+            }],
+            locals: vec![
+                Local {
+                    id: f_id,
+                    ty: mk_type_prop().arrow([mk_type_prop()]),
+                },
+                Local {
+                    id: x_id,
+                    ty: mk_type_prop(),
+                },
+                Local {
+                    id: y_id,
+                    ty: mk_type_prop(),
+                },
+            ],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::from([(
+            c.clone(),
+            Const {
+                local_types: vec![],
+                local_classes: vec![],
+                ty: mk_type_prop().arrow([mk_type_prop()]),
+            },
+        )]);
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let local_env_snapshot = local_env.clone();
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![],
+        );
+
+        elab.push_term_constraint(
+            local_env_snapshot,
+            mk_app(mk_local(f_id), mk_local(x_id)),
+            mk_app(mk_local(f_id), mk_local(y_id)),
+            visit_error("expected finite failure", None),
+        );
+
+        assert!(elab.solve().is_err());
+    }
+
+    #[test]
+    fn solve_restarts_from_post_simplification_checkpoint_for_binder_expansion_case() {
+        let x_id = Id::from_name(&Name::from_str("x"));
+        let a_id = Id::from_name(&Name::from_str("a"));
+        let m_id = Id::from_name(&Name::from_str("M"));
+
+        let alpha = mk_fresh_type_hole();
+
+        let mut local_env = tt::LocalEnv {
+            local_types: vec![],
+            local_classes: vec![],
+            local_deltas: vec![],
+            locals: vec![
+                Local {
+                    id: x_id,
+                    ty: alpha.clone(),
+                },
+                Local {
+                    id: a_id,
+                    ty: mk_type_prop(),
+                },
+            ],
+        };
+
+        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
+        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
+        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
+        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let tt_env = tt::Env {
+            type_const_table: &type_const_table,
+            const_table: &const_table,
+            delta_table: &delta_table,
+            kappa_table: &kappa_table,
+            class_predicate_table: &class_predicate_table,
+            class_instance_table: &class_instance_table,
+        };
+        let proof_env = proof::Env {
+            tt_env,
+            axiom_table: &axiom_table,
+        };
+        let mut elab = Elaborator::new(
+            proof_env,
+            &proof::LocalEnv::default(),
+            &mut local_env,
+            vec![(m_id, mk_type_prop().arrow([alpha]))],
+        );
+
+        elab.push_term_constraint(
+            tt::LocalEnv {
+                local_types: vec![],
+                local_classes: vec![],
+                local_deltas: vec![],
+                locals: vec![
+                    Local {
+                        id: x_id,
+                        ty: mk_fresh_type_hole(),
+                    },
+                    Local {
+                        id: a_id,
+                        ty: mk_type_prop(),
+                    },
+                ],
+            },
+            mk_app(mk_hole(m_id), mk_local(x_id)),
+            mk_app(mk_local(x_id), mk_local(a_id)),
+            visit_error("expected success", None),
+        );
+
+        assert!(elab.solve().is_ok());
     }
 
     #[test]
