@@ -93,8 +93,7 @@ infix > : 50 := has_le.gt
 -- 4. η-equivalence: f ≈ λ x, f x
 --
 -- Rules 1 and 2 are type agnostic. Rule 3 can be applied to partially typed terms as long as its method can be
--- resolved to a concrete term. Rule 4 is used both in the kernel and in higher-order unification for function terms,
--- although the unifier still keeps a few explicit search-space limits around polymorphic projection.
+-- resolved to a concrete term.
 --
 -- There are basically two approaches to incorporate type classes into a language.
 --
