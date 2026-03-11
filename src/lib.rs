@@ -342,6 +342,7 @@ mod tests {
         process(file).expect("inhab.uabs should synthesize partially applied relations");
     }
 
+    #[test]
     fn main_prelude_elaborates_eq_ap_over_applied_function_valued_nat_rec() {
         let script = format!(
             "{}
