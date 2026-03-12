@@ -209,6 +209,12 @@ struct LocalAxiom {
     target: Term,
 }
 
+#[derive(Debug, Clone)]
+struct LocalBinding {
+    name: Name,
+    id: Id,
+}
+
 // TODO: instance lemma の中で hole を作ると引数にそれまでの instance def が入っちゃって後々 elab で const に置き換えられるので無駄。あと instance 自体の引数が2回ぐらい hole の引数に入ってしまうバグがありそう。
 pub struct Parser<'a> {
     lex: &'a mut Lex,
@@ -223,8 +229,8 @@ pub struct Parser<'a> {
     structure_table: &'a HashMap<QualifiedName, CmdStructure>,
     local_consts: Vec<LocalConst>,
     local_axioms: Vec<(QualifiedName, LocalAxiom)>,
-    local_types: Vec<Name>,
-    locals: Vec<Name>,
+    local_types: Vec<LocalBinding>,
+    locals: Vec<LocalBinding>,
     self_ref: Option<(QualifiedName, Id)>,
     type_self_ref: Option<(QualifiedName, Id)>,
     holes: Vec<(Id, Type)>,
@@ -305,12 +311,20 @@ impl<'a> Parser<'a> {
             })
     }
 
-    fn has_local_type(&self, name: &Name) -> bool {
-        self.local_types.iter().rev().any(|local| local == name)
+    fn get_local_type(&self, name: &Name) -> Option<Id> {
+        self.local_types
+            .iter()
+            .rev()
+            .find(|local| &local.name == name)
+            .map(|local| local.id)
     }
 
-    fn has_local(&self, name: &Name) -> bool {
-        self.locals.iter().rev().any(|local| local == name)
+    fn get_local(&self, name: &Name) -> Option<Id> {
+        self.locals
+            .iter()
+            .rev()
+            .find(|local| &local.name == name)
+            .map(|local| local.id)
     }
 
     fn push_local_const(&mut self, name: QualifiedName, id: Id) {
@@ -589,8 +603,10 @@ impl<'a> Parser<'a> {
             None => {
                 let name = self.qualified_name(&token);
                 if token.is_ident() {
-                    if name.path().is_root() && self.has_local_type(name.name()) {
-                        return Ok(mk_type_local(Id::from_name(name.name())));
+                    if name.path().is_root()
+                        && let Some(id) = self.get_local_type(name.name())
+                    {
+                        return Ok(mk_type_local(id));
                     }
                     if let Some(stash) =
                         self.type_self_ref.as_ref().and_then(|(self_name, stash)| {
@@ -824,18 +840,12 @@ impl<'a> Parser<'a> {
                 Some(ty) => ty,
                 None => mk_fresh_type_hole(),
             };
-            self.locals.push(name.clone());
-            binders.push((name, ty));
+            let id = Id::fresh_with_name(name.clone());
+            self.locals.push(LocalBinding { name, id });
+            binders.push(Local { id, ty });
         }
         let mut m = self.subterm(0)?;
         self.locals.truncate(self.locals.len() - binders.len());
-        let binders = binders
-            .into_iter()
-            .map(|(name, ty)| Local {
-                id: Id::from_name(&name),
-                ty,
-            })
-            .collect::<Vec<_>>();
         m = m.abs(&binders);
         Ok(m)
     }
@@ -852,26 +862,23 @@ impl<'a> Parser<'a> {
                 Some(ty) => ty,
                 None => mk_fresh_type_hole(),
             };
-            self.locals.push(name.clone());
-            binders.push((name, ty));
+            let id = Id::fresh_with_name(name.clone());
+            self.locals.push(LocalBinding { name, id });
+            binders.push(Local { id, ty });
         }
         let mut m = self.subterm(0)?;
         self.locals.truncate(self.locals.len() - binders.len());
-        for (name, ty) in binders.into_iter().rev() {
-            let x = Local {
-                id: Id::from_name(&name),
-                ty: ty.clone(),
-            };
+        for x in binders.into_iter().rev() {
             m = m.abs(slice::from_ref(&x));
             let f = mem::take(&mut m);
-            m = mk_const(binder.clone(), vec![ty], vec![]);
+            m = mk_const(binder.clone(), vec![x.ty.clone()], vec![]);
             m = m.apply(vec![f]);
         }
         Ok(m)
     }
 
     fn term_sep(&mut self, _token: Token) -> Result<Term, ParseError> {
-        let binder_name = self.name()?;
+        let name = self.name()?;
         let ty;
         if let Some(_token) = self.expect_symbol_opt(":") {
             ty = self.ty()?;
@@ -879,13 +886,11 @@ impl<'a> Parser<'a> {
             ty = mk_fresh_type_hole();
         }
         self.expect_symbol("|")?;
-        self.locals.push(binder_name.clone());
+        let id = Id::fresh_with_name(name.clone());
+        self.locals.push(LocalBinding { name, id });
         let mut m = self.subterm(0)?;
         self.locals.pop();
-        let x = Local {
-            id: Id::from_name(&binder_name),
-            ty,
-        };
+        let x = Local { id, ty };
         m = m.abs(&[x]);
         self.expect_symbol("}")?;
         Ok(m)
@@ -923,8 +928,10 @@ impl<'a> Parser<'a> {
             None => {
                 let name = self.qualified_name(&token);
                 if token.is_ident() {
-                    if name.path().is_root() && self.has_local(name.name()) {
-                        return Ok(mk_local(Id::from_name(name.name())));
+                    if name.path().is_root()
+                        && let Some(id) = self.get_local(name.name())
+                    {
+                        return Ok(mk_local(id));
                     }
                     if let Some(stash) = self.self_ref.as_ref().and_then(|(self_name, stash)| {
                         if self_name == &name {
@@ -1057,7 +1064,7 @@ impl<'a> Parser<'a> {
             unreachable!()
         };
         self.holes.push((inner.id, mk_fresh_type_hole()));
-        hole = hole.apply(self.locals.iter().map(|name| mk_local(Id::from_name(name))));
+        hole = hole.apply(self.locals.iter().map(|local| mk_local(local.id)));
 
         hole
     }
@@ -1122,10 +1129,10 @@ impl<'a> Parser<'a> {
 
     fn mk_obtain(
         &mut self,
-        local_name: Name,
+        id: Id,
         ty: Type,
         p: Term,
-        alias: Option<Name>,
+        alias: Option<Id>,
         e1: Expr,
         e2: Expr,
     ) -> Expr {
@@ -1138,8 +1145,8 @@ impl<'a> Parser<'a> {
         let e = mk_expr_inst(e, self.mk_term_hole());
         let e = mk_expr_inst(e, self.mk_term_hole());
         let e = mk_expr_app(e, e1);
-        let e_body = mk_expr_assume(p, alias.as_ref().map(Id::from_name), e2);
-        let e_body = mk_expr_take(Id::from_name(&local_name), ty, e_body);
+        let e_body = mk_expr_assume(p, alias, e2);
+        let e_body = mk_expr_take(id, ty, e_body);
         mk_expr_app(e, e_body)
     }
 
@@ -1159,10 +1166,6 @@ impl<'a> Parser<'a> {
                 .extend(field_name.clone())
                 .to_string(),
         )
-    }
-
-    fn local_field_id(owner: &Name, field_name: &Name) -> Id {
-        Id::from_name(&Self::local_field_name(owner, field_name))
     }
 
     fn local_field_qualified(owner: &Name, field_name: &Name) -> QualifiedName {
@@ -1193,6 +1196,8 @@ impl<'a> Parser<'a> {
         self.expect_symbol("{")?;
         let local_const_len = self.local_consts.len();
         let local_axiom_len = self.local_axioms.len();
+        let local_id = Id::fresh_with_name(local_name.clone());
+        let mut field_ids: Vec<(Name, Id)> = vec![];
         let mut fields = vec![];
         while self.expect_symbol_opt("}").is_none() {
             let keyword = self.keyword()?;
@@ -1200,25 +1205,34 @@ impl<'a> Parser<'a> {
                 "def" => {
                     let field_name = self.name()?;
                     let field_params = self.typed_parameters()?;
-                    for (field_param_name, _) in &field_params {
-                        self.locals.push(field_param_name.clone());
-                    }
+                    let field_param_start = self.locals.len();
+                    let field_params = field_params
+                        .into_iter()
+                        .map(|(field_param_name, field_param_ty)| Local {
+                            id: {
+                                let id = Id::fresh_with_name(field_param_name.clone());
+                                self.locals.push(LocalBinding {
+                                    name: field_param_name,
+                                    id,
+                                });
+                                id
+                            },
+                            ty: field_param_ty,
+                        })
+                        .collect::<Vec<_>>();
                     self.expect_symbol(":")?;
                     let mut field_ty = self.ty()?;
                     self.expect_symbol(":=")?;
                     let mut field_target = self.term()?;
-                    self.locals.truncate(self.locals.len() - field_params.len());
-                    for (field_param_name, field_param_ty) in field_params.into_iter().rev() {
-                        field_ty = field_ty.arrow([field_param_ty.clone()]);
-                        field_target = field_target.abs(&[Local {
-                            id: Id::from_name(&field_param_name),
-                            ty: field_param_ty,
-                        }]);
+                    self.locals.truncate(field_param_start);
+                    for field_param in field_params.into_iter().rev() {
+                        field_ty = field_ty.arrow([field_param.ty.clone()]);
+                        field_target = field_target.abs(&[field_param]);
                     }
-                    self.push_local_const(
-                        QualifiedName::from_name(field_name.clone()),
-                        Self::local_field_id(&local_name, &field_name),
-                    );
+                    let field_id =
+                        Id::fresh_with_name(Self::local_field_name(&local_name, &field_name));
+                    field_ids.push((field_name.clone(), field_id));
+                    self.push_local_const(QualifiedName::from_name(field_name.clone()), field_id);
                     fields.push(InstanceField::Def(InstanceDef {
                         name: field_name,
                         ty: field_ty,
@@ -1228,29 +1242,37 @@ impl<'a> Parser<'a> {
                 "lemma" => {
                     let field_name = self.name()?;
                     let field_params = self.typed_parameters()?;
-                    for (field_param_name, _) in &field_params {
-                        self.locals.push(field_param_name.clone());
-                    }
+                    let field_param_start = self.locals.len();
+                    let field_params = field_params
+                        .into_iter()
+                        .map(|(field_param_name, field_param_ty)| Local {
+                            id: {
+                                let id = Id::fresh_with_name(field_param_name.clone());
+                                self.locals.push(LocalBinding {
+                                    name: field_param_name,
+                                    id,
+                                });
+                                id
+                            },
+                            ty: field_param_ty,
+                        })
+                        .collect::<Vec<_>>();
                     self.expect_symbol(":")?;
                     let mut field_target = self.term()?;
                     self.expect_symbol(":=")?;
                     let mut expr = self.expr()?;
-                    self.locals.truncate(self.locals.len() - field_params.len());
-                    let field_params = field_params
-                        .into_iter()
-                        .map(|(field_param_name, field_param_ty)| Local {
-                            id: Id::from_name(&field_param_name),
-                            ty: field_param_ty,
-                        })
-                        .collect::<Vec<_>>();
+                    self.locals.truncate(field_param_start);
                     field_target = generalize(&field_target, &field_params);
                     for field_param in field_params.into_iter().rev() {
                         expr = mk_expr_take(field_param.id, field_param.ty, expr);
                     }
                     let holes = self.holes.drain(..).collect();
+                    let field_id =
+                        Id::fresh_with_name(Self::local_field_name(&local_name, &field_name));
+                    field_ids.push((field_name.clone(), field_id));
                     self.push_local_axiom(
                         QualifiedName::from_name(field_name.clone()),
-                        Self::local_field_id(&local_name, &field_name),
+                        field_id,
                         field_target.clone(),
                     );
                     fields.push(InstanceField::Lemma(InstanceLemma {
@@ -1326,15 +1348,23 @@ impl<'a> Parser<'a> {
 
         let body_local_const_len = self.local_consts.len();
         let body_local_axiom_len = self.local_axioms.len();
-        self.locals.push(local_name.clone());
+        self.locals.push(LocalBinding {
+            name: local_name.clone(),
+            id: local_id,
+        });
         for field in &fields {
             match field {
                 InstanceField::Def(InstanceDef {
                     name: field_name, ..
                 }) => {
+                    let field_id = field_ids
+                        .iter()
+                        .find(|(name, _)| name == field_name)
+                        .map(|(_, id)| *id)
+                        .expect("field id exists");
                     self.push_local_const(
                         Self::local_field_qualified(&local_name, field_name),
-                        Self::local_field_id(&local_name, field_name),
+                        field_id,
                     );
                 }
                 InstanceField::Lemma(InstanceLemma {
@@ -1342,9 +1372,14 @@ impl<'a> Parser<'a> {
                     target,
                     ..
                 }) => {
+                    let field_id = field_ids
+                        .iter()
+                        .find(|(name, _)| name == field_name)
+                        .map(|(_, id)| *id)
+                        .expect("field id exists");
                     self.push_local_axiom(
                         Self::local_field_qualified(&local_name, field_name),
-                        Self::local_field_id(&local_name, field_name),
+                        field_id,
                         target.clone(),
                     );
                 }
@@ -1380,13 +1415,17 @@ impl<'a> Parser<'a> {
             else {
                 continue;
             };
-            let field_id = Self::local_field_id(&local_name, field_name);
+            let field_id = field_ids
+                .iter()
+                .find(|(name, _)| name == field_name)
+                .map(|(_, id)| *id)
+                .expect("field id exists");
             let mut rhs = mk_const(
                 structure_name.extend(field_name.clone()),
                 target_ty.args().into_iter().cloned().collect(),
                 vec![],
             );
-            rhs = rhs.apply([mk_local(Id::from_name(&local_name))]);
+            rhs = rhs.apply([mk_local(local_id)]);
             let mut char_term = mk_const(
                 QualifiedName::from_name(Name::from_str("eq")),
                 vec![ty.subst(&type_subst)],
@@ -1427,7 +1466,11 @@ impl<'a> Parser<'a> {
             else {
                 continue;
             };
-            let field_id = Self::local_field_id(&local_name, field_name);
+            let field_id = field_ids
+                .iter()
+                .find(|(name, _)| name == field_name)
+                .map(|(_, id)| *id)
+                .expect("field id exists");
             let mut rhs = mk_const(
                 structure_name.extend(field_name.clone()),
                 target_ty.args().into_iter().cloned().collect(),
@@ -1474,10 +1517,12 @@ impl<'a> Parser<'a> {
             else {
                 continue;
             };
-            abs_expr = mk_expr_inst(
-                abs_expr,
-                mk_local(Self::local_field_id(&local_name, field_name)),
-            );
+            let field_id = field_ids
+                .iter()
+                .find(|(name, _)| name == field_name)
+                .map(|(_, id)| *id)
+                .expect("field id exists");
+            abs_expr = mk_expr_inst(abs_expr, mk_local(field_id));
         }
         for structure_field in &cmd_structure.fields {
             let StructureField::Axiom(StructureAxiom {
@@ -1486,10 +1531,12 @@ impl<'a> Parser<'a> {
             else {
                 continue;
             };
-            abs_expr = mk_expr_app(
-                abs_expr,
-                mk_expr_local(Self::local_field_id(&local_name, field_name)),
-            );
+            let field_id = field_ids
+                .iter()
+                .find(|(name, _)| name == field_name)
+                .map(|(_, id)| *id)
+                .expect("field id exists");
+            abs_expr = mk_expr_app(abs_expr, mk_expr_local(field_id));
         }
 
         let mut exists_expr = mk_expr_const(
@@ -1500,14 +1547,7 @@ impl<'a> Parser<'a> {
         exists_expr = mk_expr_inst(exists_expr, abs_char);
         let witness = mk_expr_app(exists_expr, abs_expr);
 
-        let mut expr = self.mk_obtain(
-            local_name.clone(),
-            target_ty,
-            char_prop,
-            None,
-            witness,
-            body,
-        );
+        let mut expr = self.mk_obtain(local_id, target_ty, char_prop, None, witness, body);
         for field in fields.into_iter().rev() {
             expr = match field {
                 InstanceField::Def(InstanceDef {
@@ -1515,7 +1555,11 @@ impl<'a> Parser<'a> {
                     ty,
                     target,
                 }) => mk_expr_let_term(
-                    Self::local_field_name(&local_name, &field_name),
+                    field_ids
+                        .iter()
+                        .find(|(name, _)| name == &field_name)
+                        .map(|(_, id)| *id)
+                        .expect("field id exists"),
                     Some(ty),
                     target,
                     expr,
@@ -1527,7 +1571,13 @@ impl<'a> Parser<'a> {
                     ..
                 }) => Self::mk_have(
                     target,
-                    Some(Self::local_field_id(&local_name, &field_name)),
+                    Some(
+                        field_ids
+                            .iter()
+                            .find(|(name, _)| name == &field_name)
+                            .map(|(_, id)| *id)
+                            .expect("field id exists"),
+                    ),
                     proof,
                     expr,
                 ),
@@ -1564,118 +1614,150 @@ impl<'a> Parser<'a> {
         self.expect_symbol("{")?;
         let mut fields = vec![];
         let mut num_consts = 0;
+        let mut bare_field_subst = vec![];
         while self.expect_symbol_opt("}").is_none() {
             let keyword = self.keyword()?;
             match keyword.as_str() {
                 "const" => {
                     let field_name = self.name()?;
+                    if fields.iter().any(|field| match field {
+                        LocalStructureField::Const(field) => {
+                            field.field_id.name().as_ref() == Some(&field_name)
+                        }
+                        LocalStructureField::Axiom(field) => {
+                            field.field_id.name().as_ref() == Some(&field_name)
+                        }
+                    }) {
+                        return Self::fail(keyword, "duplicate field");
+                    }
                     self.expect_symbol(":")?;
                     let field_ty = self.ty()?;
-                    self.locals.push(field_name.clone());
+                    let bare_id = Id::fresh_with_name(field_name.clone());
+                    self.locals.push(LocalBinding {
+                        name: field_name.clone(),
+                        id: bare_id,
+                    });
+                    let id = Id::fresh_with_name(Self::local_field_name(&name, &field_name));
+                    bare_field_subst.push((bare_id, mk_local(id)));
                     fields.push(LocalStructureField::Const(LocalStructureConst {
-                        name: field_name,
+                        field_id: bare_id,
+                        id,
                         ty: field_ty,
                     }));
                     num_consts += 1;
                 }
                 "axiom" => {
                     let field_name = self.name()?;
-                    let params = self.typed_parameters()?;
-                    for (param_name, _) in &params {
-                        self.locals.push(param_name.clone());
+                    if fields.iter().any(|field| match field {
+                        LocalStructureField::Const(field) => {
+                            field.field_id.name().as_ref() == Some(&field_name)
+                        }
+                        LocalStructureField::Axiom(field) => {
+                            field.field_id.name().as_ref() == Some(&field_name)
+                        }
+                    }) {
+                        return Self::fail(keyword, "duplicate field");
                     }
-                    self.expect_symbol(":")?;
-                    let mut target = self.term()?;
-                    self.locals.truncate(self.locals.len() - params.len());
+                    let params = self.typed_parameters()?;
+                    let params_start = self.locals.len();
                     let params = params
                         .into_iter()
                         .map(|(param_name, param_ty)| Local {
-                            id: Id::from_name(&param_name),
+                            id: {
+                                let id = Id::fresh_with_name(param_name.clone());
+                                self.locals.push(LocalBinding {
+                                    name: param_name,
+                                    id,
+                                });
+                                id
+                            },
                             ty: param_ty,
                         })
                         .collect::<Vec<_>>();
+                    self.expect_symbol(":")?;
+                    let mut target = self.term()?;
+                    self.locals.truncate(params_start);
                     target = generalize(&target, &params);
+                    target = target.subst(&bare_field_subst);
                     fields.push(LocalStructureField::Axiom(LocalStructureAxiom {
-                        name: field_name,
+                        field_id: Id::fresh_with_name(field_name.clone()),
+                        id: Id::fresh_with_name(Self::local_field_name(&name, &field_name)),
                         target,
                     }))
                 }
-                _ => {
-                    return Self::fail(keyword, "expected const or axiom");
-                }
+                _ => return Self::fail(keyword, "expected const or axiom"),
             }
         }
         self.locals.truncate(self.locals.len() - num_consts);
         self.expect_symbol(",")?;
 
-        let structure_id = Id::from_name(&name);
+        let structure_id = Id::fresh_with_name(name.clone());
+        self.local_types.push(LocalBinding {
+            name: name.clone(),
+            id: structure_id,
+        });
         let this_ty = mk_type_local(structure_id);
         let this = Local {
             id: Id::fresh_with_name(Name::from_str("this")),
             ty: this_ty.clone(),
         };
-
-        let mut local_consts: Vec<LocalConst> = vec![];
-        let mut local_axioms: Vec<(QualifiedName, LocalAxiom)> = vec![];
-        let structure_name = QualifiedName::from_name(name.clone());
+        let structure_name = QualifiedName::from_name(name);
+        let mut local_consts = vec![];
+        let mut local_axioms = vec![];
         let mut subst = vec![];
         for field in &fields {
             match field {
                 LocalStructureField::Const(LocalStructureConst {
-                    name: field_name,
+                    field_id,
+                    id,
                     ty: _,
+                    ..
                 }) => {
-                    let fullname = structure_name.extend(field_name.clone());
-                    let local_name = Name::from_str(&fullname.to_string());
-                    let id = Id::from_name(&local_name);
+                    let fullname = structure_name.extend(
+                        field_id
+                            .name()
+                            .expect("local structure field keeps written name"),
+                    );
                     local_consts.push(LocalConst {
-                        name: fullname.clone(),
-                        id,
+                        name: fullname,
+                        id: *id,
                     });
-                    let mut target = mk_local(id);
+                    let mut target = mk_local(*id);
                     target = target.apply([mk_local(this.id)]);
-                    subst.push((Id::from_name(field_name), target));
+                    subst.push((*id, target));
                 }
                 LocalStructureField::Axiom(LocalStructureAxiom {
-                    name: field_name,
+                    field_id,
+                    id,
                     target,
                 }) => {
-                    let fullname = structure_name.extend(field_name.clone());
-                    let local_name = Name::from_str(&fullname.to_string());
+                    let fullname = structure_name.extend(
+                        field_id
+                            .name()
+                            .expect("local structure axiom keeps written name"),
+                    );
                     let mut target = target.clone();
                     target = target.subst(&subst);
                     target = generalize(&target, slice::from_ref(&this));
-                    local_axioms.push((
-                        fullname,
-                        LocalAxiom {
-                            id: Id::from_name(&local_name),
-                            target,
-                        },
-                    ));
+                    local_axioms.push((fullname, LocalAxiom { id: *id, target }));
                 }
             }
         }
 
         let abs_name = structure_name.extend(Name::from_str("abs"));
+        let abs_id = Id::fresh_with_name(Name::from_str(&abs_name.to_string()));
         let mut params = vec![];
         let mut guards = vec![];
         let mut chars = vec![];
         let mut abs_subst = vec![];
         for field in &fields {
             match field {
-                LocalStructureField::Const(LocalStructureConst {
-                    name: field_name,
-                    ty,
-                }) => {
+                LocalStructureField::Const(LocalStructureConst { field_id, id, ty }) => {
                     let param = Local {
-                        id: Id::fresh_with_name(field_name.clone()),
+                        id: *field_id,
                         ty: ty.clone(),
                     };
-
-                    let fullname = structure_name.extend(field_name.clone());
-                    let local_name = Name::from_str(&fullname.to_string());
-                    let id = Id::from_name(&local_name);
-                    let mut rhs = mk_local(id);
+                    let mut rhs = mk_local(*id);
                     rhs = rhs.apply([mk_local(this.id)]);
 
                     let mut char = mk_const(
@@ -1685,8 +1767,7 @@ impl<'a> Parser<'a> {
                     );
                     char = char.apply([mk_local(param.id), rhs]);
                     chars.push(char);
-
-                    abs_subst.push((Id::from_name(field_name), mk_local(param.id)));
+                    abs_subst.push((*id, mk_local(param.id)));
                     params.push(param);
                 }
                 LocalStructureField::Axiom(LocalStructureAxiom { target, .. }) => {
@@ -1697,8 +1778,6 @@ impl<'a> Parser<'a> {
             }
         }
 
-        // These are visible while parsing `body` (e.g. `@foo.abs`),
-        // and the target is needed to count implicit instantiations.
         let mut abs = mk_const(
             QualifiedName::from_name(Name::from_str("uexists")),
             vec![this_ty.clone()],
@@ -1729,18 +1808,19 @@ impl<'a> Parser<'a> {
         abs = guard(&abs, guards);
         abs = generalize(&abs, &params);
         local_axioms.push((
-            abs_name.clone(),
+            abs_name,
             LocalAxiom {
-                id: Id::from_name(&Name::from_str(&abs_name.to_string())),
+                id: abs_id,
                 target: abs,
             },
         ));
 
         let local_const_len = self.local_consts.len();
         let local_axiom_len = self.local_axioms.len();
+        // These are visible while parsing `body` (e.g. `@foo.abs`),
+        // and the target is needed to count implicit instantiations.
         self.local_consts.extend(local_consts);
         self.local_axioms.extend(local_axioms);
-        self.local_types.push(name.clone());
         let body = match self.expr() {
             Ok(body) => body,
             Err(err) => {
@@ -1753,7 +1833,7 @@ impl<'a> Parser<'a> {
         self.local_axioms.truncate(local_axiom_len);
         self.local_consts.truncate(local_const_len);
         self.local_types.pop();
-        Ok(mk_expr_let_structure(name, fields, body))
+        Ok(mk_expr_let_structure(structure_id, abs_id, fields, body))
     }
 
     fn let_term_expr(&mut self, _let_token: Token) -> Result<Expr, ParseError> {
@@ -1768,7 +1848,8 @@ impl<'a> Parser<'a> {
         self.expect_symbol(",")?;
 
         let local_const_len = self.local_consts.len();
-        self.push_local_const(QualifiedName::from_name(name.clone()), Id::from_name(&name));
+        let id = Id::fresh_with_name(name.clone());
+        self.push_local_const(QualifiedName::from_name(name.clone()), id);
         let body = match self.expr() {
             Ok(body) => body,
             Err(err) => {
@@ -1777,7 +1858,7 @@ impl<'a> Parser<'a> {
             }
         };
         self.local_consts.truncate(local_const_len);
-        Ok(mk_expr_let_term(name, ty, value, body))
+        Ok(mk_expr_let_term(id, ty, value, body))
     }
 
     fn subexpr(&mut self, rbp: usize) -> Result<Expr, ParseError> {
@@ -1820,10 +1901,13 @@ impl<'a> Parser<'a> {
                     let alias = self.alias_opt()?;
                     self.expect_symbol(",")?;
                     let local_axioms_len = self.local_axioms.len();
+                    let alias_id = alias
+                        .as_ref()
+                        .map(|alias_name| Id::fresh_with_name(alias_name.clone()));
                     if let Some(alias_name) = &alias {
                         self.push_local_axiom(
                             QualifiedName::from_name(alias_name.clone()),
-                            Id::from_name(alias_name),
+                            alias_id.expect("alias id exists"),
                             m.clone(),
                         );
                     }
@@ -1835,7 +1919,7 @@ impl<'a> Parser<'a> {
                         }
                     };
                     self.local_axioms.truncate(local_axioms_len);
-                    mk_expr_assume(m, alias.as_ref().map(Id::from_name), expr)
+                    mk_expr_assume(m, alias_id, expr)
                 }
                 "take" => {
                     self.expect_symbol("(")?;
@@ -1844,10 +1928,14 @@ impl<'a> Parser<'a> {
                     let ty = self.ty()?;
                     self.expect_symbol(")")?;
                     self.expect_symbol(",")?;
-                    self.locals.push(local_name.clone());
+                    let local_id = Id::fresh_with_name(local_name.clone());
+                    self.locals.push(LocalBinding {
+                        name: local_name,
+                        id: local_id,
+                    });
                     let e = self.expr()?;
                     self.locals.pop();
-                    mk_expr_take(Id::from_name(&local_name), ty, e)
+                    mk_expr_take(local_id, ty, e)
                 }
                 "change" => {
                     let m = self.term()?;
@@ -1862,10 +1950,13 @@ impl<'a> Parser<'a> {
                     let e1 = self.expr()?;
                     self.expect_symbol(",")?;
                     let local_axioms_len = self.local_axioms.len();
+                    let alias_id = alias
+                        .as_ref()
+                        .map(|alias_name| Id::fresh_with_name(alias_name.clone()));
                     if let Some(alias_name) = &alias {
                         self.push_local_axiom(
                             QualifiedName::from_name(alias_name.clone()),
-                            Id::from_name(alias_name),
+                            alias_id.expect("alias id exists"),
                             m.clone(),
                         );
                     }
@@ -1877,7 +1968,7 @@ impl<'a> Parser<'a> {
                         }
                     };
                     self.local_axioms.truncate(local_axioms_len);
-                    Self::mk_have(m, alias.as_ref().map(Id::from_name), e1, e2)
+                    Self::mk_have(m, alias_id, e1, e2)
                 }
                 "obtain" => {
                     if self
@@ -1893,19 +1984,29 @@ impl<'a> Parser<'a> {
                     let ty = self.ty()?;
                     self.expect_symbol(")")?;
                     self.expect_symbol(",")?;
-                    self.locals.push(local_name.clone());
+                    let local_id = Id::fresh_with_name(local_name.clone());
+                    self.locals.push(LocalBinding {
+                        name: local_name.clone(),
+                        id: local_id,
+                    });
                     let p = self.term()?;
                     self.locals.pop();
                     let alias = self.alias_opt()?;
                     self.expect_symbol(":=")?;
                     let e1 = self.expr()?;
                     self.expect_symbol(",")?;
-                    self.locals.push(local_name.clone());
+                    self.locals.push(LocalBinding {
+                        name: local_name.clone(),
+                        id: local_id,
+                    });
                     let local_axioms_len = self.local_axioms.len();
+                    let alias_id = alias
+                        .as_ref()
+                        .map(|alias_name| Id::fresh_with_name(alias_name.clone()));
                     if let Some(alias_name) = &alias {
                         self.push_local_axiom(
                             QualifiedName::from_name(alias_name.clone()),
-                            Id::from_name(alias_name),
+                            alias_id.expect("alias id exists"),
                             p.clone(),
                         );
                     }
@@ -1919,7 +2020,7 @@ impl<'a> Parser<'a> {
                     };
                     self.local_axioms.truncate(local_axioms_len);
                     self.locals.pop();
-                    self.mk_obtain(local_name, ty, p, alias, e1, e2)
+                    self.mk_obtain(local_id, ty, p, alias_id, e1, e2)
                 }
                 "calc" => {
                     // calc m₁ = m₂ := e₁
@@ -2054,7 +2155,7 @@ impl<'a> Parser<'a> {
                 loop {
                     let token = self.ident()?;
                     let tv = Name::from_str(token.as_str());
-                    if local_types.iter().any(|v| v == &tv) {
+                    if local_types.iter().any(|name: &Name| name == &tv) {
                         return Self::fail(token, "duplicate type variable")?;
                     }
                     local_types.push(tv);
@@ -2445,32 +2546,46 @@ impl<'a> Parser<'a> {
     fn def_cmd(&mut self, _token: Token) -> Result<CmdDef, ParseError> {
         let name = self.global_declaration_name(None)?;
         let local_types = self.local_type_parameters()?;
-        for ty in &local_types {
-            self.local_types.push(ty.clone());
-        }
+        let local_types = local_types
+            .into_iter()
+            .map(|name| {
+                let id = Id::fresh_with_name(name.clone());
+                self.local_types.push(LocalBinding { name, id });
+                id
+            })
+            .collect::<Vec<_>>();
         let local_classes = self.local_class_parameters()?;
         let params = self.typed_parameters()?;
-        for (param_name, _) in &params {
-            self.locals.push(param_name.clone());
-        }
+        let params_start = self.locals.len();
+        let params = params
+            .into_iter()
+            .map(|(param_name, param_ty)| Local {
+                id: {
+                    let id = Id::fresh_with_name(param_name.clone());
+                    self.locals.push(LocalBinding {
+                        name: param_name,
+                        id,
+                    });
+                    id
+                },
+                ty: param_ty,
+            })
+            .collect::<Vec<_>>();
         self.expect_symbol(":")?;
         let mut t = self.ty()?;
         self.expect_symbol(":=")?;
         let mut m = self.term()?;
         // Parsing finished.
-        self.locals.truncate(self.locals.len() - params.len());
+        self.locals.truncate(params_start);
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
-        for (param_name, param_ty) in params.into_iter().rev() {
-            t = t.arrow([param_ty.clone()]);
-            m = m.abs(&[Local {
-                id: Id::from_name(&param_name),
-                ty: param_ty,
-            }]);
+        for param in params.into_iter().rev() {
+            t = t.arrow([param.ty.clone()]);
+            m = m.abs(&[param]);
         }
         Ok(CmdDef {
             name,
-            local_types: local_types.iter().map(Id::from_name).collect(),
+            local_types,
             local_classes,
             ty: t,
             target: m,
@@ -2480,31 +2595,41 @@ impl<'a> Parser<'a> {
     fn axiom_cmd(&mut self, _token: Token) -> Result<CmdAxiom, ParseError> {
         let name = self.global_declaration_name(None)?;
         let local_types = self.local_type_parameters()?;
-        for ty in &local_types {
-            self.local_types.push(ty.clone());
-        }
+        let local_types = local_types
+            .into_iter()
+            .map(|name| {
+                let id = Id::fresh_with_name(name.clone());
+                self.local_types.push(LocalBinding { name, id });
+                id
+            })
+            .collect::<Vec<_>>();
         let local_classes = self.local_class_parameters()?;
         let params = self.typed_parameters()?;
-        for (param_name, _) in &params {
-            self.locals.push(param_name.clone());
-        }
-        self.expect_symbol(":")?;
-        let mut target = self.term()?;
-        // Parsing finished.
-        self.locals.truncate(self.locals.len() - params.len());
-        self.local_types
-            .truncate(self.local_types.len() - local_types.len());
+        let params_start = self.locals.len();
         let params = params
             .into_iter()
             .map(|(param_name, param_ty)| Local {
-                id: Id::from_name(&param_name),
+                id: {
+                    let id = Id::fresh_with_name(param_name.clone());
+                    self.locals.push(LocalBinding {
+                        name: param_name,
+                        id,
+                    });
+                    id
+                },
                 ty: param_ty,
             })
             .collect::<Vec<_>>();
+        self.expect_symbol(":")?;
+        let mut target = self.term()?;
+        // Parsing finished.
+        self.locals.truncate(params_start);
+        self.local_types
+            .truncate(self.local_types.len() - local_types.len());
         target = generalize(&target, &params);
         Ok(CmdAxiom {
             name,
-            local_types: local_types.iter().map(Id::from_name).collect(),
+            local_types,
             local_classes,
             target,
         })
@@ -2513,29 +2638,39 @@ impl<'a> Parser<'a> {
     fn lemma_cmd(&mut self, _token: Token) -> Result<CmdLemma, ParseError> {
         let name = self.global_declaration_name(None)?;
         let local_types = self.local_type_parameters()?;
-        for ty in &local_types {
-            self.local_types.push(ty.clone());
-        }
+        let local_types = local_types
+            .into_iter()
+            .map(|name| {
+                let id = Id::fresh_with_name(name.clone());
+                self.local_types.push(LocalBinding { name, id });
+                id
+            })
+            .collect::<Vec<_>>();
         let local_classes = self.local_class_parameters()?;
         let params = self.typed_parameters()?;
-        for (param_name, _) in &params {
-            self.locals.push(param_name.clone());
-        }
+        let params_start = self.locals.len();
+        let params = params
+            .into_iter()
+            .map(|(param_name, param_ty)| Local {
+                id: {
+                    let id = Id::fresh_with_name(param_name.clone());
+                    self.locals.push(LocalBinding {
+                        name: param_name,
+                        id,
+                    });
+                    id
+                },
+                ty: param_ty,
+            })
+            .collect::<Vec<_>>();
         self.expect_symbol(":")?;
         let mut p = self.term()?;
         self.expect_symbol(":=")?;
         let mut e = self.expr()?;
         // Parsing finished.
-        self.locals.truncate(self.locals.len() - params.len());
+        self.locals.truncate(params_start);
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
-        let params = params
-            .into_iter()
-            .map(|(param_name, param_ty)| Local {
-                id: Id::from_name(&param_name),
-                ty: param_ty,
-            })
-            .collect::<Vec<_>>();
         p = generalize(&p, &params);
         for param in params.into_iter().rev() {
             e = mk_expr_take(param.id, param.ty, e);
@@ -2543,7 +2678,7 @@ impl<'a> Parser<'a> {
         let holes = self.holes.drain(..).collect();
         Ok(CmdLemma {
             name,
-            local_types: local_types.iter().map(Id::from_name).collect(),
+            local_types,
             local_classes,
             target: p,
             holes,
@@ -2554,9 +2689,14 @@ impl<'a> Parser<'a> {
     fn const_cmd(&mut self, _token: Token) -> Result<CmdConst, ParseError> {
         let name = self.global_declaration_name(None)?;
         let local_types = self.local_type_parameters()?;
-        for ty in &local_types {
-            self.local_types.push(ty.clone());
-        }
+        let local_types = local_types
+            .into_iter()
+            .map(|name| {
+                let id = Id::fresh_with_name(name.clone());
+                self.local_types.push(LocalBinding { name, id });
+                id
+            })
+            .collect::<Vec<_>>();
         let local_classes = self.local_class_parameters()?;
         self.expect_symbol(":")?;
         let t = self.ty()?;
@@ -2565,7 +2705,7 @@ impl<'a> Parser<'a> {
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdConst {
             name,
-            local_types: local_types.iter().map(Id::from_name).collect(),
+            local_types,
             local_classes,
             ty: t,
         })
@@ -2583,11 +2723,21 @@ impl<'a> Parser<'a> {
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
             let local_type = Name::from_str(token.as_str());
-            if local_types.iter().any(|name| name == &local_type) {
+            if local_types
+                .iter()
+                .any(|binding: &LocalBinding| binding.name == local_type)
+            {
                 return Self::fail(token, "duplicate type variable");
             }
-            local_types.push(local_type.clone());
-            self.local_types.push(local_type);
+            let id = Id::fresh_with_name(local_type.clone());
+            self.local_types.push(LocalBinding {
+                name: local_type.clone(),
+                id,
+            });
+            local_types.push(LocalBinding {
+                name: local_type,
+                id,
+            });
         }
         self.expect_symbol(":=")?;
         let target = self.ty()?;
@@ -2595,7 +2745,7 @@ impl<'a> Parser<'a> {
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdTypeDef {
             name,
-            local_types: local_types.iter().map(Id::from_name).collect(),
+            local_types: local_types.iter().map(|binding| binding.id).collect(),
             target,
         })
     }
@@ -2616,11 +2766,18 @@ impl<'a> Parser<'a> {
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
             let tv = Name::from_str(token.as_str());
-            if local_types.iter().any(|v| v == &tv) {
+            if local_types
+                .iter()
+                .any(|binding: &LocalBinding| binding.name == tv)
+            {
                 return Self::fail(token, "duplicate type variable")?;
             }
-            local_types.push(tv.clone());
-            self.local_types.push(tv);
+            let id = Id::fresh_with_name(tv.clone());
+            self.local_types.push(LocalBinding {
+                name: tv.clone(),
+                id,
+            });
+            local_types.push(LocalBinding { name: tv, id });
         }
         let mut ctors: Vec<DataConstructor> = vec![];
         while let Some(_token) = self.expect_symbol_opt("|") {
@@ -2638,14 +2795,14 @@ impl<'a> Parser<'a> {
                 ty,
             })
         }
-        // Parsing finished. We can now safaly tear off.
+        // Parsing finished. We can now safely tear off.
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
         self.type_self_ref = None;
         Ok(CmdTypeInductive {
             name,
             self_id,
-            local_types: local_types.iter().map(Id::from_name).collect(),
+            local_types: local_types.iter().map(|binding| binding.id).collect(),
             ctors,
         })
     }
@@ -2663,13 +2820,30 @@ impl<'a> Parser<'a> {
         );
         self.self_ref = Some((literal_name, self_id));
         let local_types = self.local_type_parameters()?;
-        for ty in &local_types {
-            self.local_types.push(ty.clone());
-        }
+        let local_types = local_types
+            .into_iter()
+            .map(|name| {
+                let id = Id::fresh_with_name(name.clone());
+                self.local_types.push(LocalBinding { name, id });
+                id
+            })
+            .collect::<Vec<_>>();
         let params = self.typed_parameters()?;
-        for (param_name, _) in &params {
-            self.locals.push(param_name.clone());
-        }
+        let params_start = self.locals.len();
+        let params = params
+            .into_iter()
+            .map(|(param_name, param_ty)| Local {
+                id: {
+                    let id = Id::fresh_with_name(param_name.clone());
+                    self.locals.push(LocalBinding {
+                        name: param_name,
+                        id,
+                    });
+                    id
+                },
+                ty: param_ty,
+            })
+            .collect::<Vec<_>>();
         self.expect_symbol(":")?;
         let target_ty = self.ty()?;
         let mut ctors: Vec<Constructor> = vec![];
@@ -2682,19 +2856,24 @@ impl<'a> Parser<'a> {
                 }
             }
             let ctor_params = self.typed_parameters()?;
-            for (ctor_param_name, _) in &ctor_params {
-                self.locals.push(ctor_param_name.clone());
-            }
-            self.expect_symbol(":")?;
-            let mut target = self.term()?;
-            self.locals.truncate(self.locals.len() - ctor_params.len());
+            let ctor_params_start = self.locals.len();
             let ctor_params = ctor_params
                 .into_iter()
                 .map(|(ctor_param_name, ctor_param_ty)| Local {
-                    id: Id::from_name(&ctor_param_name),
+                    id: {
+                        let id = Id::fresh_with_name(ctor_param_name.clone());
+                        self.locals.push(LocalBinding {
+                            name: ctor_param_name,
+                            id,
+                        });
+                        id
+                    },
                     ty: ctor_param_ty,
                 })
                 .collect::<Vec<_>>();
+            self.expect_symbol(":")?;
+            let mut target = self.term()?;
+            self.locals.truncate(ctor_params_start);
             target = generalize(&target, &ctor_params);
             ctors.push(Constructor {
                 name: ctor_name,
@@ -2702,22 +2881,16 @@ impl<'a> Parser<'a> {
             })
         }
         // Parsing finished.
-        self.locals.truncate(self.locals.len() - params.len());
+        self.locals.truncate(params_start);
         self.self_ref = None;
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdInductive {
             name,
             self_id,
-            local_types: local_types.iter().map(Id::from_name).collect(),
+            local_types,
             ctors,
-            params: params
-                .into_iter()
-                .map(|(param_name, param_ty)| Local {
-                    id: Id::from_name(&param_name),
-                    ty: param_ty,
-                })
-                .collect(),
+            params,
             target_ty,
         })
     }
@@ -2727,11 +2900,18 @@ impl<'a> Parser<'a> {
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
             let tv = Name::from_str(token.as_str());
-            if local_types.iter().any(|v| v == &tv) {
+            if local_types
+                .iter()
+                .any(|binding: &LocalBinding| binding.name == tv)
+            {
                 return Self::fail(token, "duplicate type variable")?;
             }
-            local_types.push(tv.clone());
-            self.local_types.push(tv);
+            let id = Id::fresh_with_name(tv.clone());
+            self.local_types.push(LocalBinding {
+                name: tv.clone(),
+                id,
+            });
+            local_types.push(LocalBinding { name: tv, id });
         }
         self.expect_symbol(":=")?;
         self.expect_symbol("{")?;
@@ -2744,29 +2924,37 @@ impl<'a> Parser<'a> {
                     let field_name = self.name()?;
                     self.expect_symbol(":")?;
                     let field_ty = self.ty()?;
-                    self.locals.push(field_name.clone());
                     fields.push(StructureField::Const(StructureConst {
-                        name: field_name,
+                        name: field_name.clone(),
                         ty: field_ty,
                     }));
+                    self.locals.push(LocalBinding {
+                        name: field_name.clone(),
+                        id: Id::from_name(&field_name),
+                    });
                     num_consts += 1;
                 }
                 "axiom" => {
                     let field_name = self.name()?;
                     let params = self.typed_parameters()?;
-                    for (param_name, _) in &params {
-                        self.locals.push(param_name.clone());
-                    }
-                    self.expect_symbol(":")?;
-                    let mut target = self.term()?;
-                    self.locals.truncate(self.locals.len() - params.len());
+                    let params_start = self.locals.len();
                     let params = params
                         .into_iter()
                         .map(|(param_name, param_ty)| Local {
-                            id: Id::from_name(&param_name),
+                            id: {
+                                let id = Id::fresh_with_name(param_name.clone());
+                                self.locals.push(LocalBinding {
+                                    name: param_name,
+                                    id,
+                                });
+                                id
+                            },
                             ty: param_ty,
                         })
                         .collect::<Vec<_>>();
+                    self.expect_symbol(":")?;
+                    let mut target = self.term()?;
+                    self.locals.truncate(params_start);
                     target = generalize(&target, &params);
                     fields.push(StructureField::Axiom(StructureAxiom {
                         name: field_name,
@@ -2778,12 +2966,13 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+        // Parsing finished.
         self.locals.truncate(self.locals.len() - num_consts);
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdStructure {
             name,
-            local_types: local_types.iter().map(Id::from_name).collect(),
+            local_types: local_types.iter().map(|ty| ty.id).collect(),
             fields,
         })
     }
@@ -2791,14 +2980,31 @@ impl<'a> Parser<'a> {
     fn instance_cmd(&mut self, _token: Token) -> Result<CmdInstance, ParseError> {
         let name = self.global_declaration_name(None)?;
         let local_types = self.local_type_parameters()?;
-        for ty in &local_types {
-            self.local_types.push(ty.clone());
-        }
+        let local_types = local_types
+            .into_iter()
+            .map(|name| {
+                let id = Id::fresh_with_name(name.clone());
+                self.local_types.push(LocalBinding { name, id });
+                id
+            })
+            .collect::<Vec<_>>();
         let local_classes = self.local_class_parameters()?;
         let params = self.typed_parameters()?;
-        for (param_name, _) in &params {
-            self.locals.push(param_name.clone());
-        }
+        let params_start = self.locals.len();
+        let params = params
+            .into_iter()
+            .map(|(param_name, param_ty)| Local {
+                id: {
+                    let id = Id::fresh_with_name(param_name.clone());
+                    self.locals.push(LocalBinding {
+                        name: param_name,
+                        id,
+                    });
+                    id
+                },
+                ty: param_ty,
+            })
+            .collect::<Vec<_>>();
         self.expect_symbol(":")?;
         let target_ty = self.ty()?;
         let mut fields = vec![];
@@ -2811,48 +3017,66 @@ impl<'a> Parser<'a> {
             match keyword.as_str() {
                 "def" => {
                     let field_name = self.name()?;
-                    self.locals.push(field_name.clone());
                     let field_params = self.typed_parameters()?;
-                    for (field_param_name, _) in &field_params {
-                        self.locals.push(field_param_name.clone());
-                    }
+                    let field_params_start = self.locals.len();
+                    let field_params = field_params
+                        .into_iter()
+                        .map(|(field_param_name, field_param_ty)| Local {
+                            id: {
+                                let id = Id::fresh_with_name(field_param_name.clone());
+                                self.locals.push(LocalBinding {
+                                    name: field_param_name,
+                                    id,
+                                });
+                                id
+                            },
+                            ty: field_param_ty,
+                        })
+                        .collect::<Vec<_>>();
                     self.expect_symbol(":")?;
                     let mut field_ty = self.ty()?;
                     self.expect_symbol(":=")?;
                     let mut field_target = self.term()?;
-                    self.locals.truncate(self.locals.len() - field_params.len());
-                    for (field_param_name, field_param_ty) in field_params.into_iter().rev() {
-                        field_ty = field_ty.arrow([field_param_ty.clone()]);
-                        field_target = field_target.abs(&[Local {
-                            id: Id::from_name(&field_param_name),
-                            ty: field_param_ty,
-                        }]);
+                    self.locals.truncate(field_params_start);
+                    for field_param in field_params.into_iter().rev() {
+                        field_ty = field_ty.arrow([field_param.ty.clone()]);
+                        field_target = field_target.abs(&[field_param]);
                     }
                     fields.push(InstanceField::Def(InstanceDef {
-                        name: field_name,
+                        name: field_name.clone(),
                         ty: field_ty,
                         target: field_target,
                     }));
+                    self.locals.push(LocalBinding {
+                        name: field_name.clone(),
+                        id: Id::from_name(&field_name),
+                    });
                     num_defs += 1;
                 }
                 "lemma" => {
                     let field_name = self.name()?;
+                    let field_id = Id::from_name(&field_name);
                     let field_params = self.typed_parameters()?;
-                    for (field_param_name, _) in &field_params {
-                        self.locals.push(field_param_name.clone());
-                    }
+                    let field_params_start = self.locals.len();
+                    let field_params = field_params
+                        .into_iter()
+                        .map(|(field_param_name, field_param_ty)| Local {
+                            id: {
+                                let id = Id::fresh_with_name(field_param_name.clone());
+                                self.locals.push(LocalBinding {
+                                    name: field_param_name,
+                                    id,
+                                });
+                                id
+                            },
+                            ty: field_param_ty,
+                        })
+                        .collect::<Vec<_>>();
                     self.expect_symbol(":")?;
                     let mut field_target = self.term()?;
                     self.expect_symbol(":=")?;
                     let mut expr = self.expr()?;
-                    self.locals.truncate(self.locals.len() - field_params.len());
-                    let field_params = field_params
-                        .into_iter()
-                        .map(|(field_param_name, field_param_ty)| Local {
-                            id: Id::from_name(&field_param_name),
-                            ty: field_param_ty,
-                        })
-                        .collect::<Vec<_>>();
+                    self.locals.truncate(field_params_start);
                     field_target = generalize(&field_target, &field_params);
                     for field_param in field_params.into_iter().rev() {
                         expr = mk_expr_take(field_param.id, field_param.ty, expr);
@@ -2860,7 +3084,7 @@ impl<'a> Parser<'a> {
                     let holes = self.holes.drain(..).collect();
                     self.push_local_axiom(
                         QualifiedName::from_name(field_name.clone()),
-                        Id::from_name(&field_name),
+                        field_id,
                         field_target.clone(),
                     );
                     fields.push(InstanceField::Lemma(InstanceLemma {
@@ -2873,23 +3097,17 @@ impl<'a> Parser<'a> {
                 _ => Self::fail(keyword, "unknown command in instance")?,
             }
         }
-        // parsing finished.
+        // Parsing finished.
         self.locals.truncate(self.locals.len() - num_defs);
-        self.locals.truncate(self.locals.len() - params.len());
+        self.locals.truncate(params_start);
         self.local_axioms.truncate(local_axiom_len);
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdInstance {
             name,
-            local_types: local_types.iter().map(Id::from_name).collect(),
+            local_types,
             local_classes,
-            params: params
-                .into_iter()
-                .map(|(param_name, param_ty)| Local {
-                    id: Id::from_name(&param_name),
-                    ty: param_ty,
-                })
-                .collect(),
+            params,
             target_ty,
             fields,
         })
@@ -2900,11 +3118,18 @@ impl<'a> Parser<'a> {
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
             let tv = Name::from_str(token.as_str());
-            if local_types.iter().any(|v| v == &tv) {
+            if local_types
+                .iter()
+                .any(|binding: &LocalBinding| binding.name == tv)
+            {
                 return Self::fail(token, "duplicate type variable")?;
             }
-            local_types.push(tv.clone());
-            self.local_types.push(tv);
+            let id = Id::fresh_with_name(tv.clone());
+            self.local_types.push(LocalBinding {
+                name: tv.clone(),
+                id,
+            });
+            local_types.push(LocalBinding { name: tv, id });
         }
         self.expect_symbol(":=")?;
         self.expect_symbol("{")?;
@@ -2917,29 +3142,37 @@ impl<'a> Parser<'a> {
                     let field_name = self.name()?;
                     self.expect_symbol(":")?;
                     let field_ty = self.ty()?;
-                    self.locals.push(field_name.clone());
                     fields.push(ClassStructureField::Const(ClassStructureConst {
-                        name: field_name,
+                        name: field_name.clone(),
                         ty: field_ty,
                     }));
+                    self.locals.push(LocalBinding {
+                        name: field_name.clone(),
+                        id: Id::from_name(&field_name),
+                    });
                     num_consts += 1;
                 }
                 "axiom" => {
                     let field_name = self.name()?;
                     let params = self.typed_parameters()?;
-                    for (param_name, _) in &params {
-                        self.locals.push(param_name.clone());
-                    }
-                    self.expect_symbol(":")?;
-                    let mut target = self.term()?;
-                    self.locals.truncate(self.locals.len() - params.len());
+                    let params_start = self.locals.len();
                     let params = params
                         .into_iter()
                         .map(|(param_name, param_ty)| Local {
-                            id: Id::from_name(&param_name),
+                            id: {
+                                let id = Id::fresh_with_name(param_name.clone());
+                                self.locals.push(LocalBinding {
+                                    name: param_name,
+                                    id,
+                                });
+                                id
+                            },
                             ty: param_ty,
                         })
                         .collect::<Vec<_>>();
+                    self.expect_symbol(":")?;
+                    let mut target = self.term()?;
+                    self.locals.truncate(params_start);
                     target = generalize(&target, &params);
                     fields.push(ClassStructureField::Axiom(ClassStructureAxiom {
                         name: field_name,
@@ -2951,12 +3184,13 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+        // Parsing finished.
         self.locals.truncate(self.locals.len() - num_consts);
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdClassStructure {
             name,
-            local_types: local_types.iter().map(Id::from_name).collect(),
+            local_types: local_types.iter().map(|ty| ty.id).collect(),
             fields,
         })
     }
@@ -2964,9 +3198,14 @@ impl<'a> Parser<'a> {
     fn class_instance_cmd(&mut self, _token: Token) -> Result<CmdClassInstance, ParseError> {
         let name = self.global_declaration_name(None)?;
         let local_types = self.local_type_parameters()?;
-        for ty in &local_types {
-            self.local_types.push(ty.clone());
-        }
+        let local_types = local_types
+            .into_iter()
+            .map(|name| {
+                let id = Id::fresh_with_name(name.clone());
+                self.local_types.push(LocalBinding { name, id });
+                id
+            })
+            .collect::<Vec<_>>();
         let local_classes = self.local_class_parameters()?;
         self.expect_symbol(":")?;
         let target = self.class()?;
@@ -2980,48 +3219,66 @@ impl<'a> Parser<'a> {
             match keyword.as_str() {
                 "def" => {
                     let field_name = self.name()?;
-                    self.locals.push(field_name.clone());
                     let field_params = self.typed_parameters()?;
-                    for (field_param_name, _) in &field_params {
-                        self.locals.push(field_param_name.clone());
-                    }
+                    let field_params_start = self.locals.len();
+                    let field_params = field_params
+                        .into_iter()
+                        .map(|(field_param_name, field_param_ty)| Local {
+                            id: {
+                                let id = Id::fresh_with_name(field_param_name.clone());
+                                self.locals.push(LocalBinding {
+                                    name: field_param_name,
+                                    id,
+                                });
+                                id
+                            },
+                            ty: field_param_ty,
+                        })
+                        .collect::<Vec<_>>();
                     self.expect_symbol(":")?;
                     let mut field_ty = self.ty()?;
                     self.expect_symbol(":=")?;
                     let mut field_target = self.term()?;
-                    self.locals.truncate(self.locals.len() - field_params.len());
-                    for (field_param_name, field_param_ty) in field_params.into_iter().rev() {
-                        field_ty = field_ty.arrow([field_param_ty.clone()]);
-                        field_target = field_target.abs(&[Local {
-                            id: Id::from_name(&field_param_name),
-                            ty: field_param_ty,
-                        }]);
+                    self.locals.truncate(field_params_start);
+                    for field_param in field_params.into_iter().rev() {
+                        field_ty = field_ty.arrow([field_param.ty.clone()]);
+                        field_target = field_target.abs(&[field_param]);
                     }
                     fields.push(ClassInstanceField::Def(ClassInstanceDef {
-                        name: field_name,
+                        name: field_name.clone(),
                         ty: field_ty,
                         target: field_target,
                     }));
+                    self.locals.push(LocalBinding {
+                        name: field_name.clone(),
+                        id: Id::from_name(&field_name),
+                    });
                     num_defs += 1;
                 }
                 "lemma" => {
                     let field_name = self.name()?;
+                    let field_id = Id::from_name(&field_name);
                     let field_params = self.typed_parameters()?;
-                    for (field_param_name, _) in &field_params {
-                        self.locals.push(field_param_name.clone());
-                    }
+                    let field_params_start = self.locals.len();
+                    let field_params = field_params
+                        .into_iter()
+                        .map(|(field_param_name, field_param_ty)| Local {
+                            id: {
+                                let id = Id::fresh_with_name(field_param_name.clone());
+                                self.locals.push(LocalBinding {
+                                    name: field_param_name,
+                                    id,
+                                });
+                                id
+                            },
+                            ty: field_param_ty,
+                        })
+                        .collect::<Vec<_>>();
                     self.expect_symbol(":")?;
                     let mut field_target = self.term()?;
                     self.expect_symbol(":=")?;
                     let mut expr = self.expr()?;
-                    self.locals.truncate(self.locals.len() - field_params.len());
-                    let field_params = field_params
-                        .into_iter()
-                        .map(|(field_param_name, field_param_ty)| Local {
-                            id: Id::from_name(&field_param_name),
-                            ty: field_param_ty,
-                        })
-                        .collect::<Vec<_>>();
+                    self.locals.truncate(field_params_start);
                     field_target = generalize(&field_target, &field_params);
                     for field_param in field_params.into_iter().rev() {
                         expr = mk_expr_take(field_param.id, field_param.ty, expr);
@@ -3029,7 +3286,7 @@ impl<'a> Parser<'a> {
                     let holes = self.holes.drain(..).collect();
                     self.push_local_axiom(
                         QualifiedName::from_name(field_name.clone()),
-                        Id::from_name(&field_name),
+                        field_id,
                         field_target.clone(),
                     );
                     fields.push(ClassInstanceField::Lemma(ClassInstanceLemma {
@@ -3042,14 +3299,14 @@ impl<'a> Parser<'a> {
                 _ => Self::fail(keyword, "unknown command in instance")?,
             }
         }
-        // parsing finished.
+        // Parsing finished.
         self.locals.truncate(self.locals.len() - num_defs);
         self.local_axioms.truncate(local_axiom_len);
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdClassInstance {
             name,
-            local_types: local_types.iter().map(Id::from_name).collect(),
+            local_types,
             local_classes,
             target,
             fields,
@@ -3729,7 +3986,7 @@ mod tests {
     }
 
     #[test]
-    fn assume_alias_is_resolved_by_name() {
+    fn assume_alias_uses_parser_generated_id() {
         let expr = parse_expr("assume p as this, this");
         let Expr::Assume(assume) = expr else {
             panic!("expected assume expression");
@@ -3741,7 +3998,8 @@ mod tests {
             alias,
             expr: body,
         } = *assume;
-        assert_eq!(alias, Some(Id::from_name(&Name::from_str("this"))));
+        let alias = alias.expect("expected alias id");
+        assert_eq!(alias.name(), Some(Name::from_str("this")));
         let expected = mk_const(
             QualifiedName::from_name(Name::from_str("p")),
             vec![],
@@ -3753,11 +4011,11 @@ mod tests {
             panic!("expected body to reference assumption alias");
         };
         let ExprLocal { metadata: _, id } = *assump;
-        assert_eq!(id, Id::from_name(&Name::from_str("this")));
+        assert_eq!(id, alias);
     }
 
     #[test]
-    fn have_alias_is_resolved_by_name() {
+    fn have_alias_uses_parser_generated_ids() {
         let expr = parse_expr("assume p as hp, have p as this := hp, this");
         let Expr::Assume(outer) = expr else {
             panic!("expected outer assume expression");
@@ -3769,7 +4027,8 @@ mod tests {
             alias: outer_alias,
             expr: outer_body,
         } = *outer;
-        assert_eq!(outer_alias, Some(Id::from_name(&Name::from_str("hp"))));
+        let outer_alias = outer_alias.expect("expected outer alias");
+        assert_eq!(outer_alias.name(), Some(Name::from_str("hp")));
         let expected = mk_const(
             QualifiedName::from_name(Name::from_str("p")),
             vec![],
@@ -3795,7 +4054,8 @@ mod tests {
             alias: inner_alias,
             expr: inner_body,
         } = *inner_assume;
-        assert_eq!(inner_alias, Some(Id::from_name(&Name::from_str("this"))));
+        let inner_alias = inner_alias.expect("expected inner alias");
+        assert_eq!(inner_alias.name(), Some(Name::from_str("this")));
         assert!(inner_axiom.alpha_eq(&expected));
         let Expr::Local(inner_assump) = inner_body else {
             panic!("expected have body to reference alias");
@@ -3804,7 +4064,7 @@ mod tests {
             metadata: _,
             id: inner_id,
         } = *inner_assump;
-        assert_eq!(inner_id, Id::from_name(&Name::from_str("this")));
+        assert_eq!(inner_id, inner_alias);
 
         let Expr::Local(have_arg) = expr2 else {
             panic!("expected have argument to reference outer alias");
@@ -3813,11 +4073,40 @@ mod tests {
             metadata: _,
             id: outer_id,
         } = *have_arg;
-        assert_eq!(outer_id, Id::from_name(&Name::from_str("hp")));
+        assert_eq!(outer_id, outer_alias);
     }
 
     #[test]
-    fn assume_alias_auto_instantiates_forall() {
+    fn shadowed_assume_alias_gets_fresh_ids() {
+        let expr = parse_expr("assume p as h, have p as h := h, h");
+        let Expr::Assume(outer) = expr else {
+            panic!("expected outer assume");
+        };
+        let outer_alias = outer.alias.expect("outer alias");
+
+        let Expr::App(inner_app) = outer.expr else {
+            panic!("expected have expansion");
+        };
+        let Expr::Assume(inner_assume) = inner_app.expr1 else {
+            panic!("expected inner assume");
+        };
+        let inner_alias = inner_assume.alias.expect("inner alias");
+
+        assert_ne!(outer_alias, inner_alias);
+
+        let Expr::Local(outer_proof) = inner_app.expr2 else {
+            panic!("expected outer proof local");
+        };
+        assert_eq!(outer_proof.id, outer_alias);
+
+        let Expr::Local(inner_body) = inner_assume.expr else {
+            panic!("expected inner body local");
+        };
+        assert_eq!(inner_body.id, inner_alias);
+    }
+
+    #[test]
+    fn assume_alias_auto_instantiates_forall_with_alias_id() {
         let expr = parse_expr("assume ∀ (x : Prop), p as h, h");
         let Expr::Assume(assume) = expr else {
             panic!("expected assume expression");
@@ -3825,9 +4114,10 @@ mod tests {
         let ExprAssume {
             metadata: _,
             local_axiom: _,
-            alias: _,
+            alias,
             expr: body,
         } = *assume;
+        let alias = alias.expect("expected alias id");
         let Expr::Inst(inst) = body else {
             panic!("expected implicit instantiation on local axiom alias");
         };
@@ -3839,12 +4129,12 @@ mod tests {
         let Expr::Local(local_axiom) = head else {
             panic!("expected local axiom as instantiation head");
         };
-        assert_eq!(local_axiom.id, Id::from_name(&Name::from_str("h")));
+        assert_eq!(local_axiom.id, alias);
         assert!(arg.head().is_hole());
     }
 
     #[test]
-    fn term_hole_uses_canonical_ids_for_local_context() {
+    fn term_hole_uses_current_local_ids_for_local_context() {
         let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
         let type_defs = HashMap::new();
         let root_namespace = Path::root();
@@ -3874,16 +4164,70 @@ mod tests {
 
         let local_name = Name::from_str("x");
         let generated_id = Id::fresh_with_name(local_name.clone());
-        let canonical_id = Id::from_name(&local_name);
-        assert_ne!(generated_id, canonical_id);
-        parser.locals.push(local_name);
+        parser.locals.push(LocalBinding {
+            name: local_name,
+            id: generated_id,
+        });
         let term = parser.term().expect("term parses");
         let args = term.args();
         assert_eq!(args.len(), 1);
         let Term::Local(local) = args[0] else {
             panic!("expected local argument");
         };
-        assert_eq!(local.id, canonical_id);
+        assert_eq!(local.id, generated_id);
+    }
+
+    #[test]
+    fn shadowed_take_binder_keeps_outer_id_in_assumption_target() {
+        let expr = parse_expr("take (x : Prop), assume x as h, take (x : Prop), h");
+        let Expr::Take(outer_take) = expr else {
+            panic!("expected outer take");
+        };
+        let outer_id = outer_take.id;
+
+        let Expr::Assume(assume) = outer_take.expr else {
+            panic!("expected assume inside outer take");
+        };
+        let Term::Local(assume_target) = assume.local_axiom else {
+            panic!("expected local assumption target");
+        };
+        assert_eq!(assume_target.id, outer_id);
+
+        let Expr::Take(inner_take) = assume.expr else {
+            panic!("expected inner take");
+        };
+        assert_ne!(inner_take.id, outer_id);
+    }
+
+    #[test]
+    fn obtain_binder_body_reuses_same_id_as_take() {
+        let expr = parse_expr("assume p as hp, obtain (x : Prop), x := hp, «x»");
+        let Expr::Assume(outer_assume) = expr else {
+            panic!("expected outer assume");
+        };
+        let Expr::App(app) = outer_assume.expr else {
+            panic!("expected obtain expansion inside assume");
+        };
+        let Expr::Take(take) = app.expr2 else {
+            panic!("expected obtain body to be wrapped in take");
+        };
+        let take_id = take.id;
+
+        let Expr::Assume(assume) = take.expr else {
+            panic!("expected take body to start with assume");
+        };
+        let Term::Local(assume_target) = assume.local_axiom else {
+            panic!("expected obtain proposition to reference local binder");
+        };
+        assert_eq!(assume_target.id, take_id);
+
+        let Expr::Assump(body_assump) = assume.expr else {
+            panic!("expected obtain body to reference local binder through assump");
+        };
+        let Term::Local(body_local) = body_assump.target else {
+            panic!("expected body assump to target local binder");
+        };
+        assert_eq!(body_local.id, take_id);
     }
 
     #[test]
@@ -4346,6 +4690,72 @@ mod tests {
             panic!("expected second definition to reference a local");
         };
         assert_eq!(local.id, Id::from_name(&Name::from_str("a")));
+    }
+
+    #[test]
+    fn instance_field_name_does_not_shadow_outer_param_in_rhs() {
+        let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
+        type_consts.insert(qualified("U"), Kind(0));
+        type_consts.insert(qualified("foo"), Kind(0));
+        let structure_table = HashMap::from([(
+            qualified("foo"),
+            CmdStructure {
+                name: qualified("foo"),
+                local_types: vec![],
+                fields: vec![StructureField::Const(StructureConst {
+                    name: Name::from_str("rep"),
+                    ty: mk_type_const(qualified("U")),
+                })],
+            },
+        )]);
+        let file = Arc::new(File::new(
+            "<test>",
+            "instance inst (rep : U) : foo := { def rep : U := rep }",
+        ));
+        let mut lex = Lex::new(file);
+        let type_def_table = HashMap::new();
+        let root_namespace = Path::root();
+        let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
+        namespace_table.insert(
+            root_namespace.clone(),
+            Namespace {
+                use_table: HashMap::new(),
+            },
+        );
+        seed_namespace_table_from_globals(
+            &mut namespace_table,
+            &type_consts,
+            &type_def_table,
+            &consts,
+            &axioms,
+            &class_predicates,
+        );
+        let current_namespace = root_namespace;
+        ensure_use_target_prefixes_for_tests(&mut namespace_table, &current_namespace);
+        let mut parser = Parser::new(
+            &mut lex,
+            &tt,
+            &namespace_table,
+            &current_namespace,
+            &type_consts,
+            &type_def_table,
+            &consts,
+            &axioms,
+            &class_predicates,
+            &structure_table,
+        );
+        let cmd = parser.cmd().expect("instance parses");
+        let Cmd::Instance(CmdInstance { params, fields, .. }) = cmd else {
+            panic!("expected instance command");
+        };
+        let outer_param_id = params[0].id;
+        let InstanceField::Def(InstanceDef { target, .. }) = &fields[0] else {
+            panic!("expected definition field");
+        };
+        let Term::Local(local) = target else {
+            panic!("expected field target to reference outer parameter");
+        };
+        assert_eq!(local.id, outer_param_id);
     }
 
     #[test]
@@ -5788,12 +6198,12 @@ mod tests {
         };
         let ExprLetTerm {
             metadata: _,
-            name,
+            id,
             ty,
             value,
             body,
         } = *let_term;
-        assert_eq!(name, Name::from_str("c"));
+        assert_eq!(id.name(), Some(Name::from_str("c")));
         assert!(ty.is_none());
         let Term::Const(value_const) = value else {
             panic!("expected const term in let value");
@@ -5811,7 +6221,7 @@ mod tests {
         let Term::Local(local_const) = local_axiom else {
             panic!("expected local term in let body");
         };
-        assert_eq!(local_const.id, Id::from_name(&Name::from_str("c")));
+        assert_eq!(local_const.id, id);
     }
 
     #[test]
@@ -5822,7 +6232,7 @@ mod tests {
         };
         let ExprLetTerm {
             metadata: _,
-            name: _,
+            id: _,
             ty,
             value: _,
             body: _,
@@ -5888,12 +6298,12 @@ mod tests {
         };
         let ExprLetTerm {
             metadata: _,
-            name,
+            id,
             ty: _,
             value: _,
             body,
         } = *let_term;
-        assert_eq!(name, Name::from_str("c"));
+        assert_eq!(id.name(), Some(Name::from_str("c")));
         let Expr::Assume(assume) = body else {
             panic!("expected assume expression in let body");
         };
@@ -5906,7 +6316,31 @@ mod tests {
         let Term::Local(local_const) = local_axiom else {
             panic!("expected local term in let body");
         };
-        assert_eq!(local_const.id, Id::from_name(&Name::from_str("c")));
+        assert_eq!(local_const.id, id);
+    }
+
+    #[test]
+    fn shadowed_let_term_uses_distinct_ids() {
+        let expr = parse_expr("let h := p, let h := h, assume h as hp, hp");
+        let Expr::LetTerm(outer_let) = expr else {
+            panic!("expected outer let");
+        };
+
+        let Expr::LetTerm(inner_let) = outer_let.body else {
+            panic!("expected inner let");
+        };
+        let Term::Local(inner_value) = inner_let.value else {
+            panic!("expected inner let value to reference outer binder");
+        };
+
+        let Expr::Assume(assume) = inner_let.body else {
+            panic!("expected assume in inner let body");
+        };
+        let Term::Local(inner_target) = assume.local_axiom else {
+            panic!("expected inner let body to reference inner binder");
+        };
+
+        assert_ne!(inner_value.id, inner_target.id);
     }
 
     #[test]
@@ -5914,6 +6348,9 @@ mod tests {
         let expr = parse_expr("let structure foo := { const f : Prop }, assume foo.f as h, h");
         let Expr::LetStructure(let_structure) = expr else {
             panic!("expected let structure expression");
+        };
+        let Some(LocalStructureField::Const(field)) = let_structure.fields.first() else {
+            panic!("expected local const field");
         };
         let Expr::Assume(assume) = let_structure.body else {
             panic!("expected assume expression in let structure body");
@@ -5927,7 +6364,20 @@ mod tests {
         let Term::Local(local_const) = local_axiom else {
             panic!("expected local term");
         };
-        assert_eq!(local_const.id, Id::from_name(&Name::from_str("foo.f")));
+        assert_eq!(local_const.id, field.id);
+    }
+
+    #[test]
+    fn let_structure_const_field_keeps_bare_and_qualified_ids() {
+        let expr = parse_expr("let structure foo := { const f : Prop }, assume foo.f as h, h");
+        let Expr::LetStructure(let_structure) = expr else {
+            panic!("expected let structure expression");
+        };
+        let Some(LocalStructureField::Const(field)) = let_structure.fields.first() else {
+            panic!("expected local const field");
+        };
+        assert_eq!(field.field_id.name(), Some(Name::from_str("f")));
+        assert_eq!(field.id.name(), Some(Name::from_str("foo.f")));
     }
 
     #[test]
@@ -5943,6 +6393,12 @@ mod tests {
         let Expr::LetStructure(inner) = outer.body else {
             panic!("expected inner let structure expression");
         };
+        let Some(LocalStructureField::Const(outer_field)) = outer.fields.first() else {
+            panic!("expected outer local const field");
+        };
+        let Some(LocalStructureField::Const(inner_field)) = inner.fields.first() else {
+            panic!("expected inner local const field");
+        };
         let Expr::Assume(assume) = inner.body else {
             panic!("expected assume expression in inner let structure body");
         };
@@ -5955,7 +6411,8 @@ mod tests {
         let Term::Local(local_const) = local_axiom else {
             panic!("expected local term");
         };
-        assert_eq!(local_const.id, Id::from_name(&Name::from_str("foo.f")));
+        assert_eq!(local_const.id, inner_field.id);
+        assert_ne!(local_const.id, outer_field.id);
     }
 
     #[test]
@@ -5976,6 +6433,9 @@ mod tests {
         let Expr::LetStructure(let_structure) = expr else {
             panic!("expected let structure expression");
         };
+        let Some(LocalStructureField::Const(field)) = let_structure.fields.first() else {
+            panic!("expected local const field");
+        };
         let Expr::Assume(assume) = let_structure.body else {
             panic!("expected assume expression in let structure body");
         };
@@ -5988,7 +6448,75 @@ mod tests {
         let Term::Local(local_const) = local_axiom else {
             panic!("expected local term");
         };
-        assert_eq!(local_const.id, Id::from_name(&Name::from_str("foo.f")));
+        assert_eq!(local_const.id, field.id);
+    }
+
+    #[test]
+    fn let_structure_bare_field_name_does_not_bind_in_body() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let err = parse_expr_with_tables(
+            "let structure foo := { const x : Prop }, x",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect_err("bare field name should not resolve in let structure body");
+        assert!(err.to_string().contains("unknown variable"));
+    }
+
+    #[test]
+    fn let_structure_rejects_duplicate_const_field_names() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let err = parse_expr_with_tables(
+            "let structure foo := { const f : Prop const f : Prop }, foo.f",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect_err("duplicate const field should be rejected");
+        assert!(err.to_string().contains("duplicate field"));
+    }
+
+    #[test]
+    fn let_structure_rejects_duplicate_axiom_field_names() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let err = parse_expr_with_tables(
+            "let structure foo := { const f : Prop axiom a : f axiom a : f }, @foo.a",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect_err("duplicate axiom field should be rejected");
+        assert!(err.to_string().contains("duplicate field"));
+    }
+
+    #[test]
+    fn let_structure_rejects_const_axiom_name_collision() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let err = parse_expr_with_tables(
+            "let structure foo := { const f : Prop axiom f : f }, @foo.f",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect_err("const/axiom name collision should be rejected");
+        assert!(err.to_string().contains("duplicate field"));
     }
 
     #[test]
@@ -5997,10 +6525,26 @@ mod tests {
         let Expr::LetStructure(let_structure) = expr else {
             panic!("expected let structure expression");
         };
+        let Some(LocalStructureField::Axiom(field)) = let_structure.fields.get(1) else {
+            panic!("expected local axiom field");
+        };
         let Expr::Local(local_axiom) = let_structure.body else {
             panic!("expected local expression in let structure body");
         };
-        assert_eq!(local_axiom.id, Id::from_name(&Name::from_str("foo.a")));
+        assert_eq!(local_axiom.id, field.id);
+    }
+
+    #[test]
+    fn let_structure_axiom_field_keeps_bare_and_qualified_ids() {
+        let expr = parse_expr("let structure foo := { const f : Prop axiom a : f }, @foo.a");
+        let Expr::LetStructure(let_structure) = expr else {
+            panic!("expected let structure expression");
+        };
+        let Some(LocalStructureField::Axiom(field)) = let_structure.fields.get(1) else {
+            panic!("expected local axiom field");
+        };
+        assert_eq!(field.field_id.name(), Some(Name::from_str("a")));
+        assert_eq!(field.id.name(), Some(Name::from_str("foo.a")));
     }
 
     #[test]
@@ -6009,10 +6553,13 @@ mod tests {
         let Expr::LetStructure(let_structure) = expr else {
             panic!("expected let structure expression");
         };
+        let Some(LocalStructureField::Axiom(field)) = let_structure.fields.get(1) else {
+            panic!("expected local axiom field");
+        };
         let Expr::Local(local_axiom) = let_structure.body else {
             panic!("expected local expression in let structure body");
         };
-        assert_eq!(local_axiom.id, Id::from_name(&Name::from_str("foo.a")));
+        assert_eq!(local_axiom.id, field.id);
     }
 
     #[test]
@@ -6020,6 +6567,9 @@ mod tests {
         let expr = parse_expr("let structure foo := { const f : Prop axiom a : f }, foo.a");
         let Expr::LetStructure(let_structure) = expr else {
             panic!("expected let structure expression");
+        };
+        let Some(LocalStructureField::Axiom(field)) = let_structure.fields.get(1) else {
+            panic!("expected local axiom field");
         };
         let Expr::Inst(inst) = let_structure.body else {
             panic!("expected implicit instantiation in let structure body");
@@ -6032,8 +6582,33 @@ mod tests {
         let Expr::Local(local_axiom) = head else {
             panic!("expected local axiom as instantiation head");
         };
-        assert_eq!(local_axiom.id, Id::from_name(&Name::from_str("foo.a")));
+        assert_eq!(local_axiom.id, field.id);
         assert!(arg.head().is_hole());
+    }
+
+    #[test]
+    fn shadowed_let_structure_abs_keeps_outer_id_in_inner_field() {
+        let expr = parse_expr(
+            "let structure foo := { const f : Prop }, \
+             let structure foo := { const f : Prop }, \
+             assume foo.f as h, h",
+        );
+        let Expr::LetStructure(outer) = expr else {
+            panic!("expected outer let structure");
+        };
+        let Expr::LetStructure(inner) = outer.body else {
+            panic!("expected inner let structure");
+        };
+        let Some(LocalStructureField::Const(outer_field)) = outer.fields.first() else {
+            panic!("expected outer field to be a const");
+        };
+        let Expr::Assume(inner_assume) = inner.body else {
+            panic!("expected inner body assume");
+        };
+        let Term::Local(inner_field_ref) = inner_assume.local_axiom else {
+            panic!("expected inner body to reference inner local const");
+        };
+        assert_ne!(outer_field.id, inner_field_ref.id);
     }
 
     #[test]
@@ -6081,7 +6656,7 @@ mod tests {
         let Expr::LetTerm(let_term) = expr else {
             panic!("expected outer let-term");
         };
-        assert_eq!(let_term.name, Name::from_str("c.rep"));
+        assert_eq!(let_term.id.name(), Some(Name::from_str("c.rep")));
         let Term::Const(value_const) = let_term.value else {
             panic!("expected let value to be a const");
         };
@@ -6093,14 +6668,12 @@ mod tests {
         let Expr::Assume(have_assume) = have_app.expr1 else {
             panic!("expected have expansion to start with assume");
         };
-        assert_eq!(
-            have_assume.alias,
-            Some(Id::from_name(&Name::from_str("c.ok")))
-        );
+        let ok_id = have_assume.alias.expect("expected c.ok alias");
+        assert_eq!(ok_id.name(), Some(Name::from_str("c.ok")));
         let Term::Local(local_axiom) = have_assume.local_axiom else {
             panic!("expected have target to reference c.rep");
         };
-        assert_eq!(local_axiom.id, Id::from_name(&Name::from_str("c.rep")));
+        assert_eq!(local_axiom.id, let_term.id);
         let Expr::Const(proof) = have_app.expr2 else {
             panic!("expected have proof to be hp");
         };
@@ -6112,14 +6685,14 @@ mod tests {
         let Expr::Take(take) = obtain_app.expr2 else {
             panic!("expected obtain body to be a take");
         };
-        assert_eq!(take.id, Id::from_name(&Name::from_str("c")));
+        assert_eq!(take.id.name(), Some(Name::from_str("c")));
         let Expr::Assume(obtain_assume) = take.expr else {
             panic!("expected obtain take body to be an assume");
         };
         let Expr::Local(body_local) = obtain_assume.expr else {
             panic!("expected obtain body to use c.ok");
         };
-        assert_eq!(body_local.id, Id::from_name(&Name::from_str("c.ok")));
+        assert_eq!(body_local.id, ok_id);
     }
 
     #[test]
@@ -6170,10 +6743,8 @@ mod tests {
         let Expr::Assume(first_assume) = first_have.expr1 else {
             panic!("expected outer assume");
         };
-        assert_eq!(
-            first_assume.alias,
-            Some(Id::from_name(&Name::from_str("c.ok")))
-        );
+        let first_alias = first_assume.alias.expect("expected first alias");
+        assert_eq!(first_alias.name(), Some(Name::from_str("c.ok")));
 
         let Expr::App(second_have) = first_assume.expr else {
             panic!("expected inner have expansion");
@@ -6181,14 +6752,12 @@ mod tests {
         let Expr::Assume(second_assume) = second_have.expr1 else {
             panic!("expected inner assume");
         };
-        assert_eq!(
-            second_assume.alias,
-            Some(Id::from_name(&Name::from_str("c.ok2")))
-        );
+        let second_alias = second_assume.alias.expect("expected second alias");
+        assert_eq!(second_alias.name(), Some(Name::from_str("c.ok2")));
         let Expr::Local(second_proof) = second_have.expr2 else {
             panic!("expected second proof to reference prior lemma");
         };
-        assert_eq!(second_proof.id, Id::from_name(&Name::from_str("c.ok")));
+        assert_eq!(second_proof.id, first_alias);
     }
 
     #[test]

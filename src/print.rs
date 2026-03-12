@@ -572,11 +572,10 @@ impl<'a, T> Pretty<'a, T> {
     }
 }
 
-fn generate_fresh_local_type(local_types: &Vec<String>) -> String {
-    const DEFAULT_NAME: &str = "u";
+fn generate_fresh_local_type(base_name: &str, local_types: &Vec<String>) -> String {
     const SUBSCRIPT_DIGITS: [char; 10] = ['₀', '₁', '₂', '₃', '₄', '₅', '₆', '₇', '₈', '₉'];
 
-    let mut x = DEFAULT_NAME.to_string();
+    let mut x = base_name.to_string();
     'refresh: for refresh_index in 0.. {
         if refresh_index > 0 {
             let mut n = refresh_index;
@@ -586,7 +585,7 @@ fn generate_fresh_local_type(local_types: &Vec<String>) -> String {
                 chars.push(SUBSCRIPT_DIGITS[d]);
                 n /= 10;
             }
-            x = format!("{DEFAULT_NAME}{}", chars.iter().rev().collect::<String>());
+            x = format!("{base_name}{}", chars.iter().rev().collect::<String>());
         }
         for local_type in local_types {
             if local_type.as_str() == x {
@@ -599,11 +598,24 @@ fn generate_fresh_local_type(local_types: &Vec<String>) -> String {
 }
 
 fn create_local_type_name(local_types: &Vec<Id>) -> HashMap<Id, String> {
+    const DEFAULT_NAME: &str = "u";
+
     let mut local_type_names = HashMap::new();
     let mut local_type_list = Vec::new();
     for local_type in local_types {
-        if local_type.is_generated() {
-            let name = generate_fresh_local_type(&local_type_list);
+        if let Some(name) = local_type.name() {
+            let name = if local_type_list
+                .iter()
+                .any(|existing| existing == name.as_str())
+            {
+                generate_fresh_local_type(name.as_str(), &local_type_list)
+            } else {
+                name.to_string()
+            };
+            local_type_list.push(name.clone());
+            local_type_names.insert(*local_type, name);
+        } else if local_type.is_generated() {
+            let name = generate_fresh_local_type(DEFAULT_NAME, &local_type_list);
             local_type_list.push(name.clone());
             local_type_names.insert(*local_type, name);
         } else {
