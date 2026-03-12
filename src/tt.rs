@@ -201,9 +201,8 @@ impl Hash for QualifiedName {
 impl Display for Id {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(name) = self.name() {
-            if self.is_generated() {
-                return write!(f, "{}{}", name, self.0);
-            }
+            // TODO: Name が同じ Id は今のままだと同じ文字列で表示されるので、
+            // 表示側で衝突を避ける仕組みを別途入れたい。
             return write!(f, "{}", name);
         }
         write!(f, "{}", self.0)
