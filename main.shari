@@ -1707,11 +1707,10 @@ assume ∀ x, (∀ y, R y x → P y) → P x,
 take (x : u),
 have acc R x := «well_founded R»[x],
 @acc.ind[R, x, P] «acc R x»
-  -- TODO: bug: cannot use x as the name of the bound variable here
-  (take (x_ : u),
-   assume ∀ y, R y x_ → acc R y,
-   assume ∀ y, R y x_ → P y,
-   «∀ x, (∀ y, R y x → P y) → P x»[x_] «∀ y, R y x_ → P y»)
+  (take (x : u),
+   assume ∀ y, R y x → acc R y,
+   assume ∀ y, R y x → P y,
+   «∀ x, (∀ y, R y x → P y) → P x»[x] «∀ y, R y x → P y»)
 
 structure W.el u v := {
   -- polynomial
