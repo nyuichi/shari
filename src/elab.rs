@@ -19,9 +19,9 @@ use crate::{
     },
     tt::{
         self, Class, ClassInstance, ClassType, Const, Id, Instance, InstanceGlobal, Kind, Local,
-        LocalDelta, LocalEnv, Name, QualifiedName, Term, TermAbs, TermApp, Type, TypeApp,
-        TypeArrow, mk_const, mk_fresh_type_hole, mk_hole, mk_instance_global, mk_instance_local,
-        mk_local, mk_type_arrow, mk_type_local,
+        LocalDelta, LocalEnv, LocalType, Name, QualifiedName, Term, TermAbs, TermApp, Type,
+        TypeApp, TypeArrow, mk_const, mk_fresh_type_hole, mk_hole, mk_instance_global,
+        mk_instance_local, mk_local, mk_type_arrow, mk_type_local,
     },
 };
 
@@ -254,7 +254,7 @@ impl<'a> Elaborator<'a> {
             }
             Type::Local(t) => {
                 for local_type in self.tt_local_env.local_types.iter().rev() {
-                    if *local_type == t.id {
+                    if local_type.id == t.id {
                         return Ok(Kind::base());
                     }
                 }
@@ -307,7 +307,7 @@ impl<'a> Elaborator<'a> {
                 let TermAbs {
                     metadata: _,
                     binder_type,
-                    binder_name: _,
+                    binder_name,
                     body,
                 } = &**m;
 
@@ -318,6 +318,7 @@ impl<'a> Elaborator<'a> {
 
                 let x = Local {
                     id: Id::fresh(),
+                    name: binder_name.clone(),
                     ty: binder_type.clone(),
                 };
                 let body = body.open(&[mk_local(x.id)], 0);
@@ -364,7 +365,7 @@ impl<'a> Elaborator<'a> {
                 }
                 let mut type_subst = Vec::with_capacity(local_types.len());
                 for (x, t) in zip(local_types, &n.ty_args) {
-                    type_subst.push((*x, t.clone()));
+                    type_subst.push((x.id, t.clone()));
                 }
                 if local_classes.len() != n.instances.len() {
                     bail!("number of class instances mismatch");
@@ -416,7 +417,7 @@ impl<'a> Elaborator<'a> {
                 }
                 let mut type_subst = Vec::with_capacity(local_types.len());
                 for (x, t) in zip(local_types, ty_args) {
-                    type_subst.push((*x, t.clone()));
+                    type_subst.push((x.id, t.clone()));
                 }
                 if args.len() != local_classes.len() {
                     bail!("number of class instances mismatch");
@@ -510,7 +511,7 @@ impl<'a> Elaborator<'a> {
                 self.push_type_constraint(local_axiom_ty, mk_type_prop(), error);
 
                 self.local_proof_env.local_axioms.push(LocalAxiom {
-                    id: *alias,
+                    id: alias.as_ref().map(|(id, _)| *id),
                     prop: local_axiom.clone(),
                 });
                 let mut target = self.visit_expr(inner)?;
@@ -566,6 +567,7 @@ impl<'a> Elaborator<'a> {
                 let ExprTake {
                     metadata: _,
                     id,
+                    name,
                     ty,
                     expr: inner,
                 } = expr.as_mut();
@@ -576,7 +578,11 @@ impl<'a> Elaborator<'a> {
                     bail!("expected Type, but got {ty_kind}");
                 }
 
-                let x = Local { id, ty: ty.clone() };
+                let x = Local {
+                    id,
+                    name: name.clone(),
+                    ty: ty.clone(),
+                };
                 self.tt_local_env.locals.push(x);
                 let mut target = self.visit_expr(inner)?;
                 let x = self.tt_local_env.locals.pop().unwrap();
@@ -612,6 +618,7 @@ impl<'a> Elaborator<'a> {
 
                 let x = Local {
                     id: Id::fresh(),
+                    name: None,
                     ty: arg_ty.clone(),
                 };
                 let mut pred = hole.clone();
@@ -657,7 +664,7 @@ impl<'a> Elaborator<'a> {
                 }
                 let mut type_subst = Vec::with_capacity(local_types.len());
                 for (x, t) in zip(local_types, &e.ty_args) {
-                    type_subst.push((*x, t.clone()));
+                    type_subst.push((x.id, t.clone()));
                 }
                 if local_classes.len() != e.instances.len() {
                     bail!("number of class instances mismatch");
@@ -677,6 +684,7 @@ impl<'a> Elaborator<'a> {
                 let ExprLetTerm {
                     metadata: _,
                     id,
+                    name,
                     ty,
                     value,
                     body,
@@ -692,7 +700,11 @@ impl<'a> Elaborator<'a> {
                         ty.clone(),
                         value_ty,
                         visit_error(
-                            format!("type mismatch in let binding `{id}`"),
+                            format!(
+                                "type mismatch in let binding `{}`",
+                                name.as_ref()
+                                    .map_or_else(|| id.to_string(), ToString::to_string)
+                            ),
                             value.span().cloned(),
                         ),
                     );
@@ -705,6 +717,7 @@ impl<'a> Elaborator<'a> {
                 let local_delta_len = self.tt_local_env.local_deltas.len();
                 self.tt_local_env.locals.push(Local {
                     id: *id,
+                    name: name.clone(),
                     ty: binder_ty,
                 });
                 self.tt_local_env.local_deltas.push(LocalDelta {
@@ -721,6 +734,7 @@ impl<'a> Elaborator<'a> {
                 let ExprLetStructure {
                     metadata: _,
                     id: structure_id,
+                    name: structure_name,
                     abs_id,
                     fields,
                     body,
@@ -733,6 +747,8 @@ impl<'a> Elaborator<'a> {
                 for field in &*fields {
                     match field {
                         LocalStructureField::Const(LocalStructureConst {
+                            field_name,
+                            field_id,
                             id,
                             ty: field_ty,
                             ..
@@ -756,7 +772,8 @@ impl<'a> Elaborator<'a> {
                                 bail!("expected Type, but got {kind}");
                             }
                             self.tt_local_env.locals.push(Local {
-                                id: *id,
+                                id: *field_id,
+                                name: Some(field_name.clone()),
                                 ty: field_ty.clone(),
                             });
                         }
@@ -787,7 +804,8 @@ impl<'a> Elaborator<'a> {
 
                 let this_ty = mk_type_local(*structure_id);
                 let this = Local {
-                    id: Id::fresh_with_name(Name::from_str("this")),
+                    id: Id::fresh(),
+                    name: Some(Name::from_str("this")),
                     ty: this_ty.clone(),
                 };
                 let mut locals: Vec<Local> = vec![];
@@ -796,13 +814,28 @@ impl<'a> Elaborator<'a> {
 
                 for field in &*fields {
                     match field {
-                        LocalStructureField::Const(LocalStructureConst { id, ty, .. }) => {
+                        LocalStructureField::Const(LocalStructureConst {
+                            field_name,
+                            field_id,
+                            id,
+                            ty,
+                            ..
+                        }) => {
                             let ty = ty.arrow([this_ty.clone()]);
-                            locals.push(Local { id: *id, ty });
+                            let qualified_name = Name::from_str(
+                                &QualifiedName::from_name(structure_name.clone())
+                                    .extend(field_name.clone())
+                                    .to_string(),
+                            );
+                            locals.push(Local {
+                                id: *id,
+                                name: Some(qualified_name.clone()),
+                                ty,
+                            });
 
                             let mut target = mk_local(*id);
                             target = target.apply([mk_local(this.id)]);
-                            subst.push((*id, target));
+                            subst.push((*field_id, target));
                         }
                         LocalStructureField::Axiom(LocalStructureAxiom { id, target, .. }) => {
                             let mut target = target.clone();
@@ -822,9 +855,16 @@ impl<'a> Elaborator<'a> {
                 let mut abs_subst = vec![];
                 for field in &*fields {
                     match field {
-                        LocalStructureField::Const(LocalStructureConst { field_id, id, ty }) => {
+                        LocalStructureField::Const(LocalStructureConst {
+                            field_name,
+                            field_id,
+                            id,
+                            ty,
+                            ..
+                        }) => {
                             let param = Local {
                                 id: *field_id,
+                                name: Some(field_name.clone()),
                                 ty: ty.clone(),
                             };
 
@@ -833,13 +873,13 @@ impl<'a> Elaborator<'a> {
 
                             let mut char = mk_const(
                                 QualifiedName::from_name(Name::from_str("eq")),
-                                vec![ty.clone()],
+                                vec![param.ty.clone()],
                                 vec![],
                             );
                             char = char.apply([mk_local(param.id), rhs]);
                             chars.push(char);
 
-                            abs_subst.push((*id, mk_local(param.id)));
+                            abs_subst.push((*field_id, mk_local(param.id)));
                             params.push(param);
                         }
                         LocalStructureField::Axiom(LocalStructureAxiom { target, .. }) => {
@@ -887,7 +927,10 @@ impl<'a> Elaborator<'a> {
                 let local_type_len = self.tt_local_env.local_types.len();
                 let local_len = self.tt_local_env.locals.len();
                 let local_axiom_len = self.local_proof_env.local_axioms.len();
-                self.tt_local_env.local_types.push(*structure_id);
+                self.tt_local_env.local_types.push(LocalType {
+                    id: *structure_id,
+                    name: Some(structure_name.clone()),
+                });
                 self.tt_local_env.locals.extend(locals);
                 self.local_proof_env.local_axioms.extend(local_axioms);
                 let result = match self.visit_expr(body) {
@@ -895,7 +938,7 @@ impl<'a> Elaborator<'a> {
                         if target.contains_type_local(*structure_id) {
                             Err(anyhow::anyhow!(
                                 "eigenvariable condition violated: local structure type `{}` escapes",
-                                structure_id
+                                structure_name
                             ))
                         } else {
                             Ok(target)
@@ -1336,6 +1379,7 @@ impl<'a> Elaborator<'a> {
                 let ExprTake {
                     metadata: _,
                     id: _,
+                    name: _,
                     ty,
                     expr: inner,
                 } = expr.as_mut();
@@ -1377,6 +1421,7 @@ impl<'a> Elaborator<'a> {
                 let ExprLetTerm {
                     metadata: _,
                     id: _,
+                    name: _,
                     ty,
                     value,
                     body,
@@ -1391,6 +1436,7 @@ impl<'a> Elaborator<'a> {
                 let ExprLetStructure {
                     metadata: _,
                     id: _,
+                    name: _,
                     abs_id: _,
                     fields,
                     body,
@@ -1716,6 +1762,7 @@ impl<'a> Elaborator<'a> {
             self.push_type_constraint(l.binder_type.clone(), r.binder_type.clone(), error.clone());
             let x = Local {
                 id: Id::fresh(),
+                name: l.binder_name.clone(),
                 ty: l.binder_type.clone(),
             };
             let local = mk_local(x.id);
@@ -1789,6 +1836,7 @@ impl<'a> Elaborator<'a> {
             };
             let x = Local {
                 id: Id::fresh(),
+                name: right.binder_name.clone(),
                 ty: right.binder_type.clone(),
             };
             let right = right.body.clone().open(&[mk_local(x.id)], 0);
@@ -1809,6 +1857,7 @@ impl<'a> Elaborator<'a> {
                     .into_iter()
                     .map(|arg| Local {
                         id: arg,
+                        name: None,
                         ty: local_env.get_local(arg).unwrap().clone(),
                     })
                     .collect::<Vec<_>>();
@@ -1828,6 +1877,7 @@ impl<'a> Elaborator<'a> {
                     .into_iter()
                     .map(|arg| Local {
                         id: arg,
+                        name: None,
                         ty: local_env.get_local(arg).unwrap().clone(),
                     })
                     .collect::<Vec<_>>();
@@ -1936,12 +1986,12 @@ impl<'a> Elaborator<'a> {
                     .unwrap();
                 let mut subst = Vec::with_capacity(local_types.len());
                 for (x, t) in zip(local_types, &left_head.ty_args) {
-                    subst.push((*x, t.clone()));
+                    subst.push((x.id, t.clone()));
                 }
                 let left_class = local_classes[0].subst(&subst);
                 let mut subst = Vec::with_capacity(local_types.len());
                 for (x, t) in zip(local_types, &right_head.ty_args) {
-                    subst.push((*x, t.clone()));
+                    subst.push((x.id, t.clone()));
                 }
                 let right_class = local_classes[0].subst(&subst);
                 if left_class == right_class {
@@ -2002,7 +2052,7 @@ impl<'a> Elaborator<'a> {
             } = instance;
             let mut type_subst = Vec::with_capacity(local_types.len());
             for local_type in local_types.iter() {
-                type_subst.push((*local_type, mk_fresh_type_hole()));
+                type_subst.push((local_type.id, mk_fresh_type_hole()));
             }
             let target = target.subst(&type_subst);
             // TODO: C a ?b ⇒ C ?b c ⇒ C a c
@@ -2016,7 +2066,7 @@ impl<'a> Elaborator<'a> {
             let subst = local_types
                 .iter()
                 .zip(&ty_args)
-                .map(|(name, ty)| (*name, ty.clone()))
+                .map(|(name, ty)| (name.id, ty.clone()))
                 .collect::<Vec<_>>();
             let mut args = vec![];
             for local_class in local_classes {
@@ -2279,6 +2329,7 @@ impl<'a> Elaborator<'a> {
             .take(left_args.len())
             .map(|&t| Local {
                 id: Id::fresh(),
+                name: None,
                 ty: t.clone(),
             })
             .collect::<Vec<_>>();
@@ -2393,7 +2444,7 @@ impl<'a> Elaborator<'a> {
                         .unwrap();
                     let mut subst = Vec::with_capacity(local_types.len());
                     for (x, t) in zip(local_types, &right_head_inner.ty_args) {
-                        subst.push((*x, t.clone()));
+                        subst.push((x.id, t.clone()));
                     }
                     ty.subst(&subst)
                 };
@@ -2625,6 +2676,7 @@ impl<'a> Elaborator<'a> {
         for component in components {
             let binder = Local {
                 id: Id::fresh(),
+                name: None,
                 ty: component.clone(),
             };
             binders.push(binder.clone());
@@ -2737,7 +2789,11 @@ pub fn elaborate_expr(
             println!("  {} : {}", param.id, param.ty);
         }
         for local_type in &local_env.local_types {
-            println!("  {} : Type", local_type);
+            let local_type_name = local_type
+                .name
+                .as_ref()
+                .map_or_else(|| local_type.id.to_string(), |name| name.to_string());
+            println!("  {} : Type", local_type_name);
         }
         for local_class in &local_env.local_classes {
             println!("  [{}]", local_class);
@@ -2829,6 +2885,11 @@ mod tests {
     };
     use std::collections::HashMap;
 
+    fn local_id(value: &str) -> Id {
+        let _ = value;
+        Id::fresh()
+    }
+
     #[test]
     fn const_expr_does_not_resolve_local_axiom_from_local_table() {
         let mut tt_local_env = tt::LocalEnv::default();
@@ -2859,7 +2920,7 @@ mod tests {
         );
         let local_axiom_name = QualifiedName::from_name(Name::from_str("foo.a"));
         elab.local_proof_env.local_axioms.push(LocalAxiom {
-            id: Some(Id::from_name(&Name::from_str("foo.a"))),
+            id: Some(local_id("foo.a")),
             prop: mk_const(
                 QualifiedName::from_name(Name::from_str("p")),
                 vec![],
@@ -2877,12 +2938,13 @@ mod tests {
     #[test]
     fn unify_fails_for_inhabited_terms() {
         let name_u = Name::from_str("u");
-        let ty_u = mk_type_local(Id::from_name(&name_u));
+        let u_id = local_id("u");
+        let ty_u = mk_type_local(u_id);
         let name_is_inhabited = QualifiedName::from_name(Name::from_str("is_inhabited"));
         let ty_is_inhabited_u = mk_type_app(mk_type_const(name_is_inhabited.clone()), ty_u.clone());
         let ty_u_to_prop = mk_type_arrow(ty_u.clone(), mk_type_prop());
 
-        let hole_id = Id::from_name(&Name::from_str("46380"));
+        let hole_id = local_id("46380");
         let hole_type = mk_type_arrow(
             ty_is_inhabited_u.clone(),
             mk_type_arrow(
@@ -2894,8 +2956,8 @@ mod tests {
             ),
         );
 
-        let h_id = Id::from_name(&Name::from_str("h"));
-        let x_id = Id::from_name(&Name::from_str("x46373"));
+        let h_id = local_id("h");
+        let x_id = local_id("x46373");
 
         let rep_term = mk_const(
             QualifiedName::from_name(Name::from_str("is_inhabited"))
@@ -2946,16 +3008,21 @@ mod tests {
         let locals = vec![
             Local {
                 id: h_id,
+                name: None,
                 ty: ty_is_inhabited_u.clone(),
             },
             Local {
                 id: x_id,
+                name: None,
                 ty: ty_u.clone(),
             },
         ];
 
         let local_env = tt::LocalEnv {
-            local_types: vec![Id::from_name(&name_u)],
+            local_types: vec![LocalType {
+                id: u_id,
+                name: Some(name_u),
+            }],
             local_classes: vec![],
             locals,
             local_deltas: vec![],
@@ -3009,9 +3076,9 @@ mod tests {
 
     #[test]
     fn mk_term_hole_uses_only_non_unfoldable_locals() {
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let q_id = Id::from_name(&Name::from_str("foo.q"));
-        let u_id = Id::from_name(&Name::from_str("foo.u"));
+        let x_id = local_id("x");
+        let q_id = local_id("foo.q");
+        let u_id = local_id("foo.u");
 
         let x_ty = mk_type_prop();
         let q_ty = mk_type_prop();
@@ -3032,13 +3099,19 @@ mod tests {
             locals: vec![
                 Local {
                     id: x_id,
+                    name: None,
                     ty: x_ty.clone(),
                 },
                 Local {
                     id: q_id,
+                    name: None,
                     ty: q_ty.clone(),
                 },
-                Local { id: u_id, ty: u_ty },
+                Local {
+                    id: u_id,
+                    name: None,
+                    ty: u_ty,
+                },
             ],
         };
 
@@ -3091,7 +3164,7 @@ mod tests {
     #[test]
     fn unify_local_and_const_uses_local_unfold() {
         let c = QualifiedName::from_name(Name::from_str("c"));
-        let l_id = Id::from_name(&Name::from_str("foo.l"));
+        let l_id = local_id("foo.l");
         let c_term = mk_const(c.clone(), vec![], vec![]);
 
         let mut local_env = tt::LocalEnv {
@@ -3104,6 +3177,7 @@ mod tests {
             }],
             locals: vec![Local {
                 id: l_id,
+                name: None,
                 ty: mk_type_prop(),
             }],
         };
@@ -3158,8 +3232,8 @@ mod tests {
 
     #[test]
     fn unify_local_local_with_unfoldable_side() {
-        let unfoldable_id = Id::from_name(&Name::from_str("foo.l"));
-        let rigid_id = Id::from_name(&Name::from_str("x"));
+        let unfoldable_id = local_id("foo.l");
+        let rigid_id = local_id("x");
 
         let mut local_env = tt::LocalEnv {
             local_types: vec![],
@@ -3172,10 +3246,12 @@ mod tests {
             locals: vec![
                 Local {
                     id: unfoldable_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
                 Local {
                     id: rigid_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
             ],
@@ -3223,7 +3299,7 @@ mod tests {
 
     #[test]
     fn unify_rigid_local_function_with_eta_expansion() {
-        let f_id = Id::from_name(&Name::from_str("f"));
+        let f_id = local_id("f");
         let x_name = Name::from_str("x");
 
         let mut local_env = tt::LocalEnv {
@@ -3232,6 +3308,7 @@ mod tests {
             local_deltas: vec![],
             locals: vec![Local {
                 id: f_id,
+                name: None,
                 ty: mk_type_prop().arrow([mk_type_prop()]),
             }],
         };
@@ -3342,8 +3419,8 @@ mod tests {
 
     #[test]
     fn unify_flex_function_eta_solves() {
-        let f_id = Id::from_name(&Name::from_str("f"));
-        let hole_id = Id::from_name(&Name::from_str("M"));
+        let f_id = local_id("f");
+        let hole_id = local_id("M");
 
         let mut local_env = tt::LocalEnv {
             local_types: vec![],
@@ -3351,6 +3428,7 @@ mod tests {
             local_deltas: vec![],
             locals: vec![Local {
                 id: f_id,
+                name: None,
                 ty: mk_type_prop().arrow([mk_type_prop()]),
             }],
         };
@@ -3411,9 +3489,9 @@ mod tests {
 
     #[test]
     fn imitation_requeues_original_constraint() {
-        let f_id = Id::from_name(&Name::from_str("f"));
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let hole_id = Id::from_name(&Name::from_str("M"));
+        let f_id = local_id("f");
+        let x_id = local_id("x");
+        let hole_id = local_id("M");
 
         let mut local_env = tt::LocalEnv {
             local_types: vec![],
@@ -3422,10 +3500,12 @@ mod tests {
             locals: vec![
                 Local {
                     id: f_id,
+                    name: None,
                     ty: mk_type_prop().arrow([mk_type_prop()]),
                 },
                 Local {
                     id: x_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
             ],
@@ -3482,9 +3562,9 @@ mod tests {
 
     #[test]
     fn imitation_tracks_argument_holes() {
-        let f_id = Id::from_name(&Name::from_str("f"));
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let hole_id = Id::from_name(&Name::from_str("M"));
+        let f_id = local_id("f");
+        let x_id = local_id("x");
+        let hole_id = local_id("M");
 
         let mut local_env = tt::LocalEnv {
             local_types: vec![],
@@ -3493,10 +3573,12 @@ mod tests {
             locals: vec![
                 Local {
                     id: f_id,
+                    name: None,
                     ty: mk_type_prop().arrow([mk_type_prop()]),
                 },
                 Local {
                     id: x_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
             ],
@@ -3571,8 +3653,8 @@ mod tests {
     fn unify_same_kappa_const_with_local_instance_is_reachable() {
         let method_name = QualifiedName::from_name(Name::from_str("m"));
         let class_name = QualifiedName::from_name(Name::from_str("C"));
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let y_id = Id::from_name(&Name::from_str("y"));
+        let x_id = local_id("x");
+        let y_id = local_id("y");
         let instance = mk_instance_local(Class {
             name: class_name.clone(),
             args: vec![],
@@ -3586,10 +3668,12 @@ mod tests {
             locals: vec![
                 Local {
                     id: x_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
                 Local {
                     id: y_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
             ],
@@ -3647,9 +3731,9 @@ mod tests {
 
     #[test]
     fn unify_same_local_delta_head_with_mismatched_args_fails_without_panic() {
-        let f_id = Id::from_name(&Name::from_str("foo.f"));
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let y_id = Id::from_name(&Name::from_str("y"));
+        let f_id = local_id("foo.f");
+        let x_id = local_id("x");
+        let y_id = local_id("y");
         let c = QualifiedName::from_name(Name::from_str("c"));
         let c_term = mk_const(c.clone(), vec![], vec![]);
 
@@ -3664,14 +3748,17 @@ mod tests {
             locals: vec![
                 Local {
                     id: f_id,
+                    name: None,
                     ty: mk_type_prop().arrow([mk_type_prop()]),
                 },
                 Local {
                     id: x_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
                 Local {
                     id: y_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
             ],
@@ -3729,7 +3816,7 @@ mod tests {
     fn unfold_constraint_keeps_head_arguments_as_is() {
         let f = QualifiedName::from_name(Name::from_str("f"));
         let g = QualifiedName::from_name(Name::from_str("g"));
-        let u = Id::from_name(&Name::from_str("u"));
+        let u = local_id("u");
         let mut local_env = tt::LocalEnv {
             local_types: vec![],
             local_classes: vec![],
@@ -3742,7 +3829,7 @@ mod tests {
             (
                 f.clone(),
                 Const {
-                    local_types: vec![u],
+                    local_types: vec![LocalType { id: u, name: None }],
                     local_classes: vec![],
                     ty: mk_type_prop(),
                 },
@@ -3759,7 +3846,7 @@ mod tests {
         let delta_table: HashMap<QualifiedName, Delta> = HashMap::from([(
             f.clone(),
             Delta {
-                local_types: vec![u],
+                local_types: vec![LocalType { id: u, name: None }],
                 local_classes: vec![],
                 target: mk_const(g, vec![], vec![]),
                 height: 0,
@@ -3826,8 +3913,8 @@ mod tests {
     #[test]
     fn choice_fr_adds_binder_expansion_branch_for_hole_tailed_projection() {
         let c = QualifiedName::from_name(Name::from_str("c"));
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let m_id = Id::from_name(&Name::from_str("M"));
+        let x_id = local_id("x");
+        let m_id = local_id("M");
 
         let arg_ty = mk_fresh_type_hole();
         let Type::Hole(arg_hole) = &arg_ty else {
@@ -3840,6 +3927,7 @@ mod tests {
             local_deltas: vec![],
             locals: vec![Local {
                 id: x_id,
+                name: None,
                 ty: arg_ty.clone(),
             }],
         };
@@ -3884,6 +3972,7 @@ mod tests {
                 local_deltas: vec![],
                 locals: vec![Local {
                     id: x_id,
+                    name: None,
                     ty: Type::Hole(arg_hole.clone()),
                 }],
             },
@@ -3907,7 +3996,7 @@ mod tests {
     #[test]
     fn solve_with_budget_zero_keeps_existing_non_expanding_successes() {
         let c = QualifiedName::from_name(Name::from_str("c"));
-        let l_id = Id::from_name(&Name::from_str("foo.l"));
+        let l_id = local_id("foo.l");
         let c_term = mk_const(c.clone(), vec![], vec![]);
 
         let mut local_env = tt::LocalEnv {
@@ -3920,6 +4009,7 @@ mod tests {
             }],
             locals: vec![Local {
                 id: l_id,
+                name: None,
                 ty: mk_type_prop(),
             }],
         };
@@ -3972,9 +4062,9 @@ mod tests {
 
     #[test]
     fn solve_with_budget_reports_needs_more_budget_before_binder_expansion() {
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let a_id = Id::from_name(&Name::from_str("a"));
-        let m_id = Id::from_name(&Name::from_str("M"));
+        let x_id = local_id("x");
+        let a_id = local_id("a");
+        let m_id = local_id("M");
 
         let alpha = mk_fresh_type_hole();
 
@@ -3985,10 +4075,12 @@ mod tests {
             locals: vec![
                 Local {
                     id: x_id,
+                    name: None,
                     ty: alpha.clone(),
                 },
                 Local {
                     id: a_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
             ],
@@ -4028,10 +4120,12 @@ mod tests {
                 locals: vec![
                     Local {
                         id: x_id,
+                        name: None,
                         ty: mk_fresh_type_hole(),
                     },
                     Local {
                         id: a_id,
+                        name: None,
                         ty: mk_type_prop(),
                     },
                 ],
@@ -4046,9 +4140,9 @@ mod tests {
 
     #[test]
     fn solve_with_budget_one_solves_single_expansion_case() {
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let a_id = Id::from_name(&Name::from_str("a"));
-        let m_id = Id::from_name(&Name::from_str("M"));
+        let x_id = local_id("x");
+        let a_id = local_id("a");
+        let m_id = local_id("M");
 
         let alpha = mk_fresh_type_hole();
 
@@ -4059,10 +4153,12 @@ mod tests {
             locals: vec![
                 Local {
                     id: x_id,
+                    name: None,
                     ty: alpha.clone(),
                 },
                 Local {
                     id: a_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
             ],
@@ -4102,10 +4198,12 @@ mod tests {
                 locals: vec![
                     Local {
                         id: x_id,
+                        name: None,
                         ty: mk_fresh_type_hole(),
                     },
                     Local {
                         id: a_id,
+                        name: None,
                         ty: mk_type_prop(),
                     },
                 ],
@@ -4120,9 +4218,9 @@ mod tests {
 
     #[test]
     fn solve_with_budget_restarts_from_budget_exhausted_checkpoint() {
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let a_id = Id::from_name(&Name::from_str("a"));
-        let m_id = Id::from_name(&Name::from_str("M"));
+        let x_id = local_id("x");
+        let a_id = local_id("a");
+        let m_id = local_id("M");
 
         let alpha = mk_fresh_type_hole();
 
@@ -4133,10 +4231,12 @@ mod tests {
             locals: vec![
                 Local {
                     id: x_id,
+                    name: None,
                     ty: alpha.clone(),
                 },
                 Local {
                     id: a_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
             ],
@@ -4176,10 +4276,12 @@ mod tests {
                 locals: vec![
                     Local {
                         id: x_id,
+                        name: None,
                         ty: mk_fresh_type_hole(),
                     },
                     Local {
                         id: a_id,
+                        name: None,
                         ty: mk_type_prop(),
                     },
                 ],
@@ -4199,9 +4301,9 @@ mod tests {
 
     #[test]
     fn solve_returns_err_for_finite_failure_without_iterative_deepening_restart() {
-        let f_id = Id::from_name(&Name::from_str("foo.f"));
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let y_id = Id::from_name(&Name::from_str("y"));
+        let f_id = local_id("foo.f");
+        let x_id = local_id("x");
+        let y_id = local_id("y");
         let c = QualifiedName::from_name(Name::from_str("c"));
         let c_term = mk_const(c.clone(), vec![], vec![]);
 
@@ -4216,14 +4318,17 @@ mod tests {
             locals: vec![
                 Local {
                     id: f_id,
+                    name: None,
                     ty: mk_type_prop().arrow([mk_type_prop()]),
                 },
                 Local {
                     id: x_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
                 Local {
                     id: y_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
             ],
@@ -4275,9 +4380,9 @@ mod tests {
 
     #[test]
     fn solve_restarts_from_post_simplification_checkpoint_for_binder_expansion_case() {
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let a_id = Id::from_name(&Name::from_str("a"));
-        let m_id = Id::from_name(&Name::from_str("M"));
+        let x_id = local_id("x");
+        let a_id = local_id("a");
+        let m_id = local_id("M");
 
         let alpha = mk_fresh_type_hole();
 
@@ -4288,10 +4393,12 @@ mod tests {
             locals: vec![
                 Local {
                     id: x_id,
+                    name: None,
                     ty: alpha.clone(),
                 },
                 Local {
                     id: a_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
             ],
@@ -4331,10 +4438,12 @@ mod tests {
                 locals: vec![
                     Local {
                         id: x_id,
+                        name: None,
                         ty: mk_fresh_type_hole(),
                     },
                     Local {
                         id: a_id,
+                        name: None,
                         ty: mk_type_prop(),
                     },
                 ],
@@ -4353,10 +4462,10 @@ mod tests {
         let body_name = QualifiedName::from_name(Name::from_str("id"));
         let class_name = QualifiedName::from_name(Name::from_str("C"));
         let instance_name = QualifiedName::from_name(Name::from_str("inst.C"));
-        let u = Id::from_name(&Name::from_str("u"));
-        let v = Id::from_name(&Name::from_str("v"));
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let y_id = Id::from_name(&Name::from_str("y"));
+        let u = local_id("u");
+        let v = local_id("v");
+        let x_id = local_id("x");
+        let y_id = local_id("y");
 
         let left_head = mk_const(
             method_name.clone(),
@@ -4387,10 +4496,12 @@ mod tests {
             locals: vec![
                 Local {
                     id: x_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
                 Local {
                     id: y_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
             ],
@@ -4401,7 +4512,10 @@ mod tests {
             (
                 method_name.clone(),
                 Const {
-                    local_types: vec![u, v],
+                    local_types: vec![
+                        LocalType { id: u, name: None },
+                        LocalType { id: v, name: None },
+                    ],
                     local_classes: vec![Class {
                         name: class_name.clone(),
                         args: vec![mk_type_local(u), mk_type_local(v)],
@@ -4425,7 +4539,10 @@ mod tests {
         let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::from([(
             instance_name,
             ClassInstance {
-                local_types: vec![u, v],
+                local_types: vec![
+                    LocalType { id: u, name: None },
+                    LocalType { id: v, name: None },
+                ],
                 local_classes: vec![],
                 target: Class {
                     name: class_name,
@@ -4462,10 +4579,12 @@ mod tests {
                 locals: vec![
                     Local {
                         id: x_id,
+                        name: None,
                         ty: mk_type_prop(),
                     },
                     Local {
                         id: y_id,
+                        name: None,
                         ty: mk_type_prop(),
                     },
                 ],
@@ -4490,10 +4609,10 @@ mod tests {
         let body_name = QualifiedName::from_name(Name::from_str("id"));
         let class_name = QualifiedName::from_name(Name::from_str("C"));
         let instance_name = QualifiedName::from_name(Name::from_str("inst.C"));
-        let u = Id::from_name(&Name::from_str("u"));
-        let v = Id::from_name(&Name::from_str("v"));
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let y_id = Id::from_name(&Name::from_str("y"));
+        let u = local_id("u");
+        let v = local_id("v");
+        let x_id = local_id("x");
+        let y_id = local_id("y");
 
         let left_head = mk_const(
             method_name.clone(),
@@ -4524,10 +4643,12 @@ mod tests {
             locals: vec![
                 Local {
                     id: x_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
                 Local {
                     id: y_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
             ],
@@ -4538,7 +4659,10 @@ mod tests {
             (
                 method_name.clone(),
                 Const {
-                    local_types: vec![u, v],
+                    local_types: vec![
+                        LocalType { id: u, name: None },
+                        LocalType { id: v, name: None },
+                    ],
                     local_classes: vec![Class {
                         name: class_name.clone(),
                         args: vec![mk_type_local(u), mk_type_local(v)],
@@ -4562,7 +4686,10 @@ mod tests {
         let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::from([(
             instance_name,
             ClassInstance {
-                local_types: vec![u, v],
+                local_types: vec![
+                    LocalType { id: u, name: None },
+                    LocalType { id: v, name: None },
+                ],
                 local_classes: vec![],
                 target: Class {
                     name: class_name,
@@ -4599,10 +4726,12 @@ mod tests {
                 locals: vec![
                     Local {
                         id: x_id,
+                        name: None,
                         ty: mk_type_prop(),
                     },
                     Local {
                         id: y_id,
+                        name: None,
                         ty: mk_type_prop(),
                     },
                 ],

@@ -34,8 +34,6 @@ static QUALIFIED_NAME_TABLE: LazyLock<
 > = LazyLock::new(Default::default);
 
 static ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
-static ID_NAME_TABLE: LazyLock<Mutex<HashMap<Name, Id>>> = LazyLock::new(Default::default);
-static ID_NAME_REV_TABLE: LazyLock<Mutex<HashMap<Id, Name>>> = LazyLock::new(Default::default);
 
 impl Display for Name {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -200,11 +198,6 @@ impl Hash for QualifiedName {
 
 impl Display for Id {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(name) = self.name() {
-            // TODO: Name が同じ Id は今のままだと同じ文字列で表示されるので、
-            // 表示側で衝突を避ける仕組みを別途入れたい。
-            return write!(f, "{}", name);
-        }
         write!(f, "{}", self.0)
     }
 }
@@ -213,41 +206,6 @@ impl Id {
     pub fn fresh() -> Self {
         let id = ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Id(id)
-    }
-
-    pub fn fresh_with_name(name: Name) -> Self {
-        let new_id = Id::fresh();
-        ID_NAME_REV_TABLE.lock().unwrap().insert(new_id, name);
-        new_id
-    }
-
-    pub fn from_name(name: &Name) -> Id {
-        let mut id_table = ID_NAME_TABLE.lock().unwrap();
-        if let Some(&id) = id_table.get(name) {
-            return id;
-        }
-
-        let id = Id::fresh();
-        id_table.insert(name.clone(), id);
-        drop(id_table);
-        // This can be put here outside the critical section of ID_NAME_TABLE
-        // because no one but this function knows of the value of `id`.
-        ID_NAME_REV_TABLE.lock().unwrap().insert(id, name.clone());
-        id
-    }
-
-    pub fn name(&self) -> Option<Name> {
-        ID_NAME_REV_TABLE.lock().unwrap().get(self).cloned()
-    }
-
-    pub fn is_generated(&self) -> bool {
-        if let Some(name) = self.name() {
-            let Some(&id) = ID_NAME_TABLE.lock().unwrap().get(&name) else {
-                return true;
-            };
-            return id != *self;
-        }
-        true
     }
 }
 
@@ -333,6 +291,13 @@ pub struct TypeApp {
 pub struct TypeLocal {
     pub metadata: TypeMetadata,
     pub id: Id,
+}
+
+#[derive(Clone, Debug)]
+pub struct LocalType {
+    pub id: Id,
+    // Invariant: if two local carriers share the same `id`, they also carry the same `name`.
+    pub name: Option<Name>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -1299,6 +1264,7 @@ impl TryFrom<Term> for Ctor {
 #[derive(Debug, Clone)]
 pub struct Local {
     pub id: Id,
+    pub name: Option<Name>,
     pub ty: Type,
 }
 
@@ -1783,7 +1749,7 @@ impl Term {
         let locals = xs.iter().map(|x| x.id).collect::<Vec<_>>();
         let mut m = self.close(&locals, 0);
         for x in xs.iter().rev() {
-            m = mk_abs(x.id.name(), x.ty.clone(), m);
+            m = mk_abs(x.name.clone(), x.ty.clone(), m);
         }
         m
     }
@@ -1905,7 +1871,7 @@ impl Term {
 
 #[derive(Debug, Default, Clone)]
 pub struct LocalEnv {
-    pub local_types: Vec<Id>,
+    pub local_types: Vec<LocalType>,
     pub local_classes: Vec<Class>,
     pub local_deltas: Vec<LocalDelta>,
     pub locals: Vec<Local>,
@@ -1936,14 +1902,14 @@ pub struct LocalDelta {
 
 #[derive(Debug, Clone)]
 pub struct Const {
-    pub local_types: Vec<Id>,
+    pub local_types: Vec<LocalType>,
     pub local_classes: Vec<Class>,
     pub ty: Type,
 }
 
 #[derive(Debug, Clone)]
 pub struct Delta {
-    pub local_types: Vec<Id>,
+    pub local_types: Vec<LocalType>,
     pub local_classes: Vec<Class>,
     pub target: Term,
     // equal to height(target)
@@ -1955,7 +1921,7 @@ pub struct Kappa;
 
 #[derive(Debug, Clone)]
 pub struct ClassInstance {
-    pub local_types: Vec<Id>,
+    pub local_types: Vec<LocalType>,
     pub local_classes: Vec<Class>,
     pub target: Class,
     pub method_table: HashMap<QualifiedName, Term>,
@@ -2012,7 +1978,7 @@ impl Env<'_> {
             }
             Type::Local(x) => {
                 for local_type in &local_env.local_types {
-                    if *local_type == x.id {
+                    if local_type.id == x.id {
                         return Kind::base();
                     }
                 }
@@ -2092,7 +2058,7 @@ impl Env<'_> {
                 }
                 let mut type_subst = Vec::with_capacity(local_types.len());
                 for (x, t) in zip(local_types, ty_args) {
-                    type_subst.push((*x, t.clone()));
+                    type_subst.push((x.id, t.clone()));
                 }
                 if local_classes.len() != args.len() {
                     panic!(
@@ -2127,6 +2093,7 @@ impl Env<'_> {
                 self.check_wft(local_env, &m.binder_type);
                 let x = Local {
                     id: Id::fresh(),
+                    name: None,
                     ty: m.binder_type.clone(),
                 };
                 let n = m.body.open(&[mk_local(x.id)], 0);
@@ -2178,7 +2145,7 @@ impl Env<'_> {
                 }
                 let mut type_subst = Vec::with_capacity(local_types.len());
                 for (x, t) in zip(local_types, &m.ty_args) {
-                    type_subst.push((*x, t.clone()));
+                    type_subst.push((x.id, t.clone()));
                 }
                 if local_classes.len() != m.instances.len() {
                     panic!(
@@ -2229,7 +2196,7 @@ impl Env<'_> {
         } = self.delta_table.get(&n.name)?;
         let mut type_subst = Vec::with_capacity(local_types.len());
         for (x, t) in zip(local_types, &n.ty_args) {
-            type_subst.push((*x, t.clone()));
+            type_subst.push((x.id, t.clone()));
         }
         let mut instance_subst = Vec::with_capacity(local_classes.len());
         for (local_class, instance) in zip(local_classes, &n.instances) {
@@ -2270,7 +2237,7 @@ impl Env<'_> {
         let target = method_table.get(&n.name)?;
         let mut type_subst = Vec::with_capacity(local_types.len());
         for (x, t) in zip(local_types, ty_args) {
-            type_subst.push((*x, t.clone()));
+            type_subst.push((x.id, t.clone()));
         }
         let mut instance_subst = Vec::with_capacity(local_classes.len());
         for (local_class, instance) in zip(local_classes, args) {
@@ -2605,7 +2572,8 @@ mod tests {
     }
 
     fn local_id(value: &str) -> Id {
-        Id::from_name(&Name::from_str(value))
+        let _ = value;
+        Id::fresh()
     }
 
     #[test]
@@ -2650,6 +2618,7 @@ mod tests {
             local_deltas: vec![],
             locals: vec![Local {
                 id: f_id,
+                name: None,
                 ty: domain.clone().arrow(std::iter::once(codomain)),
             }],
         };
@@ -2676,6 +2645,7 @@ mod tests {
             local_deltas: vec![],
             locals: vec![Local {
                 id: f_id,
+                name: None,
                 ty: domain
                     .clone()
                     .arrow([domain.clone(), codomain.clone()].into_iter()),
@@ -2752,6 +2722,7 @@ mod tests {
         let mut local_env = empty_local_env();
         local_env.locals.push(Local {
             id: c_id,
+            name: None,
             ty: mk_type_prop(),
         });
         local_env.local_deltas.push(LocalDelta {
@@ -2802,7 +2773,7 @@ mod tests {
         let env = fixture.env();
 
         let unfoldable_id = local_id("foo.l");
-        let rigid_id = Id::from_name(&Name::from_str("x"));
+        let rigid_id = local_id("x");
         let local_env = LocalEnv {
             local_types: vec![],
             local_classes: vec![],
@@ -2814,10 +2785,12 @@ mod tests {
             locals: vec![
                 Local {
                     id: unfoldable_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
                 Local {
                     id: rigid_id,
+                    name: None,
                     ty: mk_type_prop(),
                 },
             ],
@@ -2835,6 +2808,7 @@ mod tests {
         let mut local_env = empty_local_env();
         local_env.locals.push(Local {
             id: c_id,
+            name: None,
             ty: mk_type_prop(),
         });
         local_env.local_deltas.push(LocalDelta {
@@ -2867,10 +2841,12 @@ mod tests {
             locals: vec![
                 Local {
                     id: c_id,
+                    name: None,
                     ty: domain.clone().arrow(std::iter::once(codomain.clone())),
                 },
                 Local {
                     id: f_id,
+                    name: None,
                     ty: domain.clone().arrow(std::iter::once(codomain)),
                 },
             ],
@@ -2931,10 +2907,12 @@ mod tests {
             locals: vec![
                 Local {
                     id: f_id,
+                    name: None,
                     ty: domain.clone().arrow(std::iter::once(codomain.clone())),
                 },
                 Local {
                     id: g_id,
+                    name: None,
                     ty: domain.clone().arrow(std::iter::once(codomain)),
                 },
             ],
@@ -2960,6 +2938,7 @@ mod tests {
             local_classes: vec![],
             locals: vec![Local {
                 id,
+                name: None,
                 ty: mk_type_prop(),
             }],
             local_deltas: vec![],
@@ -3002,6 +2981,7 @@ mod tests {
         let mut local_env = empty_local_env();
         local_env.locals.push(Local {
             id: c_id,
+            name: None,
             ty: mk_type_prop(),
         });
 
@@ -3027,6 +3007,7 @@ mod tests {
             local_classes: vec![],
             locals: vec![Local {
                 id: local_id("c"),
+                name: None,
                 ty: mk_type_arrow(mk_type_prop(), mk_type_prop()),
             }],
             local_deltas: vec![],
@@ -3035,19 +3016,6 @@ mod tests {
         let term = mk_const(c, vec![], vec![]);
         let inferred = env.infer_type(&mut local_env, &term);
         assert_eq!(inferred, mk_type_prop());
-    }
-
-    #[test]
-    fn from_name_is_canonical_for_dotted_name() {
-        let left = local_id("foo.bar");
-        let right = local_id("foo.bar");
-        assert_eq!(left, right);
-    }
-
-    #[test]
-    fn name_returns_some_for_dotted_name_id() {
-        let id = local_id("foo.bar");
-        assert_eq!(id.name(), Some(Name::from_str("foo.bar")));
     }
 
     #[test]

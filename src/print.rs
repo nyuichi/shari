@@ -1,7 +1,7 @@
 use crate::{
     cmd::{CmdTypeDef, Fixity, Operator},
     proof::Axiom,
-    tt::{Class, ClassType, Const, Ctor, Id, Kind, Name, QualifiedName, Term, Type},
+    tt::{Class, ClassType, Const, Ctor, Id, Kind, LocalType, Name, QualifiedName, Term, Type},
 };
 
 use anyhow::bail;
@@ -597,13 +597,13 @@ fn generate_fresh_local_type(base_name: &str, local_types: &Vec<String>) -> Stri
     x
 }
 
-fn create_local_type_name(local_types: &Vec<Id>) -> HashMap<Id, String> {
+fn create_local_type_name(local_types: &Vec<LocalType>) -> HashMap<Id, String> {
     const DEFAULT_NAME: &str = "u";
 
     let mut local_type_names = HashMap::new();
     let mut local_type_list = Vec::new();
     for local_type in local_types {
-        if let Some(name) = local_type.name() {
+        if let Some(name) = &local_type.name {
             let name = if local_type_list
                 .iter()
                 .any(|existing| existing == name.as_str())
@@ -613,15 +613,11 @@ fn create_local_type_name(local_types: &Vec<Id>) -> HashMap<Id, String> {
                 name.to_string()
             };
             local_type_list.push(name.clone());
-            local_type_names.insert(*local_type, name);
-        } else if local_type.is_generated() {
+            local_type_names.insert(local_type.id, name);
+        } else {
             let name = generate_fresh_local_type(DEFAULT_NAME, &local_type_list);
             local_type_list.push(name.clone());
-            local_type_names.insert(*local_type, name);
-        } else {
-            let name = local_type.name().unwrap().to_string();
-            local_type_list.push(name.clone());
-            local_type_names.insert(*local_type, name);
+            local_type_names.insert(local_type.id, name);
         }
     }
     local_type_names
@@ -646,7 +642,7 @@ impl Display for Pretty<'_, (&QualifiedName, &Const)> {
                 if !first {
                     write!(f, ", ")?;
                 }
-                write!(f, "{}", local_type_names.get(local_type).unwrap())?;
+                write!(f, "{}", local_type_names.get(&local_type.id).unwrap())?;
                 first = false;
             }
             write!(f, "}}")?;
@@ -686,7 +682,7 @@ impl Display for Pretty<'_, (&QualifiedName, &Axiom)> {
                 if !first {
                     write!(f, ", ")?;
                 }
-                write!(f, "{}", local_type_names.get(local_type).unwrap())?;
+                write!(f, "{}", local_type_names.get(&local_type.id).unwrap())?;
                 first = false;
             }
             write!(f, "}}")?;
@@ -733,7 +729,7 @@ impl Display for Pretty<'_, (&QualifiedName, &CmdTypeDef)> {
                 if !first {
                     write!(f, ", ")?;
                 }
-                write!(f, "{}", local_type_names.get(local_type).unwrap())?;
+                write!(f, "{}", local_type_names.get(&local_type.id).unwrap())?;
                 first = false;
             }
             write!(f, "}}")?;
