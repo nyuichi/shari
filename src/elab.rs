@@ -815,21 +815,16 @@ impl<'a> Elaborator<'a> {
                 for field in &*fields {
                     match field {
                         LocalStructureField::Const(LocalStructureConst {
-                            field_name,
+                            name,
                             field_id,
                             id,
                             ty,
                             ..
                         }) => {
                             let ty = ty.arrow([this_ty.clone()]);
-                            let qualified_name = Name::from_str(
-                                &QualifiedName::from_name(structure_name.clone())
-                                    .extend(field_name.clone())
-                                    .to_string(),
-                            );
                             locals.push(Local {
                                 id: *id,
-                                name: Some(qualified_name.clone()),
+                                name: Some(name.clone()),
                                 ty,
                             });
 
