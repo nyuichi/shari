@@ -4,8 +4,8 @@ use crate::cmd::{
     CmdConst, CmdDef, CmdInductive, CmdInfix, CmdInfixl, CmdInfixr, CmdInstance, CmdLemma,
     CmdNamespaceStart, CmdNofix, CmdPrefix, CmdStructure, CmdTypeConst, CmdTypeDef,
     CmdTypeInductive, CmdTypeInfix, CmdTypeInfixl, CmdTypeInfixr, CmdTypeNofix, CmdTypePrefix,
-    CmdUse, Constructor, DataConstructor, Fixity, InstanceDef, InstanceField, InstanceLemma,
-    Namespace, Operator, StructureAxiom, StructureConst, StructureField, UseDecl,
+    CmdUse, Fixity, InductiveConstructor, InstanceDef, InstanceField, InstanceLemma, Namespace,
+    Operator, StructureAxiom, StructureConst, StructureField, TypeInductiveConstructor, UseDecl,
 };
 use crate::proof::{
     Axiom, Expr, LocalStructureAxiom, LocalStructureConst, LocalStructureField, count_forall,
@@ -231,8 +231,8 @@ pub struct Parser<'a> {
     local_axioms: Vec<(QualifiedName, LocalAxiom)>,
     local_types: Vec<LocalBinding>,
     locals: Vec<LocalBinding>,
-    self_ref: Option<(QualifiedName, Id)>,
-    type_self_ref: Option<(QualifiedName, Id)>,
+    this_ref: Option<(QualifiedName, Id)>,
+    type_this_ref: Option<(QualifiedName, Id)>,
     holes: Vec<(Id, Type)>,
 }
 
@@ -265,8 +265,8 @@ impl<'a> Parser<'a> {
             local_axioms: vec![],
             local_types: vec![],
             locals: vec![],
-            self_ref: None,
-            type_self_ref: None,
+            this_ref: None,
+            type_this_ref: None,
             holes: vec![],
         }
     }
@@ -609,8 +609,8 @@ impl<'a> Parser<'a> {
                         return Ok(mk_type_local(id));
                     }
                     if let Some(stash) =
-                        self.type_self_ref.as_ref().and_then(|(self_name, stash)| {
-                            if self_name == &name {
+                        self.type_this_ref.as_ref().and_then(|(this_name, stash)| {
+                            if this_name == &name {
                                 Some(stash)
                             } else {
                                 None
@@ -933,8 +933,8 @@ impl<'a> Parser<'a> {
                     {
                         return Ok(mk_local(id));
                     }
-                    if let Some(stash) = self.self_ref.as_ref().and_then(|(self_name, stash)| {
-                        if self_name == &name {
+                    if let Some(stash) = self.this_ref.as_ref().and_then(|(this_name, stash)| {
+                        if this_name == &name {
                             Some(stash)
                         } else {
                             None
@@ -2747,12 +2747,12 @@ impl<'a> Parser<'a> {
         let literal_name = self.qualified_name(&token);
         self.lex.restore(state);
         let name = self.global_declaration_name(Some(&token))?;
-        let self_id = Id::fresh();
+        let this = Id::fresh();
         debug_assert!(
-            self.type_self_ref.is_none(),
+            self.type_this_ref.is_none(),
             "nested type inductive definitions are not supported"
         );
-        self.type_self_ref = Some((literal_name, self_id));
+        self.type_this_ref = Some((literal_name, this));
 
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
@@ -2770,7 +2770,7 @@ impl<'a> Parser<'a> {
             });
             local_types.push(LocalBinding { name: tv, id });
         }
-        let mut ctors: Vec<DataConstructor> = vec![];
+        let mut ctors: Vec<TypeInductiveConstructor> = vec![];
         while let Some(_token) = self.expect_symbol_opt("|") {
             let token = self.ident()?;
             let ctor_name = Name::from_str(token.as_str());
@@ -2781,7 +2781,7 @@ impl<'a> Parser<'a> {
             }
             self.expect_symbol(":")?;
             let ty = self.ty()?;
-            ctors.push(DataConstructor {
+            ctors.push(TypeInductiveConstructor {
                 name: ctor_name,
                 ty,
             })
@@ -2789,10 +2789,10 @@ impl<'a> Parser<'a> {
         // Parsing finished. We can now safely tear off.
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
-        self.type_self_ref = None;
+        self.type_this_ref = None;
         Ok(CmdTypeInductive {
             name,
-            self_id,
+            this,
             local_types: local_types.iter().map(|binding| binding.id).collect(),
             ctors,
         })
@@ -2804,12 +2804,12 @@ impl<'a> Parser<'a> {
         let literal_name = self.qualified_name(&ident);
         self.lex.restore(state);
         let name = self.global_declaration_name(Some(&ident))?;
-        let self_id = Id::fresh();
+        let this = Id::fresh();
         debug_assert!(
-            self.self_ref.is_none(),
+            self.this_ref.is_none(),
             "nested inductive definitions are not supported"
         );
-        self.self_ref = Some((literal_name, self_id));
+        self.this_ref = Some((literal_name, this));
         let local_types = self.local_type_parameters()?;
         let local_types = local_types
             .into_iter()
@@ -2837,7 +2837,7 @@ impl<'a> Parser<'a> {
             .collect::<Vec<_>>();
         self.expect_symbol(":")?;
         let target_ty = self.ty()?;
-        let mut ctors: Vec<Constructor> = vec![];
+        let mut ctors: Vec<InductiveConstructor> = vec![];
         while let Some(_token) = self.expect_symbol_opt("|") {
             let token = self.ident()?;
             let ctor_name = Name::from_str(token.as_str());
@@ -2866,19 +2866,19 @@ impl<'a> Parser<'a> {
             let mut target = self.term()?;
             self.locals.truncate(ctor_params_start);
             target = generalize(&target, &ctor_params);
-            ctors.push(Constructor {
+            ctors.push(InductiveConstructor {
                 name: ctor_name,
                 target,
             })
         }
         // Parsing finished.
         self.locals.truncate(params_start);
-        self.self_ref = None;
+        self.this_ref = None;
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdInductive {
             name,
-            self_id,
+            this,
             local_types,
             ctors,
             params,
@@ -3321,7 +3321,10 @@ impl<'a> Parser<'a> {
 mod tests {
     use super::*;
     use crate::lex::{File, Lex};
-    use crate::proof::{ExprApp, ExprAssume, ExprConst, ExprInst, ExprLetTerm, ExprLocal};
+    use crate::proof::{
+        ExprApp, ExprAssume, ExprConst, ExprInst, ExprLetTerm, ExprLocal, mk_type_prop,
+        ungeneralize, unguard,
+    };
     use std::collections::HashMap;
     use std::sync::{Arc, LazyLock};
 
@@ -6098,6 +6101,82 @@ mod tests {
             !use_table.contains_key(&Name::from_str("ctor")),
             "parsing must not mutate current namespace aliases"
         );
+    }
+
+    #[test]
+    fn type_inductive_command_parses_with_this_and_type_inductive_constructor() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "type inductive foo u | mk : foo u",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("type inductive command parses");
+        let Cmd::TypeInductive(CmdTypeInductive {
+            name,
+            this,
+            local_types,
+            ctors,
+        }) = cmd
+        else {
+            panic!("expected type inductive command");
+        };
+        assert_eq!(name, qualified("foo"));
+        assert_eq!(local_types.len(), 1);
+        assert_ne!(this, local_types[0]);
+        let [TypeInductiveConstructor { name, ty }] = ctors.as_slice() else {
+            panic!("expected one type inductive constructor");
+        };
+        assert_eq!(name, &Name::from_str("mk"));
+        assert_eq!(
+            ty,
+            &mk_type_local(this).apply([mk_type_local(local_types[0])])
+        );
+    }
+
+    #[test]
+    fn inductive_command_parses_with_this_and_inductive_constructor() {
+        let (tt, type_consts, consts, axioms, class_predicates) = setup_tables();
+        let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
+        let cmd = parse_cmd_with_tables(
+            "inductive foo : Prop | mk (h : Prop) : foo",
+            &tt,
+            &mut use_table,
+            &type_consts,
+            &consts,
+            &axioms,
+            &class_predicates,
+        )
+        .expect("inductive command parses");
+        let Cmd::Inductive(CmdInductive {
+            name,
+            this,
+            local_types,
+            params,
+            target_ty,
+            ctors,
+        }) = cmd
+        else {
+            panic!("expected inductive command");
+        };
+        assert_eq!(name, qualified("foo"));
+        assert!(local_types.is_empty());
+        assert!(params.is_empty());
+        assert_eq!(target_ty, mk_type_prop());
+        let [InductiveConstructor { name, target }] = ctors.as_slice() else {
+            panic!("expected one inductive constructor");
+        };
+        assert_eq!(name, &Name::from_str("mk"));
+        let (ctor_params, ctor_body) = ungeneralize(target);
+        assert_eq!(ctor_params.len(), 1);
+        let (ctor_args, ctor_target) = unguard(&ctor_body);
+        assert!(ctor_args.is_empty());
+        assert!(ctor_target.head().alpha_eq(&mk_local(this)));
     }
 
     #[test]
