@@ -231,13 +231,15 @@ pub enum StructureField {
 
 #[derive(Clone, Debug)]
 pub struct StructureConst {
-    pub name: Name,
+    pub field_name: Name,
+    pub name: QualifiedName,
     pub ty: Type,
 }
 
 #[derive(Clone, Debug)]
 pub struct StructureAxiom {
-    pub name: Name,
+    pub field_name: Name,
+    pub name: QualifiedName,
     pub target: Term,
 }
 
@@ -259,14 +261,16 @@ pub enum InstanceField {
 
 #[derive(Clone, Debug)]
 pub struct InstanceDef {
-    pub name: Name,
+    pub field_name: Name,
+    pub name: QualifiedName,
     pub ty: Type,
     pub target: Term,
 }
 
 #[derive(Clone, Debug)]
 pub struct InstanceLemma {
-    pub name: Name,
+    pub field_name: Name,
+    pub name: QualifiedName,
     pub target: Term,
     pub holes: Vec<(Id, Type)>,
     pub expr: Expr,
@@ -287,13 +291,15 @@ pub enum ClassStructureField {
 
 #[derive(Clone, Debug)]
 pub struct ClassStructureConst {
-    pub name: Name,
+    pub field_name: Name,
+    pub name: QualifiedName,
     pub ty: Type,
 }
 
 #[derive(Clone, Debug)]
 pub struct ClassStructureAxiom {
-    pub name: Name,
+    pub field_name: Name,
+    pub name: QualifiedName,
     pub target: Term,
 }
 
@@ -314,14 +320,14 @@ pub enum ClassInstanceField {
 
 #[derive(Clone, Debug)]
 pub struct ClassInstanceDef {
-    pub name: Name,
+    pub field_name: Name,
     pub ty: Type,
     pub target: Term,
 }
 
 #[derive(Clone, Debug)]
 pub struct ClassInstanceLemma {
-    pub name: Name,
+    pub field_name: Name,
     pub target: Term,
     pub holes: Vec<(Id, Type)>,
     pub expr: Expr,
@@ -467,8 +473,10 @@ impl std::fmt::Display for Cmd {
                 cmd.fields
                     .iter()
                     .map(|field| match field {
-                        StructureField::Const(c) => format!("  constant {} : {}", c.name, c.ty),
-                        StructureField::Axiom(a) => format!("  axiom {} : {}", a.name, a.target),
+                        StructureField::Const(c) =>
+                            format!("  constant {} : {}", c.field_name, c.ty),
+                        StructureField::Axiom(a) =>
+                            format!("  axiom {} : {}", a.field_name, a.target),
                     })
                     .collect::<Vec<_>>()
                     .join("\n")
@@ -492,9 +500,9 @@ impl std::fmt::Display for Cmd {
                     .iter()
                     .map(|field| match field {
                         InstanceField::Def(d) =>
-                            format!("  def {} : {} := {}", d.name, d.ty, d.target),
+                            format!("  def {} : {} := {}", d.field_name, d.ty, d.target),
                         InstanceField::Lemma(l) =>
-                            format!("  lemma {} : {} := {}", l.name, l.target, l.expr),
+                            format!("  lemma {} : {} := {}", l.field_name, l.target, l.expr),
                     })
                     .collect::<Vec<_>>()
                     .join("\n")
@@ -512,9 +520,9 @@ impl std::fmt::Display for Cmd {
                     .iter()
                     .map(|field| match field {
                         ClassStructureField::Const(c) =>
-                            format!("  constant {} : {}", c.name, c.ty),
+                            format!("  constant {} : {}", c.field_name, c.ty),
                         ClassStructureField::Axiom(a) =>
-                            format!("  axiom {} : {}", a.name, a.target),
+                            format!("  axiom {} : {}", a.field_name, a.target),
                     })
                     .collect::<Vec<_>>()
                     .join("\n")
@@ -533,9 +541,9 @@ impl std::fmt::Display for Cmd {
                     .iter()
                     .map(|field| match field {
                         ClassInstanceField::Def(d) =>
-                            format!("  def {} : {} := {}", d.name, d.ty, d.target),
+                            format!("  def {} : {} := {}", d.field_name, d.ty, d.target),
                         ClassInstanceField::Lemma(l) =>
-                            format!("  lemma {} : {} := {}", l.name, l.target, l.expr),
+                            format!("  lemma {} : {} := {}", l.field_name, l.target, l.expr),
                     })
                     .collect::<Vec<_>>()
                     .join("\n")
@@ -1892,12 +1900,12 @@ impl Eval {
         for field in &mut fields {
             match field {
                 StructureField::Const(StructureConst {
-                    name: field_name,
+                    field_name,
+                    name,
                     ty: field_ty,
                 }) => {
                     let field_name = field_name.clone();
-                    let fullname = name.extend(field_name.clone());
-                    if self.has_const(&fullname) {
+                    if self.has_const(name) {
                         bail!("already defined");
                     }
                     if const_field_names.contains(&field_name) {
@@ -1911,12 +1919,12 @@ impl Eval {
                     });
                 }
                 StructureField::Axiom(StructureAxiom {
-                    name: field_name,
+                    field_name,
+                    name,
                     target,
                 }) => {
                     let field_name = field_name.clone();
-                    let fullname = name.extend(field_name.clone());
-                    if self.has_axiom(&fullname) {
+                    if self.has_axiom(name) {
                         bail!("already defined");
                     }
                     if axiom_field_names.contains(&field_name) {
@@ -1954,10 +1962,11 @@ impl Eval {
         for field in &fields {
             match field {
                 StructureField::Const(StructureConst {
-                    name: field_name,
+                    field_name,
+                    name,
                     ty: field_ty,
                 }) => {
-                    let fullname = name.extend(field_name.clone());
+                    let fullname = name.clone();
                     let ty = field_ty.arrow([this.ty.clone()]);
                     self.add_const(fullname.clone(), local_types.clone(), vec![], ty);
 
@@ -1970,16 +1979,12 @@ impl Eval {
                     target = target.apply([mk_local(this.id)]);
                     subst.push((Id::from_name(field_name), target));
                 }
-                StructureField::Axiom(StructureAxiom {
-                    name: field_name,
-                    target,
-                }) => {
-                    let fullname = name.extend(field_name.clone());
+                StructureField::Axiom(StructureAxiom { name, target, .. }) => {
                     let mut target = target.clone();
                     let new_target = target.subst(&subst);
                     target = new_target;
                     target = generalize(&target, slice::from_ref(&this));
-                    self.add_axiom(fullname, local_types.clone(), vec![], target);
+                    self.add_axiom(name.clone(), local_types.clone(), vec![], target);
                 }
             }
         }
@@ -1992,7 +1997,8 @@ impl Eval {
         for field in &fields {
             match field {
                 StructureField::Const(StructureConst {
-                    name: field_name,
+                    field_name,
+                    name,
                     ty: field_ty,
                 }) => {
                     // (s : set u)
@@ -2002,9 +2008,8 @@ impl Eval {
                     };
 
                     // inhab.rep this
-                    let fullname = name.extend(field_name.clone());
                     let mut rhs = mk_const(
-                        fullname,
+                        name.clone(),
                         local_types.iter().cloned().map(mk_type_local).collect(),
                         vec![],
                     );
@@ -2123,7 +2128,7 @@ impl Eval {
             bail!("type of instance must be a structure");
         };
         let structure_name = structure_name.name.clone();
-        let Some(cmd_structure) = self.structure_table.get(&structure_name) else {
+        let Some(cmd_structure) = self.structure_table.get(&structure_name).cloned() else {
             bail!("type of instance must be a structure");
         };
         let mut type_subst = Vec::with_capacity(cmd_structure.local_types.len());
@@ -2139,19 +2144,20 @@ impl Eval {
             match (structure_field, field) {
                 (
                     StructureField::Const(StructureConst {
-                        name: structure_field_name,
+                        field_name: structure_field_name,
                         ty: structure_field_ty,
+                        ..
                     }),
                     InstanceField::Def(InstanceDef {
-                        name: field_name,
+                        field_name,
+                        name,
                         ty,
                         ..
                     }),
                 ) => {
                     let structure_field_name = structure_field_name.clone();
                     let field_name = field_name.clone();
-                    let field_fullname = name.extend(field_name.clone());
-                    if self.has_const(&field_fullname) {
+                    if self.has_const(name) {
                         bail!("already defined");
                     }
                     if structure_field_name != field_name {
@@ -2173,19 +2179,20 @@ impl Eval {
                 }
                 (
                     StructureField::Axiom(StructureAxiom {
-                        name: structure_field_name,
+                        field_name: structure_field_name,
                         target: structure_field_target,
+                        ..
                     }),
                     InstanceField::Lemma(InstanceLemma {
-                        name: field_name,
+                        field_name,
+                        name,
                         target,
                         ..
                     }),
                 ) => {
                     let structure_field_name = structure_field_name.clone();
                     let field_name = field_name.clone();
-                    let field_fullname = name.extend(field_name.clone());
-                    if self.has_axiom(&field_fullname) {
+                    if self.has_axiom(name) {
                         bail!("already defined");
                     }
                     if structure_field_name != field_name {
@@ -2215,7 +2222,8 @@ impl Eval {
         for field in &mut fields {
             match field {
                 InstanceField::Def(InstanceDef {
-                    name: field_name,
+                    field_name,
+                    name,
                     ty,
                     target,
                 }) => {
@@ -2224,10 +2232,9 @@ impl Eval {
                     *target = target.subst(&subst);
                     self.elaborate_term(&mut local_env, target, ty)?;
 
-                    let fullname = name.extend(field_name.clone());
                     let target_ty = ty.arrow(params.iter().map(|param| param.ty.clone()));
                     self.add_const(
-                        fullname.clone(),
+                        name.clone(),
                         local_types.clone(),
                         local_classes.clone(),
                         target_ty,
@@ -2237,11 +2244,11 @@ impl Eval {
                         m = m.abs(&params);
                         m
                     };
-                    self.add_delta(fullname.clone(), target);
+                    self.add_delta(name.clone(), target);
 
                     // rep ↦ inhab.rep.{u} A
                     let mut target = mk_const(
-                        fullname,
+                        name.clone(),
                         local_types.iter().cloned().map(mk_type_local).collect(),
                         local_classes
                             .iter()
@@ -2252,7 +2259,8 @@ impl Eval {
                     subst.push((Id::from_name(&field_name), target));
                 }
                 InstanceField::Lemma(InstanceLemma {
-                    name: field_name,
+                    field_name,
+                    name,
                     target,
                     holes,
                     expr,
@@ -2275,10 +2283,14 @@ impl Eval {
                         prop: target.clone(),
                     });
 
-                    let fullname = name.extend(field_name.clone());
                     let mut target = target.clone();
                     target = generalize(&target, &params);
-                    self.add_axiom(fullname, local_types.clone(), local_classes.clone(), target);
+                    self.add_axiom(
+                        name.clone(),
+                        local_types.clone(),
+                        local_classes.clone(),
+                        target,
+                    );
                 }
             }
         }
@@ -2305,32 +2317,31 @@ impl Eval {
                 .collect(),
         );
         this = this.apply(params.iter().map(|param| mk_local(param.id)));
-        for field in &fields {
-            let InstanceField::Def(InstanceDef {
-                name: field_name,
-                ty,
-                ..
-            }) = field
+        for (structure_field, field) in zip(&cmd_structure.fields, &fields) {
+            let (
+                StructureField::Const(StructureConst {
+                    name: structure_field_name,
+                    ..
+                }),
+                InstanceField::Def(InstanceDef { name, ty, .. }),
+            ) = (structure_field, field)
             else {
                 continue;
             };
-            let field_name = field_name.clone();
-            let spec_name = name
-                .extend(field_name.clone())
-                .extend(Name::from_str("spec"));
+            let spec_name = name.extend(Name::from_str("spec"));
             if self.has_axiom(&spec_name) {
                 bail!("already defined");
             }
 
             let mut lhs = mk_const(
-                structure_name.extend(field_name.clone()),
+                structure_field_name.clone(),
                 target_ty.args().into_iter().cloned().collect(),
                 vec![],
             );
             lhs = lhs.apply([this.clone()]);
 
             let mut rhs = mk_const(
-                name.extend(field_name.clone()),
+                name.clone(),
                 local_types.iter().cloned().map(mk_type_local).collect(),
                 local_classes
                     .iter()
@@ -2383,12 +2394,12 @@ impl Eval {
         for field in &mut fields {
             match field {
                 ClassStructureField::Const(ClassStructureConst {
-                    name: field_name,
+                    field_name,
+                    name,
                     ty: field_ty,
                 }) => {
                     let field_name = field_name.clone();
-                    let fullname = name.extend(field_name.clone());
-                    if self.has_const(&fullname) {
+                    if self.has_const(name) {
                         bail!("already defined");
                     }
                     if const_field_names.contains(&field_name) {
@@ -2402,12 +2413,12 @@ impl Eval {
                     });
                 }
                 ClassStructureField::Axiom(ClassStructureAxiom {
-                    name: field_name,
+                    field_name,
+                    name,
                     target,
                 }) => {
                     let field_name = field_name.clone();
-                    let fullname = name.extend(field_name.clone());
-                    if self.has_axiom(&fullname) {
+                    if self.has_axiom(name) {
                         bail!("already defined");
                     }
                     if axiom_field_names.contains(&field_name) {
@@ -2442,10 +2453,11 @@ impl Eval {
         for field in &fields {
             match field {
                 ClassStructureField::Const(ClassStructureConst {
-                    name: field_name,
+                    field_name,
+                    name,
                     ty,
                 }) => {
-                    let fullname = name.extend(field_name.clone());
+                    let fullname = name.clone();
                     self.add_const(
                         fullname.clone(),
                         local_types.clone(),
@@ -2461,16 +2473,12 @@ impl Eval {
                     );
                     subst.push((Id::from_name(field_name), target));
                 }
-                ClassStructureField::Axiom(ClassStructureAxiom {
-                    name: field_name,
-                    target,
-                }) => {
-                    let fullname = name.extend(field_name.clone());
+                ClassStructureField::Axiom(ClassStructureAxiom { name, target, .. }) => {
                     let mut target = target.clone();
                     let new_target = target.subst(&subst);
                     target = new_target;
                     self.add_axiom(
-                        fullname,
+                        name.clone(),
                         local_types.clone(),
                         vec![this_class.clone()],
                         target,
@@ -2523,7 +2531,11 @@ impl Eval {
                 bail!("overlapping instances are disallowed");
             }
         }
-        let cmd_structure = self.class_structure_table.get(&target.name).unwrap();
+        let cmd_structure = self
+            .class_structure_table
+            .get(&target.name)
+            .cloned()
+            .unwrap();
         let mut type_subst = Vec::with_capacity(cmd_structure.local_types.len());
         for (x, t) in zip(&cmd_structure.local_types, &target.args) {
             type_subst.push((*x, t.clone()));
@@ -2537,13 +2549,15 @@ impl Eval {
             match (structure_field, field) {
                 (
                     ClassStructureField::Const(ClassStructureConst {
-                        name: structure_field_name,
+                        field_name: structure_field_name,
                         ty: structure_field_ty,
+                        ..
                     }),
                     ClassInstanceField::Def(ClassInstanceDef {
-                        name: field_name,
+                        field_name,
                         ty,
                         target,
+                        ..
                     }),
                 ) => {
                     let structure_field_name = structure_field_name.clone();
@@ -2565,14 +2579,16 @@ impl Eval {
                 }
                 (
                     ClassStructureField::Axiom(ClassStructureAxiom {
-                        name: structure_field_name,
+                        field_name: structure_field_name,
                         target: structure_field_target,
+                        ..
                     }),
                     ClassInstanceField::Lemma(ClassInstanceLemma {
-                        name: field_name,
+                        field_name,
                         target,
                         holes,
                         expr,
+                        ..
                     }),
                 ) => {
                     let structure_field_name = structure_field_name.clone();
@@ -2608,20 +2624,15 @@ impl Eval {
         }
         // well-formedness check is completed.
         let mut method_table = HashMap::new();
-        for field in &fields {
-            match field {
-                ClassInstanceField::Def(ClassInstanceDef {
-                    name: field_name,
-                    target,
-                    ..
-                }) => {
-                    let field_name = field_name.clone();
-                    let target = target.clone();
-                    let fullname = cmd_structure.name.extend(field_name.clone());
-                    method_table.insert(fullname, target);
-                }
-                ClassInstanceField::Lemma(_) => {}
-            }
+        for (structure_field, field) in zip(&cmd_structure.fields, &fields) {
+            let (
+                ClassStructureField::Const(ClassStructureConst { name, .. }),
+                ClassInstanceField::Def(ClassInstanceDef { target, .. }),
+            ) = (structure_field, field)
+            else {
+                continue;
+            };
+            method_table.insert(name.clone(), target.clone());
         }
         self.add_class_instance(
             name.clone(),
