@@ -1605,6 +1605,7 @@ impl<'a> Parser<'a> {
         {
             return Self::fail(token, "local type parameters are not allowed");
         }
+        let structure_name = QualifiedName::from_name(name.clone());
         self.expect_symbol(":=")?;
         self.expect_symbol("{")?;
         let mut fields = vec![];
@@ -1628,8 +1629,11 @@ impl<'a> Parser<'a> {
                         id: bare_id,
                     });
                     let id = Id::fresh();
+                    let qualified_name =
+                        Name::from_str(&structure_name.extend(field_name.clone()).to_string());
                     fields.push(LocalStructureField::Const(LocalStructureConst {
                         field_name,
+                        name: qualified_name,
                         field_id: bare_id,
                         id,
                         ty: field_ty,
@@ -1689,7 +1693,6 @@ impl<'a> Parser<'a> {
             name: Some(Name::from_str("this")),
             ty: this_ty.clone(),
         };
-        let structure_name = QualifiedName::from_name(name.clone());
         let mut local_consts = vec![];
         let mut local_axioms = vec![];
         let mut subst = vec![];
@@ -6706,6 +6709,7 @@ mod tests {
             panic!("expected local const field");
         };
         assert_eq!(field.field_name, Name::from_str("f"));
+        assert_eq!(field.name, Name::from_str("foo.f"));
         let Expr::Assume(assume) = let_structure.body else {
             panic!("expected assume expression in let structure body");
         };
