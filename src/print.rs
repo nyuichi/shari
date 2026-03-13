@@ -614,12 +614,8 @@ fn create_local_type_name(local_types: &Vec<Id>) -> HashMap<Id, String> {
             };
             local_type_list.push(name.clone());
             local_type_names.insert(*local_type, name);
-        } else if local_type.is_generated() {
-            let name = generate_fresh_local_type(DEFAULT_NAME, &local_type_list);
-            local_type_list.push(name.clone());
-            local_type_names.insert(*local_type, name);
         } else {
-            let name = local_type.name().unwrap().to_string();
+            let name = generate_fresh_local_type(DEFAULT_NAME, &local_type_list);
             local_type_list.push(name.clone());
             local_type_names.insert(*local_type, name);
         }

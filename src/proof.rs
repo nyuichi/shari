@@ -292,6 +292,7 @@ pub enum LocalStructureField {
 
 #[derive(Debug, Clone)]
 pub struct LocalStructureConst {
+    pub field_name: Name,
     pub field_id: Id,
     pub id: Id,
     pub ty: Type,
@@ -299,7 +300,7 @@ pub struct LocalStructureConst {
 
 #[derive(Debug, Clone)]
 pub struct LocalStructureAxiom {
-    pub field_id: Id,
+    pub field_name: Name,
     pub id: Id,
     pub target: Term,
 }
@@ -522,18 +523,18 @@ impl std::fmt::Display for Expr {
                         }
                         match field {
                             LocalStructureField::Const(LocalStructureConst {
-                                field_id,
+                                field_name,
                                 ty,
                                 ..
                             }) => {
-                                write!(f, "const {field_id} : {ty}")?;
+                                write!(f, "const {field_name} : {ty}")?;
                             }
                             LocalStructureField::Axiom(LocalStructureAxiom {
-                                field_id,
+                                field_name,
                                 target,
                                 ..
                             }) => {
-                                write!(f, "axiom {field_id} : {target}")?;
+                                write!(f, "axiom {field_name} : {target}")?;
                             }
                         }
                     }
@@ -1311,7 +1312,12 @@ impl Env<'_> {
                 let mut abs_subst = vec![];
                 for field in fields {
                     match field {
-                        LocalStructureField::Const(LocalStructureConst { field_id, id, ty }) => {
+                        LocalStructureField::Const(LocalStructureConst {
+                            field_id,
+                            id,
+                            ty,
+                            ..
+                        }) => {
                             let param = Local {
                                 id: *field_id,
                                 ty: ty.clone(),
@@ -1417,6 +1423,10 @@ mod tests {
 
     use std::collections::HashMap;
 
+    fn local_id(value: &str) -> Id {
+        Id::fresh_with_name(Name::from_str(value))
+    }
+
     #[test]
     fn change_accepts_function_eta_equivalence() {
         let mut type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
@@ -1425,7 +1435,7 @@ mod tests {
             Kind::base(),
         );
         let eq_name = QualifiedName::from_name(Name::from_str("eq"));
-        let u = Id::from_name(&Name::from_str("u"));
+        let u = local_id("u");
         let prop = mk_type_prop();
         let function_ty = prop.clone().arrow(std::iter::once(prop.clone()));
         let mut const_table = HashMap::new();
@@ -1455,7 +1465,7 @@ mod tests {
             axiom_table: &axiom_table,
         };
 
-        let f_id = Id::from_name(&Name::from_str("f"));
+        let f_id = local_id("f");
         let mut tt_local_env = tt::LocalEnv {
             local_types: vec![],
             local_classes: vec![],
@@ -1515,8 +1525,9 @@ mod tests {
         };
         let mut local_env = LocalEnv::default();
         let local_axiom_name = QualifiedName::from_name(Name::from_str("foo.a"));
+        let local_axiom_id = local_id("foo.a");
         local_env.local_axioms.push(LocalAxiom {
-            id: Some(Id::from_name(&Name::from_str("foo.a"))),
+            id: Some(local_axiom_id),
             prop: mk_const(
                 QualifiedName::from_name(Name::from_str("p")),
                 vec![],

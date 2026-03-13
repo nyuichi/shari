@@ -231,6 +231,7 @@ pub enum StructureField {
 
 #[derive(Clone, Debug)]
 pub struct StructureConst {
+    pub field_id: Id,
     pub field_name: Name,
     pub name: QualifiedName,
     pub ty: Type,
@@ -261,6 +262,7 @@ pub enum InstanceField {
 
 #[derive(Clone, Debug)]
 pub struct InstanceDef {
+    pub field_id: Id,
     pub field_name: Name,
     pub name: QualifiedName,
     pub ty: Type,
@@ -269,6 +271,7 @@ pub struct InstanceDef {
 
 #[derive(Clone, Debug)]
 pub struct InstanceLemma {
+    pub field_id: Id,
     pub field_name: Name,
     pub name: QualifiedName,
     pub target: Term,
@@ -291,6 +294,7 @@ pub enum ClassStructureField {
 
 #[derive(Clone, Debug)]
 pub struct ClassStructureConst {
+    pub field_id: Id,
     pub field_name: Name,
     pub name: QualifiedName,
     pub ty: Type,
@@ -320,6 +324,7 @@ pub enum ClassInstanceField {
 
 #[derive(Clone, Debug)]
 pub struct ClassInstanceDef {
+    pub field_id: Id,
     pub field_name: Name,
     pub ty: Type,
     pub target: Term,
@@ -327,6 +332,7 @@ pub struct ClassInstanceDef {
 
 #[derive(Clone, Debug)]
 pub struct ClassInstanceLemma {
+    pub field_id: Id,
     pub field_name: Name,
     pub target: Term,
     pub holes: Vec<(Id, Type)>,
@@ -1900,6 +1906,7 @@ impl Eval {
         for field in &mut fields {
             match field {
                 StructureField::Const(StructureConst {
+                    field_id,
                     field_name,
                     name,
                     ty: field_ty,
@@ -1914,7 +1921,7 @@ impl Eval {
                     const_field_names.push(field_name.clone());
                     self.elaborate_type(&mut local_env, field_ty, Kind::base())?;
                     local_env.locals.push(Local {
-                        id: Id::from_name(&field_name),
+                        id: *field_id,
                         ty: field_ty.clone(),
                     });
                 }
@@ -1962,9 +1969,10 @@ impl Eval {
         for field in &fields {
             match field {
                 StructureField::Const(StructureConst {
-                    field_name,
+                    field_id,
                     name,
                     ty: field_ty,
+                    ..
                 }) => {
                     let fullname = name.clone();
                     let ty = field_ty.arrow([this.ty.clone()]);
@@ -1977,7 +1985,7 @@ impl Eval {
                         vec![],
                     );
                     target = target.apply([mk_local(this.id)]);
-                    subst.push((Id::from_name(field_name), target));
+                    subst.push((*field_id, target));
                 }
                 StructureField::Axiom(StructureAxiom { name, target, .. }) => {
                     let mut target = target.clone();
@@ -1997,6 +2005,7 @@ impl Eval {
         for field in &fields {
             match field {
                 StructureField::Const(StructureConst {
+                    field_id,
                     field_name,
                     name,
                     ty: field_ty,
@@ -2025,7 +2034,7 @@ impl Eval {
                     chars.push(char);
 
                     // rep ↦ s
-                    subst.push((Id::from_name(field_name), mk_local(param.id)));
+                    subst.push((*field_id, mk_local(param.id)));
 
                     params.push(param);
                 }
@@ -2140,15 +2149,18 @@ impl Eval {
             bail!("number of fields mismatch");
         }
         let mut num_consts = 0;
+        let mut field_subst = vec![];
         for (structure_field, field) in zip(&cmd_structure.fields, &mut fields) {
             match (structure_field, field) {
                 (
                     StructureField::Const(StructureConst {
+                        field_id: structure_field_id,
                         field_name: structure_field_name,
                         ty: structure_field_ty,
                         ..
                     }),
                     InstanceField::Def(InstanceDef {
+                        field_id,
                         field_name,
                         name,
                         ty,
@@ -2169,9 +2181,10 @@ impl Eval {
                         bail!("type mismatch");
                     }
                     local_env.locals.push(Local {
-                        id: Id::from_name(&field_name),
+                        id: *field_id,
                         ty: ty.clone(),
                     });
+                    field_subst.push((*structure_field_id, mk_local(*field_id)));
                     num_consts += 1;
                 }
                 (StructureField::Const(_), _) => {
@@ -2202,6 +2215,7 @@ impl Eval {
                     let mut structure_field_target = structure_field_target.clone();
                     let new_target = structure_field_target.subst_type(&type_subst);
                     structure_field_target = new_target;
+                    structure_field_target = structure_field_target.subst(&field_subst);
                     if !structure_field_target.alpha_eq(target) {
                         bail!("target mismatch");
                     }
@@ -2222,12 +2236,12 @@ impl Eval {
         for field in &mut fields {
             match field {
                 InstanceField::Def(InstanceDef {
-                    field_name,
+                    field_id,
                     name,
                     ty,
                     target,
+                    ..
                 }) => {
-                    let field_name = field_name.clone();
                     // e.g. def power.inhab.rep.{u} (A : set u) : set (set u) := power A
                     *target = target.subst(&subst);
                     self.elaborate_term(&mut local_env, target, ty)?;
@@ -2256,16 +2270,16 @@ impl Eval {
                             .collect(),
                     );
                     target = target.apply(params.iter().map(|param| mk_local(param.id)));
-                    subst.push((Id::from_name(&field_name), target));
+                    subst.push((*field_id, target));
                 }
                 InstanceField::Lemma(InstanceLemma {
-                    field_name,
+                    field_id,
                     name,
                     target,
                     holes,
                     expr,
+                    ..
                 }) => {
-                    let field_name = field_name.clone();
                     // e.g. lemma power.inhab.inhabited.{u} : ∃ a, a ∈ rep := (..)
                     *target = target.subst(&subst);
                     expr.subst(&subst);
@@ -2279,7 +2293,7 @@ impl Eval {
                     self.proof_env()
                         .check_prop(&mut local_env, &mut proof_local_env, expr, target);
                     proof_local_env.local_axioms.push(proof::LocalAxiom {
-                        id: Some(Id::from_name(&field_name)),
+                        id: Some(*field_id),
                         prop: target.clone(),
                     });
 
@@ -2394,6 +2408,7 @@ impl Eval {
         for field in &mut fields {
             match field {
                 ClassStructureField::Const(ClassStructureConst {
+                    field_id,
                     field_name,
                     name,
                     ty: field_ty,
@@ -2408,7 +2423,7 @@ impl Eval {
                     const_field_names.push(field_name.clone());
                     self.elaborate_type(&mut local_env, field_ty, Kind::base())?;
                     local_env.locals.push(Local {
-                        id: Id::from_name(&field_name),
+                        id: *field_id,
                         ty: field_ty.clone(),
                     });
                 }
@@ -2453,9 +2468,7 @@ impl Eval {
         for field in &fields {
             match field {
                 ClassStructureField::Const(ClassStructureConst {
-                    field_name,
-                    name,
-                    ty,
+                    field_id, name, ty, ..
                 }) => {
                     let fullname = name.clone();
                     self.add_const(
@@ -2471,7 +2484,7 @@ impl Eval {
                         local_types.iter().cloned().map(mk_type_local).collect(),
                         vec![this_instance.clone()],
                     );
-                    subst.push((Id::from_name(field_name), target));
+                    subst.push((*field_id, target));
                 }
                 ClassStructureField::Axiom(ClassStructureAxiom { name, target, .. }) => {
                     let mut target = target.clone();
@@ -2543,17 +2556,20 @@ impl Eval {
         if cmd_structure.fields.len() != fields.len() {
             bail!("number of fields mismatch");
         }
-        let mut subst = vec![];
+        let mut structure_subst = vec![];
+        let mut instance_subst = vec![];
         let mut proof_local_env = proof::LocalEnv::default();
         for (structure_field, field) in zip(&cmd_structure.fields, &mut fields) {
             match (structure_field, field) {
                 (
                     ClassStructureField::Const(ClassStructureConst {
+                        field_id: structure_field_id,
                         field_name: structure_field_name,
                         ty: structure_field_ty,
                         ..
                     }),
                     ClassInstanceField::Def(ClassInstanceDef {
+                        field_id,
                         field_name,
                         ty,
                         target,
@@ -2570,9 +2586,10 @@ impl Eval {
                     if structure_field_ty != *ty {
                         bail!("type mismatch");
                     }
-                    *target = target.subst(&subst);
+                    *target = target.subst(&instance_subst);
                     self.elaborate_term(&mut local_env, target, ty)?;
-                    subst.push((Id::from_name(&field_name), target.clone()));
+                    structure_subst.push((*structure_field_id, target.clone()));
+                    instance_subst.push((*field_id, target.clone()));
                 }
                 (ClassStructureField::Const(_), _) => {
                     bail!("definition expected");
@@ -2584,6 +2601,7 @@ impl Eval {
                         ..
                     }),
                     ClassInstanceField::Lemma(ClassInstanceLemma {
+                        field_id,
                         field_name,
                         target,
                         holes,
@@ -2599,7 +2617,7 @@ impl Eval {
                     self.elaborate_term(&mut local_env, target, &mk_type_prop())?;
                     let mut structure_field_target = structure_field_target.clone();
                     structure_field_target = structure_field_target.subst_type(&type_subst);
-                    structure_field_target = structure_field_target.subst(&subst);
+                    structure_field_target = structure_field_target.subst(&structure_subst);
                     if !structure_field_target.alpha_eq(target) {
                         bail!("target mismatch");
                     }
@@ -2613,7 +2631,7 @@ impl Eval {
                     self.proof_env()
                         .check_prop(&mut local_env, &mut proof_local_env, expr, target);
                     proof_local_env.local_axioms.push(proof::LocalAxiom {
-                        id: Some(Id::from_name(&field_name)),
+                        id: Some(*field_id),
                         prop: target.clone(),
                     });
                 }

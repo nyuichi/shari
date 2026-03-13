@@ -822,7 +822,12 @@ impl<'a> Elaborator<'a> {
                 let mut abs_subst = vec![];
                 for field in &*fields {
                     match field {
-                        LocalStructureField::Const(LocalStructureConst { field_id, id, ty }) => {
+                        LocalStructureField::Const(LocalStructureConst {
+                            field_id,
+                            id,
+                            ty,
+                            ..
+                        }) => {
                             let param = Local {
                                 id: *field_id,
                                 ty: ty.clone(),
@@ -2829,6 +2834,10 @@ mod tests {
     };
     use std::collections::HashMap;
 
+    fn local_id(value: &str) -> Id {
+        Id::fresh_with_name(Name::from_str(value))
+    }
+
     #[test]
     fn const_expr_does_not_resolve_local_axiom_from_local_table() {
         let mut tt_local_env = tt::LocalEnv::default();
@@ -2859,7 +2868,7 @@ mod tests {
         );
         let local_axiom_name = QualifiedName::from_name(Name::from_str("foo.a"));
         elab.local_proof_env.local_axioms.push(LocalAxiom {
-            id: Some(Id::from_name(&Name::from_str("foo.a"))),
+            id: Some(local_id("foo.a")),
             prop: mk_const(
                 QualifiedName::from_name(Name::from_str("p")),
                 vec![],
@@ -2877,12 +2886,13 @@ mod tests {
     #[test]
     fn unify_fails_for_inhabited_terms() {
         let name_u = Name::from_str("u");
-        let ty_u = mk_type_local(Id::from_name(&name_u));
+        let u_id = Id::fresh_with_name(name_u.clone());
+        let ty_u = mk_type_local(u_id);
         let name_is_inhabited = QualifiedName::from_name(Name::from_str("is_inhabited"));
         let ty_is_inhabited_u = mk_type_app(mk_type_const(name_is_inhabited.clone()), ty_u.clone());
         let ty_u_to_prop = mk_type_arrow(ty_u.clone(), mk_type_prop());
 
-        let hole_id = Id::from_name(&Name::from_str("46380"));
+        let hole_id = Id::fresh_with_name(Name::from_str("46380"));
         let hole_type = mk_type_arrow(
             ty_is_inhabited_u.clone(),
             mk_type_arrow(
@@ -2894,8 +2904,8 @@ mod tests {
             ),
         );
 
-        let h_id = Id::from_name(&Name::from_str("h"));
-        let x_id = Id::from_name(&Name::from_str("x46373"));
+        let h_id = Id::fresh_with_name(Name::from_str("h"));
+        let x_id = Id::fresh_with_name(Name::from_str("x46373"));
 
         let rep_term = mk_const(
             QualifiedName::from_name(Name::from_str("is_inhabited"))
@@ -2955,7 +2965,7 @@ mod tests {
         ];
 
         let local_env = tt::LocalEnv {
-            local_types: vec![Id::from_name(&name_u)],
+            local_types: vec![u_id],
             local_classes: vec![],
             locals,
             local_deltas: vec![],
@@ -3009,9 +3019,9 @@ mod tests {
 
     #[test]
     fn mk_term_hole_uses_only_non_unfoldable_locals() {
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let q_id = Id::from_name(&Name::from_str("foo.q"));
-        let u_id = Id::from_name(&Name::from_str("foo.u"));
+        let x_id = Id::fresh_with_name(Name::from_str("x"));
+        let q_id = Id::fresh_with_name(Name::from_str("foo.q"));
+        let u_id = Id::fresh_with_name(Name::from_str("foo.u"));
 
         let x_ty = mk_type_prop();
         let q_ty = mk_type_prop();
@@ -3091,7 +3101,7 @@ mod tests {
     #[test]
     fn unify_local_and_const_uses_local_unfold() {
         let c = QualifiedName::from_name(Name::from_str("c"));
-        let l_id = Id::from_name(&Name::from_str("foo.l"));
+        let l_id = Id::fresh_with_name(Name::from_str("foo.l"));
         let c_term = mk_const(c.clone(), vec![], vec![]);
 
         let mut local_env = tt::LocalEnv {
@@ -3158,8 +3168,8 @@ mod tests {
 
     #[test]
     fn unify_local_local_with_unfoldable_side() {
-        let unfoldable_id = Id::from_name(&Name::from_str("foo.l"));
-        let rigid_id = Id::from_name(&Name::from_str("x"));
+        let unfoldable_id = Id::fresh_with_name(Name::from_str("foo.l"));
+        let rigid_id = Id::fresh_with_name(Name::from_str("x"));
 
         let mut local_env = tt::LocalEnv {
             local_types: vec![],
@@ -3223,7 +3233,7 @@ mod tests {
 
     #[test]
     fn unify_rigid_local_function_with_eta_expansion() {
-        let f_id = Id::from_name(&Name::from_str("f"));
+        let f_id = Id::fresh_with_name(Name::from_str("f"));
         let x_name = Name::from_str("x");
 
         let mut local_env = tt::LocalEnv {
@@ -3342,8 +3352,8 @@ mod tests {
 
     #[test]
     fn unify_flex_function_eta_solves() {
-        let f_id = Id::from_name(&Name::from_str("f"));
-        let hole_id = Id::from_name(&Name::from_str("M"));
+        let f_id = Id::fresh_with_name(Name::from_str("f"));
+        let hole_id = Id::fresh_with_name(Name::from_str("M"));
 
         let mut local_env = tt::LocalEnv {
             local_types: vec![],
@@ -3411,9 +3421,9 @@ mod tests {
 
     #[test]
     fn imitation_requeues_original_constraint() {
-        let f_id = Id::from_name(&Name::from_str("f"));
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let hole_id = Id::from_name(&Name::from_str("M"));
+        let f_id = Id::fresh_with_name(Name::from_str("f"));
+        let x_id = Id::fresh_with_name(Name::from_str("x"));
+        let hole_id = Id::fresh_with_name(Name::from_str("M"));
 
         let mut local_env = tt::LocalEnv {
             local_types: vec![],
@@ -3482,9 +3492,9 @@ mod tests {
 
     #[test]
     fn imitation_tracks_argument_holes() {
-        let f_id = Id::from_name(&Name::from_str("f"));
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let hole_id = Id::from_name(&Name::from_str("M"));
+        let f_id = Id::fresh_with_name(Name::from_str("f"));
+        let x_id = Id::fresh_with_name(Name::from_str("x"));
+        let hole_id = Id::fresh_with_name(Name::from_str("M"));
 
         let mut local_env = tt::LocalEnv {
             local_types: vec![],
@@ -3571,8 +3581,8 @@ mod tests {
     fn unify_same_kappa_const_with_local_instance_is_reachable() {
         let method_name = QualifiedName::from_name(Name::from_str("m"));
         let class_name = QualifiedName::from_name(Name::from_str("C"));
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let y_id = Id::from_name(&Name::from_str("y"));
+        let x_id = Id::fresh_with_name(Name::from_str("x"));
+        let y_id = Id::fresh_with_name(Name::from_str("y"));
         let instance = mk_instance_local(Class {
             name: class_name.clone(),
             args: vec![],
@@ -3647,9 +3657,9 @@ mod tests {
 
     #[test]
     fn unify_same_local_delta_head_with_mismatched_args_fails_without_panic() {
-        let f_id = Id::from_name(&Name::from_str("foo.f"));
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let y_id = Id::from_name(&Name::from_str("y"));
+        let f_id = Id::fresh_with_name(Name::from_str("foo.f"));
+        let x_id = Id::fresh_with_name(Name::from_str("x"));
+        let y_id = Id::fresh_with_name(Name::from_str("y"));
         let c = QualifiedName::from_name(Name::from_str("c"));
         let c_term = mk_const(c.clone(), vec![], vec![]);
 
@@ -3729,7 +3739,7 @@ mod tests {
     fn unfold_constraint_keeps_head_arguments_as_is() {
         let f = QualifiedName::from_name(Name::from_str("f"));
         let g = QualifiedName::from_name(Name::from_str("g"));
-        let u = Id::from_name(&Name::from_str("u"));
+        let u = Id::fresh_with_name(Name::from_str("u"));
         let mut local_env = tt::LocalEnv {
             local_types: vec![],
             local_classes: vec![],
@@ -3826,8 +3836,8 @@ mod tests {
     #[test]
     fn choice_fr_adds_binder_expansion_branch_for_hole_tailed_projection() {
         let c = QualifiedName::from_name(Name::from_str("c"));
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let m_id = Id::from_name(&Name::from_str("M"));
+        let x_id = Id::fresh_with_name(Name::from_str("x"));
+        let m_id = Id::fresh_with_name(Name::from_str("M"));
 
         let arg_ty = mk_fresh_type_hole();
         let Type::Hole(arg_hole) = &arg_ty else {
@@ -3907,7 +3917,7 @@ mod tests {
     #[test]
     fn solve_with_budget_zero_keeps_existing_non_expanding_successes() {
         let c = QualifiedName::from_name(Name::from_str("c"));
-        let l_id = Id::from_name(&Name::from_str("foo.l"));
+        let l_id = Id::fresh_with_name(Name::from_str("foo.l"));
         let c_term = mk_const(c.clone(), vec![], vec![]);
 
         let mut local_env = tt::LocalEnv {
@@ -3972,9 +3982,9 @@ mod tests {
 
     #[test]
     fn solve_with_budget_reports_needs_more_budget_before_binder_expansion() {
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let a_id = Id::from_name(&Name::from_str("a"));
-        let m_id = Id::from_name(&Name::from_str("M"));
+        let x_id = Id::fresh_with_name(Name::from_str("x"));
+        let a_id = Id::fresh_with_name(Name::from_str("a"));
+        let m_id = Id::fresh_with_name(Name::from_str("M"));
 
         let alpha = mk_fresh_type_hole();
 
@@ -4046,9 +4056,9 @@ mod tests {
 
     #[test]
     fn solve_with_budget_one_solves_single_expansion_case() {
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let a_id = Id::from_name(&Name::from_str("a"));
-        let m_id = Id::from_name(&Name::from_str("M"));
+        let x_id = Id::fresh_with_name(Name::from_str("x"));
+        let a_id = Id::fresh_with_name(Name::from_str("a"));
+        let m_id = Id::fresh_with_name(Name::from_str("M"));
 
         let alpha = mk_fresh_type_hole();
 
@@ -4120,9 +4130,9 @@ mod tests {
 
     #[test]
     fn solve_with_budget_restarts_from_budget_exhausted_checkpoint() {
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let a_id = Id::from_name(&Name::from_str("a"));
-        let m_id = Id::from_name(&Name::from_str("M"));
+        let x_id = Id::fresh_with_name(Name::from_str("x"));
+        let a_id = Id::fresh_with_name(Name::from_str("a"));
+        let m_id = Id::fresh_with_name(Name::from_str("M"));
 
         let alpha = mk_fresh_type_hole();
 
@@ -4199,9 +4209,9 @@ mod tests {
 
     #[test]
     fn solve_returns_err_for_finite_failure_without_iterative_deepening_restart() {
-        let f_id = Id::from_name(&Name::from_str("foo.f"));
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let y_id = Id::from_name(&Name::from_str("y"));
+        let f_id = Id::fresh_with_name(Name::from_str("foo.f"));
+        let x_id = Id::fresh_with_name(Name::from_str("x"));
+        let y_id = Id::fresh_with_name(Name::from_str("y"));
         let c = QualifiedName::from_name(Name::from_str("c"));
         let c_term = mk_const(c.clone(), vec![], vec![]);
 
@@ -4275,9 +4285,9 @@ mod tests {
 
     #[test]
     fn solve_restarts_from_post_simplification_checkpoint_for_binder_expansion_case() {
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let a_id = Id::from_name(&Name::from_str("a"));
-        let m_id = Id::from_name(&Name::from_str("M"));
+        let x_id = Id::fresh_with_name(Name::from_str("x"));
+        let a_id = Id::fresh_with_name(Name::from_str("a"));
+        let m_id = Id::fresh_with_name(Name::from_str("M"));
 
         let alpha = mk_fresh_type_hole();
 
@@ -4353,10 +4363,10 @@ mod tests {
         let body_name = QualifiedName::from_name(Name::from_str("id"));
         let class_name = QualifiedName::from_name(Name::from_str("C"));
         let instance_name = QualifiedName::from_name(Name::from_str("inst.C"));
-        let u = Id::from_name(&Name::from_str("u"));
-        let v = Id::from_name(&Name::from_str("v"));
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let y_id = Id::from_name(&Name::from_str("y"));
+        let u = Id::fresh_with_name(Name::from_str("u"));
+        let v = Id::fresh_with_name(Name::from_str("v"));
+        let x_id = Id::fresh_with_name(Name::from_str("x"));
+        let y_id = Id::fresh_with_name(Name::from_str("y"));
 
         let left_head = mk_const(
             method_name.clone(),
@@ -4490,10 +4500,10 @@ mod tests {
         let body_name = QualifiedName::from_name(Name::from_str("id"));
         let class_name = QualifiedName::from_name(Name::from_str("C"));
         let instance_name = QualifiedName::from_name(Name::from_str("inst.C"));
-        let u = Id::from_name(&Name::from_str("u"));
-        let v = Id::from_name(&Name::from_str("v"));
-        let x_id = Id::from_name(&Name::from_str("x"));
-        let y_id = Id::from_name(&Name::from_str("y"));
+        let u = Id::fresh_with_name(Name::from_str("u"));
+        let v = Id::fresh_with_name(Name::from_str("v"));
+        let x_id = Id::fresh_with_name(Name::from_str("x"));
+        let y_id = Id::fresh_with_name(Name::from_str("y"));
 
         let left_head = mk_const(
             method_name.clone(),

@@ -34,7 +34,6 @@ static QUALIFIED_NAME_TABLE: LazyLock<
 > = LazyLock::new(Default::default);
 
 static ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
-static ID_NAME_TABLE: LazyLock<Mutex<HashMap<Name, Id>>> = LazyLock::new(Default::default);
 static ID_NAME_REV_TABLE: LazyLock<Mutex<HashMap<Id, Name>>> = LazyLock::new(Default::default);
 
 impl Display for Name {
@@ -221,33 +220,8 @@ impl Id {
         new_id
     }
 
-    pub fn from_name(name: &Name) -> Id {
-        let mut id_table = ID_NAME_TABLE.lock().unwrap();
-        if let Some(&id) = id_table.get(name) {
-            return id;
-        }
-
-        let id = Id::fresh();
-        id_table.insert(name.clone(), id);
-        drop(id_table);
-        // This can be put here outside the critical section of ID_NAME_TABLE
-        // because no one but this function knows of the value of `id`.
-        ID_NAME_REV_TABLE.lock().unwrap().insert(id, name.clone());
-        id
-    }
-
     pub fn name(&self) -> Option<Name> {
         ID_NAME_REV_TABLE.lock().unwrap().get(self).cloned()
-    }
-
-    pub fn is_generated(&self) -> bool {
-        if let Some(name) = self.name() {
-            let Some(&id) = ID_NAME_TABLE.lock().unwrap().get(&name) else {
-                return true;
-            };
-            return id != *self;
-        }
-        true
     }
 }
 
@@ -2605,7 +2579,7 @@ mod tests {
     }
 
     fn local_id(value: &str) -> Id {
-        Id::from_name(&Name::from_str(value))
+        Id::fresh_with_name(Name::from_str(value))
     }
 
     #[test]
@@ -2802,7 +2776,7 @@ mod tests {
         let env = fixture.env();
 
         let unfoldable_id = local_id("foo.l");
-        let rigid_id = Id::from_name(&Name::from_str("x"));
+        let rigid_id = local_id("x");
         let local_env = LocalEnv {
             local_types: vec![],
             local_classes: vec![],
@@ -3038,10 +3012,9 @@ mod tests {
     }
 
     #[test]
-    fn from_name_is_canonical_for_dotted_name() {
-        let left = local_id("foo.bar");
-        let right = local_id("foo.bar");
-        assert_eq!(left, right);
+    fn fresh_with_name_keeps_name_for_dotted_id() {
+        let id = local_id("foo.bar");
+        assert_eq!(id.name(), Some(Name::from_str("foo.bar")));
     }
 
     #[test]
