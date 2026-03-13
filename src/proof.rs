@@ -6,8 +6,8 @@ use std::{collections::HashMap, iter::zip, slice};
 use crate::{
     lex::Span,
     tt::{
-        self, Class, Id, Instance, Local, LocalDelta, Name, QualifiedName, Term, Type, mk_abs,
-        mk_const, mk_local, mk_type_const, mk_type_local,
+        self, Class, Id, Instance, Local, LocalDelta, LocalType, Name, QualifiedName, Term, Type,
+        mk_abs, mk_const, mk_local, mk_type_const, mk_type_local,
     },
 };
 
@@ -52,7 +52,7 @@ pub fn generalize(term: &Term, xs: &[Local]) -> Term {
     let locals = xs.iter().map(|x| x.id).collect::<Vec<_>>();
     let mut result = term.close(&locals, 0);
     for x in xs.iter().rev() {
-        result = mk_abs(x.id.name(), x.ty.clone(), result);
+        result = mk_abs(x.name.clone(), x.ty.clone(), result);
         let mut c = mk_const(FORALL.clone(), vec![x.ty.clone()], vec![]);
         c = c.apply([result]);
         result = c;
@@ -92,13 +92,11 @@ pub fn ungeneralize1(term: &Term) -> Option<(Local, Term)> {
         binder_name,
         body,
     } = &**abs;
-    let id = match binder_name {
-        Some(name) => Id::fresh_with_name(name.clone()),
-        None => Id::fresh(),
-    };
-    let body = body.open(&[mk_local(id)], 0);
+    let id = Id::fresh();
+    let body = body.open(&[tt::mk_local(id)], 0);
     let binder = Local {
         id,
+        name: binder_name.clone(),
         ty: binder_type.clone(),
     };
     Some((binder, body))
@@ -221,7 +219,7 @@ pub struct ExprLocal {
 pub struct ExprAssume {
     pub metadata: ExprMetadata,
     pub local_axiom: Term,
-    pub alias: Option<Id>,
+    pub alias: Option<(Id, Name)>,
     pub expr: Expr,
 }
 
@@ -236,6 +234,7 @@ pub struct ExprApp {
 pub struct ExprTake {
     pub metadata: ExprMetadata,
     pub id: Id,
+    pub name: Option<Name>,
     pub ty: Type,
     pub expr: Expr,
 }
@@ -263,6 +262,7 @@ pub struct ExprLetTerm {
     // `x : u, x : u | P x`, but with only Names the later phases cannot recover
     // which `x` the `P x` refers to. ExprLetStructure has the same issue.
     pub id: Id,
+    pub name: Option<Name>,
     pub ty: Option<Type>,
     pub value: Term,
     pub body: Expr,
@@ -279,6 +279,7 @@ pub struct ExprChange {
 pub struct ExprLetStructure {
     pub metadata: ExprMetadata,
     pub id: Id,
+    pub name: Name,
     pub abs_id: Id,
     pub fields: Vec<LocalStructureField>,
     pub body: Expr,
@@ -326,7 +327,7 @@ pub fn mk_expr_local(id: Id) -> Expr {
     }))
 }
 
-pub fn mk_expr_assume(h: Term, alias: Option<Id>, e: Expr) -> Expr {
+pub fn mk_expr_assume(h: Term, alias: Option<(Id, Name)>, e: Expr) -> Expr {
     Expr::Assume(Box::new(ExprAssume {
         metadata: ExprMetadata::default(),
         local_axiom: h,
@@ -343,10 +344,11 @@ pub fn mk_expr_app(e1: Expr, e2: Expr) -> Expr {
     }))
 }
 
-pub fn mk_expr_take(id: Id, ty: Type, e: Expr) -> Expr {
+pub fn mk_expr_take(id: Id, name: Option<Name>, ty: Type, e: Expr) -> Expr {
     Expr::Take(Box::new(ExprTake {
         metadata: ExprMetadata::default(),
         id,
+        name,
         ty,
         expr: e,
     }))
@@ -369,10 +371,17 @@ pub fn mk_expr_const(name: QualifiedName, ty_args: Vec<Type>, instances: Vec<Ins
     }))
 }
 
-pub fn mk_expr_let_term(id: Id, ty: Option<Type>, value: Term, body: Expr) -> Expr {
+pub fn mk_expr_let_term(
+    id: Id,
+    name: Option<Name>,
+    ty: Option<Type>,
+    value: Term,
+    body: Expr,
+) -> Expr {
     Expr::LetTerm(Box::new(ExprLetTerm {
         metadata: ExprMetadata::default(),
         id,
+        name,
         ty,
         value,
         body,
@@ -381,6 +390,7 @@ pub fn mk_expr_let_term(id: Id, ty: Option<Type>, value: Term, body: Expr) -> Ex
 
 pub fn mk_expr_let_structure(
     id: Id,
+    name: Name,
     abs_id: Id,
     fields: Vec<LocalStructureField>,
     body: Expr,
@@ -388,6 +398,7 @@ pub fn mk_expr_let_structure(
     Expr::LetStructure(Box::new(ExprLetStructure {
         metadata: ExprMetadata::default(),
         id,
+        name,
         abs_id,
         fields,
         body,
@@ -448,12 +459,10 @@ impl std::fmt::Display for Expr {
                 Expr::Assump(e) => {
                     write!(f, "«{}»", e.target)?;
                 }
-                Expr::Local(e) => {
-                    write!(f, "{}", e.id)?;
-                }
+                Expr::Local(e) => write!(f, "{}", e.id)?,
                 Expr::Assume(e) => {
                     write!(f, "assume {}", e.local_axiom)?;
-                    if let Some(alias) = e.alias {
+                    if let Some((_, alias)) = &e.alias {
                         write!(f, " as {}", alias)?;
                     }
                     write!(f, ", ")?;
@@ -465,7 +474,10 @@ impl std::fmt::Display for Expr {
                     fmt_expr(&e.expr2, f, PREC_INST)?;
                 }
                 Expr::Take(e) => {
-                    write!(f, "take ({} : {}), ", e.id, e.ty)?;
+                    match &e.name {
+                        Some(name) => write!(f, "take ({} : {}), ", name, e.ty)?,
+                        None => write!(f, "take ({} : {}), ", e.id, e.ty)?,
+                    }
                     fmt_expr(&e.expr, f, PREC_LOWEST)?;
                 }
                 Expr::Inst(_) => {
@@ -506,7 +518,10 @@ impl std::fmt::Display for Expr {
                     }
                 }
                 Expr::LetTerm(e) => {
-                    write!(f, "let {}", e.id)?;
+                    match &e.name {
+                        Some(name) => write!(f, "let {}", name)?,
+                        None => write!(f, "let {}", e.id)?,
+                    }
                     if let Some(ty) = &e.ty {
                         write!(f, " : {}", ty)?;
                     }
@@ -514,7 +529,7 @@ impl std::fmt::Display for Expr {
                     fmt_expr(&e.body, f, PREC_LOWEST)?;
                 }
                 Expr::LetStructure(e) => {
-                    write!(f, "let structure {} := {{", e.id)?;
+                    write!(f, "let structure {} := {{", e.name)?;
                     for (idx, field) in e.fields.iter().enumerate() {
                         if idx > 0 {
                             write!(f, "; ")?;
@@ -657,6 +672,7 @@ impl Expr {
                 let ExprTake {
                     metadata: _,
                     id: _,
+                    name: _,
                     ty: _,
                     expr,
                 } = &**e;
@@ -675,6 +691,7 @@ impl Expr {
                 let ExprLetTerm {
                     metadata: _,
                     id: _,
+                    name: _,
                     ty,
                     value,
                     body,
@@ -685,6 +702,7 @@ impl Expr {
                 let ExprLetStructure {
                     metadata: _,
                     id: _,
+                    name: _,
                     abs_id: _,
                     fields,
                     body,
@@ -738,6 +756,7 @@ impl Expr {
                 let ExprTake {
                     metadata: _,
                     id: _,
+                    name: _,
                     ty,
                     expr,
                 } = &**e;
@@ -765,6 +784,7 @@ impl Expr {
                 let ExprLetTerm {
                     metadata: _,
                     id: _,
+                    name: _,
                     ty,
                     value,
                     body,
@@ -777,6 +797,7 @@ impl Expr {
                 let ExprLetStructure {
                     metadata: _,
                     id: _,
+                    name: _,
                     abs_id: _,
                     fields,
                     body,
@@ -864,6 +885,7 @@ impl Expr {
                 let ExprTake {
                     metadata: _,
                     id: _,
+                    name: _,
                     ty: _,
                     expr,
                 } = e.as_mut();
@@ -884,6 +906,7 @@ impl Expr {
                 let ExprLetTerm {
                     metadata: _,
                     id: _,
+                    name: _,
                     ty: _,
                     value,
                     body,
@@ -895,6 +918,7 @@ impl Expr {
                 let ExprLetStructure {
                     metadata: _,
                     id: _,
+                    name: _,
                     abs_id: _,
                     fields,
                     body,
@@ -955,6 +979,7 @@ impl Expr {
                 let ExprTake {
                     metadata: _,
                     id: _,
+                    name: _,
                     ty: _,
                     expr,
                 } = e.as_mut();
@@ -974,6 +999,7 @@ impl Expr {
                 let ExprLetTerm {
                     metadata: _,
                     id: _,
+                    name: _,
                     ty: _,
                     value,
                     body,
@@ -985,6 +1011,7 @@ impl Expr {
                 let ExprLetStructure {
                     metadata: _,
                     id: _,
+                    name: _,
                     abs_id: _,
                     fields,
                     body,
@@ -1011,7 +1038,7 @@ impl Expr {
 
 #[derive(Debug, Clone)]
 pub struct Axiom {
-    pub local_types: Vec<Id>,
+    pub local_types: Vec<LocalType>,
     pub local_classes: Vec<Class>,
     pub target: Term,
 }
@@ -1086,7 +1113,7 @@ impl Env<'_> {
                 } = &**e;
                 self.tt_env.check_wff(tt_local_env, local_axiom);
                 local_env.local_axioms.push(LocalAxiom {
-                    id: *alias,
+                    id: alias.as_ref().map(|(id, _)| *id),
                     prop: local_axiom.clone(),
                 });
                 let target = self.infer_prop(tt_local_env, local_env, expr);
@@ -1110,6 +1137,7 @@ impl Env<'_> {
                 let ExprTake {
                     metadata: _,
                     id,
+                    name,
                     ty,
                     expr,
                 } = &**e;
@@ -1122,6 +1150,7 @@ impl Env<'_> {
                 }
                 let param = Local {
                     id: *id,
+                    name: name.clone(),
                     ty: ty.clone(),
                 };
                 tt_local_env.locals.push(param);
@@ -1136,7 +1165,7 @@ impl Env<'_> {
                     arg,
                 } = &**e;
                 let target = self.infer_prop(tt_local_env, local_env, expr);
-                let Some((Local { id, ty }, mut body)) = ungeneralize1(&target) else {
+                let Some((Local { id, ty, .. }, mut body)) = ungeneralize1(&target) else {
                     panic!("∀ expected, got {}", target);
                 };
                 self.tt_env.check_type(tt_local_env, arg, &ty);
@@ -1171,7 +1200,7 @@ impl Env<'_> {
                 }
                 let mut type_subst = Vec::with_capacity(local_types.len());
                 for (x, t) in zip(local_types, ty_args) {
-                    type_subst.push((*x, t.clone()))
+                    type_subst.push((x.id, t.clone()))
                 }
                 if local_classes.len() != instances.len() {
                     panic!(
@@ -1197,6 +1226,7 @@ impl Env<'_> {
                 let ExprLetTerm {
                     metadata: _,
                     id,
+                    name,
                     ty,
                     value,
                     body,
@@ -1215,6 +1245,7 @@ impl Env<'_> {
                 let local_delta_len = tt_local_env.local_deltas.len();
                 tt_local_env.locals.push(Local {
                     id: *id,
+                    name: name.clone(),
                     ty: binder_ty,
                 });
                 tt_local_env.local_deltas.push(LocalDelta {
@@ -1232,6 +1263,7 @@ impl Env<'_> {
                 let ExprLetStructure {
                     metadata: _,
                     id: structure_id,
+                    name: structure_name,
                     abs_id,
                     fields,
                     body,
@@ -1243,6 +1275,8 @@ impl Env<'_> {
                 for field in fields {
                     match field {
                         LocalStructureField::Const(LocalStructureConst {
+                            field_name,
+                            field_id,
                             id,
                             ty: field_ty,
                             ..
@@ -1255,7 +1289,8 @@ impl Env<'_> {
                             const_field_ids.push(*id);
                             self.tt_env.check_wft(tt_local_env, field_ty);
                             tt_local_env.locals.push(Local {
-                                id: *id,
+                                id: *field_id,
+                                name: Some(field_name.clone()),
                                 ty: field_ty.clone(),
                             });
                             num_consts += 1;
@@ -1277,7 +1312,8 @@ impl Env<'_> {
 
                 let this_ty = mk_type_local(*structure_id);
                 let this = Local {
-                    id: Id::fresh_with_name(Name::from_str("this")),
+                    id: Id::fresh(),
+                    name: Some(Name::from_str("this")),
                     ty: this_ty.clone(),
                 };
                 let mut locals: Vec<Local> = vec![];
@@ -1286,13 +1322,28 @@ impl Env<'_> {
 
                 for field in fields {
                     match field {
-                        LocalStructureField::Const(LocalStructureConst { id, ty, .. }) => {
+                        LocalStructureField::Const(LocalStructureConst {
+                            field_name,
+                            field_id,
+                            id,
+                            ty,
+                            ..
+                        }) => {
                             let ty = ty.arrow([this_ty.clone()]);
-                            locals.push(Local { id: *id, ty });
+                            let qualified_name = Name::from_str(
+                                &QualifiedName::from_name(structure_name.clone())
+                                    .extend(field_name.clone())
+                                    .to_string(),
+                            );
+                            locals.push(Local {
+                                id: *id,
+                                name: Some(qualified_name.clone()),
+                                ty,
+                            });
 
                             let mut target = mk_local(*id);
                             target = target.apply([mk_local(this.id)]);
-                            subst.push((*id, target));
+                            subst.push((*field_id, target));
                         }
                         LocalStructureField::Axiom(LocalStructureAxiom { id, target, .. }) => {
                             let mut target = target.clone();
@@ -1313,6 +1364,7 @@ impl Env<'_> {
                 for field in fields {
                     match field {
                         LocalStructureField::Const(LocalStructureConst {
+                            field_name,
                             field_id,
                             id,
                             ty,
@@ -1320,6 +1372,7 @@ impl Env<'_> {
                         }) => {
                             let param = Local {
                                 id: *field_id,
+                                name: Some(field_name.clone()),
                                 ty: ty.clone(),
                             };
 
@@ -1328,13 +1381,13 @@ impl Env<'_> {
 
                             let mut char = mk_const(
                                 QualifiedName::from_name(Name::from_str("eq")),
-                                vec![ty.clone()],
+                                vec![param.ty.clone()],
                                 vec![],
                             );
                             char = char.apply([mk_local(param.id), rhs]);
                             chars.push(char);
 
-                            abs_subst.push((*id, mk_local(param.id)));
+                            abs_subst.push((*field_id, mk_local(param.id)));
                             params.push(param);
                         }
                         LocalStructureField::Axiom(LocalStructureAxiom { target, .. }) => {
@@ -1382,7 +1435,10 @@ impl Env<'_> {
                 let local_type_len = tt_local_env.local_types.len();
                 let local_len = tt_local_env.locals.len();
                 let local_axiom_len = local_env.local_axioms.len();
-                tt_local_env.local_types.push(*structure_id);
+                tt_local_env.local_types.push(LocalType {
+                    id: *structure_id,
+                    name: Some(structure_name.clone()),
+                });
                 tt_local_env.locals.extend(locals);
                 local_env.local_axioms.extend(local_axioms);
                 for i in local_len..tt_local_env.locals.len() {
@@ -1424,7 +1480,8 @@ mod tests {
     use std::collections::HashMap;
 
     fn local_id(value: &str) -> Id {
-        Id::fresh_with_name(Name::from_str(value))
+        let _ = value;
+        Id::fresh()
     }
 
     #[test]
@@ -1442,7 +1499,10 @@ mod tests {
         const_table.insert(
             eq_name.clone(),
             Const {
-                local_types: vec![u],
+                local_types: vec![LocalType {
+                    id: u,
+                    name: Some(Name::from_str("u")),
+                }],
                 local_classes: vec![],
                 ty: mk_type_prop().arrow([mk_type_local(u), mk_type_local(u)]),
             },
@@ -1472,6 +1532,7 @@ mod tests {
             local_deltas: vec![],
             locals: vec![Local {
                 id: f_id,
+                name: None,
                 ty: function_ty.clone(),
             }],
         };

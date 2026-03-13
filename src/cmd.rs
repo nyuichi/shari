@@ -9,8 +9,8 @@ use crate::{
     proof::{self, Axiom, Expr, generalize, guard, mk_type_prop, ungeneralize, unguard},
     tt::{
         self, Class, ClassInstance, ClassType, Const, Delta, Id, Kappa, Kind, Local, LocalEnv,
-        Name, Path, QualifiedName, Term, Type, mk_const, mk_fresh_type_hole, mk_instance_local,
-        mk_local, mk_type_arrow, mk_type_const, mk_type_local,
+        LocalType, Name, Path, QualifiedName, Term, Type, mk_const, mk_fresh_type_hole,
+        mk_instance_local, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
     },
 };
 
@@ -141,7 +141,7 @@ pub struct UseDecl {
 #[derive(Clone, Debug)]
 pub struct CmdDef {
     pub name: QualifiedName,
-    pub local_types: Vec<Id>,
+    pub local_types: Vec<LocalType>,
     pub local_classes: Vec<Class>,
     pub ty: Type,
     pub target: Term,
@@ -150,7 +150,7 @@ pub struct CmdDef {
 #[derive(Clone, Debug)]
 pub struct CmdAxiom {
     pub name: QualifiedName,
-    pub local_types: Vec<Id>,
+    pub local_types: Vec<LocalType>,
     pub local_classes: Vec<Class>,
     pub target: Term,
 }
@@ -158,7 +158,7 @@ pub struct CmdAxiom {
 #[derive(Clone, Debug)]
 pub struct CmdLemma {
     pub name: QualifiedName,
-    pub local_types: Vec<Id>,
+    pub local_types: Vec<LocalType>,
     pub local_classes: Vec<Class>,
     pub target: Term,
     pub holes: Vec<(Id, Type)>,
@@ -169,7 +169,7 @@ pub struct CmdLemma {
 pub struct CmdConst {
     pub name: QualifiedName,
     pub local_classes: Vec<Class>,
-    pub local_types: Vec<Id>,
+    pub local_types: Vec<LocalType>,
     pub ty: Type,
 }
 
@@ -182,7 +182,7 @@ pub struct CmdTypeConst {
 #[derive(Clone, Debug)]
 pub struct CmdTypeDef {
     pub name: QualifiedName,
-    pub local_types: Vec<Id>,
+    pub local_types: Vec<LocalType>,
     pub target: Type,
 }
 
@@ -190,7 +190,7 @@ pub struct CmdTypeDef {
 pub struct CmdTypeInductive {
     pub name: QualifiedName,
     pub this: Id,
-    pub local_types: Vec<Id>,
+    pub local_types: Vec<LocalType>,
     pub ctors: Vec<TypeInductiveConstructor>,
 }
 
@@ -204,7 +204,7 @@ pub struct TypeInductiveConstructor {
 pub struct CmdInductive {
     pub name: QualifiedName,
     pub this: Id,
-    pub local_types: Vec<Id>,
+    pub local_types: Vec<LocalType>,
     pub params: Vec<Local>,
     pub target_ty: Type,
     pub ctors: Vec<InductiveConstructor>,
@@ -219,7 +219,7 @@ pub struct InductiveConstructor {
 #[derive(Clone, Debug)]
 pub struct CmdStructure {
     pub name: QualifiedName,
-    pub local_types: Vec<Id>,
+    pub local_types: Vec<LocalType>,
     pub fields: Vec<StructureField>,
 }
 
@@ -247,7 +247,7 @@ pub struct StructureAxiom {
 #[derive(Debug, Clone)]
 pub struct CmdInstance {
     pub name: QualifiedName,
-    pub local_types: Vec<Id>,
+    pub local_types: Vec<LocalType>,
     pub local_classes: Vec<Class>,
     pub params: Vec<Local>,
     pub target_ty: Type,
@@ -282,7 +282,7 @@ pub struct InstanceLemma {
 #[derive(Debug, Clone)]
 pub struct CmdClassStructure {
     pub name: QualifiedName,
-    pub local_types: Vec<Id>,
+    pub local_types: Vec<LocalType>,
     pub fields: Vec<ClassStructureField>,
 }
 
@@ -310,7 +310,7 @@ pub struct ClassStructureAxiom {
 #[derive(Debug, Clone)]
 pub struct CmdClassInstance {
     pub name: QualifiedName,
-    pub local_types: Vec<Id>,
+    pub local_types: Vec<LocalType>,
     pub local_classes: Vec<Class>,
     pub target: Class,
     pub fields: Vec<ClassInstanceField>,
@@ -341,6 +341,93 @@ pub struct ClassInstanceLemma {
 
 impl std::fmt::Display for Cmd {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // TODO: Once printer supports commands, simplify this debug-oriented display impl.
+        let local_type_name = |local_types: &[LocalType], id: Id| {
+            local_types
+                .iter()
+                .find(|local_type| local_type.id == id)
+                .and_then(|local_type| local_type.name.as_ref())
+                .map_or_else(|| id.to_string(), |name| name.to_string())
+        };
+        let format_local_types = |local_types: &[LocalType]| {
+            local_types
+                .iter()
+                .map(|local_type| {
+                    local_type
+                        .name
+                        .as_ref()
+                        .map_or_else(|| local_type.id.to_string(), |name| name.to_string())
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let format_type = |local_types: &[LocalType], ty: &Type| {
+            fn fmt_type(
+                local_types: &[LocalType],
+                local_type_name: &impl Fn(&[LocalType], Id) -> String,
+                ty: &Type,
+                out: &mut String,
+                prec: u8,
+            ) {
+                const TYPE_PREC_ARROW: u8 = 0;
+                const TYPE_PREC_APP: u8 = 1;
+                const TYPE_PREC_ATOM: u8 = 2;
+
+                match ty {
+                    Type::Const(inner) => {
+                        out.push_str(&inner.name.to_string());
+                    }
+                    Type::Arrow(inner) => {
+                        let needs_paren = prec > TYPE_PREC_ARROW;
+                        if needs_paren {
+                            out.push('(');
+                        }
+                        fmt_type(local_types, local_type_name, &inner.dom, out, TYPE_PREC_APP);
+                        out.push_str(" → ");
+                        fmt_type(
+                            local_types,
+                            local_type_name,
+                            &inner.cod,
+                            out,
+                            TYPE_PREC_ARROW,
+                        );
+                        if needs_paren {
+                            out.push(')');
+                        }
+                    }
+                    Type::App(inner) => {
+                        let needs_paren = prec > TYPE_PREC_APP;
+                        if needs_paren {
+                            out.push('(');
+                        }
+                        fmt_type(local_types, local_type_name, &inner.fun, out, TYPE_PREC_APP);
+                        out.push(' ');
+                        fmt_type(
+                            local_types,
+                            local_type_name,
+                            &inner.arg,
+                            out,
+                            TYPE_PREC_ATOM,
+                        );
+                        if needs_paren {
+                            out.push(')');
+                        }
+                    }
+                    Type::Local(inner) => {
+                        out.push('$');
+                        out.push_str(&local_type_name(local_types, inner.id));
+                    }
+                    Type::Hole(inner) => {
+                        out.push('?');
+                        out.push_str(&inner.id.to_string());
+                    }
+                }
+            }
+
+            let mut out = String::new();
+            fmt_type(local_types, &local_type_name, ty, &mut out, 0);
+            out
+        };
         match self {
             Cmd::NamespaceStart(cmd) => write!(f, "namespace {} {{", cmd.path),
             Cmd::BlockEnd => write!(f, "}}"),
@@ -377,34 +464,22 @@ impl std::fmt::Display for Cmd {
                 f,
                 "def {}.{{{}}} : {} := {}",
                 cmd.name,
-                cmd.local_types
-                    .iter()
-                    .map(|n| n.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                cmd.ty,
+                format_local_types(&cmd.local_types),
+                format_type(&cmd.local_types, &cmd.ty),
                 cmd.target
             ),
             Cmd::Axiom(cmd) => write!(
                 f,
                 "axiom {}.{{{}}} : {}",
                 cmd.name,
-                cmd.local_types
-                    .iter()
-                    .map(|n| n.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" "),
+                format_local_types(&cmd.local_types),
                 cmd.target
             ),
             Cmd::Lemma(cmd) => write!(
                 f,
                 "lemma {}.{{{}}} : {} := {}",
                 cmd.name,
-                cmd.local_types
-                    .iter()
-                    .map(|n| n.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" "),
+                format_local_types(&cmd.local_types),
                 cmd.target,
                 cmd.expr
             ),
@@ -412,34 +487,22 @@ impl std::fmt::Display for Cmd {
                 f,
                 "const {}.{{{}}} : {}",
                 cmd.name,
-                cmd.local_types
-                    .iter()
-                    .map(|n| n.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                cmd.ty
+                format_local_types(&cmd.local_types),
+                format_type(&cmd.local_types, &cmd.ty)
             ),
             Cmd::TypeConst(cmd) => write!(f, "type const {} : {}", cmd.name, cmd.kind),
             Cmd::TypeDef(cmd) => write!(
                 f,
                 "type def {}.{{{}}} := {}",
                 cmd.name,
-                cmd.local_types
-                    .iter()
-                    .map(|n| n.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                cmd.target
+                format_local_types(&cmd.local_types),
+                format_type(&cmd.local_types, &cmd.target)
             ),
             Cmd::TypeInductive(cmd) => write!(
                 f,
                 "inductive {}.{{{}}} {{\n{}\n}}",
                 cmd.name,
-                cmd.local_types
-                    .iter()
-                    .map(|n| n.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" "),
+                format_local_types(&cmd.local_types),
                 cmd.ctors
                     .iter()
                     .map(|ctor| format!("{} : {}", ctor.name, ctor.ty))
@@ -450,11 +513,7 @@ impl std::fmt::Display for Cmd {
                 f,
                 "inductive {}.{{{}}} ({}) : {} {{\n{}\n}}",
                 cmd.name,
-                cmd.local_types
-                    .iter()
-                    .map(|n| n.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" "),
+                format_local_types(&cmd.local_types),
                 cmd.params
                     .iter()
                     .map(|p| format!("{} : {}", p.id, p.ty))
@@ -471,11 +530,7 @@ impl std::fmt::Display for Cmd {
                 f,
                 "structure {}.{{{}}} {{\n{}\n}}",
                 cmd.name,
-                cmd.local_types
-                    .iter()
-                    .map(|n| n.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" "),
+                format_local_types(&cmd.local_types),
                 cmd.fields
                     .iter()
                     .map(|field| match field {
@@ -491,11 +546,7 @@ impl std::fmt::Display for Cmd {
                 f,
                 "instance {}.{{{}}} ({}) : {} {{\n{}\n}}",
                 cmd.name,
-                cmd.local_types
-                    .iter()
-                    .map(|n| n.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" "),
+                format_local_types(&cmd.local_types),
                 cmd.params
                     .iter()
                     .map(|p| format!("{} : {}", p.id, p.ty))
@@ -517,11 +568,7 @@ impl std::fmt::Display for Cmd {
                 f,
                 "class structure {}.{{{}}} {{\n{}\n}}",
                 cmd.name,
-                cmd.local_types
-                    .iter()
-                    .map(|n| n.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" "),
+                format_local_types(&cmd.local_types),
                 cmd.fields
                     .iter()
                     .map(|field| match field {
@@ -537,11 +584,7 @@ impl std::fmt::Display for Cmd {
                 f,
                 "class instance {}.{{{}}} : {} {{\n{}\n}}",
                 cmd.name,
-                cmd.local_types
-                    .iter()
-                    .map(|n| n.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" "),
+                format_local_types(&cmd.local_types),
                 cmd.target,
                 cmd.fields
                     .iter()
@@ -626,7 +669,7 @@ impl Eval {
     fn add_const(
         &mut self,
         name: QualifiedName,
-        local_types: Vec<Id>,
+        local_types: Vec<LocalType>,
         local_classes: Vec<Class>,
         ty: Type,
     ) {
@@ -670,7 +713,7 @@ impl Eval {
     fn add_axiom(
         &mut self,
         name: QualifiedName,
-        local_types: Vec<Id>,
+        local_types: Vec<LocalType>,
         local_classes: Vec<Class>,
         target: Term,
     ) {
@@ -754,7 +797,7 @@ impl Eval {
     fn add_class_instance(
         &mut self,
         name: QualifiedName,
-        local_types: Vec<Id>,
+        local_types: Vec<LocalType>,
         local_classes: Vec<Class>,
         target: Class,
         method_table: HashMap<QualifiedName, Term>,
@@ -1161,7 +1204,7 @@ impl Eval {
                 }
                 for i in 0..local_types.len() {
                     for j in i + 1..local_types.len() {
-                        if local_types[i] == local_types[j] {
+                        if local_types[i].id == local_types[j].id {
                             bail!("duplicate type variables");
                         }
                     }
@@ -1200,7 +1243,7 @@ impl Eval {
                 }
                 for i in 0..local_types.len() {
                     for j in i + 1..local_types.len() {
-                        if local_types[i] == local_types[j] {
+                        if local_types[i].id == local_types[j].id {
                             bail!("duplicate type variables");
                         }
                     }
@@ -1234,7 +1277,7 @@ impl Eval {
                 }
                 for i in 0..local_types.len() {
                     for j in i + 1..local_types.len() {
-                        if local_types[i] == local_types[j] {
+                        if local_types[i].id == local_types[j].id {
                             bail!("duplicate type variables");
                         }
                     }
@@ -1278,7 +1321,7 @@ impl Eval {
                 }
                 for i in 0..local_types.len() {
                     for j in i + 1..local_types.len() {
-                        if local_types[i] == local_types[j] {
+                        if local_types[i].id == local_types[j].id {
                             bail!("duplicate type variables");
                         }
                     }
@@ -1316,7 +1359,7 @@ impl Eval {
                 }
                 for i in 0..local_types.len() {
                     for j in i + 1..local_types.len() {
-                        if local_types[i] == local_types[j] {
+                        if local_types[i].id == local_types[j].id {
                             bail!("duplicate type variables");
                         }
                     }
@@ -1356,7 +1399,7 @@ impl Eval {
         }
         for i in 0..local_types.len() {
             for j in i + 1..local_types.len() {
-                if local_types[i] == local_types[j] {
+                if local_types[i].id == local_types[j].id {
                     bail!("duplicate type variables");
                 }
             }
@@ -1367,7 +1410,14 @@ impl Eval {
             locals: vec![],
             local_deltas: vec![],
         };
-        local_env.local_types.insert(0, this);
+        let self_name = name.name().clone();
+        local_env.local_types.insert(
+            0,
+            LocalType {
+                id: this,
+                name: Some(self_name.clone()),
+            },
+        );
         for i in 0..ctors.len() {
             for j in i + 1..ctors.len() {
                 if ctors[i].name == ctors[j].name {
@@ -1417,7 +1467,11 @@ impl Eval {
         // generate data constructors
         let target_ty = {
             // Foo u v
-            mk_type_const(name.clone()).apply(local_types.iter().cloned().map(mk_type_local))
+            mk_type_const(name.clone()).apply(
+                local_types
+                    .iter()
+                    .map(|local_type| mk_type_local(local_type.id)),
+            )
         };
         // Foo ↦ Foo u v
         let subst = [(this, target_ty.clone())];
@@ -1448,7 +1502,8 @@ impl Eval {
         //           P zero →
         //           P α
         let motive = Local {
-            id: Id::fresh_with_name(Name::from_str("motive")),
+            id: Id::fresh(),
+            name: Some(Name::from_str("motive")),
             ty: mk_type_arrow(target_ty.clone(), mk_type_prop()),
         };
         let mut guards = vec![];
@@ -1458,6 +1513,7 @@ impl Eval {
             for arg_ty in ctor_arg_tys {
                 args.push(Local {
                     id: Id::fresh(),
+                    name: None,
                     ty: arg_ty,
                 });
             }
@@ -1469,6 +1525,7 @@ impl Eval {
                     .into_iter()
                     .map(|x| Local {
                         id: Id::fresh(),
+                        name: None,
                         ty: x,
                     })
                     .collect();
@@ -1487,7 +1544,10 @@ impl Eval {
             let ctor_name = name.extend(ctor.name.clone());
             let mut a = mk_const(
                 ctor_name,
-                local_types.iter().cloned().map(mk_type_local).collect(),
+                local_types
+                    .iter()
+                    .map(|local_type| mk_type_local(local_type.id))
+                    .collect(),
                 vec![],
             );
             a = a.apply(args.iter().map(|arg| mk_local(arg.id)));
@@ -1502,7 +1562,8 @@ impl Eval {
         }
         // ∀ x P, {guards} → P x
         let x = Local {
-            id: Id::fresh_with_name(Name::from_str("x")),
+            id: Id::fresh(),
+            name: Some(Name::from_str("x")),
             ty: target_ty.clone(),
         };
         let mut target = mk_local(motive.id);
@@ -1523,9 +1584,12 @@ impl Eval {
         //   rec (succ α) ≡ λ k₁ k₂ k₃, k₂ α (rec α k₁ k₂ k₃)
         //   rec zero ≡ λ k₁ k₂ k₃, k₃
         //
-        let rec_ty_var = Id::fresh_with_name(Name::from_str("u"));
+        let rec_ty_var = Id::fresh();
         let mut rec_local_types = local_types.clone();
-        rec_local_types.push(rec_ty_var);
+        rec_local_types.push(LocalType {
+            id: rec_ty_var,
+            name: Some(Name::from_str("u")),
+        });
         let mut ctor_params_list = vec![];
         for ctor in &ctors {
             let mut ctor_params = vec![];
@@ -1534,6 +1598,7 @@ impl Eval {
                 let ctor_param_ty = ctor_param_ty.subst(&subst);
                 ctor_params.push(Local {
                     id: Id::fresh(),
+                    name: None,
                     ty: ctor_param_ty,
                 });
             }
@@ -1541,7 +1606,7 @@ impl Eval {
         }
         let mut cont_params = vec![];
         for _ in &ctors {
-            cont_params.push(Id::fresh_with_name(Name::from_str("k")));
+            cont_params.push(Id::fresh());
         }
         let mut cont_param_tys = vec![];
         let mut rhs_bodies = vec![];
@@ -1572,12 +1637,16 @@ impl Eval {
                     .into_iter()
                     .map(|arg_ty| Local {
                         id: Id::fresh(),
+                        name: None,
                         ty: arg_ty,
                     })
                     .collect();
                 let mut m = mk_const(
                     rec_name.clone(),
-                    rec_local_types.iter().cloned().map(mk_type_local).collect(),
+                    rec_local_types
+                        .iter()
+                        .map(|local_type| mk_type_local(local_type.id))
+                        .collect(),
                     vec![],
                 );
                 let mut a = mk_local(param.id);
@@ -1602,19 +1671,26 @@ impl Eval {
         for (x, t) in zip(cont_params, &cont_param_tys) {
             rhs_binders.push(Local {
                 id: x,
+                name: Some(Name::from_str("k")),
                 ty: t.clone(),
             });
         }
         for ((rhs_body, ctor_params), ctor) in zip(zip(rhs_bodies, ctor_params_list), &ctors) {
             let mut lhs = mk_const(
                 rec_name.clone(),
-                rec_local_types.iter().cloned().map(mk_type_local).collect(),
+                rec_local_types
+                    .iter()
+                    .map(|local_type| mk_type_local(local_type.id))
+                    .collect(),
                 vec![],
             );
             let ctor_name = name.extend(ctor.name.clone());
             let mut lhs_arg = mk_const(
                 ctor_name.clone(),
-                local_types.iter().cloned().map(mk_type_local).collect(),
+                local_types
+                    .iter()
+                    .map(|local_type| mk_type_local(local_type.id))
+                    .collect(),
                 vec![],
             );
             lhs_arg = lhs_arg.apply(ctor_params.iter().map(|x| mk_local(x.id)));
@@ -1665,7 +1741,7 @@ impl Eval {
         }
         for i in 0..local_types.len() {
             for j in i + 1..local_types.len() {
-                if local_types[i] == local_types[j] {
+                if local_types[i].id == local_types[j].id {
                     bail!("duplicate type variables");
                 }
             }
@@ -1698,10 +1774,12 @@ impl Eval {
                 }
             }
         }
+        let self_name = name.name().clone();
         local_env.locals.insert(
             0,
             Local {
                 id: this,
+                name: Some(self_name.clone()),
                 ty: target_ty.clone(),
             },
         );
@@ -1781,7 +1859,10 @@ impl Eval {
             // P.{u} x
             let mut stash = mk_const(
                 name.clone(),
-                local_types.iter().map(|id| mk_type_local(*id)).collect(),
+                local_types
+                    .iter()
+                    .map(|local_type| mk_type_local(local_type.id))
+                    .collect(),
                 vec![],
             );
             stash = stash.apply(params.iter().map(|param| mk_local(param.id)));
@@ -1801,11 +1882,13 @@ impl Eval {
             .into_iter()
             .map(|t| Local {
                 id: Id::fresh(),
+                name: None,
                 ty: t,
             })
             .collect::<Vec<_>>();
         let motive = Local {
-            id: Id::fresh_with_name(Name::from_str("motive")),
+            id: Id::fresh(),
+            name: Some(Name::from_str("motive")),
             ty: target_ty.clone(),
         };
         // C w
@@ -1836,7 +1919,10 @@ impl Eval {
             // P ↦ P.{u} x
             let mut stash = mk_const(
                 name.clone(),
-                local_types.iter().map(|id| mk_type_local(*id)).collect(),
+                local_types
+                    .iter()
+                    .map(|local_type| mk_type_local(local_type.id))
+                    .collect(),
                 vec![],
             );
             stash = stash.apply(params.iter().map(|param| mk_local(param.id)));
@@ -1858,7 +1944,10 @@ impl Eval {
 
         let mut p = mk_const(
             name.clone(),
-            local_types.iter().map(|id| mk_type_local(*id)).collect(),
+            local_types
+                .iter()
+                .map(|local_type| mk_type_local(local_type.id))
+                .collect(),
             vec![],
         );
         p = p.apply(params.iter().map(|param| mk_local(param.id)));
@@ -1890,7 +1979,7 @@ impl Eval {
         }
         for i in 0..local_types.len() {
             for j in i + 1..local_types.len() {
-                if local_types[i] == local_types[j] {
+                if local_types[i].id == local_types[j].id {
                     bail!("duplicate type variables");
                 }
             }
@@ -1922,6 +2011,7 @@ impl Eval {
                     self.elaborate_type(&mut local_env, field_ty, Kind::base())?;
                     local_env.locals.push(Local {
                         id: *field_id,
+                        name: Some(field_name.clone()),
                         ty: field_ty.clone(),
                     });
                 }
@@ -1959,9 +2049,14 @@ impl Eval {
 
         // inhab u
         let this = Local {
-            id: Id::fresh_with_name(Name::from_str("this")),
+            id: Id::fresh(),
+            name: Some(Name::from_str("this")),
             ty: {
-                mk_type_const(name.clone()).apply(local_types.iter().cloned().map(mk_type_local))
+                mk_type_const(name.clone()).apply(
+                    local_types
+                        .iter()
+                        .map(|local_type| mk_type_local(local_type.id)),
+                )
             },
         };
 
@@ -1981,7 +2076,10 @@ impl Eval {
                     // rep ↦ inhab.rep.{u} this
                     let mut target = mk_const(
                         fullname,
-                        local_types.iter().cloned().map(mk_type_local).collect(),
+                        local_types
+                            .iter()
+                            .map(|local_type| mk_type_local(local_type.id))
+                            .collect(),
                         vec![],
                     );
                     target = target.apply([mk_local(this.id)]);
@@ -2012,14 +2110,18 @@ impl Eval {
                 }) => {
                     // (s : set u)
                     let param = Local {
-                        id: Id::fresh_with_name(field_name.clone()),
+                        id: Id::fresh(),
+                        name: Some(field_name.clone()),
                         ty: field_ty.clone(),
                     };
 
                     // inhab.rep this
                     let mut rhs = mk_const(
                         name.clone(),
-                        local_types.iter().cloned().map(mk_type_local).collect(),
+                        local_types
+                            .iter()
+                            .map(|local_type| mk_type_local(local_type.id))
+                            .collect(),
                         vec![],
                     );
                     rhs = rhs.apply([mk_local(this.id)]);
@@ -2106,7 +2208,7 @@ impl Eval {
         }
         for i in 0..local_types.len() {
             for j in i + 1..local_types.len() {
-                if local_types[i] == local_types[j] {
+                if local_types[i].id == local_types[j].id {
                     bail!("duplicate type variables");
                 }
             }
@@ -2142,7 +2244,7 @@ impl Eval {
         };
         let mut type_subst = Vec::with_capacity(cmd_structure.local_types.len());
         for (x, t) in zip(&cmd_structure.local_types, target_ty.args()) {
-            type_subst.push((*x, t.clone()));
+            type_subst.push((x.id, t.clone()));
         }
         let type_subst = type_subst;
         if cmd_structure.fields.len() != fields.len() {
@@ -2182,6 +2284,7 @@ impl Eval {
                     }
                     local_env.locals.push(Local {
                         id: *field_id,
+                        name: Some(field_name.clone()),
                         ty: ty.clone(),
                     });
                     field_subst.push((*structure_field_id, mk_local(*field_id)));
@@ -2263,7 +2366,10 @@ impl Eval {
                     // rep ↦ inhab.rep.{u} A
                     let mut target = mk_const(
                         name.clone(),
-                        local_types.iter().cloned().map(mk_type_local).collect(),
+                        local_types
+                            .iter()
+                            .map(|local_type| mk_type_local(local_type.id))
+                            .collect(),
                         local_classes
                             .iter()
                             .map(|c| mk_instance_local(c.clone()))
@@ -2324,7 +2430,10 @@ impl Eval {
         // generate per-field spec axioms
         let mut this = mk_const(
             name.clone(),
-            local_types.iter().cloned().map(mk_type_local).collect(),
+            local_types
+                .iter()
+                .map(|local_type| mk_type_local(local_type.id))
+                .collect(),
             local_classes
                 .iter()
                 .map(|c| mk_instance_local(c.clone()))
@@ -2356,7 +2465,10 @@ impl Eval {
 
             let mut rhs = mk_const(
                 name.clone(),
-                local_types.iter().cloned().map(mk_type_local).collect(),
+                local_types
+                    .iter()
+                    .map(|local_type| mk_type_local(local_type.id))
+                    .collect(),
                 local_classes
                     .iter()
                     .map(|c| mk_instance_local(c.clone()))
@@ -2392,7 +2504,7 @@ impl Eval {
         }
         for i in 0..local_types.len() {
             for j in i + 1..local_types.len() {
-                if local_types[i] == local_types[j] {
+                if local_types[i].id == local_types[j].id {
                     bail!("duplicate type variables");
                 }
             }
@@ -2424,6 +2536,7 @@ impl Eval {
                     self.elaborate_type(&mut local_env, field_ty, Kind::base())?;
                     local_env.locals.push(Local {
                         id: *field_id,
+                        name: Some(field_name.clone()),
                         ty: field_ty.clone(),
                     });
                 }
@@ -2461,7 +2574,10 @@ impl Eval {
         );
         let this_class = Class {
             name: name.clone(),
-            args: local_types.iter().cloned().map(mk_type_local).collect(),
+            args: local_types
+                .iter()
+                .map(|local_type| mk_type_local(local_type.id))
+                .collect(),
         };
         let this_instance = mk_instance_local(this_class.clone());
         let mut subst = vec![];
@@ -2481,7 +2597,10 @@ impl Eval {
 
                     let target = mk_const(
                         fullname.clone(),
-                        local_types.iter().cloned().map(mk_type_local).collect(),
+                        local_types
+                            .iter()
+                            .map(|local_type| mk_type_local(local_type.id))
+                            .collect(),
                         vec![this_instance.clone()],
                     );
                     subst.push((*field_id, target));
@@ -2515,7 +2634,7 @@ impl Eval {
         }
         for i in 0..local_types.len() {
             for j in i + 1..local_types.len() {
-                if local_types[i] == local_types[j] {
+                if local_types[i].id == local_types[j].id {
                     bail!("duplicate type variables");
                 }
             }
@@ -2536,7 +2655,7 @@ impl Eval {
             let instance_target = {
                 let mut type_subst = Vec::with_capacity(instance.local_types.len());
                 for id in &instance.local_types {
-                    type_subst.push((*id, mk_fresh_type_hole()));
+                    type_subst.push((id.id, mk_fresh_type_hole()));
                 }
                 instance.target.subst(&type_subst)
             };
@@ -2551,7 +2670,7 @@ impl Eval {
             .unwrap();
         let mut type_subst = Vec::with_capacity(cmd_structure.local_types.len());
         for (x, t) in zip(&cmd_structure.local_types, &target.args) {
-            type_subst.push((*x, t.clone()));
+            type_subst.push((x.id, t.clone()));
         }
         if cmd_structure.fields.len() != fields.len() {
             bail!("number of fields mismatch");
