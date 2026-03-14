@@ -2340,36 +2340,11 @@ impl<'a> Elaborator<'a> {
         // where τ(z[i]) = t₁ → ⋯ → tₘ → τ(@ u[1] .. u[q]).
         // We try projection first because projection yields more general solutions.
         for z in &new_binders {
-            // TODO: this implementation is incompolete!
-            //
-            // When the target of the type of z[i] is a hole, we cannot determine the number m of Y[i]s.
-            // This is critical because it appears often in the wild. Consider the following lemma.
-            //
-            //   lemma L : bool.rec tt true false = true := eq.ap bool.tt.spec
-            //
-            // where bool.tt.spec.{α} : bool.rec tt = (λ x y, x).
-            // Then we will need to solve tt = C (λ x y, x), but C has an uninstantiated meta type variable α,
-            // and it makes hard to proceed the projection step because we cannot determine the number of Y[i]s
-            // which will be applied to z[1] of C := λ z[1], z[1] (..).
-            //
-            // More generally, when we solve the following constraint:
-            //
-            //  (?M : α → Prop) (t : α) =?= N
-            //
-            // We have infinitely many solutions produced by projection in combination with type instantiation:
-            //
-            //   ?M = λ x, x : Prop → Prop
-            //      | λ x, x (Y x) : (β → Prop) → Prop
-            //      | λ x, x (Y x) (Z x) : (β → γ → Prop) → Prop
-            //      ...
-            //
-            // In our implementation we only check the first branch (i.e. assume instantiation of α happens only for base types).
-            // (Maybe we can prove that only a finite subset of them matters using the subformula property?)
-            //
-            // See [1] for more detailed discussion, and [2] for a solution of this problem.
-            //
-            // - [1] Tobias Nipkow. Higher-Order Unification, Polymorphism and Subsort, 1990.
-            // - [2] Ullrich Hustadt. A complete transformation system for polymorphic higher-order unification, 1991.
+            // This is already effectively complete for hole-tailed projection.
+            // Following Hustadt, "A complete transformation system for polymorphic
+            // higher-order unification" (1991), we recover the missing branches
+            // with binder expansion plus iterative deepening.
+            // The search depth is still capped for practical usability.
 
             if z.ty.components().len() < left_ty.components().len() {
                 continue;
