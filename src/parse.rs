@@ -1251,6 +1251,8 @@ impl<'a> Parser<'a> {
                         field_id,
                         field_name: field_name.clone(),
                         name: Self::local_field_qualified(&local_name, &field_name),
+                        spec_name: Self::local_field_qualified(&local_name, &field_name)
+                            .extend(Name::from_str("spec")),
                         ty: field_ty,
                         target: field_target,
                     }));
@@ -2827,7 +2829,9 @@ impl<'a> Parser<'a> {
             self.expect_symbol(":")?;
             let ty = self.ty()?;
             ctors.push(TypeInductiveConstructor {
-                name: ctor_name,
+                name: ctor_name.clone(),
+                ctor_name: name.extend(ctor_name.clone()),
+                ctor_spec_name: name.extend(ctor_name).extend(Name::from_str("spec")),
                 ty,
             })
         }
@@ -2835,6 +2839,8 @@ impl<'a> Parser<'a> {
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
         self.type_this_ref = None;
+        let ind_name = name.extend(Name::from_str("ind"));
+        let rec_name = name.extend(Name::from_str("rec"));
         Ok(CmdTypeInductive {
             name,
             this,
@@ -2845,6 +2851,8 @@ impl<'a> Parser<'a> {
                     name: Some(binding.name.clone()),
                 })
                 .collect(),
+            ind_name,
+            rec_name,
             ctors,
         })
     }
@@ -2929,7 +2937,8 @@ impl<'a> Parser<'a> {
             self.locals.truncate(ctor_params_start);
             target = generalize(&target, &ctor_params);
             ctors.push(InductiveConstructor {
-                name: ctor_name,
+                name: ctor_name.clone(),
+                ctor_name: name.extend(ctor_name),
                 target,
             })
         }
@@ -2938,6 +2947,7 @@ impl<'a> Parser<'a> {
         self.this_ref = None;
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
+        let ind_name = name.extend(Name::from_str("ind"));
         Ok(CmdInductive {
             name,
             this,
@@ -2945,6 +2955,7 @@ impl<'a> Parser<'a> {
             ctors,
             params,
             target_ty,
+            ind_name,
         })
     }
 
@@ -3030,6 +3041,7 @@ impl<'a> Parser<'a> {
         self.locals.truncate(self.locals.len() - num_consts);
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
+        let abs_name = name.extend(Name::from_str("abs"));
         Ok(CmdStructure {
             name,
             local_types: local_types
@@ -3039,6 +3051,7 @@ impl<'a> Parser<'a> {
                     name: Some(ty.name.clone()),
                 })
                 .collect(),
+            abs_name,
             fields,
         })
     }
@@ -3122,6 +3135,9 @@ impl<'a> Parser<'a> {
                         field_id,
                         field_name: field_name.clone(),
                         name: field_qualified_name,
+                        spec_name: name
+                            .extend(field_name.clone())
+                            .extend(Name::from_str("spec")),
                         ty: field_ty,
                         target: field_target,
                     }));
@@ -4761,6 +4777,7 @@ mod tests {
             field_id: _,
             field_name,
             name,
+            spec_name,
             ty: _,
             target,
         }) = &fields[1]
@@ -4769,6 +4786,7 @@ mod tests {
         };
         assert_eq!(field_name, &Name::from_str("b"));
         assert_eq!(name, &qualified("inst.b"));
+        assert_eq!(spec_name, &qualified("inst.b.spec"));
         let Term::Local(local) = target else {
             panic!("expected second definition to reference a local");
         };
@@ -4842,6 +4860,7 @@ mod tests {
             CmdStructure {
                 name: qualified("foo"),
                 local_types: vec![],
+                abs_name: qualified("foo.abs"),
                 fields: vec![StructureField::Const(StructureConst {
                     field_id: structure_field_id,
                     field_name: Name::from_str("rep"),
@@ -5037,9 +5056,13 @@ mod tests {
             &class_predicates,
         )
         .expect("structure parses");
-        let Cmd::Structure(CmdStructure { fields, .. }) = cmd else {
+        let Cmd::Structure(CmdStructure {
+            abs_name, fields, ..
+        }) = cmd
+        else {
             panic!("expected structure command");
         };
+        assert_eq!(abs_name, qualified("foo.abs"));
         let StructureField::Const(StructureConst {
             field_id,
             field_name,
@@ -6283,18 +6306,32 @@ mod tests {
             name,
             this,
             local_types,
+            ind_name,
+            rec_name,
             ctors,
         }) = cmd
         else {
             panic!("expected type inductive command");
         };
         assert_eq!(name, qualified("foo"));
+        assert_eq!(ind_name, qualified("foo.ind"));
+        assert_eq!(rec_name, qualified("foo.rec"));
         assert_eq!(local_types.len(), 1);
         assert_ne!(this, local_types[0].id);
-        let [TypeInductiveConstructor { name, ty }] = ctors.as_slice() else {
+        let [
+            TypeInductiveConstructor {
+                name,
+                ctor_name,
+                ctor_spec_name,
+                ty,
+            },
+        ] = ctors.as_slice()
+        else {
             panic!("expected one type inductive constructor");
         };
         assert_eq!(name, &Name::from_str("mk"));
+        assert_eq!(ctor_name, &qualified("foo.mk"));
+        assert_eq!(ctor_spec_name, &qualified("foo.mk.spec"));
         assert_eq!(
             ty,
             &mk_type_local(this).apply([mk_type_local(local_types[0].id)])
@@ -6321,19 +6358,29 @@ mod tests {
             local_types,
             params,
             target_ty,
+            ind_name,
             ctors,
         }) = cmd
         else {
             panic!("expected inductive command");
         };
         assert_eq!(name, qualified("foo"));
+        assert_eq!(ind_name, qualified("foo.ind"));
         assert!(local_types.is_empty());
         assert!(params.is_empty());
         assert_eq!(target_ty, mk_type_prop());
-        let [InductiveConstructor { name, target }] = ctors.as_slice() else {
+        let [
+            InductiveConstructor {
+                name,
+                ctor_name,
+                target,
+            },
+        ] = ctors.as_slice()
+        else {
             panic!("expected one inductive constructor");
         };
         assert_eq!(name, &Name::from_str("mk"));
+        assert_eq!(ctor_name, &qualified("foo.mk"));
         let (ctor_params, ctor_body) = ungeneralize(target);
         assert_eq!(ctor_params.len(), 1);
         let (ctor_args, ctor_target) = unguard(&ctor_body);
@@ -6990,6 +7037,7 @@ mod tests {
             CmdStructure {
                 name: qualified("foo"),
                 local_types: vec![],
+                abs_name: qualified("foo.abs"),
                 fields: vec![
                     StructureField::Const(StructureConst {
                         field_id: rep_field_id,
@@ -7077,6 +7125,7 @@ mod tests {
             CmdStructure {
                 name: qualified("foo"),
                 local_types: vec![],
+                abs_name: qualified("foo.abs"),
                 fields: vec![
                     StructureField::Axiom(StructureAxiom {
                         field_name: Name::from_str("ok"),
