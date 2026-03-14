@@ -191,12 +191,16 @@ pub struct CmdTypeInductive {
     pub name: QualifiedName,
     pub this: Id,
     pub local_types: Vec<LocalType>,
+    pub ind_name: QualifiedName,
+    pub rec_name: QualifiedName,
     pub ctors: Vec<TypeInductiveConstructor>,
 }
 
 #[derive(Clone, Debug)]
 pub struct TypeInductiveConstructor {
     pub name: Name,
+    pub ctor_name: QualifiedName,
+    pub ctor_spec_name: QualifiedName,
     pub ty: Type,
 }
 
@@ -207,12 +211,14 @@ pub struct CmdInductive {
     pub local_types: Vec<LocalType>,
     pub params: Vec<Local>,
     pub target_ty: Type,
+    pub ind_name: QualifiedName,
     pub ctors: Vec<InductiveConstructor>,
 }
 
 #[derive(Clone, Debug)]
 pub struct InductiveConstructor {
     pub name: Name,
+    pub ctor_name: QualifiedName,
     pub target: Term,
 }
 
@@ -220,6 +226,7 @@ pub struct InductiveConstructor {
 pub struct CmdStructure {
     pub name: QualifiedName,
     pub local_types: Vec<LocalType>,
+    pub abs_name: QualifiedName,
     pub fields: Vec<StructureField>,
 }
 
@@ -265,6 +272,7 @@ pub struct InstanceDef {
     pub field_id: Id,
     pub field_name: Name,
     pub name: QualifiedName,
+    pub spec_name: QualifiedName,
     pub ty: Type,
     pub target: Term,
 }
@@ -1392,6 +1400,8 @@ impl Eval {
             name,
             this,
             local_types,
+            ind_name,
+            rec_name,
             ctors,
         } = cmd;
         if self.has_type_name(&name) {
@@ -1426,12 +1436,10 @@ impl Eval {
             }
         }
         for ctor in &ctors {
-            let ctor_name = name.extend(ctor.name.clone());
-            if self.has_const(&ctor_name) {
+            if self.has_const(&ctor.ctor_name) {
                 bail!("already defined");
             }
-            let ctor_spec_name = ctor_name.extend(Name::from_str("spec"));
-            if self.has_const(&ctor_spec_name) {
+            if self.has_const(&ctor.ctor_spec_name) {
                 bail!("already defined");
             }
             self.elaborate_type(&mut local_env, &ctor.ty, Kind::base())?;
@@ -1451,11 +1459,9 @@ impl Eval {
                 }
             }
         }
-        let ind_name = name.extend(Name::from_str("ind"));
         if self.has_axiom(&ind_name) {
             bail!("already defined");
         }
-        let rec_name = name.extend(Name::from_str("rec"));
         if self.has_const(&rec_name) {
             bail!("already defined");
         }
@@ -1477,9 +1483,8 @@ impl Eval {
         let subst = [(this, target_ty.clone())];
         let mut cs = vec![];
         for ctor in &ctors {
-            let ctor_name = name.extend(ctor.name.clone());
             let ty = ctor.ty.subst(&subst);
-            cs.push((ctor_name, ty));
+            cs.push((ctor.ctor_name.clone(), ty));
         }
         for (name, ty) in cs {
             self.add_const(name, local_types.clone(), vec![], ty);
@@ -1541,9 +1546,8 @@ impl Eval {
                 ih_list.push(h);
             }
             // ∀ args, {IH} → P (C args)
-            let ctor_name = name.extend(ctor.name.clone());
             let mut a = mk_const(
-                ctor_name,
+                ctor.ctor_name.clone(),
                 local_types
                     .iter()
                     .map(|local_type| mk_type_local(local_type.id))
@@ -1684,9 +1688,8 @@ impl Eval {
                     .collect(),
                 vec![],
             );
-            let ctor_name = name.extend(ctor.name.clone());
             let mut lhs_arg = mk_const(
-                ctor_name.clone(),
+                ctor.ctor_name.clone(),
                 local_types
                     .iter()
                     .map(|local_type| mk_type_local(local_type.id))
@@ -1709,8 +1712,12 @@ impl Eval {
             spec = spec.apply([lhs, rhs]);
             spec = generalize(&spec, &ctor_params);
 
-            let ctor_spec_name = ctor_name.extend(Name::from_str("spec"));
-            self.add_axiom(ctor_spec_name, rec_local_types.clone(), vec![], spec);
+            self.add_axiom(
+                ctor.ctor_spec_name.clone(),
+                rec_local_types.clone(),
+                vec![],
+                spec,
+            );
         }
         Ok(())
     }
@@ -1734,6 +1741,7 @@ impl Eval {
             local_types,
             params,
             target_ty,
+            ind_name,
             mut ctors,
         } = cmd;
         if self.has_const(&name) {
@@ -1788,8 +1796,7 @@ impl Eval {
         let mut ctor_target_list = vec![];
         let mut ctor_ind_args_list = vec![];
         for ctor in &mut ctors {
-            let ctor_name = name.extend(ctor.name.clone());
-            if self.has_axiom(&ctor_name) {
+            if self.has_axiom(&ctor.ctor_name) {
                 bail!("already defined");
             }
             self.elaborate_term(&mut local_env, &mut ctor.target, &mk_type_prop())?;
@@ -1835,7 +1842,6 @@ impl Eval {
             ctor_ind_args_list.push(ctor_ind_args);
         }
         local_env.locals.remove(0);
-        let ind_name = name.extend(Name::from_str("ind"));
         if self.has_axiom(&ind_name) {
             bail!("already defined");
         }
@@ -1854,7 +1860,6 @@ impl Eval {
         // | intro : ∀ y, φ → (∀ z, ψ → P M) → P N
         // ↦ axiom P.intro.{u} (x : τ) : ∀ y, φ → (∀ z, ψ → P.{u} x M) → P.{u} x N
         for ctor in &ctors {
-            let ctor_name = name.extend(ctor.name.clone());
             let mut target = ctor.target.clone();
             // P.{u} x
             let mut stash = mk_const(
@@ -1870,7 +1875,7 @@ impl Eval {
             let new_target = target.subst(&subst);
             target = new_target;
             target = generalize(&target, &params);
-            self.add_axiom(ctor_name, local_types.clone(), vec![], target);
+            self.add_axiom(ctor.ctor_name.clone(), local_types.clone(), vec![], target);
         }
 
         // inductive P.{u} (x : τ) : σ → Prop
@@ -1972,6 +1977,7 @@ impl Eval {
         let CmdStructure {
             name,
             local_types,
+            abs_name,
             mut fields,
         } = cmd;
         if self.has_type_name(&name) {
@@ -2032,7 +2038,6 @@ impl Eval {
                 }
             }
         }
-        let abs_name = name.extend(Name::from_str("abs"));
         if self.has_axiom(&abs_name) {
             bail!("already defined");
         }
@@ -2042,6 +2047,7 @@ impl Eval {
             CmdStructure {
                 name: name.clone(),
                 local_types: local_types.clone(),
+                abs_name: abs_name.clone(),
                 fields: fields.clone(),
             },
         );
@@ -2446,13 +2452,17 @@ impl Eval {
                     name: structure_field_name,
                     ..
                 }),
-                InstanceField::Def(InstanceDef { name, ty, .. }),
+                InstanceField::Def(InstanceDef {
+                    name,
+                    spec_name,
+                    ty,
+                    ..
+                }),
             ) = (structure_field, field)
             else {
                 continue;
             };
-            let spec_name = name.extend(Name::from_str("spec"));
-            if self.has_axiom(&spec_name) {
+            if self.has_axiom(spec_name) {
                 bail!("already defined");
             }
 
@@ -2484,7 +2494,7 @@ impl Eval {
             target = target.apply([lhs, rhs]);
             target = generalize(&target, &params);
             self.add_axiom(
-                spec_name,
+                spec_name.clone(),
                 local_types.clone(),
                 local_classes.clone(),
                 target,
@@ -2784,8 +2794,18 @@ impl Eval {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cmd, CmdNamespaceStart, CmdTypeConst, CmdUse, Eval, Namespace, UseDecl};
-    use crate::tt::{Kind, Name, Path, QualifiedName};
+    use super::{
+        Cmd, CmdInductive, CmdInstance, CmdNamespaceStart, CmdStructure, CmdTypeConst,
+        CmdTypeInductive, CmdUse, Eval, InductiveConstructor, InstanceDef, InstanceField,
+        Namespace, StructureConst, StructureField, TypeInductiveConstructor, UseDecl,
+    };
+    use crate::{
+        proof::mk_type_prop,
+        tt::{
+            Id, Kind, LocalType, Name, Path, QualifiedName, mk_const, mk_local, mk_type_arrow,
+            mk_type_const, mk_type_local,
+        },
+    };
 
     fn path(value: &str) -> Path {
         let mut path = Path::root();
@@ -2806,6 +2826,48 @@ mod tests {
             name = name.extend(Name::from_str(part));
         }
         name
+    }
+
+    fn install_minimal_logic(eval: &mut Eval) {
+        eval.add_type_const(qualified("Prop"), Kind(0));
+        eval.add_const(
+            qualified("imp"),
+            vec![],
+            vec![],
+            mk_type_arrow(
+                mk_type_prop(),
+                mk_type_arrow(mk_type_prop(), mk_type_prop()),
+            ),
+        );
+        for name in ["forall", "uexists", "eq"] {
+            let u = Id::fresh();
+            let local_types = vec![LocalType {
+                id: u,
+                name: Some(Name::from_str("u")),
+            }];
+            let ty = match name {
+                "forall" | "uexists" => mk_type_arrow(
+                    mk_type_arrow(mk_type_local(u), mk_type_prop()),
+                    mk_type_prop(),
+                ),
+                "eq" => mk_type_arrow(
+                    mk_type_local(u),
+                    mk_type_arrow(mk_type_local(u), mk_type_prop()),
+                ),
+                _ => unreachable!("unexpected minimal logic constant"),
+            };
+            eval.add_const(qualified(name), local_types, vec![], ty);
+        }
+        eval.add_const(
+            qualified("and"),
+            vec![],
+            vec![],
+            mk_type_arrow(
+                mk_type_prop(),
+                mk_type_arrow(mk_type_prop(), mk_type_prop()),
+            ),
+        );
+        eval.add_const(qualified("true"), vec![], vec![], mk_type_prop());
     }
 
     #[test]
@@ -2998,5 +3060,146 @@ mod tests {
                 .get(&Name::from_str("piyo")),
             Some(&qualified("fuga"))
         );
+    }
+
+    #[test]
+    fn type_inductive_command_uses_parser_generated_derived_names() {
+        let mut eval = Eval::default();
+        install_minimal_logic(&mut eval);
+
+        let this = Id::fresh();
+        let ctor_name = qualified("meta.ctor");
+        let ctor_spec_name = qualified("meta.ctor_rule");
+        let ind_name = qualified("meta.type_ind");
+        let rec_name = qualified("meta.type_rec");
+
+        eval.run_cmd(Cmd::TypeInductive(CmdTypeInductive {
+            name: qualified("foo"),
+            this,
+            local_types: vec![],
+            ind_name: ind_name.clone(),
+            rec_name: rec_name.clone(),
+            ctors: vec![TypeInductiveConstructor {
+                name: Name::from_str("mk"),
+                ctor_name: ctor_name.clone(),
+                ctor_spec_name: ctor_spec_name.clone(),
+                ty: mk_type_local(this),
+            }],
+        }))
+        .expect("type inductive command should succeed");
+
+        assert!(eval.const_table.contains_key(&ctor_name));
+        assert!(eval.const_table.contains_key(&rec_name));
+        assert!(eval.axiom_table.contains_key(&ctor_spec_name));
+        assert!(eval.axiom_table.contains_key(&ind_name));
+        assert!(!eval.const_table.contains_key(&qualified("foo.mk")));
+        assert!(!eval.const_table.contains_key(&qualified("foo.rec")));
+        assert!(!eval.axiom_table.contains_key(&qualified("foo.mk.spec")));
+        assert!(!eval.axiom_table.contains_key(&qualified("foo.ind")));
+    }
+
+    #[test]
+    fn inductive_command_uses_parser_generated_derived_names() {
+        let mut eval = Eval::default();
+        install_minimal_logic(&mut eval);
+
+        let this = Id::fresh();
+        let ctor_name = qualified("meta.intro");
+        let ind_name = qualified("meta.prop_ind");
+
+        eval.run_cmd(Cmd::Inductive(CmdInductive {
+            name: qualified("foo"),
+            this,
+            local_types: vec![],
+            params: vec![],
+            target_ty: mk_type_prop(),
+            ind_name: ind_name.clone(),
+            ctors: vec![InductiveConstructor {
+                name: Name::from_str("mk"),
+                ctor_name: ctor_name.clone(),
+                target: mk_local(this),
+            }],
+        }))
+        .expect("inductive command should succeed");
+
+        assert!(eval.const_table.contains_key(&qualified("foo")));
+        assert!(eval.axiom_table.contains_key(&ctor_name));
+        assert!(eval.axiom_table.contains_key(&ind_name));
+        assert!(!eval.axiom_table.contains_key(&qualified("foo.mk")));
+        assert!(!eval.axiom_table.contains_key(&qualified("foo.ind")));
+    }
+
+    #[test]
+    fn structure_command_uses_parser_generated_abs_name() {
+        let mut eval = Eval::default();
+        install_minimal_logic(&mut eval);
+
+        let abs_name = qualified("meta.struct_abs");
+
+        eval.run_cmd(Cmd::Structure(CmdStructure {
+            name: qualified("foo"),
+            local_types: vec![],
+            abs_name: abs_name.clone(),
+            fields: vec![StructureField::Const(StructureConst {
+                field_id: Id::fresh(),
+                field_name: Name::from_str("rep"),
+                name: qualified("foo.rep"),
+                ty: mk_type_prop(),
+            })],
+        }))
+        .expect("structure command should succeed");
+
+        assert!(eval.axiom_table.contains_key(&abs_name));
+        assert!(!eval.axiom_table.contains_key(&qualified("foo.abs")));
+    }
+
+    #[test]
+    fn instance_command_uses_parser_generated_spec_name() {
+        let mut eval = Eval::default();
+        install_minimal_logic(&mut eval);
+
+        let rep_field_id = Id::fresh();
+        eval.add_type_const(qualified("foo"), Kind(0));
+        eval.add_const(
+            qualified("foo.rep"),
+            vec![],
+            vec![],
+            mk_type_arrow(mk_type_const(qualified("foo")), mk_type_prop()),
+        );
+        eval.structure_table.insert(
+            qualified("foo"),
+            CmdStructure {
+                name: qualified("foo"),
+                local_types: vec![],
+                abs_name: qualified("meta.foo_abs"),
+                fields: vec![StructureField::Const(StructureConst {
+                    field_id: rep_field_id,
+                    field_name: Name::from_str("rep"),
+                    name: qualified("foo.rep"),
+                    ty: mk_type_prop(),
+                })],
+            },
+        );
+
+        let spec_name = qualified("meta.inst_rep_rule");
+        eval.run_cmd(Cmd::Instance(CmdInstance {
+            name: qualified("inst"),
+            local_types: vec![],
+            local_classes: vec![],
+            params: vec![],
+            target_ty: mk_type_const(qualified("foo")),
+            fields: vec![InstanceField::Def(InstanceDef {
+                field_id: Id::fresh(),
+                field_name: Name::from_str("rep"),
+                name: qualified("inst.rep"),
+                spec_name: spec_name.clone(),
+                ty: mk_type_prop(),
+                target: mk_const(qualified("true"), vec![], vec![]),
+            })],
+        }))
+        .expect("instance command should succeed");
+
+        assert!(eval.axiom_table.contains_key(&spec_name));
+        assert!(!eval.axiom_table.contains_key(&qualified("inst.rep.spec")));
     }
 }
