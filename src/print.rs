@@ -1,7 +1,7 @@
 use crate::{
     cmd::{CmdTypeDef, Fixity, Operator},
     proof::Axiom,
-    tt::{Class, ClassType, Const, Ctor, Id, Kind, LocalType, Name, QualifiedName, Term, Type},
+    tt::{Class, ClassType, Const, Ctor, GlobalId, Id, Kind, LocalType, Name, Term, Type},
 };
 
 use anyhow::bail;
@@ -9,8 +9,8 @@ use std::{collections::HashMap, fmt::Display};
 
 #[derive(Debug, Default, Clone)]
 pub struct OpTable {
-    op_table: HashMap<QualifiedName, Operator>,
-    type_op_table: HashMap<QualifiedName, Operator>,
+    op_table: HashMap<GlobalId, Operator>,
+    type_op_table: HashMap<GlobalId, Operator>,
 }
 
 impl OpTable {
@@ -22,7 +22,7 @@ impl OpTable {
         Self::insert(&mut self.type_op_table, op)
     }
 
-    fn insert(table: &mut HashMap<QualifiedName, Operator>, op: Operator) -> anyhow::Result<()> {
+    fn insert(table: &mut HashMap<GlobalId, Operator>, op: Operator) -> anyhow::Result<()> {
         let entity = op.entity.clone();
         if table.insert(entity, op).is_some() {
             bail!("notation already defined");
@@ -30,12 +30,12 @@ impl OpTable {
         Ok(())
     }
 
-    fn get(&self, name: &QualifiedName) -> Option<&Operator> {
-        self.op_table.get(name)
+    fn get(&self, id: &GlobalId) -> Option<&Operator> {
+        self.op_table.get(id)
     }
 
-    fn get_type(&self, name: &QualifiedName) -> Option<&Operator> {
-        self.type_op_table.get(name)
+    fn get_type(&self, id: &GlobalId) -> Option<&Operator> {
+        self.type_op_table.get(id)
     }
 }
 
@@ -106,7 +106,7 @@ impl<'a> Printer<'a> {
     fn collect_ctor_binders(
         &self,
         mut term: Term,
-        ctor_name: QualifiedName,
+        ctor_id: GlobalId,
         local_names: &mut Vec<String>,
     ) -> (Vec<(String, Type)>, Term) {
         let mut binders = Vec::new();
@@ -119,7 +119,7 @@ impl<'a> Printer<'a> {
                 term = inner.body.clone();
             }
             if let Ok(mut ctor) = Ctor::try_from(term.clone())
-                && ctor.head.name == ctor_name
+                && ctor.head.id == ctor_id
                 && ctor.args.len() == 1
             {
                 term = ctor.args.pop().unwrap();
@@ -172,7 +172,7 @@ impl<'a> Printer<'a> {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         if let Ok(Ctor { head, mut args }) = m.clone().try_into() {
-            if let Some(op) = self.op_table.get(&head.name) {
+            if let Some(op) = self.op_table.get(&head.id) {
                 match op.fixity {
                     Fixity::Infix | Fixity::Infixl => {
                         if args.len() == 2 {
@@ -231,15 +231,15 @@ impl<'a> Printer<'a> {
                     }
                 }
             }
-            let name = head.name.clone();
-            match name.to_string().as_str() {
+            let id = head.id.clone();
+            match id.to_string().as_str() {
                 "forall" => {
                     if args.len() == 1 {
                         let arg = args.pop().unwrap();
                         let arg_copy = arg.clone();
                         let snapshot = local_names.len();
                         let (binders, body) =
-                            self.collect_ctor_binders(arg, name.clone(), local_names);
+                            self.collect_ctor_binders(arg, id.clone(), local_names);
                         if binders.is_empty() {
                             local_names.truncate(snapshot);
                             args.push(arg_copy);
@@ -264,7 +264,7 @@ impl<'a> Printer<'a> {
                         let arg_copy = arg.clone();
                         let snapshot = local_names.len();
                         let (binders, body) =
-                            self.collect_ctor_binders(arg, name.clone(), local_names);
+                            self.collect_ctor_binders(arg, id.clone(), local_names);
                         if binders.is_empty() {
                             local_names.truncate(snapshot);
                             args.push(arg_copy);
@@ -289,7 +289,7 @@ impl<'a> Printer<'a> {
                         let arg_copy = arg.clone();
                         let snapshot = local_names.len();
                         let (binders, body) =
-                            self.collect_ctor_binders(arg, name.clone(), local_names);
+                            self.collect_ctor_binders(arg, id.clone(), local_names);
                         if binders.is_empty() {
                             local_names.truncate(snapshot);
                             args.push(arg_copy);
@@ -331,7 +331,7 @@ impl<'a> Printer<'a> {
                 write!(f, "?{}", inner.id)
             }
             Term::Const(inner) => {
-                write!(f, "{}", inner.name)?;
+                write!(f, "{}", inner.id)?;
                 if self.print_type_args && !inner.ty_args.is_empty() {
                     write!(f, ".{{",)?;
                     let mut first = true;
@@ -393,7 +393,7 @@ impl<'a> Printer<'a> {
             return Ok(rendered);
         }
         match t {
-            Type::Const(inner) => write!(f, "{}", inner.name),
+            Type::Const(inner) => write!(f, "{}", inner.id),
             Type::Arrow(inner) => {
                 if prec >= 25 {
                     write!(f, "(")?;
@@ -437,7 +437,7 @@ impl<'a> Printer<'a> {
     ) -> Result<Option<()>, std::fmt::Error> {
         match t {
             Type::Const(inner) => {
-                if let Some(op) = self.op_table.get_type(&inner.name)
+                if let Some(op) = self.op_table.get_type(&inner.id)
                     && op.fixity == Fixity::Nofix
                 {
                     write!(f, "{}", op.symbol)?;
@@ -446,7 +446,7 @@ impl<'a> Printer<'a> {
             }
             Type::App(inner) => {
                 if let Type::Const(fun) = &inner.fun
-                    && let Some(op) = self.op_table.get_type(&fun.name)
+                    && let Some(op) = self.op_table.get_type(&fun.id)
                     && op.fixity == Fixity::Prefix
                 {
                     if prec > op.prec {
@@ -461,7 +461,7 @@ impl<'a> Printer<'a> {
                 }
                 if let Type::App(lhs) = &inner.fun
                     && let Type::Const(head) = &lhs.fun
-                    && let Some(op) = self.op_table.get_type(&head.name)
+                    && let Some(op) = self.op_table.get_type(&head.id)
                 {
                     match op.fixity {
                         Fixity::Infix | Fixity::Infixl | Fixity::Infixr => {
@@ -496,7 +496,7 @@ impl<'a> Printer<'a> {
     }
 
     fn fmt_class(&self, f: &mut std::fmt::Formatter, c: &Class) -> std::fmt::Result {
-        write!(f, "{}", c.name)?;
+        write!(f, "{}", c.id)?;
         if !c.args.is_empty() {
             for arg in &c.args {
                 write!(f, " ")?;
@@ -623,7 +623,7 @@ fn create_local_type_name(local_types: &Vec<LocalType>) -> HashMap<Id, String> {
     local_type_names
 }
 
-impl Display for Pretty<'_, (&QualifiedName, &Const)> {
+impl Display for Pretty<'_, (&GlobalId, &Const)> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (
             name,
@@ -663,7 +663,7 @@ impl Display for Pretty<'_, (&QualifiedName, &Const)> {
     }
 }
 
-impl Display for Pretty<'_, (&QualifiedName, &Axiom)> {
+impl Display for Pretty<'_, (&GlobalId, &Axiom)> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (
             name,
@@ -703,19 +703,19 @@ impl Display for Pretty<'_, (&QualifiedName, &Axiom)> {
     }
 }
 
-impl Display for Pretty<'_, (&QualifiedName, &Kind)> {
+impl Display for Pretty<'_, (&GlobalId, &Kind)> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (name, kind) = self.data;
         write!(f, "type const {} : {}", name, kind)
     }
 }
 
-impl Display for Pretty<'_, (&QualifiedName, &CmdTypeDef)> {
+impl Display for Pretty<'_, (&GlobalId, &CmdTypeDef)> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (
             name,
             CmdTypeDef {
-                name: _,
+                id: _,
                 local_types,
                 target,
             },
@@ -743,7 +743,7 @@ impl Display for Pretty<'_, (&QualifiedName, &CmdTypeDef)> {
     }
 }
 
-impl Display for Pretty<'_, (&QualifiedName, &ClassType)> {
+impl Display for Pretty<'_, (&GlobalId, &ClassType)> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (name, &ClassType { arity }) = self.data;
         write!(f, "class {}", name)?;
@@ -757,16 +757,10 @@ impl Display for Pretty<'_, (&QualifiedName, &ClassType)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tt::{mk_type_arrow, mk_type_const};
+    use crate::tt::{GlobalId, Name, mk_type_arrow, mk_type_const};
 
-    fn qualified(value: &str) -> QualifiedName {
-        let mut parts = value.split('.');
-        let first = parts.next().expect("qualified name must not be empty");
-        let mut name = QualifiedName::from_name(Name::from_str(first));
-        for part in parts {
-            name = name.extend(Name::from_str(part));
-        }
-        name
+    fn global_id(value: &str) -> GlobalId {
+        GlobalId::from_name(Name::from_str(value))
     }
 
     #[test]
@@ -777,11 +771,11 @@ mod tests {
                 symbol: "×".to_owned(),
                 fixity: Fixity::Infixr,
                 prec: 35,
-                entity: qualified("prod"),
+                entity: global_id("prod"),
             })
             .expect("type notation registers");
-        let ty = mk_type_const(qualified("prod"))
-            .apply([mk_type_const(qualified("U")), mk_type_const(qualified("V"))]);
+        let ty = mk_type_const(global_id("prod"))
+            .apply([mk_type_const(global_id("U")), mk_type_const(global_id("V"))]);
 
         let rendered = format!("{}", PrettyInner::new(&op_table, &HashMap::new(), &ty));
 
@@ -796,12 +790,12 @@ mod tests {
                 symbol: "×".to_owned(),
                 fixity: Fixity::Infixr,
                 prec: 35,
-                entity: qualified("prod"),
+                entity: global_id("prod"),
             })
             .expect("type notation registers");
-        let ty = mk_type_const(qualified("prod")).apply([
-            mk_type_arrow(mk_type_const(qualified("U")), mk_type_const(qualified("V"))),
-            mk_type_const(qualified("W")),
+        let ty = mk_type_const(global_id("prod")).apply([
+            mk_type_arrow(mk_type_const(global_id("U")), mk_type_const(global_id("V"))),
+            mk_type_const(global_id("W")),
         ]);
 
         let rendered = format!("{}", PrettyInner::new(&op_table, &HashMap::new(), &ty));
@@ -817,7 +811,7 @@ mod tests {
                 symbol: "◻".to_owned(),
                 fixity: Fixity::Prefix,
                 prec: 90,
-                entity: qualified("box"),
+                entity: global_id("box"),
             })
             .expect("type prefix registers");
         op_table
@@ -825,10 +819,10 @@ mod tests {
                 symbol: "One".to_owned(),
                 fixity: Fixity::Nofix,
                 prec: usize::MAX,
-                entity: qualified("unit"),
+                entity: global_id("unit"),
             })
             .expect("type nofix registers");
-        let prefixed = mk_type_const(qualified("box")).apply([mk_type_const(qualified("unit"))]);
+        let prefixed = mk_type_const(global_id("box")).apply([mk_type_const(global_id("unit"))]);
 
         assert_eq!(
             format!(
@@ -843,7 +837,7 @@ mod tests {
                 PrettyInner::new(
                     &op_table,
                     &HashMap::new(),
-                    &mk_type_const(qualified("unit"))
+                    &mk_type_const(global_id("unit"))
                 )
             ),
             "One"

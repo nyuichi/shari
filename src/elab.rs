@@ -18,12 +18,16 @@ use crate::{
         ungeneralize1, unguard1,
     },
     tt::{
-        self, Class, ClassInstance, ClassType, Const, Id, Instance, InstanceGlobal, Kind, Local,
-        LocalDelta, LocalEnv, LocalType, Name, QualifiedName, Term, TermAbs, TermApp, Type,
-        TypeApp, TypeArrow, mk_const, mk_fresh_type_hole, mk_hole, mk_instance_global,
-        mk_instance_local, mk_local, mk_type_arrow, mk_type_local,
+        self, Class, ClassInstance, ClassType, Const, GlobalId, Id, Instance, InstanceGlobal, Kind,
+        Local, LocalDelta, LocalEnv, LocalType, Name, Term, TermAbs, TermApp, Type, TypeApp,
+        TypeArrow, mk_const, mk_fresh_type_hole, mk_hole, mk_instance_global, mk_instance_local,
+        mk_local, mk_type_arrow, mk_type_local,
     },
 };
+
+fn global_id(value: &str) -> GlobalId {
+    GlobalId::from_name(Name::from_str(value))
+}
 
 #[derive(Debug, Clone)]
 enum Error {
@@ -215,7 +219,7 @@ impl<'a> Elaborator<'a> {
     fn visit_type(&self, t: &Type) -> anyhow::Result<Kind> {
         match t {
             Type::Const(t) => {
-                let Some(kind) = self.proof_env.tt_env.type_const_table.get(&t.name) else {
+                let Some(kind) = self.proof_env.tt_env.type_const_table.get(&t.id) else {
                     bail!("constant type not found");
                 };
                 Ok(kind.clone())
@@ -350,7 +354,7 @@ impl<'a> Elaborator<'a> {
                     local_types,
                     local_classes,
                     ty,
-                }) = self.proof_env.tt_env.const_table.get(&n.name)
+                }) = self.proof_env.tt_env.const_table.get(&n.id)
                 else {
                     bail!("constant not found");
                 };
@@ -392,17 +396,13 @@ impl<'a> Elaborator<'a> {
                 Ok(())
             }
             Instance::Global(instance) => {
-                let InstanceGlobal {
-                    name,
-                    ty_args,
-                    args,
-                } = &**instance;
+                let InstanceGlobal { id, ty_args, args } = &**instance;
                 let Some(ClassInstance {
                     local_types,
                     local_classes,
                     target,
                     method_table: _,
-                }) = self.proof_env.tt_env.class_instance_table.get(name)
+                }) = self.proof_env.tt_env.class_instance_table.get(id)
                 else {
                     bail!("class rule not found");
                 };
@@ -625,11 +625,7 @@ impl<'a> Elaborator<'a> {
                 pred = pred.apply([mk_local(x.id)]);
                 pred = pred.abs(&[x]);
 
-                let mut target = mk_const(
-                    QualifiedName::from_name(Name::from_str("forall")),
-                    vec![arg_ty.clone()],
-                    vec![],
-                );
+                let mut target = mk_const(global_id("forall"), vec![arg_ty.clone()], vec![]);
                 target = target.apply([pred]);
                 self.push_term_constraint(
                     self.tt_local_env.clone(),
@@ -649,9 +645,9 @@ impl<'a> Elaborator<'a> {
                     local_types,
                     local_classes,
                     target,
-                }) = self.proof_env.axiom_table.get(&e.name)
+                }) = self.proof_env.axiom_table.get(&e.id)
                 else {
-                    bail!("proposition not found: {}", e.name);
+                    bail!("proposition not found: {}", e.id);
                 };
                 if local_types.len() != e.ty_args.len() {
                     bail!("number of type variables mismatch");
@@ -866,11 +862,8 @@ impl<'a> Elaborator<'a> {
                             let mut rhs = mk_local(*id);
                             rhs = rhs.apply([mk_local(this.id)]);
 
-                            let mut char = mk_const(
-                                QualifiedName::from_name(Name::from_str("eq")),
-                                vec![param.ty.clone()],
-                                vec![],
-                            );
+                            let mut char =
+                                mk_const(global_id("eq"), vec![param.ty.clone()], vec![]);
                             char = char.apply([mk_local(param.id), rhs]);
                             chars.push(char);
 
@@ -885,30 +878,16 @@ impl<'a> Elaborator<'a> {
                     }
                 }
 
-                let mut abs = mk_const(
-                    QualifiedName::from_name(Name::from_str("uexists")),
-                    vec![this_ty.clone()],
-                    vec![],
-                );
+                let mut abs = mk_const(global_id("uexists"), vec![this_ty.clone()], vec![]);
                 abs = abs.apply([{
                     let mut char = chars
                         .into_iter()
                         .reduce(|left, right| {
-                            let mut conj = mk_const(
-                                QualifiedName::from_name(Name::from_str("and")),
-                                vec![],
-                                vec![],
-                            );
+                            let mut conj = mk_const(global_id("and"), vec![], vec![]);
                             conj = conj.apply([left, right]);
                             conj
                         })
-                        .unwrap_or_else(|| {
-                            mk_const(
-                                QualifiedName::from_name(Name::from_str("true")),
-                                vec![],
-                                vec![],
-                            )
-                        });
+                        .unwrap_or_else(|| mk_const(global_id("true"), vec![], vec![]));
                     char = char.abs(slice::from_ref(&this));
                     char
                 }]);
@@ -1127,7 +1106,7 @@ impl<'a> Elaborator<'a> {
 
     fn watch_instance(&mut self, c: Rc<MethodConstraint>) {
         if let Term::Const(left_head) = c.left.head()
-            && self.proof_env.tt_env.has_kappa(&left_head.name)
+            && self.proof_env.tt_env.has_kappa(&left_head.id)
             && let Instance::Hole(hole) = &left_head.instances[0]
         {
             self.instance_watch_list
@@ -1138,7 +1117,7 @@ impl<'a> Elaborator<'a> {
             return;
         }
         if let Term::Const(right_head) = c.right.head()
-            && self.proof_env.tt_env.has_kappa(&right_head.name)
+            && self.proof_env.tt_env.has_kappa(&right_head.id)
             && let Instance::Hole(hole) = &right_head.instances[0]
         {
             self.instance_watch_list
@@ -1150,7 +1129,7 @@ impl<'a> Elaborator<'a> {
 
     fn unwatch_instance(&mut self, c: &Rc<MethodConstraint>) {
         if let Term::Const(left_head) = c.left.head()
-            && self.proof_env.tt_env.has_kappa(&left_head.name)
+            && self.proof_env.tt_env.has_kappa(&left_head.id)
             && let Instance::Hole(hole) = &left_head.instances[0]
         {
             let hole_id = hole.id;
@@ -1166,7 +1145,7 @@ impl<'a> Elaborator<'a> {
             return;
         }
         if let Term::Const(right_head) = c.right.head()
-            && self.proof_env.tt_env.has_kappa(&right_head.name)
+            && self.proof_env.tt_env.has_kappa(&right_head.id)
             && let Instance::Hole(hole) = &right_head.instances[0]
         {
             let hole_id = hole.id;
@@ -1225,7 +1204,7 @@ impl<'a> Elaborator<'a> {
             let Term::Const(head_const) = head else {
                 return None;
             };
-            if !self.proof_env.tt_env.has_kappa(&head_const.name) {
+            if !self.proof_env.tt_env.has_kappa(&head_const.id) {
                 return None;
             }
             if head_const.instances.is_empty() {
@@ -1238,7 +1217,7 @@ impl<'a> Elaborator<'a> {
             let mut instances = head_const.instances.clone();
             instances[0] = instance;
             Some(mk_const(
-                head_const.name.clone(),
+                head_const.id.clone(),
                 head_const.ty_args.clone(),
                 instances,
             ))
@@ -1287,7 +1266,7 @@ impl<'a> Elaborator<'a> {
             class.clone()
         } else {
             Class {
-                name: class.name.clone(),
+                id: class.id.clone(),
                 args,
             }
         }
@@ -1304,11 +1283,7 @@ impl<'a> Elaborator<'a> {
                 }
             }
             Instance::Global(instance) => {
-                let InstanceGlobal {
-                    name,
-                    ty_args,
-                    args,
-                } = &**instance;
+                let InstanceGlobal { id, ty_args, args } = &**instance;
                 let new_ty_args = ty_args
                     .iter()
                     .map(|ty_arg| self.fully_inst_type(ty_arg))
@@ -1326,7 +1301,7 @@ impl<'a> Elaborator<'a> {
                     Instance::Global(instance.clone())
                 } else {
                     Instance::Global(Arc::new(InstanceGlobal {
-                        name: name.clone(),
+                        id: id.clone(),
                         ty_args: new_ty_args,
                         args: new_args,
                     }))
@@ -1393,7 +1368,7 @@ impl<'a> Elaborator<'a> {
             Expr::Const(expr) => {
                 let ExprConst {
                     metadata: _,
-                    name: _,
+                    id: _,
                     ty_args,
                     instances,
                 } = expr.as_mut();
@@ -1808,7 +1783,7 @@ impl<'a> Elaborator<'a> {
         if let Term::Abs(_) = right {
             if matches!(
                 left.head(),
-                Term::Const(left_head) if self.proof_env.tt_env.has_kappa(&left_head.name)
+                Term::Const(left_head) if self.proof_env.tt_env.has_kappa(&left_head.id)
             ) {
                 if let Some(new_left) = self.inst_recv(&left) {
                     left = new_left;
@@ -1893,14 +1868,14 @@ impl<'a> Elaborator<'a> {
             right = new_right;
         }
         if let Term::Const(left_head) = left.head()
-            && self.proof_env.tt_env.has_kappa(&left_head.name)
+            && self.proof_env.tt_env.has_kappa(&left_head.id)
             && left_head.instances[0].is_hole()
         {
             self.add_method_constraint(local_env.clone(), left, right, error);
             return None;
         }
         if let Term::Const(right_head) = right.head()
-            && self.proof_env.tt_env.has_kappa(&right_head.name)
+            && self.proof_env.tt_env.has_kappa(&right_head.id)
             && right_head.instances[0].is_hole()
         {
             self.add_method_constraint(local_env.clone(), left, right, error);
@@ -1917,7 +1892,7 @@ impl<'a> Elaborator<'a> {
                     }
                 }
                 (Term::Const(left_head), Term::Const(right_head)) => {
-                    if left_head.name != right_head.name {
+                    if left_head.id != right_head.id {
                         return Some(error);
                     }
                     for (left_ty_arg, right_ty_arg) in
@@ -1955,7 +1930,7 @@ impl<'a> Elaborator<'a> {
                 return None;
             }
             (Term::Const(left_head), Term::Const(right_head))
-                if left_head.name == right_head.name
+                if left_head.id == right_head.id
                     && self
                         .proof_env
                         .tt_env
@@ -1965,10 +1940,10 @@ impl<'a> Elaborator<'a> {
                 return None;
             }
             (Term::Const(left_head), Term::Const(right_head))
-                if left_head.name == right_head.name
-                    && self.proof_env.tt_env.has_kappa(&left_head.name) =>
+                if left_head.id == right_head.id
+                    && self.proof_env.tt_env.has_kappa(&left_head.id) =>
             {
-                assert!(self.proof_env.tt_env.has_kappa(&left_head.name));
+                assert!(self.proof_env.tt_env.has_kappa(&left_head.id));
                 let Const {
                     local_types,
                     local_classes,
@@ -1977,7 +1952,7 @@ impl<'a> Elaborator<'a> {
                     .proof_env
                     .tt_env
                     .const_table
-                    .get(&left_head.name)
+                    .get(&left_head.id)
                     .unwrap();
                 let mut subst = Vec::with_capacity(local_types.len());
                 for (x, t) in zip(local_types, &left_head.ty_args) {
@@ -2410,7 +2385,7 @@ impl<'a> Elaborator<'a> {
                         .proof_env
                         .tt_env
                         .const_table
-                        .get(&right_head_inner.name)
+                        .get(&right_head_inner.id)
                         .unwrap();
                     let mut subst = Vec::with_capacity(local_types.len());
                     for (x, t) in zip(local_types, &right_head_inner.ty_args) {
@@ -2656,12 +2631,12 @@ impl<'a> Elaborator<'a> {
         if let Some(instance) = self.resolve_class(
             self.tt_local_env,
             &Class {
-                name: QualifiedName::from_name(Name::from_str("default")),
+                id: global_id("default"),
                 args: vec![goal.clone()],
             },
         ) {
             let mut m = mk_const(
-                QualifiedName::from_name(Name::from_str("default")).extend(Name::from_str("value")),
+                global_id("default.value"),
                 vec![goal.clone()],
                 vec![instance],
             );
@@ -2829,7 +2804,7 @@ pub fn elaborate_class(
     local_env: &mut LocalEnv,
     class: &Class,
 ) -> anyhow::Result<()> {
-    let Some(&ClassType { arity }) = proof_env.tt_env.class_predicate_table.get(&class.name) else {
+    let Some(&ClassType { arity }) = proof_env.tt_env.class_predicate_table.get(&class.id) else {
         bail!("class not found");
     };
     if class.args.len() != arity {
@@ -2863,13 +2838,13 @@ mod tests {
     #[test]
     fn const_expr_does_not_resolve_local_axiom_from_local_table() {
         let mut tt_local_env = tt::LocalEnv::default();
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -2888,17 +2863,13 @@ mod tests {
             &mut tt_local_env,
             vec![],
         );
-        let local_axiom_name = QualifiedName::from_name(Name::from_str("foo.a"));
+        let local_axiom_id = global_id("foo.a");
         elab.local_proof_env.local_axioms.push(LocalAxiom {
             id: Some(local_id("foo.a")),
-            prop: mk_const(
-                QualifiedName::from_name(Name::from_str("p")),
-                vec![],
-                vec![],
-            ),
+            prop: mk_const(global_id("p"), vec![], vec![]),
         });
 
-        let mut expr = proof::mk_expr_const(local_axiom_name, vec![], vec![]);
+        let mut expr = proof::mk_expr_const(local_axiom_id, vec![], vec![]);
         let error = elab
             .visit_expr(&mut expr)
             .expect_err("const expression should not resolve via local axiom table");
@@ -2910,7 +2881,7 @@ mod tests {
         let name_u = Name::from_str("u");
         let u_id = local_id("u");
         let ty_u = mk_type_local(u_id);
-        let name_is_inhabited = QualifiedName::from_name(Name::from_str("is_inhabited"));
+        let name_is_inhabited = global_id("is_inhabited");
         let ty_is_inhabited_u = mk_type_app(mk_type_const(name_is_inhabited.clone()), ty_u.clone());
         let ty_u_to_prop = mk_type_arrow(ty_u.clone(), mk_type_prop());
 
@@ -2930,9 +2901,7 @@ mod tests {
         let x_id = local_id("x46373");
 
         let rep_term = mk_const(
-            QualifiedName::from_name(Name::from_str("is_inhabited"))
-                .extend(Name::from_str("inhab"))
-                .extend(Name::from_str("rep")),
+            global_id("is_inhabited.inhab.rep"),
             vec![ty_u.clone()],
             vec![],
         );
@@ -2968,11 +2937,7 @@ mod tests {
             mk_local(x_id),
         );
 
-        let in_term = mk_const(
-            QualifiedName::from_name(Name::from_str("in")),
-            vec![ty_u.clone()],
-            vec![],
-        );
+        let in_term = mk_const(global_id("in"), vec![ty_u.clone()], vec![]);
         let right = mk_app(mk_app(in_term, mk_local(x_id)), rep_applied.clone());
 
         let locals = vec![
@@ -2999,18 +2964,18 @@ mod tests {
         };
         let mut tt_local_env = local_env.clone();
 
-        let name_prop = QualifiedName::from_name(Name::from_str("Prop"));
+        let name_prop = global_id("Prop");
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::from([
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::from([
             (name_prop.clone(), Kind::base()),
             (name_is_inhabited.clone(), Kind(1)),
         ]);
-        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
 
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
@@ -3059,11 +3024,7 @@ mod tests {
             local_classes: vec![],
             local_deltas: vec![LocalDelta {
                 id: u_id,
-                target: mk_const(
-                    QualifiedName::from_name(Name::from_str("c")),
-                    vec![],
-                    vec![],
-                ),
+                target: mk_const(global_id("c"), vec![], vec![]),
                 height: 0,
             }],
             locals: vec![
@@ -3085,13 +3046,13 @@ mod tests {
             ],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -3133,7 +3094,7 @@ mod tests {
 
     #[test]
     fn unify_local_and_const_uses_local_unfold() {
-        let c = QualifiedName::from_name(Name::from_str("c"));
+        let c = global_id("c");
         let l_id = local_id("foo.l");
         let c_term = mk_const(c.clone(), vec![], vec![]);
 
@@ -3152,8 +3113,8 @@ mod tests {
             }],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::from([(
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::from([(
             c.clone(),
             Const {
                 local_types: vec![],
@@ -3161,11 +3122,11 @@ mod tests {
                 ty: mk_type_prop(),
             },
         )]);
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -3227,13 +3188,13 @@ mod tests {
             ],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -3283,13 +3244,13 @@ mod tests {
             }],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -3328,7 +3289,7 @@ mod tests {
 
     #[test]
     fn unify_rigid_const_function_with_eta_expansion() {
-        let c = QualifiedName::from_name(Name::from_str("c"));
+        let c = global_id("c");
 
         let mut local_env = tt::LocalEnv {
             local_types: vec![],
@@ -3337,8 +3298,8 @@ mod tests {
             locals: vec![],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::from([(
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::from([(
             c.clone(),
             Const {
                 local_types: vec![],
@@ -3346,11 +3307,11 @@ mod tests {
                 ty: mk_type_prop().arrow([mk_type_prop()]),
             },
         )]);
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -3403,13 +3364,13 @@ mod tests {
             }],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -3481,13 +3442,13 @@ mod tests {
             ],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -3554,13 +3515,13 @@ mod tests {
             ],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -3621,15 +3582,15 @@ mod tests {
 
     #[test]
     fn unify_same_kappa_const_with_local_instance_is_reachable() {
-        let method_name = QualifiedName::from_name(Name::from_str("m"));
-        let class_name = QualifiedName::from_name(Name::from_str("C"));
+        let method_id = global_id("m");
+        let class_id = global_id("C");
         let x_id = local_id("x");
         let y_id = local_id("y");
         let instance = mk_instance_local(Class {
-            name: class_name.clone(),
+            id: class_id.clone(),
             args: vec![],
         });
-        let head = mk_const(method_name.clone(), vec![], vec![instance]);
+        let head = mk_const(method_id.clone(), vec![], vec![instance]);
 
         let mut local_env = tt::LocalEnv {
             local_types: vec![],
@@ -3649,21 +3610,20 @@ mod tests {
             ],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::from([(
-            method_name.clone(),
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::from([(
+            method_id.clone(),
             Const {
                 local_types: vec![],
                 local_classes: vec![],
                 ty: mk_type_prop().arrow([mk_type_prop()]),
             },
         )]);
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> =
-            HashMap::from([(method_name.clone(), Kappa)]);
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::from([(method_id.clone(), Kappa)]);
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -3704,7 +3664,7 @@ mod tests {
         let f_id = local_id("foo.f");
         let x_id = local_id("x");
         let y_id = local_id("y");
-        let c = QualifiedName::from_name(Name::from_str("c"));
+        let c = global_id("c");
         let c_term = mk_const(c.clone(), vec![], vec![]);
 
         let mut local_env = tt::LocalEnv {
@@ -3734,8 +3694,8 @@ mod tests {
             ],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::from([(
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::from([(
             c.clone(),
             Const {
                 local_types: vec![],
@@ -3743,11 +3703,11 @@ mod tests {
                 ty: mk_type_prop().arrow([mk_type_prop()]),
             },
         )]);
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -3784,8 +3744,8 @@ mod tests {
 
     #[test]
     fn unfold_constraint_keeps_head_arguments_as_is() {
-        let f = QualifiedName::from_name(Name::from_str("f"));
-        let g = QualifiedName::from_name(Name::from_str("g"));
+        let f = global_id("f");
+        let g = global_id("g");
         let u = local_id("u");
         let mut local_env = tt::LocalEnv {
             local_types: vec![],
@@ -3794,8 +3754,8 @@ mod tests {
             locals: vec![],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::from([
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::from([
             (
                 f.clone(),
                 Const {
@@ -3813,7 +3773,7 @@ mod tests {
                 },
             ),
         ]);
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::from([(
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::from([(
             f.clone(),
             Delta {
                 local_types: vec![LocalType { id: u, name: None }],
@@ -3822,10 +3782,10 @@ mod tests {
                 height: 0,
             },
         )]);
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -3882,7 +3842,7 @@ mod tests {
 
     #[test]
     fn choice_fr_adds_binder_expansion_branch_for_hole_tailed_projection() {
-        let c = QualifiedName::from_name(Name::from_str("c"));
+        let c = global_id("c");
         let x_id = local_id("x");
         let m_id = local_id("M");
 
@@ -3902,8 +3862,8 @@ mod tests {
             }],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::from([(
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::from([(
             c.clone(),
             Const {
                 local_types: vec![],
@@ -3911,11 +3871,11 @@ mod tests {
                 ty: mk_type_prop(),
             },
         )]);
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -3965,7 +3925,7 @@ mod tests {
 
     #[test]
     fn solve_with_budget_zero_keeps_existing_non_expanding_successes() {
-        let c = QualifiedName::from_name(Name::from_str("c"));
+        let c = global_id("c");
         let l_id = local_id("foo.l");
         let c_term = mk_const(c.clone(), vec![], vec![]);
 
@@ -3984,8 +3944,8 @@ mod tests {
             }],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::from([(
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::from([(
             c.clone(),
             Const {
                 local_types: vec![],
@@ -3993,11 +3953,11 @@ mod tests {
                 ty: mk_type_prop(),
             },
         )]);
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -4056,13 +4016,13 @@ mod tests {
             ],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -4134,13 +4094,13 @@ mod tests {
             ],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -4212,13 +4172,13 @@ mod tests {
             ],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -4274,7 +4234,7 @@ mod tests {
         let f_id = local_id("foo.f");
         let x_id = local_id("x");
         let y_id = local_id("y");
-        let c = QualifiedName::from_name(Name::from_str("c"));
+        let c = global_id("c");
         let c_term = mk_const(c.clone(), vec![], vec![]);
 
         let mut local_env = tt::LocalEnv {
@@ -4304,8 +4264,8 @@ mod tests {
             ],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::from([(
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::from([(
             c.clone(),
             Const {
                 local_types: vec![],
@@ -4313,11 +4273,11 @@ mod tests {
                 ty: mk_type_prop().arrow([mk_type_prop()]),
             },
         )]);
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -4374,13 +4334,13 @@ mod tests {
             ],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -4428,29 +4388,29 @@ mod tests {
 
     #[test]
     fn kappa_unfold_constraint_uses_head_type_not_receiver_instance() {
-        let method_name = QualifiedName::from_name(Name::from_str("m"));
-        let body_name = QualifiedName::from_name(Name::from_str("id"));
-        let class_name = QualifiedName::from_name(Name::from_str("C"));
-        let instance_name = QualifiedName::from_name(Name::from_str("inst.C"));
+        let method_id = global_id("m");
+        let body_id = global_id("id");
+        let class_id = global_id("C");
+        let instance_id = global_id("inst.C");
         let u = local_id("u");
         let v = local_id("v");
         let x_id = local_id("x");
         let y_id = local_id("y");
 
         let left_head = mk_const(
-            method_name.clone(),
+            method_id.clone(),
             vec![mk_type_prop(), mk_type_prop()],
             vec![mk_instance_global(
-                instance_name.clone(),
+                instance_id.clone(),
                 vec![mk_type_prop(), mk_type_prop()],
                 vec![],
             )],
         );
         let right_head = mk_const(
-            method_name.clone(),
+            method_id.clone(),
             vec![mk_type_prop(), mk_type_prop()],
             vec![mk_instance_global(
-                instance_name.clone(),
+                instance_id.clone(),
                 vec![
                     mk_type_prop(),
                     mk_type_arrow(mk_type_prop(), mk_type_prop()),
@@ -4477,24 +4437,24 @@ mod tests {
             ],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::from([
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::from([
             (
-                method_name.clone(),
+                method_id.clone(),
                 Const {
                     local_types: vec![
                         LocalType { id: u, name: None },
                         LocalType { id: v, name: None },
                     ],
                     local_classes: vec![Class {
-                        name: class_name.clone(),
+                        id: class_id.clone(),
                         args: vec![mk_type_local(u), mk_type_local(v)],
                     }],
                     ty: mk_type_prop().arrow([mk_type_prop()]),
                 },
             ),
             (
-                body_name.clone(),
+                body_id.clone(),
                 Const {
                     local_types: vec![],
                     local_classes: vec![],
@@ -4502,12 +4462,11 @@ mod tests {
                 },
             ),
         ]);
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> =
-            HashMap::from([(method_name.clone(), Kappa)]);
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::from([(
-            instance_name,
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::from([(method_id.clone(), Kappa)]);
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::from([(
+            instance_id,
             ClassInstance {
                 local_types: vec![
                     LocalType { id: u, name: None },
@@ -4515,13 +4474,13 @@ mod tests {
                 ],
                 local_classes: vec![],
                 target: Class {
-                    name: class_name,
+                    id: class_id,
                     args: vec![mk_type_local(u), mk_type_local(v)],
                 },
-                method_table: HashMap::from([(method_name, mk_const(body_name, vec![], vec![]))]),
+                method_table: HashMap::from([(method_id, mk_const(body_id, vec![], vec![]))]),
             },
         )]);
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -4575,32 +4534,32 @@ mod tests {
 
     #[test]
     fn kappa_unfold_constraint_requires_matching_head_class() {
-        let method_name = QualifiedName::from_name(Name::from_str("m"));
-        let body_name = QualifiedName::from_name(Name::from_str("id"));
-        let class_name = QualifiedName::from_name(Name::from_str("C"));
-        let instance_name = QualifiedName::from_name(Name::from_str("inst.C"));
+        let method_id = global_id("m");
+        let body_id = global_id("id");
+        let class_id = global_id("C");
+        let instance_id = global_id("inst.C");
         let u = local_id("u");
         let v = local_id("v");
         let x_id = local_id("x");
         let y_id = local_id("y");
 
         let left_head = mk_const(
-            method_name.clone(),
+            method_id.clone(),
             vec![mk_type_prop(), mk_type_prop()],
             vec![mk_instance_global(
-                instance_name.clone(),
+                instance_id.clone(),
                 vec![mk_type_prop(), mk_type_prop()],
                 vec![],
             )],
         );
         let right_head = mk_const(
-            method_name.clone(),
+            method_id.clone(),
             vec![
                 mk_type_prop(),
                 mk_type_arrow(mk_type_prop(), mk_type_prop()),
             ],
             vec![mk_instance_global(
-                instance_name.clone(),
+                instance_id.clone(),
                 vec![mk_type_prop(), mk_type_prop()],
                 vec![],
             )],
@@ -4624,24 +4583,24 @@ mod tests {
             ],
         };
 
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::from([
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::from([
             (
-                method_name.clone(),
+                method_id.clone(),
                 Const {
                     local_types: vec![
                         LocalType { id: u, name: None },
                         LocalType { id: v, name: None },
                     ],
                     local_classes: vec![Class {
-                        name: class_name.clone(),
+                        id: class_id.clone(),
                         args: vec![mk_type_local(u), mk_type_local(v)],
                     }],
                     ty: mk_type_prop().arrow([mk_type_prop()]),
                 },
             ),
             (
-                body_name.clone(),
+                body_id.clone(),
                 Const {
                     local_types: vec![],
                     local_classes: vec![],
@@ -4649,12 +4608,11 @@ mod tests {
                 },
             ),
         ]);
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> =
-            HashMap::from([(method_name.clone(), Kappa)]);
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::from([(
-            instance_name,
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::from([(method_id.clone(), Kappa)]);
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::from([(
+            instance_id,
             ClassInstance {
                 local_types: vec![
                     LocalType { id: u, name: None },
@@ -4662,13 +4620,13 @@ mod tests {
                 ],
                 local_classes: vec![],
                 target: Class {
-                    name: class_name,
+                    id: class_id,
                     args: vec![mk_type_local(u), mk_type_local(v)],
                 },
-                method_table: HashMap::from([(method_name, mk_const(body_name, vec![], vec![]))]),
+                method_table: HashMap::from([(method_id, mk_const(body_id, vec![], vec![]))]),
             },
         )]);
-        let axiom_table: HashMap<QualifiedName, proof::Axiom> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, proof::Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,

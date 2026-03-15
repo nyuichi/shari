@@ -8,11 +8,15 @@ use crate::{
     print::{OpTable, Pretty},
     proof::{self, Axiom, Expr, generalize, guard, mk_type_prop, ungeneralize, unguard},
     tt::{
-        self, Class, ClassInstance, ClassType, Const, Delta, Id, Kappa, Kind, Local, LocalEnv,
-        LocalType, Name, Path, QualifiedName, Term, Type, mk_const, mk_fresh_type_hole,
+        self, Class, ClassInstance, ClassType, Const, Delta, GlobalId, Id, Kappa, Kind, Local,
+        LocalEnv, LocalType, Name, Path, QualifiedName, Term, Type, mk_const, mk_fresh_type_hole,
         mk_instance_local, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
     },
 };
+
+fn global_id(value: &str) -> GlobalId {
+    GlobalId::from_name(Name::from_str(value))
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct Namespace {
@@ -63,68 +67,68 @@ pub struct CmdNamespaceStart {
 pub struct CmdInfix {
     pub op: String,
     pub prec: usize,
-    pub entity: QualifiedName,
+    pub entity: GlobalId,
 }
 
 #[derive(Clone, Debug)]
 pub struct CmdInfixr {
     pub op: String,
     pub prec: usize,
-    pub entity: QualifiedName,
+    pub entity: GlobalId,
 }
 
 #[derive(Clone, Debug)]
 pub struct CmdInfixl {
     pub op: String,
     pub prec: usize,
-    pub entity: QualifiedName,
+    pub entity: GlobalId,
 }
 
 #[derive(Clone, Debug)]
 pub struct CmdPrefix {
     pub op: String,
     pub prec: usize,
-    pub entity: QualifiedName,
+    pub entity: GlobalId,
 }
 
 #[derive(Clone, Debug)]
 pub struct CmdNofix {
     pub op: String,
-    pub entity: QualifiedName,
+    pub entity: GlobalId,
 }
 
 #[derive(Clone, Debug)]
 pub struct CmdTypeInfix {
     pub op: String,
     pub prec: usize,
-    pub entity: QualifiedName,
+    pub entity: GlobalId,
 }
 
 #[derive(Clone, Debug)]
 pub struct CmdTypeInfixr {
     pub op: String,
     pub prec: usize,
-    pub entity: QualifiedName,
+    pub entity: GlobalId,
 }
 
 #[derive(Clone, Debug)]
 pub struct CmdTypeInfixl {
     pub op: String,
     pub prec: usize,
-    pub entity: QualifiedName,
+    pub entity: GlobalId,
 }
 
 #[derive(Clone, Debug)]
 pub struct CmdTypePrefix {
     pub op: String,
     pub prec: usize,
-    pub entity: QualifiedName,
+    pub entity: GlobalId,
 }
 
 #[derive(Clone, Debug)]
 pub struct CmdTypeNofix {
     pub op: String,
-    pub entity: QualifiedName,
+    pub entity: GlobalId,
 }
 
 #[derive(Clone, Debug)]
@@ -140,7 +144,7 @@ pub struct UseDecl {
 
 #[derive(Clone, Debug)]
 pub struct CmdDef {
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub local_types: Vec<LocalType>,
     pub local_classes: Vec<Class>,
     pub ty: Type,
@@ -149,7 +153,7 @@ pub struct CmdDef {
 
 #[derive(Clone, Debug)]
 pub struct CmdAxiom {
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub local_types: Vec<LocalType>,
     pub local_classes: Vec<Class>,
     pub target: Term,
@@ -157,7 +161,7 @@ pub struct CmdAxiom {
 
 #[derive(Clone, Debug)]
 pub struct CmdLemma {
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub local_types: Vec<LocalType>,
     pub local_classes: Vec<Class>,
     pub target: Term,
@@ -167,7 +171,7 @@ pub struct CmdLemma {
 
 #[derive(Clone, Debug)]
 pub struct CmdConst {
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub local_classes: Vec<Class>,
     pub local_types: Vec<LocalType>,
     pub ty: Type,
@@ -175,58 +179,60 @@ pub struct CmdConst {
 
 #[derive(Clone, Debug)]
 pub struct CmdTypeConst {
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub kind: Kind,
 }
 
 #[derive(Clone, Debug)]
 pub struct CmdTypeDef {
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub local_types: Vec<LocalType>,
     pub target: Type,
 }
 
 #[derive(Clone, Debug)]
 pub struct CmdTypeInductive {
-    pub name: QualifiedName,
+    pub id: GlobalId,
+    pub this_name: Name,
     pub this: Id,
     pub local_types: Vec<LocalType>,
-    pub ind_name: QualifiedName,
-    pub rec_name: QualifiedName,
+    pub ind_id: GlobalId,
+    pub rec_id: GlobalId,
     pub ctors: Vec<TypeInductiveConstructor>,
 }
 
 #[derive(Clone, Debug)]
 pub struct TypeInductiveConstructor {
     pub name: Name,
-    pub ctor_name: QualifiedName,
-    pub ctor_spec_name: QualifiedName,
+    pub ctor_id: GlobalId,
+    pub ctor_spec_id: GlobalId,
     pub ty: Type,
 }
 
 #[derive(Clone, Debug)]
 pub struct CmdInductive {
-    pub name: QualifiedName,
+    pub id: GlobalId,
+    pub this_name: Name,
     pub this: Id,
     pub local_types: Vec<LocalType>,
     pub params: Vec<Local>,
     pub target_ty: Type,
-    pub ind_name: QualifiedName,
+    pub ind_id: GlobalId,
     pub ctors: Vec<InductiveConstructor>,
 }
 
 #[derive(Clone, Debug)]
 pub struct InductiveConstructor {
     pub name: Name,
-    pub ctor_name: QualifiedName,
+    pub ctor_id: GlobalId,
     pub target: Term,
 }
 
 #[derive(Clone, Debug)]
 pub struct CmdStructure {
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub local_types: Vec<LocalType>,
-    pub abs_name: QualifiedName,
+    pub abs_id: GlobalId,
     pub fields: Vec<StructureField>,
 }
 
@@ -240,20 +246,20 @@ pub enum StructureField {
 pub struct StructureConst {
     pub field_id: Id,
     pub field_name: Name,
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub ty: Type,
 }
 
 #[derive(Clone, Debug)]
 pub struct StructureAxiom {
     pub field_name: Name,
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub target: Term,
 }
 
 #[derive(Debug, Clone)]
 pub struct CmdInstance {
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub local_types: Vec<LocalType>,
     pub local_classes: Vec<Class>,
     pub params: Vec<Local>,
@@ -271,8 +277,8 @@ pub enum InstanceField {
 pub struct InstanceDef {
     pub field_id: Id,
     pub field_name: Name,
-    pub name: QualifiedName,
-    pub spec_name: QualifiedName,
+    pub id: GlobalId,
+    pub spec_id: GlobalId,
     pub ty: Type,
     pub target: Term,
 }
@@ -281,7 +287,7 @@ pub struct InstanceDef {
 pub struct InstanceLemma {
     pub field_id: Id,
     pub field_name: Name,
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub target: Term,
     pub holes: Vec<(Id, Type)>,
     pub expr: Expr,
@@ -289,7 +295,7 @@ pub struct InstanceLemma {
 
 #[derive(Debug, Clone)]
 pub struct CmdClassStructure {
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub local_types: Vec<LocalType>,
     pub fields: Vec<ClassStructureField>,
 }
@@ -304,20 +310,20 @@ pub enum ClassStructureField {
 pub struct ClassStructureConst {
     pub field_id: Id,
     pub field_name: Name,
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub ty: Type,
 }
 
 #[derive(Clone, Debug)]
 pub struct ClassStructureAxiom {
     pub field_name: Name,
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub target: Term,
 }
 
 #[derive(Debug, Clone)]
 pub struct CmdClassInstance {
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub local_types: Vec<LocalType>,
     pub local_classes: Vec<Class>,
     pub target: Class,
@@ -383,7 +389,7 @@ impl std::fmt::Display for Cmd {
 
                 match ty {
                     Type::Const(inner) => {
-                        out.push_str(&inner.name.to_string());
+                        out.push_str(&inner.id.to_string());
                     }
                     Type::Arrow(inner) => {
                         let needs_paren = prec > TYPE_PREC_ARROW;
@@ -471,7 +477,7 @@ impl std::fmt::Display for Cmd {
             Cmd::Def(cmd) => write!(
                 f,
                 "def {}.{{{}}} : {} := {}",
-                cmd.name,
+                cmd.id,
                 format_local_types(&cmd.local_types),
                 format_type(&cmd.local_types, &cmd.ty),
                 cmd.target
@@ -479,14 +485,14 @@ impl std::fmt::Display for Cmd {
             Cmd::Axiom(cmd) => write!(
                 f,
                 "axiom {}.{{{}}} : {}",
-                cmd.name,
+                cmd.id,
                 format_local_types(&cmd.local_types),
                 cmd.target
             ),
             Cmd::Lemma(cmd) => write!(
                 f,
                 "lemma {}.{{{}}} : {} := {}",
-                cmd.name,
+                cmd.id,
                 format_local_types(&cmd.local_types),
                 cmd.target,
                 cmd.expr
@@ -494,22 +500,22 @@ impl std::fmt::Display for Cmd {
             Cmd::Const(cmd) => write!(
                 f,
                 "const {}.{{{}}} : {}",
-                cmd.name,
+                cmd.id,
                 format_local_types(&cmd.local_types),
                 format_type(&cmd.local_types, &cmd.ty)
             ),
-            Cmd::TypeConst(cmd) => write!(f, "type const {} : {}", cmd.name, cmd.kind),
+            Cmd::TypeConst(cmd) => write!(f, "type const {} : {}", cmd.id, cmd.kind),
             Cmd::TypeDef(cmd) => write!(
                 f,
                 "type def {}.{{{}}} := {}",
-                cmd.name,
+                cmd.id,
                 format_local_types(&cmd.local_types),
                 format_type(&cmd.local_types, &cmd.target)
             ),
             Cmd::TypeInductive(cmd) => write!(
                 f,
                 "inductive {}.{{{}}} {{\n{}\n}}",
-                cmd.name,
+                cmd.id,
                 format_local_types(&cmd.local_types),
                 cmd.ctors
                     .iter()
@@ -520,7 +526,7 @@ impl std::fmt::Display for Cmd {
             Cmd::Inductive(cmd) => write!(
                 f,
                 "inductive {}.{{{}}} ({}) : {} {{\n{}\n}}",
-                cmd.name,
+                cmd.id,
                 format_local_types(&cmd.local_types),
                 cmd.params
                     .iter()
@@ -537,7 +543,7 @@ impl std::fmt::Display for Cmd {
             Cmd::Structure(cmd) => write!(
                 f,
                 "structure {}.{{{}}} {{\n{}\n}}",
-                cmd.name,
+                cmd.id,
                 format_local_types(&cmd.local_types),
                 cmd.fields
                     .iter()
@@ -553,7 +559,7 @@ impl std::fmt::Display for Cmd {
             Cmd::Instance(cmd) => write!(
                 f,
                 "instance {}.{{{}}} ({}) : {} {{\n{}\n}}",
-                cmd.name,
+                cmd.id,
                 format_local_types(&cmd.local_types),
                 cmd.params
                     .iter()
@@ -575,7 +581,7 @@ impl std::fmt::Display for Cmd {
             Cmd::ClassStructure(cmd) => write!(
                 f,
                 "class structure {}.{{{}}} {{\n{}\n}}",
-                cmd.name,
+                cmd.id,
                 format_local_types(&cmd.local_types),
                 cmd.fields
                     .iter()
@@ -591,7 +597,7 @@ impl std::fmt::Display for Cmd {
             Cmd::ClassInstance(cmd) => write!(
                 f,
                 "class instance {}.{{{}}} : {} {{\n{}\n}}",
-                cmd.name,
+                cmd.id,
                 format_local_types(&cmd.local_types),
                 cmd.target,
                 cmd.fields
@@ -619,16 +625,16 @@ pub struct Eval {
     pub current_namespace: Path,
     pub namespace_stack: Vec<Path>,
     // Invariant: a type name appears in exactly one of `type_const_table` or `type_def_table`.
-    pub type_const_table: HashMap<QualifiedName, Kind>,
-    pub type_def_table: HashMap<QualifiedName, CmdTypeDef>,
-    pub const_table: HashMap<QualifiedName, Const>,
-    pub axiom_table: HashMap<QualifiedName, Axiom>,
-    pub delta_table: HashMap<QualifiedName, Delta>,
-    pub kappa_table: HashMap<QualifiedName, Kappa>,
-    pub class_predicate_table: HashMap<QualifiedName, ClassType>,
-    pub class_instance_table: HashMap<QualifiedName, ClassInstance>,
-    pub structure_table: HashMap<QualifiedName, CmdStructure>,
-    pub class_structure_table: HashMap<QualifiedName, CmdClassStructure>,
+    pub type_const_table: HashMap<GlobalId, Kind>,
+    pub type_def_table: HashMap<GlobalId, CmdTypeDef>,
+    pub const_table: HashMap<GlobalId, Const>,
+    pub axiom_table: HashMap<GlobalId, Axiom>,
+    pub delta_table: HashMap<GlobalId, Delta>,
+    pub kappa_table: HashMap<GlobalId, Kappa>,
+    pub class_predicate_table: HashMap<GlobalId, ClassType>,
+    pub class_instance_table: HashMap<GlobalId, ClassInstance>,
+    pub structure_table: HashMap<GlobalId, CmdStructure>,
+    pub class_structure_table: HashMap<GlobalId, CmdClassStructure>,
 }
 
 impl Default for Eval {
@@ -670,18 +676,18 @@ pub struct Operator {
     pub symbol: String,
     pub fixity: Fixity,
     pub prec: usize,
-    pub entity: QualifiedName,
+    pub entity: GlobalId,
 }
 
 impl Eval {
     fn add_const(
         &mut self,
-        name: QualifiedName,
+        id: GlobalId,
         local_types: Vec<LocalType>,
         local_classes: Vec<Class>,
         ty: Type,
     ) {
-        assert!(!self.const_table.contains_key(&name));
+        assert!(!self.const_table.contains_key(&id));
         for local_class in &local_classes {
             self.tt_env().check_wfc(
                 &LocalEnv {
@@ -704,7 +710,7 @@ impl Eval {
         );
 
         self.const_table.insert(
-            name.clone(),
+            id.clone(),
             Const {
                 local_types,
                 local_classes, // TODO: shrink
@@ -714,18 +720,18 @@ impl Eval {
 
         log::info!(
             "+ {}",
-            Pretty::new(&self.pp, (&name, self.const_table.get(&name).unwrap()),)
+            Pretty::new(&self.pp, (&id, self.const_table.get(&id).unwrap()),)
         );
     }
 
     fn add_axiom(
         &mut self,
-        name: QualifiedName,
+        id: GlobalId,
         local_types: Vec<LocalType>,
         local_classes: Vec<Class>,
         target: Term,
     ) {
-        assert!(!self.axiom_table.contains_key(&name));
+        assert!(!self.axiom_table.contains_key(&id));
         for local_class in &local_classes {
             self.tt_env().check_wfc(
                 &LocalEnv {
@@ -748,7 +754,7 @@ impl Eval {
         );
 
         self.axiom_table.insert(
-            name.clone(),
+            id.clone(),
             Axiom {
                 local_types,
                 local_classes,
@@ -758,59 +764,59 @@ impl Eval {
 
         log::info!(
             "+ {}",
-            Pretty::new(&self.pp, (&name, self.axiom_table.get(&name).unwrap()),)
+            Pretty::new(&self.pp, (&id, self.axiom_table.get(&id).unwrap()),)
         );
     }
 
-    fn add_type_const(&mut self, name: QualifiedName, kind: Kind) {
-        assert!(!self.type_const_table.contains_key(&name));
+    fn add_type_const(&mut self, id: GlobalId, kind: Kind) {
+        assert!(!self.type_const_table.contains_key(&id));
 
-        self.type_const_table.insert(name.clone(), kind.clone());
+        self.type_const_table.insert(id.clone(), kind.clone());
 
         log::info!(
             "+ {}",
-            Pretty::new(&self.pp, (&name, self.type_const_table.get(&name).unwrap()),)
+            Pretty::new(&self.pp, (&id, self.type_const_table.get(&id).unwrap()),)
         );
     }
 
     fn add_type_def(&mut self, cmd: CmdTypeDef) {
-        let name = cmd.name.clone();
-        assert!(!self.type_def_table.contains_key(&name));
+        let id = cmd.id.clone();
+        assert!(!self.type_def_table.contains_key(&id));
 
-        self.type_def_table.insert(name, cmd.clone());
+        self.type_def_table.insert(id, cmd.clone());
 
         log::info!(
             "+ {}",
             Pretty::new(
                 &self.pp,
-                (&cmd.name, self.type_def_table.get(&cmd.name).unwrap()),
+                (&cmd.id, self.type_def_table.get(&cmd.id).unwrap()),
             )
         );
     }
 
-    fn add_class_predicate(&mut self, name: QualifiedName, ty: ClassType) {
-        assert!(!self.class_predicate_table.contains_key(&name));
+    fn add_class_predicate(&mut self, id: GlobalId, ty: ClassType) {
+        assert!(!self.class_predicate_table.contains_key(&id));
 
-        self.class_predicate_table.insert(name.clone(), ty);
+        self.class_predicate_table.insert(id.clone(), ty);
 
         log::info!(
             "+ {}",
             Pretty::new(
                 &self.pp,
-                self.class_predicate_table.get_key_value(&name).unwrap()
+                self.class_predicate_table.get_key_value(&id).unwrap()
             )
         );
     }
 
     fn add_class_instance(
         &mut self,
-        name: QualifiedName,
+        id: GlobalId,
         local_types: Vec<LocalType>,
         local_classes: Vec<Class>,
         target: Class,
-        method_table: HashMap<QualifiedName, Term>,
+        method_table: HashMap<GlobalId, Term>,
     ) {
-        assert!(!self.class_instance_table.contains_key(&name));
+        assert!(!self.class_instance_table.contains_key(&id));
         for local_class in &local_classes {
             self.tt_env().check_wfc(
                 &LocalEnv {
@@ -834,7 +840,7 @@ impl Eval {
         // TODO: check method_table
 
         self.class_instance_table.insert(
-            name.clone(),
+            id.clone(),
             ClassInstance {
                 local_types,
                 local_classes,
@@ -844,8 +850,8 @@ impl Eval {
         );
     }
 
-    fn add_delta(&mut self, name: QualifiedName, target: Term) {
-        assert!(!self.delta_table.contains_key(&name));
+    fn add_delta(&mut self, id: GlobalId, target: Term) {
+        assert!(!self.delta_table.contains_key(&id));
 
         let Const {
             local_types,
@@ -853,7 +859,7 @@ impl Eval {
             ty,
         } = self
             .const_table
-            .get(&name)
+            .get(&id)
             .expect("constant must be defined before delta");
 
         let mut local_env = LocalEnv {
@@ -866,7 +872,7 @@ impl Eval {
         self.tt_env().check_type(&mut local_env, &target, ty);
 
         self.delta_table.insert(
-            name,
+            id,
             Delta {
                 local_types: local_types.clone(),
                 local_classes: local_classes.clone(),
@@ -876,38 +882,38 @@ impl Eval {
         );
     }
 
-    fn add_kappa(&mut self, name: QualifiedName) {
-        assert!(!self.kappa_table.contains_key(&name));
+    fn add_kappa(&mut self, id: GlobalId) {
+        assert!(!self.kappa_table.contains_key(&id));
 
-        self.kappa_table.insert(name, Kappa);
+        self.kappa_table.insert(id, Kappa);
     }
 
-    fn has_const(&self, name: &QualifiedName) -> bool {
-        self.const_table.contains_key(name)
+    fn has_const(&self, id: &GlobalId) -> bool {
+        self.const_table.contains_key(id)
     }
 
-    fn has_axiom(&self, name: &QualifiedName) -> bool {
-        self.axiom_table.contains_key(name)
+    fn has_axiom(&self, id: &GlobalId) -> bool {
+        self.axiom_table.contains_key(id)
     }
 
-    fn has_type_const(&self, name: &QualifiedName) -> bool {
-        self.type_const_table.contains_key(name)
+    fn has_type_const(&self, id: &GlobalId) -> bool {
+        self.type_const_table.contains_key(id)
     }
 
-    fn has_type_def(&self, name: &QualifiedName) -> bool {
-        self.type_def_table.contains_key(name)
+    fn has_type_def(&self, id: &GlobalId) -> bool {
+        self.type_def_table.contains_key(id)
     }
 
-    fn has_type_name(&self, name: &QualifiedName) -> bool {
-        self.has_type_const(name) || self.has_type_def(name)
+    fn has_type_id(&self, id: &GlobalId) -> bool {
+        self.has_type_const(id) || self.has_type_def(id)
     }
 
-    fn has_class_predicate(&self, name: &QualifiedName) -> bool {
-        self.class_predicate_table.contains_key(name)
+    fn has_class_predicate(&self, id: &GlobalId) -> bool {
+        self.class_predicate_table.contains_key(id)
     }
 
-    fn has_class_instance(&self, name: &QualifiedName) -> bool {
-        self.class_instance_table.contains_key(name)
+    fn has_class_instance(&self, id: &GlobalId) -> bool {
+        self.class_instance_table.contains_key(id)
     }
 
     fn elaborate_type(
@@ -1201,13 +1207,13 @@ impl Eval {
             }
             Cmd::Def(inner) => {
                 let CmdDef {
-                    name,
+                    id,
                     local_types,
                     local_classes,
                     ty,
                     mut target,
                 } = inner;
-                if self.has_const(&name) {
+                if self.has_const(&id) {
                     bail!("already defined");
                 }
                 for i in 0..local_types.len() {
@@ -1231,22 +1237,22 @@ impl Eval {
                 self.elaborate_term(&mut local_env, &mut target, &ty)?;
                 // well-formedness check is completed.
                 self.add_const(
-                    name.clone(),
+                    id.clone(),
                     local_types.clone(),
                     local_classes.clone(),
                     ty.clone(),
                 );
-                self.add_delta(name, target);
+                self.add_delta(id, target);
                 Ok(())
             }
             Cmd::Axiom(inner) => {
                 let CmdAxiom {
-                    name,
+                    id,
                     local_types,
                     local_classes,
                     mut target,
                 } = inner;
-                if self.has_axiom(&name) {
+                if self.has_axiom(&id) {
                     bail!("already defined");
                 }
                 for i in 0..local_types.len() {
@@ -1268,19 +1274,19 @@ impl Eval {
                 }
                 self.elaborate_term(&mut local_env, &mut target, &mk_type_prop())?;
                 // well-formedness check is completed.
-                self.add_axiom(name, local_types, local_classes, target);
+                self.add_axiom(id, local_types, local_classes, target);
                 Ok(())
             }
             Cmd::Lemma(inner) => {
                 let CmdLemma {
-                    name,
+                    id,
                     local_types,
                     local_classes,
                     mut target,
                     holes,
                     mut expr,
                 } = inner;
-                if self.has_axiom(&name) {
+                if self.has_axiom(&id) {
                     bail!("already defined");
                 }
                 for i in 0..local_types.len() {
@@ -1314,17 +1320,17 @@ impl Eval {
                     &expr,
                     &target,
                 );
-                self.add_axiom(name, local_types, local_classes, target);
+                self.add_axiom(id, local_types, local_classes, target);
                 Ok(())
             }
             Cmd::Const(inner) => {
                 let CmdConst {
-                    name,
+                    id,
                     local_types,
                     local_classes,
                     ty,
                 } = inner;
-                if self.has_const(&name) {
+                if self.has_const(&id) {
                     bail!("already defined");
                 }
                 for i in 0..local_types.len() {
@@ -1345,24 +1351,24 @@ impl Eval {
                     local_env.local_classes.push(local_class.clone());
                 }
                 self.elaborate_type(&mut local_env, &ty, Kind::base())?;
-                self.add_const(name, local_types, local_classes, ty);
+                self.add_const(id, local_types, local_classes, ty);
                 Ok(())
             }
             Cmd::TypeConst(inner) => {
-                let CmdTypeConst { name, kind } = inner;
-                if self.has_type_name(&name) {
+                let CmdTypeConst { id, kind } = inner;
+                if self.has_type_id(&id) {
                     bail!("already defined");
                 }
-                self.add_type_const(name, kind);
+                self.add_type_const(id, kind);
                 Ok(())
             }
             Cmd::TypeDef(inner) => {
                 let CmdTypeDef {
-                    name,
+                    id,
                     local_types,
                     target,
                 } = inner;
-                if self.has_type_name(&name) {
+                if self.has_type_id(&id) {
                     bail!("already defined");
                 }
                 for i in 0..local_types.len() {
@@ -1380,7 +1386,7 @@ impl Eval {
                 };
                 self.elaborate_type(&mut local_env, &target, Kind::base())?;
                 self.add_type_def(CmdTypeDef {
-                    name,
+                    id,
                     local_types,
                     target,
                 });
@@ -1397,14 +1403,15 @@ impl Eval {
 
     fn run_type_inductive_cmd(&mut self, cmd: CmdTypeInductive) -> anyhow::Result<()> {
         let CmdTypeInductive {
-            name,
+            id,
+            this_name,
             this,
             local_types,
-            ind_name,
-            rec_name,
+            ind_id,
+            rec_id,
             ctors,
         } = cmd;
-        if self.has_type_name(&name) {
+        if self.has_type_id(&id) {
             bail!("already defined");
         }
         for i in 0..local_types.len() {
@@ -1420,12 +1427,11 @@ impl Eval {
             locals: vec![],
             local_deltas: vec![],
         };
-        let self_name = name.name().clone();
         local_env.local_types.insert(
             0,
             LocalType {
                 id: this,
-                name: Some(self_name.clone()),
+                name: Some(this_name.clone()),
             },
         );
         for i in 0..ctors.len() {
@@ -1436,10 +1442,10 @@ impl Eval {
             }
         }
         for ctor in &ctors {
-            if self.has_const(&ctor.ctor_name) {
+            if self.has_const(&ctor.ctor_id) {
                 bail!("already defined");
             }
-            if self.has_const(&ctor.ctor_spec_name) {
+            if self.has_const(&ctor.ctor_spec_id) {
                 bail!("already defined");
             }
             self.elaborate_type(&mut local_env, &ctor.ty, Kind::base())?;
@@ -1459,21 +1465,21 @@ impl Eval {
                 }
             }
         }
-        if self.has_axiom(&ind_name) {
+        if self.has_axiom(&ind_id) {
             bail!("already defined");
         }
-        if self.has_const(&rec_name) {
+        if self.has_const(&rec_id) {
             bail!("already defined");
         }
         // well-formedness check is completed.
 
         // generate type constructor
-        self.add_type_const(name.clone(), Kind(local_types.len()));
+        self.add_type_const(id.clone(), Kind(local_types.len()));
 
         // generate data constructors
         let target_ty = {
             // Foo u v
-            mk_type_const(name.clone()).apply(
+            mk_type_const(id.clone()).apply(
                 local_types
                     .iter()
                     .map(|local_type| mk_type_local(local_type.id)),
@@ -1484,10 +1490,10 @@ impl Eval {
         let mut cs = vec![];
         for ctor in &ctors {
             let ty = ctor.ty.subst(&subst);
-            cs.push((ctor.ctor_name.clone(), ty));
+            cs.push((ctor.ctor_id.clone(), ty));
         }
-        for (name, ty) in cs {
-            self.add_const(name, local_types.clone(), vec![], ty);
+        for (id, ty) in cs {
+            self.add_const(id, local_types.clone(), vec![], ty);
         }
 
         // generate the induction principle
@@ -1547,7 +1553,7 @@ impl Eval {
             }
             // ∀ args, {IH} → P (C args)
             let mut a = mk_const(
-                ctor.ctor_name.clone(),
+                ctor.ctor_id.clone(),
                 local_types
                     .iter()
                     .map(|local_type| mk_type_local(local_type.id))
@@ -1574,7 +1580,7 @@ impl Eval {
         target = target.apply([mk_local(x.id)]);
         target = guard(&target, guards);
         target = generalize(&target, &[x, motive]);
-        self.add_axiom(ind_name, local_types.clone(), vec![], target);
+        self.add_axiom(ind_id, local_types.clone(), vec![], target);
 
         // generate the recursion principle
         //
@@ -1646,7 +1652,7 @@ impl Eval {
                     })
                     .collect();
                 let mut m = mk_const(
-                    rec_name.clone(),
+                    rec_id.clone(),
                     rec_local_types
                         .iter()
                         .map(|local_type| mk_type_local(local_type.id))
@@ -1669,7 +1675,7 @@ impl Eval {
         let rec_ty = mk_type_local(rec_ty_var)
             .arrow(cont_param_tys.clone())
             .arrow([target_ty]);
-        self.add_const(rec_name.clone(), rec_local_types.clone(), vec![], rec_ty);
+        self.add_const(rec_id.clone(), rec_local_types.clone(), vec![], rec_ty);
 
         let mut rhs_binders = vec![];
         for (x, t) in zip(cont_params, &cont_param_tys) {
@@ -1681,7 +1687,7 @@ impl Eval {
         }
         for ((rhs_body, ctor_params), ctor) in zip(zip(rhs_bodies, ctor_params_list), &ctors) {
             let mut lhs = mk_const(
-                rec_name.clone(),
+                rec_id.clone(),
                 rec_local_types
                     .iter()
                     .map(|local_type| mk_type_local(local_type.id))
@@ -1689,7 +1695,7 @@ impl Eval {
                 vec![],
             );
             let mut lhs_arg = mk_const(
-                ctor.ctor_name.clone(),
+                ctor.ctor_id.clone(),
                 local_types
                     .iter()
                     .map(|local_type| mk_type_local(local_type.id))
@@ -1704,16 +1710,12 @@ impl Eval {
 
             let eq_ty = mk_type_local(rec_ty_var).arrow(cont_param_tys.clone());
 
-            let mut spec = mk_const(
-                QualifiedName::from_name(Name::from_str("eq")),
-                vec![eq_ty],
-                vec![],
-            );
+            let mut spec = mk_const(global_id("eq"), vec![eq_ty], vec![]);
             spec = spec.apply([lhs, rhs]);
             spec = generalize(&spec, &ctor_params);
 
             self.add_axiom(
-                ctor.ctor_spec_name.clone(),
+                ctor.ctor_spec_id.clone(),
                 rec_local_types.clone(),
                 vec![],
                 spec,
@@ -1736,15 +1738,16 @@ impl Eval {
         //  : P x w → (∀ y, φ → (∀ z, ψ → P x M) → (∀ z, ψ → C M) → C N) → C w
         //
         let CmdInductive {
-            name,
+            id,
+            this_name,
             this,
             local_types,
             params,
             target_ty,
-            ind_name,
+            ind_id,
             mut ctors,
         } = cmd;
-        if self.has_const(&name) {
+        if self.has_const(&id) {
             bail!("already defined");
         }
         for i in 0..local_types.len() {
@@ -1782,12 +1785,11 @@ impl Eval {
                 }
             }
         }
-        let self_name = name.name().clone();
         local_env.locals.insert(
             0,
             Local {
                 id: this,
-                name: Some(self_name.clone()),
+                name: Some(this_name.clone()),
                 ty: target_ty.clone(),
             },
         );
@@ -1796,7 +1798,7 @@ impl Eval {
         let mut ctor_target_list = vec![];
         let mut ctor_ind_args_list = vec![];
         for ctor in &mut ctors {
-            if self.has_axiom(&ctor.ctor_name) {
+            if self.has_axiom(&ctor.ctor_id) {
                 bail!("already defined");
             }
             self.elaborate_term(&mut local_env, &mut ctor.target, &mk_type_prop())?;
@@ -1842,7 +1844,7 @@ impl Eval {
             ctor_ind_args_list.push(ctor_ind_args);
         }
         local_env.locals.remove(0);
-        if self.has_axiom(&ind_name) {
+        if self.has_axiom(&ind_id) {
             bail!("already defined");
         }
         // well-formedness check is completed.
@@ -1854,7 +1856,7 @@ impl Eval {
             param_types.push(param.ty.clone());
         }
         let pred_ty = target_ty.arrow(param_types);
-        self.add_const(name.clone(), local_types.clone(), vec![], pred_ty);
+        self.add_const(id.clone(), local_types.clone(), vec![], pred_ty);
 
         // inductive P.{u} (x : τ) : σ → Prop
         // | intro : ∀ y, φ → (∀ z, ψ → P M) → P N
@@ -1863,7 +1865,7 @@ impl Eval {
             let mut target = ctor.target.clone();
             // P.{u} x
             let mut stash = mk_const(
-                name.clone(),
+                id.clone(),
                 local_types
                     .iter()
                     .map(|local_type| mk_type_local(local_type.id))
@@ -1875,7 +1877,7 @@ impl Eval {
             let new_target = target.subst(&subst);
             target = new_target;
             target = generalize(&target, &params);
-            self.add_axiom(ctor.ctor_name.clone(), local_types.clone(), vec![], target);
+            self.add_axiom(ctor.ctor_id.clone(), local_types.clone(), vec![], target);
         }
 
         // inductive P.{u} (x : τ) : σ → Prop
@@ -1923,7 +1925,7 @@ impl Eval {
 
             // P ↦ P.{u} x
             let mut stash = mk_const(
-                name.clone(),
+                id.clone(),
                 local_types
                     .iter()
                     .map(|local_type| mk_type_local(local_type.id))
@@ -1948,7 +1950,7 @@ impl Eval {
         target = guard(&target, guards);
 
         let mut p = mk_const(
-            name.clone(),
+            id.clone(),
             local_types
                 .iter()
                 .map(|local_type| mk_type_local(local_type.id))
@@ -1963,7 +1965,7 @@ impl Eval {
         target = generalize(&target, &indexes);
         target = generalize(&target, &params);
 
-        self.add_axiom(ind_name, local_types, vec![], target);
+        self.add_axiom(ind_id, local_types, vec![], target);
         Ok(())
     }
 
@@ -1975,12 +1977,12 @@ impl Eval {
         //  axiom inhabited : ∃ x, x ∈ rep
         // }
         let CmdStructure {
-            name,
+            id,
             local_types,
-            abs_name,
+            abs_id,
             mut fields,
         } = cmd;
-        if self.has_type_name(&name) {
+        if self.has_type_id(&id) {
             bail!("already defined");
         }
         for i in 0..local_types.len() {
@@ -2003,11 +2005,11 @@ impl Eval {
                 StructureField::Const(StructureConst {
                     field_id,
                     field_name,
-                    name,
+                    id: field_global_id,
                     ty: field_ty,
                 }) => {
                     let field_name = field_name.clone();
-                    if self.has_const(name) {
+                    if self.has_const(field_global_id) {
                         bail!("already defined");
                     }
                     if const_field_names.contains(&field_name) {
@@ -2023,11 +2025,11 @@ impl Eval {
                 }
                 StructureField::Axiom(StructureAxiom {
                     field_name,
-                    name,
+                    id,
                     target,
                 }) => {
                     let field_name = field_name.clone();
-                    if self.has_axiom(name) {
+                    if self.has_axiom(id) {
                         bail!("already defined");
                     }
                     if axiom_field_names.contains(&field_name) {
@@ -2038,27 +2040,27 @@ impl Eval {
                 }
             }
         }
-        if self.has_axiom(&abs_name) {
+        if self.has_axiom(&abs_id) {
             bail!("already defined");
         }
         // well-formedness check is completed.
         self.structure_table.insert(
-            name.clone(),
+            id.clone(),
             CmdStructure {
-                name: name.clone(),
+                id: id.clone(),
                 local_types: local_types.clone(),
-                abs_name: abs_name.clone(),
+                abs_id: abs_id.clone(),
                 fields: fields.clone(),
             },
         );
-        self.add_type_const(name.clone(), Kind(local_types.len()));
+        self.add_type_const(id.clone(), Kind(local_types.len()));
 
         // inhab u
         let this = Local {
             id: Id::fresh(),
             name: Some(Name::from_str("this")),
             ty: {
-                mk_type_const(name.clone()).apply(
+                mk_type_const(id.clone()).apply(
                     local_types
                         .iter()
                         .map(|local_type| mk_type_local(local_type.id)),
@@ -2071,17 +2073,16 @@ impl Eval {
             match field {
                 StructureField::Const(StructureConst {
                     field_id,
-                    name,
+                    id: field_global_id,
                     ty: field_ty,
                     ..
                 }) => {
-                    let fullname = name.clone();
                     let ty = field_ty.arrow([this.ty.clone()]);
-                    self.add_const(fullname.clone(), local_types.clone(), vec![], ty);
+                    self.add_const(field_global_id.clone(), local_types.clone(), vec![], ty);
 
                     // rep ↦ inhab.rep.{u} this
                     let mut target = mk_const(
-                        fullname,
+                        field_global_id.clone(),
                         local_types
                             .iter()
                             .map(|local_type| mk_type_local(local_type.id))
@@ -2091,12 +2092,12 @@ impl Eval {
                     target = target.apply([mk_local(this.id)]);
                     subst.push((*field_id, target));
                 }
-                StructureField::Axiom(StructureAxiom { name, target, .. }) => {
+                StructureField::Axiom(StructureAxiom { id, target, .. }) => {
                     let mut target = target.clone();
                     let new_target = target.subst(&subst);
                     target = new_target;
                     target = generalize(&target, slice::from_ref(&this));
-                    self.add_axiom(name.clone(), local_types.clone(), vec![], target);
+                    self.add_axiom(id.clone(), local_types.clone(), vec![], target);
                 }
             }
         }
@@ -2111,7 +2112,7 @@ impl Eval {
                 StructureField::Const(StructureConst {
                     field_id,
                     field_name,
-                    name,
+                    id: field_global_id,
                     ty: field_ty,
                 }) => {
                     // (s : set u)
@@ -2123,7 +2124,7 @@ impl Eval {
 
                     // inhab.rep this
                     let mut rhs = mk_const(
-                        name.clone(),
+                        field_global_id.clone(),
                         local_types
                             .iter()
                             .map(|local_type| mk_type_local(local_type.id))
@@ -2133,11 +2134,7 @@ impl Eval {
                     rhs = rhs.apply([mk_local(this.id)]);
 
                     // s = inhab.rep this
-                    let mut char = mk_const(
-                        QualifiedName::from_name(Name::from_str("eq")),
-                        vec![field_ty.clone()],
-                        vec![],
-                    );
+                    let mut char = mk_const(global_id("eq"), vec![field_ty.clone()], vec![]);
                     char = char.apply([mk_local(param.id), rhs]);
                     chars.push(char);
 
@@ -2154,36 +2151,22 @@ impl Eval {
                 }
             }
         }
-        let mut abs = mk_const(
-            QualifiedName::from_name(Name::from_str("uexists")),
-            vec![this.ty.clone()],
-            vec![],
-        );
+        let mut abs = mk_const(global_id("uexists"), vec![this.ty.clone()], vec![]);
         abs = abs.apply([{
             let mut char = chars
                 .into_iter()
                 .reduce(|left, right| {
-                    let mut conj = mk_const(
-                        QualifiedName::from_name(Name::from_str("and")),
-                        vec![],
-                        vec![],
-                    );
+                    let mut conj = mk_const(global_id("and"), vec![], vec![]);
                     conj = conj.apply([left, right]);
                     conj
                 })
-                .unwrap_or_else(|| {
-                    mk_const(
-                        QualifiedName::from_name(Name::from_str("true")),
-                        vec![],
-                        vec![],
-                    )
-                });
+                .unwrap_or_else(|| mk_const(global_id("true"), vec![], vec![]));
             char = char.abs(slice::from_ref(&this));
             char
         }]);
         abs = guard(&abs, guards);
         abs = generalize(&abs, &params);
-        self.add_axiom(abs_name, local_types.clone(), vec![], abs);
+        self.add_axiom(abs_id, local_types.clone(), vec![], abs);
         Ok(())
     }
 
@@ -2202,14 +2185,14 @@ impl Eval {
         //     inhab.rep (power.inhab A) = power.inhab.rep A
         //
         let CmdInstance {
-            name,
+            id,
             local_types,
             local_classes,
             params,
             target_ty,
             mut fields,
         } = cmd;
-        if self.has_const(&name) {
+        if self.has_const(&id) {
             bail!("already defined");
         }
         for i in 0..local_types.len() {
@@ -2244,7 +2227,7 @@ impl Eval {
         let Type::Const(structure_name) = target_ty.head() else {
             bail!("type of instance must be a structure");
         };
-        let structure_name = structure_name.name.clone();
+        let structure_name = structure_name.id.clone();
         let Some(cmd_structure) = self.structure_table.get(&structure_name).cloned() else {
             bail!("type of instance must be a structure");
         };
@@ -2270,14 +2253,14 @@ impl Eval {
                     InstanceField::Def(InstanceDef {
                         field_id,
                         field_name,
-                        name,
+                        id,
                         ty,
                         ..
                     }),
                 ) => {
                     let structure_field_name = structure_field_name.clone();
                     let field_name = field_name.clone();
-                    if self.has_const(name) {
+                    if self.has_const(id) {
                         bail!("already defined");
                     }
                     if structure_field_name != field_name {
@@ -2307,14 +2290,14 @@ impl Eval {
                     }),
                     InstanceField::Lemma(InstanceLemma {
                         field_name,
-                        name,
+                        id,
                         target,
                         ..
                     }),
                 ) => {
                     let structure_field_name = structure_field_name.clone();
                     let field_name = field_name.clone();
-                    if self.has_axiom(name) {
+                    if self.has_axiom(id) {
                         bail!("already defined");
                     }
                     if structure_field_name != field_name {
@@ -2346,7 +2329,7 @@ impl Eval {
             match field {
                 InstanceField::Def(InstanceDef {
                     field_id,
-                    name,
+                    id,
                     ty,
                     target,
                     ..
@@ -2357,7 +2340,7 @@ impl Eval {
 
                     let target_ty = ty.arrow(params.iter().map(|param| param.ty.clone()));
                     self.add_const(
-                        name.clone(),
+                        id.clone(),
                         local_types.clone(),
                         local_classes.clone(),
                         target_ty,
@@ -2367,11 +2350,11 @@ impl Eval {
                         m = m.abs(&params);
                         m
                     };
-                    self.add_delta(name.clone(), target);
+                    self.add_delta(id.clone(), target);
 
                     // rep ↦ inhab.rep.{u} A
                     let mut target = mk_const(
-                        name.clone(),
+                        id.clone(),
                         local_types
                             .iter()
                             .map(|local_type| mk_type_local(local_type.id))
@@ -2386,7 +2369,7 @@ impl Eval {
                 }
                 InstanceField::Lemma(InstanceLemma {
                     field_id,
-                    name,
+                    id,
                     target,
                     holes,
                     expr,
@@ -2412,7 +2395,7 @@ impl Eval {
                     let mut target = target.clone();
                     target = generalize(&target, &params);
                     self.add_axiom(
-                        name.clone(),
+                        id.clone(),
                         local_types.clone(),
                         local_classes.clone(),
                         target,
@@ -2427,7 +2410,7 @@ impl Eval {
             target = target.arrow([param.ty.clone()]);
         }
         self.add_const(
-            name.clone(),
+            id.clone(),
             local_types.clone(),
             local_classes.clone(),
             target,
@@ -2435,7 +2418,7 @@ impl Eval {
 
         // generate per-field spec axioms
         let mut this = mk_const(
-            name.clone(),
+            id.clone(),
             local_types
                 .iter()
                 .map(|local_type| mk_type_local(local_type.id))
@@ -2449,32 +2432,29 @@ impl Eval {
         for (structure_field, field) in zip(&cmd_structure.fields, &fields) {
             let (
                 StructureField::Const(StructureConst {
-                    name: structure_field_name,
+                    id: structure_field_id,
                     ..
                 }),
                 InstanceField::Def(InstanceDef {
-                    name,
-                    spec_name,
-                    ty,
-                    ..
+                    id, spec_id, ty, ..
                 }),
             ) = (structure_field, field)
             else {
                 continue;
             };
-            if self.has_axiom(spec_name) {
+            if self.has_axiom(spec_id) {
                 bail!("already defined");
             }
 
             let mut lhs = mk_const(
-                structure_field_name.clone(),
+                structure_field_id.clone(),
                 target_ty.args().into_iter().cloned().collect(),
                 vec![],
             );
             lhs = lhs.apply([this.clone()]);
 
             let mut rhs = mk_const(
-                name.clone(),
+                id.clone(),
                 local_types
                     .iter()
                     .map(|local_type| mk_type_local(local_type.id))
@@ -2486,15 +2466,11 @@ impl Eval {
             );
             rhs = rhs.apply(params.iter().map(|param| mk_local(param.id)));
 
-            let mut target = mk_const(
-                QualifiedName::from_name(Name::from_str("eq")),
-                vec![ty.clone()],
-                vec![],
-            );
+            let mut target = mk_const(global_id("eq"), vec![ty.clone()], vec![]);
             target = target.apply([lhs, rhs]);
             target = generalize(&target, &params);
             self.add_axiom(
-                spec_name.clone(),
+                spec_id.clone(),
                 local_types.clone(),
                 local_classes.clone(),
                 target,
@@ -2505,11 +2481,11 @@ impl Eval {
 
     fn run_class_structure_cmd(&mut self, cmd: CmdClassStructure) -> anyhow::Result<()> {
         let CmdClassStructure {
-            name,
+            id,
             local_types,
             mut fields,
         } = cmd;
-        if self.has_class_predicate(&name) {
+        if self.has_class_predicate(&id) {
             bail!("already defined");
         }
         for i in 0..local_types.len() {
@@ -2532,11 +2508,11 @@ impl Eval {
                 ClassStructureField::Const(ClassStructureConst {
                     field_id,
                     field_name,
-                    name,
+                    id,
                     ty: field_ty,
                 }) => {
                     let field_name = field_name.clone();
-                    if self.has_const(name) {
+                    if self.has_const(id) {
                         bail!("already defined");
                     }
                     if const_field_names.contains(&field_name) {
@@ -2552,11 +2528,11 @@ impl Eval {
                 }
                 ClassStructureField::Axiom(ClassStructureAxiom {
                     field_name,
-                    name,
+                    id,
                     target,
                 }) => {
                     let field_name = field_name.clone();
-                    if self.has_axiom(name) {
+                    if self.has_axiom(id) {
                         bail!("already defined");
                     }
                     if axiom_field_names.contains(&field_name) {
@@ -2569,21 +2545,21 @@ impl Eval {
         }
         // well-formedness check is completed.
         self.class_structure_table.insert(
-            name.clone(),
+            id.clone(),
             CmdClassStructure {
-                name: name.clone(),
+                id: id.clone(),
                 local_types: local_types.clone(),
                 fields: fields.clone(),
             },
         );
         self.add_class_predicate(
-            name.clone(),
+            id.clone(),
             ClassType {
                 arity: local_types.len(),
             },
         );
         let this_class = Class {
-            name: name.clone(),
+            id: id.clone(),
             args: local_types
                 .iter()
                 .map(|local_type| mk_type_local(local_type.id))
@@ -2594,19 +2570,19 @@ impl Eval {
         for field in &fields {
             match field {
                 ClassStructureField::Const(ClassStructureConst {
-                    field_id, name, ty, ..
+                    field_id, id, ty, ..
                 }) => {
-                    let fullname = name.clone();
+                    let method_id = id.clone();
                     self.add_const(
-                        fullname.clone(),
+                        method_id.clone(),
                         local_types.clone(),
                         vec![this_class.clone()],
                         ty.clone(),
                     );
-                    self.add_kappa(fullname.clone());
+                    self.add_kappa(method_id.clone());
 
                     let target = mk_const(
-                        fullname.clone(),
+                        method_id.clone(),
                         local_types
                             .iter()
                             .map(|local_type| mk_type_local(local_type.id))
@@ -2615,12 +2591,12 @@ impl Eval {
                     );
                     subst.push((*field_id, target));
                 }
-                ClassStructureField::Axiom(ClassStructureAxiom { name, target, .. }) => {
+                ClassStructureField::Axiom(ClassStructureAxiom { id, target, .. }) => {
                     let mut target = target.clone();
                     let new_target = target.subst(&subst);
                     target = new_target;
                     self.add_axiom(
-                        name.clone(),
+                        id.clone(),
                         local_types.clone(),
                         vec![this_class.clone()],
                         target,
@@ -2633,13 +2609,13 @@ impl Eval {
 
     fn run_class_instance_cmd(&mut self, cmd: CmdClassInstance) -> anyhow::Result<()> {
         let CmdClassInstance {
-            name,
+            id,
             local_types,
             local_classes,
             target,
             mut fields,
         } = cmd;
-        if self.has_class_instance(&name) {
+        if self.has_class_instance(&id) {
             bail!("already defined");
         }
         for i in 0..local_types.len() {
@@ -2673,11 +2649,7 @@ impl Eval {
                 bail!("overlapping instances are disallowed");
             }
         }
-        let cmd_structure = self
-            .class_structure_table
-            .get(&target.name)
-            .cloned()
-            .unwrap();
+        let cmd_structure = self.class_structure_table.get(&target.id).cloned().unwrap();
         let mut type_subst = Vec::with_capacity(cmd_structure.local_types.len());
         for (x, t) in zip(&cmd_structure.local_types, &target.args) {
             type_subst.push((x.id, t.clone()));
@@ -2773,21 +2745,15 @@ impl Eval {
         let mut method_table = HashMap::new();
         for (structure_field, field) in zip(&cmd_structure.fields, &fields) {
             let (
-                ClassStructureField::Const(ClassStructureConst { name, .. }),
+                ClassStructureField::Const(ClassStructureConst { id, .. }),
                 ClassInstanceField::Def(ClassInstanceDef { target, .. }),
             ) = (structure_field, field)
             else {
                 continue;
             };
-            method_table.insert(name.clone(), target.clone());
+            method_table.insert(id.clone(), target.clone());
         }
-        self.add_class_instance(
-            name.clone(),
-            local_types,
-            local_classes,
-            target,
-            method_table,
-        );
+        self.add_class_instance(id.clone(), local_types, local_classes, target, method_table);
         Ok(())
     }
 }
@@ -2802,8 +2768,8 @@ mod tests {
     use crate::{
         proof::mk_type_prop,
         tt::{
-            Id, Kind, LocalType, Name, Path, QualifiedName, mk_const, mk_local, mk_type_arrow,
-            mk_type_const, mk_type_local,
+            GlobalId, Id, Kind, LocalType, Name, Path, QualifiedName, mk_const, mk_local,
+            mk_type_arrow, mk_type_const, mk_type_local,
         },
     };
 
@@ -2828,10 +2794,14 @@ mod tests {
         name
     }
 
+    fn global_id(value: &str) -> GlobalId {
+        GlobalId::from_name(Name::from_str(value))
+    }
+
     fn install_minimal_logic(eval: &mut Eval) {
-        eval.add_type_const(qualified("Prop"), Kind(0));
+        eval.add_type_const(global_id("Prop"), Kind(0));
         eval.add_const(
-            qualified("imp"),
+            global_id("imp"),
             vec![],
             vec![],
             mk_type_arrow(
@@ -2856,10 +2826,10 @@ mod tests {
                 ),
                 _ => unreachable!("unexpected minimal logic constant"),
             };
-            eval.add_const(qualified(name), local_types, vec![], ty);
+            eval.add_const(global_id(name), local_types, vec![], ty);
         }
         eval.add_const(
-            qualified("and"),
+            global_id("and"),
             vec![],
             vec![],
             mk_type_arrow(
@@ -2867,7 +2837,7 @@ mod tests {
                 mk_type_arrow(mk_type_prop(), mk_type_prop()),
             ),
         );
-        eval.add_const(qualified("true"), vec![], vec![], mk_type_prop());
+        eval.add_const(global_id("true"), vec![], vec![], mk_type_prop());
     }
 
     #[test]
@@ -2952,7 +2922,7 @@ mod tests {
             .add(Name::from_str("foo"), qualified("foo"));
 
         eval.run_cmd(Cmd::TypeConst(CmdTypeConst {
-            name: QualifiedName::from_name(Name::from_str("foo")).extend(Name::from_str("bar")),
+            id: global_id("foo.bar"),
             kind: Kind(0),
         }))
         .expect("type const command should succeed");
@@ -2969,9 +2939,7 @@ mod tests {
         let mut eval = Eval::default();
 
         eval.run_cmd(Cmd::TypeConst(CmdTypeConst {
-            name: QualifiedName::from_name(Name::from_str("foo"))
-                .extend(Name::from_str("bar"))
-                .extend(Name::from_str("baz")),
+            id: global_id("foo.bar.baz"),
             kind: Kind(0),
         }))
         .expect("type const command should succeed");
@@ -3068,34 +3036,35 @@ mod tests {
         install_minimal_logic(&mut eval);
 
         let this = Id::fresh();
-        let ctor_name = qualified("meta.ctor");
-        let ctor_spec_name = qualified("meta.ctor_rule");
-        let ind_name = qualified("meta.type_ind");
-        let rec_name = qualified("meta.type_rec");
+        let ctor_id = global_id("meta.ctor");
+        let ctor_spec_id = global_id("meta.ctor_rule");
+        let ind_id = global_id("meta.type_ind");
+        let rec_id = global_id("meta.type_rec");
 
         eval.run_cmd(Cmd::TypeInductive(CmdTypeInductive {
-            name: qualified("foo"),
+            id: global_id("foo"),
+            this_name: Name::from_str("foo"),
             this,
             local_types: vec![],
-            ind_name: ind_name.clone(),
-            rec_name: rec_name.clone(),
+            ind_id: ind_id.clone(),
+            rec_id: rec_id.clone(),
             ctors: vec![TypeInductiveConstructor {
                 name: Name::from_str("mk"),
-                ctor_name: ctor_name.clone(),
-                ctor_spec_name: ctor_spec_name.clone(),
+                ctor_id: ctor_id.clone(),
+                ctor_spec_id: ctor_spec_id.clone(),
                 ty: mk_type_local(this),
             }],
         }))
         .expect("type inductive command should succeed");
 
-        assert!(eval.const_table.contains_key(&ctor_name));
-        assert!(eval.const_table.contains_key(&rec_name));
-        assert!(eval.axiom_table.contains_key(&ctor_spec_name));
-        assert!(eval.axiom_table.contains_key(&ind_name));
-        assert!(!eval.const_table.contains_key(&qualified("foo.mk")));
-        assert!(!eval.const_table.contains_key(&qualified("foo.rec")));
-        assert!(!eval.axiom_table.contains_key(&qualified("foo.mk.spec")));
-        assert!(!eval.axiom_table.contains_key(&qualified("foo.ind")));
+        assert!(eval.const_table.contains_key(&global_id("meta.ctor")));
+        assert!(eval.const_table.contains_key(&global_id("meta.type_rec")));
+        assert!(eval.axiom_table.contains_key(&global_id("meta.ctor_rule")));
+        assert!(eval.axiom_table.contains_key(&global_id("meta.type_ind")));
+        assert!(!eval.const_table.contains_key(&global_id("foo.mk")));
+        assert!(!eval.const_table.contains_key(&global_id("foo.rec")));
+        assert!(!eval.axiom_table.contains_key(&global_id("foo.mk.spec")));
+        assert!(!eval.axiom_table.contains_key(&global_id("foo.ind")));
     }
 
     #[test]
@@ -3104,29 +3073,30 @@ mod tests {
         install_minimal_logic(&mut eval);
 
         let this = Id::fresh();
-        let ctor_name = qualified("meta.intro");
-        let ind_name = qualified("meta.prop_ind");
+        let ctor_id = global_id("meta.intro");
+        let ind_id = global_id("meta.prop_ind");
 
         eval.run_cmd(Cmd::Inductive(CmdInductive {
-            name: qualified("foo"),
+            id: global_id("foo"),
+            this_name: Name::from_str("foo"),
             this,
             local_types: vec![],
             params: vec![],
             target_ty: mk_type_prop(),
-            ind_name: ind_name.clone(),
+            ind_id: ind_id.clone(),
             ctors: vec![InductiveConstructor {
                 name: Name::from_str("mk"),
-                ctor_name: ctor_name.clone(),
+                ctor_id: ctor_id.clone(),
                 target: mk_local(this),
             }],
         }))
         .expect("inductive command should succeed");
 
-        assert!(eval.const_table.contains_key(&qualified("foo")));
-        assert!(eval.axiom_table.contains_key(&ctor_name));
-        assert!(eval.axiom_table.contains_key(&ind_name));
-        assert!(!eval.axiom_table.contains_key(&qualified("foo.mk")));
-        assert!(!eval.axiom_table.contains_key(&qualified("foo.ind")));
+        assert!(eval.const_table.contains_key(&global_id("foo")));
+        assert!(eval.axiom_table.contains_key(&global_id("meta.intro")));
+        assert!(eval.axiom_table.contains_key(&global_id("meta.prop_ind")));
+        assert!(!eval.axiom_table.contains_key(&global_id("foo.mk")));
+        assert!(!eval.axiom_table.contains_key(&global_id("foo.ind")));
     }
 
     #[test]
@@ -3134,23 +3104,23 @@ mod tests {
         let mut eval = Eval::default();
         install_minimal_logic(&mut eval);
 
-        let abs_name = qualified("meta.struct_abs");
+        let abs_id = global_id("meta.struct_abs");
 
         eval.run_cmd(Cmd::Structure(CmdStructure {
-            name: qualified("foo"),
+            id: global_id("foo"),
             local_types: vec![],
-            abs_name: abs_name.clone(),
+            abs_id: abs_id.clone(),
             fields: vec![StructureField::Const(StructureConst {
                 field_id: Id::fresh(),
                 field_name: Name::from_str("rep"),
-                name: qualified("foo.rep"),
+                id: global_id("foo.rep"),
                 ty: mk_type_prop(),
             })],
         }))
         .expect("structure command should succeed");
 
-        assert!(eval.axiom_table.contains_key(&abs_name));
-        assert!(!eval.axiom_table.contains_key(&qualified("foo.abs")));
+        assert!(eval.axiom_table.contains_key(&global_id("meta.struct_abs")));
+        assert!(!eval.axiom_table.contains_key(&global_id("foo.abs")));
     }
 
     #[test]
@@ -3159,47 +3129,50 @@ mod tests {
         install_minimal_logic(&mut eval);
 
         let rep_field_id = Id::fresh();
-        eval.add_type_const(qualified("foo"), Kind(0));
+        eval.add_type_const(global_id("foo"), Kind(0));
         eval.add_const(
-            qualified("foo.rep"),
+            global_id("foo.rep"),
             vec![],
             vec![],
-            mk_type_arrow(mk_type_const(qualified("foo")), mk_type_prop()),
+            mk_type_arrow(mk_type_const(global_id("foo")), mk_type_prop()),
         );
         eval.structure_table.insert(
-            qualified("foo"),
+            global_id("foo"),
             CmdStructure {
-                name: qualified("foo"),
+                id: global_id("foo"),
                 local_types: vec![],
-                abs_name: qualified("meta.foo_abs"),
+                abs_id: global_id("meta.foo_abs"),
                 fields: vec![StructureField::Const(StructureConst {
                     field_id: rep_field_id,
                     field_name: Name::from_str("rep"),
-                    name: qualified("foo.rep"),
+                    id: global_id("foo.rep"),
                     ty: mk_type_prop(),
                 })],
             },
         );
 
-        let spec_name = qualified("meta.inst_rep_rule");
+        let spec_id = global_id("meta.inst_rep_rule");
         eval.run_cmd(Cmd::Instance(CmdInstance {
-            name: qualified("inst"),
+            id: global_id("inst"),
             local_types: vec![],
             local_classes: vec![],
             params: vec![],
-            target_ty: mk_type_const(qualified("foo")),
+            target_ty: mk_type_const(global_id("foo")),
             fields: vec![InstanceField::Def(InstanceDef {
                 field_id: Id::fresh(),
                 field_name: Name::from_str("rep"),
-                name: qualified("inst.rep"),
-                spec_name: spec_name.clone(),
+                id: global_id("inst.rep"),
+                spec_id: spec_id.clone(),
                 ty: mk_type_prop(),
-                target: mk_const(qualified("true"), vec![], vec![]),
+                target: mk_const(global_id("true"), vec![], vec![]),
             })],
         }))
         .expect("instance command should succeed");
 
-        assert!(eval.axiom_table.contains_key(&spec_name));
-        assert!(!eval.axiom_table.contains_key(&qualified("inst.rep.spec")));
+        assert!(
+            eval.axiom_table
+                .contains_key(&global_id("meta.inst_rep_rule"))
+        );
+        assert!(!eval.axiom_table.contains_key(&global_id("inst.rep.spec")));
     }
 }
