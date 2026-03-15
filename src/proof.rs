@@ -6,20 +6,22 @@ use std::{collections::HashMap, iter::zip, slice};
 use crate::{
     lex::Span,
     tt::{
-        self, Class, Id, Instance, Local, LocalDelta, LocalType, Name, QualifiedName, Term, Type,
+        self, Class, GlobalId, Id, Instance, Local, LocalDelta, LocalType, Name, Term, Type,
         mk_abs, mk_const, mk_local, mk_type_const, mk_type_local,
     },
 };
 
+fn global_id(value: &str) -> GlobalId {
+    GlobalId::from_name(Name::from_str(value))
+}
+
 pub fn mk_type_prop() -> Type {
-    static T_PROP: LazyLock<Type> =
-        LazyLock::new(|| mk_type_const(QualifiedName::from_name(Name::from_str("Prop"))));
+    static T_PROP: LazyLock<Type> = LazyLock::new(|| mk_type_const(global_id("Prop")));
     T_PROP.clone()
 }
 
 pub fn count_forall(term: &Term) -> usize {
-    static FORALL: LazyLock<QualifiedName> =
-        LazyLock::new(|| QualifiedName::from_name(Name::from_str("forall")));
+    static FORALL: LazyLock<GlobalId> = LazyLock::new(|| global_id("forall"));
 
     let mut count = 0;
     let mut current = term;
@@ -31,7 +33,7 @@ pub fn count_forall(term: &Term) -> usize {
         let Term::Const(head) = &app.fun else {
             break;
         };
-        if head.name != *FORALL {
+        if head.id != *FORALL {
             break;
         }
         let Term::Abs(abs) = &app.arg else {
@@ -46,8 +48,7 @@ pub fn count_forall(term: &Term) -> usize {
 }
 
 pub fn generalize(term: &Term, xs: &[Local]) -> Term {
-    static FORALL: LazyLock<QualifiedName> =
-        LazyLock::new(|| QualifiedName::from_name(Name::from_str("forall")));
+    static FORALL: LazyLock<GlobalId> = LazyLock::new(|| global_id("forall"));
 
     let locals = xs.iter().map(|x| x.id).collect::<Vec<_>>();
     let mut result = term.close(&locals, 0);
@@ -71,8 +72,7 @@ pub fn ungeneralize(term: &Term) -> (Vec<Local>, Term) {
 }
 
 pub fn ungeneralize1(term: &Term) -> Option<(Local, Term)> {
-    static FORALL: LazyLock<QualifiedName> =
-        LazyLock::new(|| QualifiedName::from_name(Name::from_str("forall")));
+    static FORALL: LazyLock<GlobalId> = LazyLock::new(|| global_id("forall"));
 
     let Term::App(m) = term else {
         return None;
@@ -80,7 +80,7 @@ pub fn ungeneralize1(term: &Term) -> Option<(Local, Term)> {
     let Term::Const(head) = &m.fun else {
         return None;
     };
-    if head.name != *FORALL {
+    if head.id != *FORALL {
         return None;
     }
     let Term::Abs(abs) = &m.arg else {
@@ -107,8 +107,7 @@ pub fn guard(term: &Term, guards: impl IntoIterator<Item = Term>) -> Term {
 }
 
 fn guard_help(target: Term, mut guards: impl Iterator<Item = Term>) -> Term {
-    static IMP: LazyLock<QualifiedName> =
-        LazyLock::new(|| QualifiedName::from_name(Name::from_str("imp")));
+    static IMP: LazyLock<GlobalId> = LazyLock::new(|| global_id("imp"));
 
     if let Some(guard_term) = guards.next() {
         let inner = guard_help(target, guards);
@@ -131,8 +130,7 @@ pub fn unguard(term: &Term) -> (Vec<Term>, Term) {
 }
 
 pub fn unguard1(term: &Term) -> Option<(Term, Term)> {
-    static IMP: LazyLock<QualifiedName> =
-        LazyLock::new(|| QualifiedName::from_name(Name::from_str("imp")));
+    static IMP: LazyLock<GlobalId> = LazyLock::new(|| global_id("imp"));
 
     let Term::App(m) = term else {
         return None;
@@ -143,7 +141,7 @@ pub fn unguard1(term: &Term) -> Option<(Term, Term)> {
     let Term::Const(head) = &n.fun else {
         return None;
     };
-    if head.name != *IMP {
+    if head.id != *IMP {
         return None;
     }
     Some((n.arg.clone(), m.arg.clone()))
@@ -249,7 +247,7 @@ pub struct ExprInst {
 #[derive(Debug, Clone)]
 pub struct ExprConst {
     pub metadata: ExprMetadata,
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub ty_args: Vec<Type>,
     pub instances: Vec<Instance>,
 }
@@ -363,10 +361,10 @@ pub fn mk_expr_inst(e: Expr, m: Term) -> Expr {
     }))
 }
 
-pub fn mk_expr_const(name: QualifiedName, ty_args: Vec<Type>, instances: Vec<Instance>) -> Expr {
+pub fn mk_expr_const(id: GlobalId, ty_args: Vec<Type>, instances: Vec<Instance>) -> Expr {
     Expr::Const(Box::new(ExprConst {
         metadata: ExprMetadata::default(),
-        name,
+        id,
         ty_args,
         instances,
     }))
@@ -496,7 +494,7 @@ impl std::fmt::Display for Expr {
                     write!(f, "]")?;
                 }
                 Expr::Const(e) => {
-                    write!(f, "{}", e.name)?;
+                    write!(f, "{}", e.id)?;
                     if !e.ty_args.is_empty() {
                         write!(f, ".{{")?;
                         for (idx, t) in e.ty_args.iter().enumerate() {
@@ -774,7 +772,7 @@ impl Expr {
             Expr::Const(e) => {
                 let ExprConst {
                     metadata: _,
-                    name: _,
+                    id: _,
                     ty_args,
                     instances,
                 } = &**e;
@@ -1048,7 +1046,7 @@ pub struct Axiom {
 pub struct Env<'a> {
     pub tt_env: tt::Env<'a>,
     // Proved or postulated facts
-    pub axiom_table: &'a HashMap<QualifiedName, Axiom>,
+    pub axiom_table: &'a HashMap<GlobalId, Axiom>,
 }
 
 #[derive(Debug, Clone)]
@@ -1176,7 +1174,7 @@ impl Env<'_> {
             Expr::Const(e) => {
                 let ExprConst {
                     metadata: _,
-                    name,
+                    id,
                     ty_args,
                     instances,
                 } = &**e;
@@ -1186,12 +1184,12 @@ impl Env<'_> {
                     target,
                 } = self
                     .axiom_table
-                    .get(name)
-                    .unwrap_or_else(|| panic!("unknown axiom: {:?}", name));
+                    .get(id)
+                    .unwrap_or_else(|| panic!("unknown axiom: {:?}", id));
                 if ty_args.len() != local_types.len() {
                     panic!(
                         "axiom {:?} expects {} type arguments but got {}",
-                        name,
+                        id,
                         local_types.len(),
                         ty_args.len()
                     );
@@ -1206,7 +1204,7 @@ impl Env<'_> {
                 if local_classes.len() != instances.len() {
                     panic!(
                         "axiom {:?} expects {} class arguments but got {}",
-                        name,
+                        id,
                         local_classes.len(),
                         instances.len()
                     );
@@ -1375,11 +1373,8 @@ impl Env<'_> {
                             let mut rhs = mk_local(*id);
                             rhs = rhs.apply([mk_local(this.id)]);
 
-                            let mut char = mk_const(
-                                QualifiedName::from_name(Name::from_str("eq")),
-                                vec![param.ty.clone()],
-                                vec![],
-                            );
+                            let mut char =
+                                mk_const(global_id("eq"), vec![param.ty.clone()], vec![]);
                             char = char.apply([mk_local(param.id), rhs]);
                             chars.push(char);
 
@@ -1394,30 +1389,16 @@ impl Env<'_> {
                     }
                 }
 
-                let mut abs = mk_const(
-                    QualifiedName::from_name(Name::from_str("uexists")),
-                    vec![this_ty.clone()],
-                    vec![],
-                );
+                let mut abs = mk_const(global_id("uexists"), vec![this_ty.clone()], vec![]);
                 abs = abs.apply([{
                     let mut char = chars
                         .into_iter()
                         .reduce(|left, right| {
-                            let mut conj = mk_const(
-                                QualifiedName::from_name(Name::from_str("and")),
-                                vec![],
-                                vec![],
-                            );
+                            let mut conj = mk_const(global_id("and"), vec![], vec![]);
                             conj = conj.apply([left, right]);
                             conj
                         })
-                        .unwrap_or_else(|| {
-                            mk_const(
-                                QualifiedName::from_name(Name::from_str("true")),
-                                vec![],
-                                vec![],
-                            )
-                        });
+                        .unwrap_or_else(|| mk_const(global_id("true"), vec![], vec![]));
                     char = char.abs(slice::from_ref(&this));
                     char
                 }]);
@@ -1482,18 +1463,15 @@ mod tests {
 
     #[test]
     fn change_accepts_function_eta_equivalence() {
-        let mut type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        type_const_table.insert(
-            QualifiedName::from_name(Name::from_str("Prop")),
-            Kind::base(),
-        );
-        let eq_name = QualifiedName::from_name(Name::from_str("eq"));
+        let mut type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        type_const_table.insert(global_id("Prop"), Kind::base());
+        let eq_id = global_id("eq");
         let u = local_id("u");
         let prop = mk_type_prop();
         let function_ty = prop.clone().arrow(std::iter::once(prop.clone()));
         let mut const_table = HashMap::new();
         const_table.insert(
-            eq_name.clone(),
+            eq_id.clone(),
             Const {
                 local_types: vec![LocalType {
                     id: u,
@@ -1503,11 +1481,11 @@ mod tests {
                 ty: mk_type_prop().arrow([mk_type_local(u), mk_type_local(u)]),
             },
         );
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, Axiom> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, Axiom> = HashMap::new();
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
             const_table: &const_table,
@@ -1532,9 +1510,9 @@ mod tests {
                 ty: function_ty.clone(),
             }],
         };
-        let source = mk_const(eq_name.clone(), vec![function_ty.clone()], vec![])
+        let source = mk_const(eq_id.clone(), vec![function_ty.clone()], vec![])
             .apply([mk_local(f_id), mk_local(f_id)]);
-        let target = mk_const(eq_name, vec![function_ty], vec![]).apply([
+        let target = mk_const(eq_id, vec![function_ty], vec![]).apply([
             mk_local(f_id),
             mk_abs(
                 Some(Name::from_str("x")),
@@ -1560,13 +1538,13 @@ mod tests {
     #[should_panic(expected = "unknown axiom")]
     fn const_expr_does_not_resolve_local_axiom_from_local_table() {
         let mut tt_local_env = tt::LocalEnv::default();
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
-        let delta_table: HashMap<QualifiedName, Delta> = HashMap::new();
-        let kappa_table: HashMap<QualifiedName, Kappa> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
-        let class_instance_table: HashMap<QualifiedName, ClassInstance> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, Axiom> = HashMap::new();
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::new();
+        let delta_table: HashMap<GlobalId, Delta> = HashMap::new();
+        let kappa_table: HashMap<GlobalId, Kappa> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
+        let class_instance_table: HashMap<GlobalId, ClassInstance> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, Axiom> = HashMap::new();
 
         let tt_env = tt::Env {
             type_const_table: &type_const_table,
@@ -1581,17 +1559,13 @@ mod tests {
             axiom_table: &axiom_table,
         };
         let mut local_env = LocalEnv::default();
-        let local_axiom_name = QualifiedName::from_name(Name::from_str("foo.a"));
+        let local_axiom_global_id = global_id("foo.a");
         let local_axiom_id = local_id("foo.a");
         local_env.local_axioms.push(LocalAxiom {
             id: Some(local_axiom_id),
-            prop: mk_const(
-                QualifiedName::from_name(Name::from_str("p")),
-                vec![],
-                vec![],
-            ),
+            prop: mk_const(global_id("p"), vec![], vec![]),
         });
-        let expr = mk_expr_const(local_axiom_name, vec![], vec![]);
+        let expr = mk_expr_const(local_axiom_global_id, vec![], vec![]);
         let _ = env.infer_prop(&mut tt_local_env, &mut local_env, &expr);
     }
 }

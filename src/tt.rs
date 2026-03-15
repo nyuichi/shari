@@ -13,6 +13,11 @@ use crate::{lex::Span, proof::mk_type_prop};
 pub struct Name(Arc<String>);
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Default)]
+pub struct GlobalId {
+    inner: Name,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Default)]
 pub struct Path(Option<QualifiedName>);
 
 // TODO: parseの中でrelative pathを処理するためにこの型が使われているが、この型はabsolute pathを表すものなので、parseの中で専用の型を使うべき。
@@ -41,6 +46,12 @@ impl Display for Name {
     }
 }
 
+impl Display for GlobalId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.inner)
+    }
+}
+
 impl Name {
     pub fn from_str(value: &str) -> Name {
         let mut table = NAME_TABLE.lock().unwrap();
@@ -55,6 +66,12 @@ impl Name {
 
     pub fn as_str(&self) -> &str {
         self.0.as_str()
+    }
+}
+
+impl GlobalId {
+    pub fn from_name(inner: Name) -> Self {
+        Self { inner }
     }
 }
 
@@ -158,6 +175,10 @@ impl QualifiedName {
 
     pub fn into_path(self) -> Path {
         Path::from_qualified_name(self)
+    }
+
+    pub fn into_global_id(self) -> GlobalId {
+        GlobalId::from_name(Name::from_str(&self.to_string()))
     }
 
     pub fn append(&self, suffix: &QualifiedName) -> QualifiedName {
@@ -270,7 +291,7 @@ pub enum Type {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct TypeConst {
     pub metadata: TypeMetadata,
-    pub name: QualifiedName,
+    pub id: GlobalId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -320,7 +341,7 @@ impl Display for Type {
 
         fn fmt_type(ty: &Type, f: &mut std::fmt::Formatter<'_>, prec: u8) -> std::fmt::Result {
             match ty {
-                Type::Const(inner) => write!(f, "{}", inner.name),
+                Type::Const(inner) => write!(f, "{}", inner.id),
                 Type::Arrow(inner) => {
                     let needs_paren = prec > TYPE_PREC_ARROW;
                     if needs_paren {
@@ -387,10 +408,10 @@ pub fn mk_type_local(id: Id) -> Type {
 }
 
 #[inline]
-pub fn mk_type_const(name: QualifiedName) -> Type {
+pub fn mk_type_const(id: GlobalId) -> Type {
     Type::Const(Arc::new(TypeConst {
         metadata: TypeMetadata::default(),
-        name,
+        id,
     }))
 }
 
@@ -714,13 +735,13 @@ pub struct ClassType {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Class {
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub args: Vec<Type>,
 }
 
 impl Display for Class {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name)?;
+        write!(f, "{}", self.id)?;
         for t in &self.args {
             write!(f, " {}", t)?;
         }
@@ -744,7 +765,7 @@ impl Class {
             .collect();
         if changed {
             Class {
-                name: self.name.clone(),
+                id: self.id.clone(),
                 args,
             }
         } else {
@@ -757,7 +778,7 @@ impl Class {
     }
 
     pub fn matches(&self, pattern: &Class) -> Option<Vec<(Id, Type)>> {
-        if self.name != pattern.name || self.args.len() != pattern.args.len() {
+        if self.id != pattern.id || self.args.len() != pattern.args.len() {
             return None;
         }
         let mut subst = vec![];
@@ -797,7 +818,7 @@ pub struct InstanceHole {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstanceGlobal {
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub ty_args: Vec<Type>,
     pub args: Vec<Instance>,
 }
@@ -807,7 +828,7 @@ impl Display for Instance {
         match self {
             Instance::Local(c) => write!(f, "${}", c.class),
             Instance::Global(i) => {
-                write!(f, "{}", i.name)?;
+                write!(f, "{}", i.id)?;
                 if !i.ty_args.is_empty() {
                     write!(f, ".{{")?;
                     let mut first = true;
@@ -843,16 +864,8 @@ pub fn mk_instance_local(class: Class) -> Instance {
     Instance::Local(Arc::new(InstanceLocal { class }))
 }
 
-pub fn mk_instance_global(
-    name: QualifiedName,
-    ty_args: Vec<Type>,
-    args: Vec<Instance>,
-) -> Instance {
-    Instance::Global(Arc::new(InstanceGlobal {
-        name,
-        ty_args,
-        args,
-    }))
+pub fn mk_instance_global(id: GlobalId, ty_args: Vec<Type>, args: Vec<Instance>) -> Instance {
+    Instance::Global(Arc::new(InstanceGlobal { id, ty_args, args }))
 }
 
 pub fn mk_instance_hole(id: Id) -> Instance {
@@ -876,7 +889,7 @@ impl Instance {
                     self.clone()
                 } else {
                     mk_instance_local(Class {
-                        name: c.class.name.clone(),
+                        id: c.class.id.clone(),
                         args: new_args,
                     })
                 }
@@ -896,7 +909,7 @@ impl Instance {
                     .collect();
                 let args: Vec<Instance> = i.args.iter().map(|arg| arg.replace_type(f)).collect();
                 if changed || args.iter().zip(&i.args).any(|(a, b)| !a.ptr_eq(b)) {
-                    mk_instance_global(i.name.clone(), ty_args, args)
+                    mk_instance_global(i.id.clone(), ty_args, args)
                 } else {
                     self.clone()
                 }
@@ -958,7 +971,7 @@ impl Instance {
                     })
                     .collect();
                 if changed {
-                    mk_instance_global(i.name.clone(), i.ty_args.clone(), args)
+                    mk_instance_global(i.id.clone(), i.ty_args.clone(), args)
                 } else {
                     self.clone()
                 }
@@ -1056,7 +1069,7 @@ pub struct TermLocal {
 #[derive(Clone, Debug)]
 pub struct TermConst {
     pub metadata: TermMetadata,
-    pub name: QualifiedName,
+    pub id: GlobalId,
     pub ty_args: Vec<Type>,
     pub instances: Vec<Instance>,
 }
@@ -1069,7 +1082,7 @@ pub struct TermHole {
 
 impl TermConst {
     fn alpha_eq(&self, other: &TermConst) -> bool {
-        if self.name != other.name || self.ty_args.len() != other.ty_args.len() {
+        if self.id != other.id || self.ty_args.len() != other.ty_args.len() {
             return false;
         }
         for (t, u) in zip(&self.ty_args, &other.ty_args) {
@@ -1127,7 +1140,7 @@ impl Display for Term {
                 }
                 Term::Local(inner) => write!(f, "${}", inner.id),
                 Term::Const(inner) => {
-                    write!(f, "{}", inner.name)?;
+                    write!(f, "{}", inner.id)?;
                     if !inner.ty_args.is_empty() {
                         write!(f, ".{{")?;
                         for (idx, t) in inner.ty_args.iter().enumerate() {
@@ -1193,7 +1206,7 @@ pub fn mk_var(index: usize) -> Term {
     Term::Var(Arc::new(TermVar { metadata, index }))
 }
 
-pub fn mk_const(name: QualifiedName, ty_args: Vec<Type>, instances: Vec<Instance>) -> Term {
+pub fn mk_const(id: GlobalId, ty_args: Vec<Type>, instances: Vec<Instance>) -> Term {
     let metadata = TermMetadata {
         span: None,
         is_closed: true,
@@ -1203,7 +1216,7 @@ pub fn mk_const(name: QualifiedName, ty_args: Vec<Type>, instances: Vec<Instance
     };
     Term::Const(Arc::new(TermConst {
         metadata,
-        name,
+        id,
         ty_args,
         instances,
     }))
@@ -1513,7 +1526,7 @@ impl Term {
                     })
                     .collect();
                 if changed {
-                    mk_const(inner.name.clone(), inner.ty_args.clone(), instances)
+                    mk_const(inner.id.clone(), inner.ty_args.clone(), instances)
                 } else {
                     self.clone()
                 }
@@ -1569,7 +1582,7 @@ impl Term {
                     })
                     .collect();
                 if changed {
-                    mk_const(inner.name.clone(), ty_args, instances)
+                    mk_const(inner.id.clone(), ty_args, instances)
                 } else {
                     self.clone()
                 }
@@ -1815,7 +1828,7 @@ impl Term {
                 inner1.fun.maybe_alpha_eq(&inner2.fun) && inner1.arg.maybe_alpha_eq(&inner2.arg)
             }
             (Term::Local(name1), Term::Local(name2)) => name1.id == name2.id,
-            (Term::Const(inner1), Term::Const(inner2)) => inner1.name == inner2.name,
+            (Term::Const(inner1), Term::Const(inner2)) => inner1.id == inner2.id,
             (Term::Hole(name1), Term::Hole(name2)) => name1.id == name2.id,
             _ => false,
         }
@@ -1924,17 +1937,17 @@ pub struct ClassInstance {
     pub local_types: Vec<LocalType>,
     pub local_classes: Vec<Class>,
     pub target: Class,
-    pub method_table: HashMap<QualifiedName, Term>,
+    pub method_table: HashMap<GlobalId, Term>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Env<'a> {
-    pub type_const_table: &'a HashMap<QualifiedName, Kind>,
-    pub const_table: &'a HashMap<QualifiedName, Const>,
-    pub delta_table: &'a HashMap<QualifiedName, Delta>,
-    pub kappa_table: &'a HashMap<QualifiedName, Kappa>,
-    pub class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
-    pub class_instance_table: &'a HashMap<QualifiedName, ClassInstance>,
+    pub type_const_table: &'a HashMap<GlobalId, Kind>,
+    pub const_table: &'a HashMap<GlobalId, Const>,
+    pub delta_table: &'a HashMap<GlobalId, Delta>,
+    pub kappa_table: &'a HashMap<GlobalId, Kappa>,
+    pub class_predicate_table: &'a HashMap<GlobalId, ClassType>,
+    pub class_instance_table: &'a HashMap<GlobalId, ClassInstance>,
 }
 
 impl Env<'_> {
@@ -1942,9 +1955,9 @@ impl Env<'_> {
         match t {
             Type::Const(name) => self
                 .type_const_table
-                .get(&name.name)
+                .get(&name.id)
                 .cloned()
-                .unwrap_or_else(|| panic!("unknown type constant: {:?}", name.name)),
+                .unwrap_or_else(|| panic!("unknown type constant: {:?}", name.id)),
             Type::Arrow(inner) => {
                 let dom_kind = self.infer_kind(local_env, &inner.dom);
                 if dom_kind != Kind::base() {
@@ -2005,12 +2018,12 @@ impl Env<'_> {
     pub fn check_wfc(&self, local_env: &LocalEnv, c: &Class) {
         let class_type = self
             .class_predicate_table
-            .get(&c.name)
-            .unwrap_or_else(|| panic!("unknown class predicate: {:?}", c.name));
+            .get(&c.id)
+            .unwrap_or_else(|| panic!("unknown class predicate: {:?}", c.id));
         if class_type.arity != c.args.len() {
             panic!(
                 "class {:?} expects {} arguments but got {}",
-                c.name,
+                c.id,
                 class_type.arity,
                 c.args.len()
             );
@@ -2031,11 +2044,7 @@ impl Env<'_> {
                 panic!("unknown local class instance: {:?}", i);
             }
             Instance::Global(i) => {
-                let InstanceGlobal {
-                    name,
-                    ty_args,
-                    args,
-                } = &**i;
+                let InstanceGlobal { id, ty_args, args } = &**i;
                 let ClassInstance {
                     local_types,
                     local_classes,
@@ -2043,12 +2052,12 @@ impl Env<'_> {
                     method_table: _,
                 } = self
                     .class_instance_table
-                    .get(name)
-                    .unwrap_or_else(|| panic!("unknown class instance: {:?}", name));
+                    .get(id)
+                    .unwrap_or_else(|| panic!("unknown class instance: {:?}", id));
                 if local_types.len() != ty_args.len() {
                     panic!(
                         "class instance {:?} expects {} type arguments but got {}",
-                        name,
+                        id,
                         local_types.len(),
                         ty_args.len()
                     );
@@ -2063,7 +2072,7 @@ impl Env<'_> {
                 if local_classes.len() != args.len() {
                     panic!(
                         "class instance {:?} expects {} class arguments but got {}",
-                        name,
+                        id,
                         local_classes.len(),
                         args.len()
                     );
@@ -2130,12 +2139,12 @@ impl Env<'_> {
                     ty,
                 } = self
                     .const_table
-                    .get(&m.name)
-                    .unwrap_or_else(|| panic!("unknown constant: {:?}", m.name));
+                    .get(&m.id)
+                    .unwrap_or_else(|| panic!("unknown constant: {:?}", m.id));
                 if local_types.len() != m.ty_args.len() {
                     panic!(
                         "constant {:?} expects {} type arguments but got {}",
-                        m.name,
+                        m.id,
                         local_types.len(),
                         m.ty_args.len()
                     );
@@ -2150,7 +2159,7 @@ impl Env<'_> {
                 if local_classes.len() != m.instances.len() {
                     panic!(
                         "constant {:?} expects {} class arguments but got {}",
-                        m.name,
+                        m.id,
                         local_classes.len(),
                         m.instances.len()
                     );
@@ -2193,7 +2202,7 @@ impl Env<'_> {
             local_classes,
             target,
             height: _,
-        } = self.delta_table.get(&n.name)?;
+        } = self.delta_table.get(&n.id)?;
         let mut type_subst = Vec::with_capacity(local_types.len());
         for (x, t) in zip(local_types, &n.ty_args) {
             type_subst.push((x.id, t.clone()));
@@ -2214,18 +2223,14 @@ impl Env<'_> {
         let Term::Const(n) = m else {
             return None;
         };
-        self.kappa_table.get(&n.name)?;
+        self.kappa_table.get(&n.id)?;
         if n.instances.is_empty() {
             return None;
         }
         let Instance::Global(recv) = &n.instances[0] else {
             return None;
         };
-        let InstanceGlobal {
-            name,
-            ty_args,
-            args,
-        } = &**recv;
+        let InstanceGlobal { id, ty_args, args } = &**recv;
         // assert_eq!(ty_args, &n.ty_args);
         // assert_eq!(&args[..], &n.instances[1..]);
         let ClassInstance {
@@ -2233,8 +2238,8 @@ impl Env<'_> {
             local_classes,
             target: _,
             method_table,
-        } = self.class_instance_table.get(name)?;
-        let target = method_table.get(&n.name)?;
+        } = self.class_instance_table.get(id)?;
+        let target = method_table.get(&n.id)?;
         let mut type_subst = Vec::with_capacity(local_types.len());
         for (x, t) in zip(local_types, ty_args) {
             type_subst.push((x.id, t.clone()));
@@ -2274,10 +2279,8 @@ impl Env<'_> {
             .map_or(0, |delta| delta.height + 1)
     }
 
-    pub fn delta_height(&self, name: &QualifiedName) -> usize {
-        self.delta_table
-            .get(name)
-            .map_or(0, |delta| delta.height + 1)
+    pub fn delta_height(&self, id: &GlobalId) -> usize {
+        self.delta_table.get(id).map_or(0, |delta| delta.height + 1)
     }
 
     // NB: does not take kappa-reductions into account.
@@ -2290,20 +2293,20 @@ impl Env<'_> {
                 self.height(local_env, &m.arg),
             ),
             Term::Local(inner) => self.local_delta_height(local_env, inner.id),
-            Term::Const(inner) => self.delta_height(&inner.name),
+            Term::Const(inner) => self.delta_height(&inner.id),
             Term::Hole(_) => 0,
         }
     }
 
-    pub fn has_kappa(&self, name: &QualifiedName) -> bool {
-        self.kappa_table.contains_key(name)
+    pub fn has_kappa(&self, id: &GlobalId) -> bool {
+        self.kappa_table.contains_key(id)
     }
 
     fn is_kappa_redex(&self, m: &Term) -> bool {
         let Term::Const(n) = m else {
             return false;
         };
-        self.kappa_table.contains_key(&n.name)
+        self.kappa_table.contains_key(&n.id)
             && !n.instances.is_empty()
             && matches!(&n.instances[0], Instance::Global(_))
     }
@@ -2311,7 +2314,7 @@ impl Env<'_> {
     pub fn is_delta_redex(&self, local_env: &LocalEnv, m: &Term) -> bool {
         match m {
             Term::Local(inner) => self.local_delta_height(local_env, inner.id) > 0,
-            Term::Const(inner) => self.delta_height(&inner.name) > 0,
+            Term::Const(inner) => self.delta_height(&inner.id) > 0,
             _ => false,
         }
     }
@@ -2515,13 +2518,17 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    fn global_id(value: &str) -> GlobalId {
+        GlobalId::from_name(Name::from_str(value))
+    }
+
     struct EnvFixture {
-        type_const_table: HashMap<QualifiedName, Kind>,
-        const_table: HashMap<QualifiedName, Const>,
-        delta_table: HashMap<QualifiedName, Delta>,
-        kappa_table: HashMap<QualifiedName, Kappa>,
-        class_predicate_table: HashMap<QualifiedName, ClassType>,
-        class_instance_table: HashMap<QualifiedName, ClassInstance>,
+        type_const_table: HashMap<GlobalId, Kind>,
+        const_table: HashMap<GlobalId, Const>,
+        delta_table: HashMap<GlobalId, Delta>,
+        kappa_table: HashMap<GlobalId, Kappa>,
+        class_predicate_table: HashMap<GlobalId, ClassType>,
+        class_instance_table: HashMap<GlobalId, ClassInstance>,
     }
 
     impl EnvFixture {
@@ -2536,13 +2543,13 @@ mod tests {
             }
         }
 
-        fn with_delta(mut self, name: QualifiedName, delta: Delta) -> Self {
-            self.delta_table.insert(name, delta);
+        fn with_delta(mut self, id: GlobalId, delta: Delta) -> Self {
+            self.delta_table.insert(id, delta);
             self
         }
 
-        fn with_const(mut self, name: QualifiedName, constant: Const) -> Self {
-            self.const_table.insert(name, constant);
+        fn with_const(mut self, id: GlobalId, constant: Const) -> Self {
+            self.const_table.insert(id, constant);
             self
         }
 
@@ -2581,7 +2588,7 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let c = QualifiedName::from_name(Name::from_str("c"));
+        let c = global_id("c");
         let left = mk_const(c.clone(), vec![], vec![]);
         let right = mk_const(c, vec![], vec![]);
 
@@ -2594,7 +2601,7 @@ mod tests {
         let env = fixture.env();
 
         let x = Name::from_str("x");
-        let a = QualifiedName::from_name(Name::from_str("a"));
+        let a = global_id("a");
         let body = mk_var(0);
         let lambda = mk_abs(Some(x), mk_type_prop(), body);
         let arg = mk_const(a.clone(), vec![], vec![]);
@@ -2668,8 +2675,8 @@ mod tests {
 
     #[test]
     fn equiv_delta_unfolds_constant() {
-        let c = QualifiedName::from_name(Name::from_str("c"));
-        let d = QualifiedName::from_name(Name::from_str("d"));
+        let c = global_id("c");
+        let d = global_id("d");
 
         let delta = Delta {
             local_types: vec![],
@@ -2689,8 +2696,8 @@ mod tests {
 
     #[test]
     fn equiv_eta_after_delta_unfolding() {
-        let c = QualifiedName::from_name(Name::from_str("c"));
-        let g = QualifiedName::from_name(Name::from_str("g"));
+        let c = global_id("c");
+        let g = global_id("g");
         let domain = mk_type_prop();
 
         let delta = Delta {
@@ -2716,7 +2723,7 @@ mod tests {
     #[test]
     fn unfold_head_uses_local_delta_for_local() {
         let c_id = local_id("c");
-        let d = QualifiedName::from_name(Name::from_str("d"));
+        let d = global_id("d");
         let fixture = EnvFixture::new();
         let env = fixture.env();
         let mut local_env = empty_local_env();
@@ -2740,9 +2747,9 @@ mod tests {
 
     #[test]
     fn local_delta_does_not_apply_to_global_const() {
-        let c = QualifiedName::from_name(Name::from_str("c"));
-        let a = QualifiedName::from_name(Name::from_str("a"));
-        let b = QualifiedName::from_name(Name::from_str("b"));
+        let c = global_id("c");
+        let a = global_id("a");
+        let b = global_id("b");
         let fixture = EnvFixture::new().with_delta(
             c.clone(),
             Delta {
@@ -2802,7 +2809,7 @@ mod tests {
     #[test]
     fn equiv_uses_local_delta() {
         let c_id = local_id("c");
-        let d = QualifiedName::from_name(Name::from_str("d"));
+        let d = global_id("d");
         let fixture = EnvFixture::new();
         let env = fixture.env();
         let mut local_env = empty_local_env();
@@ -2867,8 +2874,8 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let c = QualifiedName::from_name(Name::from_str("c"));
-        let d = QualifiedName::from_name(Name::from_str("d"));
+        let c = global_id("c");
+        let d = global_id("d");
         let left = mk_const(c, vec![], vec![]);
         let right = mk_const(d, vec![], vec![]);
 
@@ -2880,9 +2887,9 @@ mod tests {
         let fixture = EnvFixture::new();
         let env = fixture.env();
 
-        let f = QualifiedName::from_name(Name::from_str("f"));
-        let a = QualifiedName::from_name(Name::from_str("a"));
-        let b = QualifiedName::from_name(Name::from_str("b"));
+        let f = global_id("f");
+        let a = global_id("a");
+        let b = global_id("b");
 
         let fun = mk_const(f, vec![], vec![]);
         let left = mk_app(fun.clone(), mk_const(a, vec![], vec![]));
@@ -2968,7 +2975,7 @@ mod tests {
     #[test]
     fn local_and_const_are_not_equiv_without_unfold() {
         let fixture = EnvFixture::new().with_const(
-            QualifiedName::from_name(Name::from_str("c")),
+            global_id("c"),
             Const {
                 local_types: vec![],
                 local_classes: vec![],
@@ -2976,7 +2983,7 @@ mod tests {
             },
         );
         let env = fixture.env();
-        let c = QualifiedName::from_name(Name::from_str("c"));
+        let c = global_id("c");
         let c_id = local_id("c");
         let mut local_env = empty_local_env();
         local_env.locals.push(Local {
@@ -2992,7 +2999,7 @@ mod tests {
 
     #[test]
     fn infer_type_const_ignores_local_name_collision() {
-        let c = QualifiedName::from_name(Name::from_str("c"));
+        let c = global_id("c");
         let fixture = EnvFixture::new().with_const(
             c.clone(),
             Const {
@@ -3094,5 +3101,19 @@ mod tests {
         let name = QualifiedName::from_name(Name::from_str("foo"));
         let extended = name.extend(Name::from_str("bar"));
         assert_eq!(extended.to_string(), "foo.bar");
+    }
+
+    #[test]
+    fn mk_const_uses_global_id_for_global_name() {
+        let term = mk_const(global_id("foo.bar"), vec![], vec![]);
+        let Term::Const(inner) = term else {
+            panic!("expected const term");
+        };
+        assert_eq!(inner.id, global_id("foo.bar"));
+    }
+
+    #[test]
+    fn global_id_displays_dotted_name() {
+        assert_eq!(global_id("foo.bar").to_string(), "foo.bar");
     }
 }

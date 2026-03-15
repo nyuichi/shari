@@ -13,8 +13,8 @@ use crate::proof::{
     mk_expr_inst, mk_expr_let_structure, mk_expr_let_term, mk_expr_local, mk_expr_take,
 };
 use crate::tt::{
-    Class, ClassType, Const, Id, Kind, Local, LocalType, Name, Path, QualifiedName, Term, Type,
-    mk_const, mk_fresh_hole, mk_fresh_type_hole, mk_instance_hole, mk_local, mk_type_arrow,
+    Class, ClassType, Const, GlobalId, Id, Kind, Local, LocalType, Name, Path, QualifiedName, Term,
+    Type, mk_const, mk_fresh_hole, mk_fresh_type_hole, mk_instance_hole, mk_local, mk_type_arrow,
     mk_type_const, mk_type_local,
 };
 
@@ -25,6 +25,10 @@ use std::iter::zip;
 use std::sync::{Arc, LazyLock};
 use std::{mem, slice};
 use thiserror::Error;
+
+fn global_id(value: &str) -> GlobalId {
+    GlobalId::from_name(Name::from_str(value))
+}
 
 #[derive(Default, Debug, Clone)]
 pub struct TokenTable {
@@ -95,11 +99,9 @@ enum Proj {
 }
 
 impl Proj {
-    fn name(self) -> QualifiedName {
-        static FST: LazyLock<QualifiedName> =
-            LazyLock::new(|| QualifiedName::from_name(Name::from_str("fst")));
-        static SND: LazyLock<QualifiedName> =
-            LazyLock::new(|| QualifiedName::from_name(Name::from_str("snd")));
+    fn name(self) -> GlobalId {
+        static FST: LazyLock<GlobalId> = LazyLock::new(|| global_id("fst"));
+        static SND: LazyLock<GlobalId> = LazyLock::new(|| global_id("snd"));
 
         match self {
             Self::Fst => FST.clone(),
@@ -221,12 +223,12 @@ pub struct Parser<'a> {
     tt: &'a TokenTable,
     namespace_table: &'a HashMap<Path, Namespace>,
     current_namespace: &'a Path,
-    type_const_table: &'a HashMap<QualifiedName, Kind>,
-    type_def_table: &'a HashMap<QualifiedName, CmdTypeDef>,
-    const_table: &'a HashMap<QualifiedName, Const>,
-    axiom_table: &'a HashMap<QualifiedName, Axiom>,
-    class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
-    structure_table: &'a HashMap<QualifiedName, CmdStructure>,
+    type_const_table: &'a HashMap<GlobalId, Kind>,
+    type_def_table: &'a HashMap<GlobalId, CmdTypeDef>,
+    const_table: &'a HashMap<GlobalId, Const>,
+    axiom_table: &'a HashMap<GlobalId, Axiom>,
+    class_predicate_table: &'a HashMap<GlobalId, ClassType>,
+    structure_table: &'a HashMap<GlobalId, CmdStructure>,
     local_consts: Vec<LocalConst>,
     local_axioms: Vec<(QualifiedName, LocalAxiom)>,
     local_types: Vec<LocalBinding>,
@@ -243,12 +245,12 @@ impl<'a> Parser<'a> {
         tt: &'a TokenTable,
         namespace_table: &'a HashMap<Path, Namespace>,
         current_namespace: &'a Path,
-        type_const_table: &'a HashMap<QualifiedName, Kind>,
-        type_def_table: &'a HashMap<QualifiedName, CmdTypeDef>,
-        const_table: &'a HashMap<QualifiedName, Const>,
-        axiom_table: &'a HashMap<QualifiedName, Axiom>,
-        class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
-        structure_table: &'a HashMap<QualifiedName, CmdStructure>,
+        type_const_table: &'a HashMap<GlobalId, Kind>,
+        type_def_table: &'a HashMap<GlobalId, CmdTypeDef>,
+        const_table: &'a HashMap<GlobalId, Const>,
+        axiom_table: &'a HashMap<GlobalId, Axiom>,
+        class_predicate_table: &'a HashMap<GlobalId, ClassType>,
+        structure_table: &'a HashMap<GlobalId, CmdStructure>,
     ) -> Self {
         Self {
             lex,
@@ -287,8 +289,8 @@ impl<'a> Parser<'a> {
         expr.with_span(Some(self.span_since(start)))
     }
 
-    fn get_const(&self, name: &QualifiedName) -> Option<&Const> {
-        self.const_table.get(name)
+    fn get_const(&self, id: &GlobalId) -> Option<&Const> {
+        self.const_table.get(id)
     }
 
     fn get_local_const(&self, name: &QualifiedName) -> Option<&LocalConst> {
@@ -593,11 +595,7 @@ impl<'a> Parser<'a> {
         Ok(Kind(kind))
     }
 
-    fn type_var(
-        &mut self,
-        token: Token,
-        entity: Option<QualifiedName>,
-    ) -> Result<Type, ParseError> {
+    fn type_var(&mut self, token: Token, entity: Option<GlobalId>) -> Result<Type, ParseError> {
         let name = match entity {
             Some(entity) => entity,
             None => {
@@ -620,8 +618,9 @@ impl<'a> Parser<'a> {
                         return Ok(mk_type_local(*stash));
                     }
                     self.resolve(self.current_namespace.clone(), name)
+                        .into_global_id()
                 } else if token.is_field() {
-                    self.resolve(Path::root(), name)
+                    self.resolve(Path::root(), name).into_global_id()
                 } else {
                     unreachable!("type variable token must be identifier or field")
                 }
@@ -800,15 +799,15 @@ impl<'a> Parser<'a> {
         if !token.is_ident() && !token.is_field() {
             return Self::fail(token, "expected class name");
         }
-        let name = self.global_reference_name(Some(&token))?;
-        if !self.class_predicate_table.contains_key(&name) {
+        let id = self.global_reference_name(Some(&token))?.into_global_id();
+        if !self.class_predicate_table.contains_key(&id) {
             return Self::fail(token, "unknown class");
         }
         let mut args = vec![];
         while let Some(t) = self.optional(|this| this.subty(1024)) {
             args.push(t);
         }
-        Ok(Class { name, args })
+        Ok(Class { id, args })
     }
 
     /// e.g. `"[C] [D]"`
@@ -859,7 +858,7 @@ impl<'a> Parser<'a> {
         Ok(m)
     }
 
-    fn term_binder(&mut self, token: Token, binder: &QualifiedName) -> Result<Term, ParseError> {
+    fn term_binder(&mut self, token: Token, binder: &GlobalId) -> Result<Term, ParseError> {
         let params = self.parameters()?;
         self.expect_symbol(",")?;
         if params.is_empty() {
@@ -925,7 +924,7 @@ impl<'a> Parser<'a> {
         let snd = self.subterm(0)?;
         self.expect_symbol("⟩")?;
         let pair = mk_const(
-            QualifiedName::from_name(Name::from_str("pair")),
+            global_id("pair"),
             vec![mk_fresh_type_hole(), mk_fresh_type_hole()],
             vec![],
         );
@@ -941,11 +940,7 @@ impl<'a> Parser<'a> {
         proj.apply(vec![term])
     }
 
-    fn term_var(
-        &mut self,
-        token: Token,
-        entity: Option<QualifiedName>,
-    ) -> Result<Term, ParseError> {
+    fn term_var(&mut self, token: Token, entity: Option<GlobalId>) -> Result<Term, ParseError> {
         let name = match entity {
             Some(entity) => entity,
             None => {
@@ -971,8 +966,9 @@ impl<'a> Parser<'a> {
                         return Ok(mk_local(local_const.id));
                     }
                     self.resolve(self.current_namespace.clone(), name)
+                        .into_global_id()
                 } else if token.is_field() {
-                    self.resolve(Path::root(), name)
+                    self.resolve(Path::root(), name).into_global_id()
                 } else {
                     unreachable!("term variable token must be identifier or field")
                 }
@@ -1020,15 +1016,9 @@ impl<'a> Parser<'a> {
                 self.expect_symbol(")")?;
                 m
             }
-            Nud::Forall => {
-                self.term_binder(token, &QualifiedName::from_name(Name::from_str("forall")))?
-            }
-            Nud::Exists => {
-                self.term_binder(token, &QualifiedName::from_name(Name::from_str("exists")))?
-            }
-            Nud::Uexists => {
-                self.term_binder(token, &QualifiedName::from_name(Name::from_str("uexists")))?
-            }
+            Nud::Forall => self.term_binder(token, &global_id("forall"))?,
+            Nud::Exists => self.term_binder(token, &global_id("exists"))?,
+            Nud::Uexists => self.term_binder(token, &global_id("uexists"))?,
             Nud::User(op) => match op.fixity {
                 Fixity::Nofix => self.term_var(token, Some(op.entity.clone()))?,
                 Fixity::Prefix => {
@@ -1111,8 +1101,9 @@ impl<'a> Parser<'a> {
                 return Ok(expr);
             }
             self.resolve(self.current_namespace.clone(), name)
+                .into_global_id()
         } else if token.is_field() {
-            self.resolve(Path::root(), name)
+            self.resolve(Path::root(), name).into_global_id()
         } else {
             unreachable!("expression variable token must be identifier or field")
         };
@@ -1161,11 +1152,7 @@ impl<'a> Parser<'a> {
         e2: Expr,
     ) -> Expr {
         // Expand[obtain (x : τ), p := e1, e2] := exists.ind.{τ}[_, _] e1 (take (x : τ), assume p, e2)
-        let e = mk_expr_const(
-            QualifiedName::from_name(Name::from_str("exists")).extend(Name::from_str("ind")),
-            vec![binder.ty.clone()],
-            vec![],
-        );
+        let e = mk_expr_const(global_id("exists.ind"), vec![binder.ty.clone()], vec![]);
         let e = mk_expr_inst(e, self.mk_term_hole());
         let e = mk_expr_inst(e, self.mk_term_hole());
         let e = mk_expr_app(e, e1);
@@ -1175,17 +1162,15 @@ impl<'a> Parser<'a> {
     }
 
     fn mk_eq(lhs: Term, rhs: Term) -> Term {
-        let mut eq = mk_const(
-            QualifiedName::from_name(Name::from_str("eq")),
-            vec![mk_fresh_type_hole()],
-            vec![],
-        );
+        let mut eq = mk_const(global_id("eq"), vec![mk_fresh_type_hole()], vec![]);
         eq = eq.apply([lhs, rhs]);
         eq
     }
 
-    fn local_field_qualified(owner: &Name, field_name: &Name) -> QualifiedName {
-        QualifiedName::from_name(owner.clone()).extend(field_name.clone())
+    fn local_field_qualified(owner: &Name, field_name: &Name) -> GlobalId {
+        QualifiedName::from_name(owner.clone())
+            .extend(field_name.clone())
+            .into_global_id()
     }
 
     fn obtain_instance_expr(&mut self) -> Result<Expr, ParseError> {
@@ -1200,7 +1185,7 @@ impl<'a> Parser<'a> {
                 span: self.span_since(ty_start),
             });
         };
-        let structure_name = structure_head.name.clone();
+        let structure_name = structure_head.id.clone();
         let Some(cmd_structure) = self.structure_table.get(&structure_name).cloned() else {
             return Err(ParseError::Parse {
                 message: "type of obtain instance must be a structure".to_string(),
@@ -1250,9 +1235,11 @@ impl<'a> Parser<'a> {
                     fields.push(InstanceField::Def(InstanceDef {
                         field_id,
                         field_name: field_name.clone(),
-                        name: Self::local_field_qualified(&local_name, &field_name),
-                        spec_name: Self::local_field_qualified(&local_name, &field_name)
-                            .extend(Name::from_str("spec")),
+                        id: Self::local_field_qualified(&local_name, &field_name),
+                        spec_id: QualifiedName::from_name(local_name.clone())
+                            .extend(field_name.clone())
+                            .extend(Name::from_str("spec"))
+                            .into_global_id(),
                         ty: field_ty,
                         target: field_target,
                     }));
@@ -1300,7 +1287,7 @@ impl<'a> Parser<'a> {
                     fields.push(InstanceField::Lemma(InstanceLemma {
                         field_id,
                         field_name: field_name.clone(),
-                        name: Self::local_field_qualified(&local_name, &field_name),
+                        id: Self::local_field_qualified(&local_name, &field_name),
                         target: field_target,
                         holes,
                         expr,
@@ -1380,7 +1367,7 @@ impl<'a> Parser<'a> {
                     ..
                 }) => {
                     self.push_local_const(
-                        Self::local_field_qualified(&local_name, field_name),
+                        QualifiedName::from_name(local_name.clone()).extend(field_name.clone()),
                         *field_id,
                     );
                 }
@@ -1391,7 +1378,7 @@ impl<'a> Parser<'a> {
                     ..
                 }) => {
                     self.push_local_axiom(
-                        Self::local_field_qualified(&local_name, field_name),
+                        QualifiedName::from_name(local_name.clone()).extend(field_name.clone()),
                         *field_id,
                         target.clone(),
                     );
@@ -1419,44 +1406,30 @@ impl<'a> Parser<'a> {
         let mut char_terms = vec![];
         for (structure_field, field) in zip(&cmd_structure.fields, &fields) {
             let (
-                StructureField::Const(StructureConst { name, ty, .. }),
+                StructureField::Const(StructureConst { id, ty, .. }),
                 InstanceField::Def(InstanceDef { field_id, .. }),
             ) = (structure_field, field)
             else {
                 continue;
             };
             let mut rhs = mk_const(
-                name.clone(),
+                id.clone(),
                 target_ty.args().into_iter().cloned().collect(),
                 vec![],
             );
             rhs = rhs.apply([mk_local(local_id)]);
-            let mut char_term = mk_const(
-                QualifiedName::from_name(Name::from_str("eq")),
-                vec![ty.subst(&type_subst)],
-                vec![],
-            );
+            let mut char_term = mk_const(global_id("eq"), vec![ty.subst(&type_subst)], vec![]);
             char_term = char_term.apply([mk_local(*field_id), rhs]);
             char_terms.push(char_term);
         }
         let char_prop = char_terms
             .into_iter()
             .reduce(|left, right| {
-                let mut and = mk_const(
-                    QualifiedName::from_name(Name::from_str("and")),
-                    vec![],
-                    vec![],
-                );
+                let mut and = mk_const(global_id("and"), vec![], vec![]);
                 and = and.apply([left, right]);
                 and
             })
-            .unwrap_or_else(|| {
-                mk_const(
-                    QualifiedName::from_name(Name::from_str("true")),
-                    vec![],
-                    vec![],
-                )
-            });
+            .unwrap_or_else(|| mk_const(global_id("true"), vec![], vec![]));
 
         let this = Local {
             id: Id::fresh(),
@@ -1466,48 +1439,34 @@ impl<'a> Parser<'a> {
         let mut abs_char_terms = vec![];
         for (structure_field, field) in zip(&cmd_structure.fields, &fields) {
             let (
-                StructureField::Const(StructureConst { name, ty, .. }),
+                StructureField::Const(StructureConst { id, ty, .. }),
                 InstanceField::Def(InstanceDef { field_id, .. }),
             ) = (structure_field, field)
             else {
                 continue;
             };
             let mut rhs = mk_const(
-                name.clone(),
+                id.clone(),
                 target_ty.args().into_iter().cloned().collect(),
                 vec![],
             );
             rhs = rhs.apply([mk_local(this.id)]);
-            let mut char_term = mk_const(
-                QualifiedName::from_name(Name::from_str("eq")),
-                vec![ty.subst(&type_subst)],
-                vec![],
-            );
+            let mut char_term = mk_const(global_id("eq"), vec![ty.subst(&type_subst)], vec![]);
             char_term = char_term.apply([mk_local(*field_id), rhs]);
             abs_char_terms.push(char_term);
         }
         let abs_char = abs_char_terms
             .into_iter()
             .reduce(|left, right| {
-                let mut and = mk_const(
-                    QualifiedName::from_name(Name::from_str("and")),
-                    vec![],
-                    vec![],
-                );
+                let mut and = mk_const(global_id("and"), vec![], vec![]);
                 and = and.apply([left, right]);
                 and
             })
-            .unwrap_or_else(|| {
-                mk_const(
-                    QualifiedName::from_name(Name::from_str("true")),
-                    vec![],
-                    vec![],
-                )
-            })
+            .unwrap_or_else(|| mk_const(global_id("true"), vec![], vec![]))
             .abs(slice::from_ref(&this));
 
         let mut abs_expr = mk_expr_const(
-            structure_name.extend(Name::from_str("abs")),
+            cmd_structure.abs_id.clone(),
             target_ty.args().into_iter().cloned().collect(),
             vec![],
         );
@@ -1532,11 +1491,8 @@ impl<'a> Parser<'a> {
             abs_expr = mk_expr_app(abs_expr, mk_expr_local(*field_id));
         }
 
-        let mut exists_expr = mk_expr_const(
-            QualifiedName::from_name(Name::from_str("uexists")).extend(Name::from_str("exists")),
-            vec![target_ty.clone()],
-            vec![],
-        );
+        let mut exists_expr =
+            mk_expr_const(global_id("uexists.exists"), vec![target_ty.clone()], vec![]);
         exists_expr = mk_expr_inst(exists_expr, abs_char);
         let witness = mk_expr_app(exists_expr, abs_expr);
 
@@ -1555,26 +1511,26 @@ impl<'a> Parser<'a> {
             expr = match field {
                 InstanceField::Def(InstanceDef {
                     field_id,
-                    name,
+                    id,
                     ty,
                     target,
                     ..
                 }) => mk_expr_let_term(
                     field_id,
-                    Some(Name::from_str(&name.to_string())),
+                    Some(Name::from_str(&id.to_string())),
                     Some(ty),
                     target,
                     expr,
                 ),
                 InstanceField::Lemma(InstanceLemma {
                     field_id,
-                    name,
+                    id,
                     target,
                     expr: proof,
                     ..
                 }) => Self::mk_have(
                     target,
-                    Some((field_id, Name::from_str(&name.to_string()))),
+                    Some((field_id, Name::from_str(&id.to_string()))),
                     proof,
                     expr,
                 ),
@@ -1584,10 +1540,10 @@ impl<'a> Parser<'a> {
     }
 
     fn mk_eq_trans(&mut self, e1: Expr, e2: Expr) -> Expr {
-        let name = QualifiedName::from_name(Name::from_str("eq")).extend(Name::from_str("trans"));
+        let id = global_id("eq.trans");
         let ty_args = vec![mk_fresh_type_hole()];
         let instances = vec![];
-        let mut eq_trans = mk_expr_const(name, ty_args, instances);
+        let mut eq_trans = mk_expr_const(id, ty_args, instances);
         for _ in 0..3 {
             eq_trans = mk_expr_inst(eq_trans, self.mk_term_hole());
         }
@@ -1631,11 +1587,11 @@ impl<'a> Parser<'a> {
                         id: bare_id,
                     });
                     let id = Id::fresh();
-                    let qualified_name =
+                    let name =
                         Name::from_str(&structure_name.extend(field_name.clone()).to_string());
                     fields.push(LocalStructureField::Const(LocalStructureConst {
                         field_name,
-                        name: qualified_name,
+                        name,
                         field_id: bare_id,
                         id,
                         ty: field_ty,
@@ -1749,11 +1705,7 @@ impl<'a> Parser<'a> {
                     let mut rhs = mk_local(*id);
                     rhs = rhs.apply([mk_local(this.id)]);
 
-                    let mut char = mk_const(
-                        QualifiedName::from_name(Name::from_str("eq")),
-                        vec![ty.clone()],
-                        vec![],
-                    );
+                    let mut char = mk_const(global_id("eq"), vec![ty.clone()], vec![]);
                     char = char.apply([mk_local(param.id), rhs]);
                     chars.push(char);
                     abs_subst.push((*field_id, mk_local(param.id)));
@@ -1767,30 +1719,16 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let mut abs = mk_const(
-            QualifiedName::from_name(Name::from_str("uexists")),
-            vec![this_ty.clone()],
-            vec![],
-        );
+        let mut abs = mk_const(global_id("uexists"), vec![this_ty.clone()], vec![]);
         abs = abs.apply([{
             let mut char = chars
                 .into_iter()
                 .reduce(|left, right| {
-                    let mut conj = mk_const(
-                        QualifiedName::from_name(Name::from_str("and")),
-                        vec![],
-                        vec![],
-                    );
+                    let mut conj = mk_const(global_id("and"), vec![], vec![]);
                     conj = conj.apply([left, right]);
                     conj
                 })
-                .unwrap_or_else(|| {
-                    mk_const(
-                        QualifiedName::from_name(Name::from_str("true")),
-                        vec![],
-                        vec![],
-                    )
-                });
+                .unwrap_or_else(|| mk_const(global_id("true"), vec![], vec![]));
             char = char.abs(slice::from_ref(&this));
             char
         }]);
@@ -2398,7 +2336,7 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let entity = self.global_reference_name(None)?;
+        let entity = self.global_reference_name(None)?.into_global_id();
         Ok(CmdInfixr {
             op: op.as_str().to_owned(),
             prec,
@@ -2415,7 +2353,7 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let entity = self.global_reference_name(None)?;
+        let entity = self.global_reference_name(None)?.into_global_id();
         Ok(CmdInfixl {
             op: op.as_str().to_owned(),
             prec,
@@ -2432,7 +2370,7 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let entity = self.global_reference_name(None)?;
+        let entity = self.global_reference_name(None)?.into_global_id();
         Ok(CmdInfix {
             op: op.as_str().to_owned(),
             prec,
@@ -2449,7 +2387,7 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let entity = self.global_reference_name(None)?;
+        let entity = self.global_reference_name(None)?.into_global_id();
         Ok(CmdPrefix {
             op: op.as_str().to_owned(),
             prec,
@@ -2460,7 +2398,7 @@ impl<'a> Parser<'a> {
     fn nofix_cmd(&mut self, _token: Token) -> Result<CmdNofix, ParseError> {
         let op = self.symbol()?;
         self.expect_symbol(":=")?;
-        let entity = self.global_reference_name(None)?;
+        let entity = self.global_reference_name(None)?.into_global_id();
         Ok(CmdNofix {
             op: op.as_str().to_owned(),
             entity,
@@ -2476,7 +2414,7 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let entity = self.global_reference_name(None)?;
+        let entity = self.global_reference_name(None)?.into_global_id();
         Ok(CmdTypeInfixr {
             op: op.as_str().to_owned(),
             prec,
@@ -2493,7 +2431,7 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let entity = self.global_reference_name(None)?;
+        let entity = self.global_reference_name(None)?.into_global_id();
         Ok(CmdTypeInfixl {
             op: op.as_str().to_owned(),
             prec,
@@ -2510,7 +2448,7 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let entity = self.global_reference_name(None)?;
+        let entity = self.global_reference_name(None)?.into_global_id();
         Ok(CmdTypeInfix {
             op: op.as_str().to_owned(),
             prec,
@@ -2527,7 +2465,7 @@ impl<'a> Parser<'a> {
             .parse::<usize>()
             .expect("numeral literal too big");
         self.expect_symbol(":=")?;
-        let entity = self.global_reference_name(None)?;
+        let entity = self.global_reference_name(None)?.into_global_id();
         Ok(CmdTypePrefix {
             op: op.as_str().to_owned(),
             prec,
@@ -2541,7 +2479,7 @@ impl<'a> Parser<'a> {
             return Self::fail(op, "expected type operator");
         }
         self.expect_symbol(":=")?;
-        let entity = self.global_reference_name(None)?;
+        let entity = self.global_reference_name(None)?.into_global_id();
         Ok(CmdTypeNofix {
             op: op.as_str().to_owned(),
             entity,
@@ -2549,7 +2487,7 @@ impl<'a> Parser<'a> {
     }
 
     fn def_cmd(&mut self, _token: Token) -> Result<CmdDef, ParseError> {
-        let name = self.global_declaration_name(None)?;
+        let id = self.global_declaration_name(None)?.into_global_id();
         let local_types = self.local_type_parameters()?;
         let local_types = local_types
             .into_iter()
@@ -2596,7 +2534,7 @@ impl<'a> Parser<'a> {
             m = m.abs(&[param]);
         }
         Ok(CmdDef {
-            name,
+            id,
             local_types,
             local_classes,
             ty: t,
@@ -2605,7 +2543,7 @@ impl<'a> Parser<'a> {
     }
 
     fn axiom_cmd(&mut self, _token: Token) -> Result<CmdAxiom, ParseError> {
-        let name = self.global_declaration_name(None)?;
+        let id = self.global_declaration_name(None)?.into_global_id();
         let local_types = self.local_type_parameters()?;
         let local_types = local_types
             .into_iter()
@@ -2647,7 +2585,7 @@ impl<'a> Parser<'a> {
             .truncate(self.local_types.len() - local_types.len());
         target = generalize(&target, &params);
         Ok(CmdAxiom {
-            name,
+            id,
             local_types,
             local_classes,
             target,
@@ -2655,7 +2593,7 @@ impl<'a> Parser<'a> {
     }
 
     fn lemma_cmd(&mut self, _token: Token) -> Result<CmdLemma, ParseError> {
-        let name = self.global_declaration_name(None)?;
+        let id = self.global_declaration_name(None)?.into_global_id();
         let local_types = self.local_type_parameters()?;
         let local_types = local_types
             .into_iter()
@@ -2703,7 +2641,7 @@ impl<'a> Parser<'a> {
         }
         let holes = self.holes.drain(..).collect();
         Ok(CmdLemma {
-            name,
+            id,
             local_types,
             local_classes,
             target: p,
@@ -2713,7 +2651,7 @@ impl<'a> Parser<'a> {
     }
 
     fn const_cmd(&mut self, _token: Token) -> Result<CmdConst, ParseError> {
-        let name = self.global_declaration_name(None)?;
+        let id = self.global_declaration_name(None)?.into_global_id();
         let local_types = self.local_type_parameters()?;
         let local_types = local_types
             .into_iter()
@@ -2736,7 +2674,7 @@ impl<'a> Parser<'a> {
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdConst {
-            name,
+            id,
             local_types,
             local_classes,
             ty: t,
@@ -2744,14 +2682,14 @@ impl<'a> Parser<'a> {
     }
 
     fn type_const_cmd(&mut self, _token: Token) -> Result<CmdTypeConst, ParseError> {
-        let name = self.global_declaration_name(None)?;
+        let id = self.global_declaration_name(None)?.into_global_id();
         self.expect_symbol(":")?;
         let kind = self.kind()?;
-        Ok(CmdTypeConst { name, kind })
+        Ok(CmdTypeConst { id, kind })
     }
 
     fn type_def_cmd(&mut self, _token: Token) -> Result<CmdTypeDef, ParseError> {
-        let name = self.global_declaration_name(None)?;
+        let id = self.global_declaration_name(None)?.into_global_id();
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
             let local_type = Name::from_str(token.as_str());
@@ -2776,7 +2714,7 @@ impl<'a> Parser<'a> {
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdTypeDef {
-            name,
+            id,
             local_types: local_types
                 .iter()
                 .map(|binding| LocalType {
@@ -2794,6 +2732,8 @@ impl<'a> Parser<'a> {
         let literal_name = self.qualified_name(&token);
         self.lex.restore(state);
         let name = self.global_declaration_name(Some(&token))?;
+        let id = name.clone().into_global_id();
+        let this_name = name.name().clone();
         let this = Id::fresh();
         debug_assert!(
             self.type_this_ref.is_none(),
@@ -2830,8 +2770,11 @@ impl<'a> Parser<'a> {
             let ty = self.ty()?;
             ctors.push(TypeInductiveConstructor {
                 name: ctor_name.clone(),
-                ctor_name: name.extend(ctor_name.clone()),
-                ctor_spec_name: name.extend(ctor_name).extend(Name::from_str("spec")),
+                ctor_id: name.extend(ctor_name.clone()).into_global_id(),
+                ctor_spec_id: name
+                    .extend(ctor_name.clone())
+                    .extend(Name::from_str("spec"))
+                    .into_global_id(),
                 ty,
             })
         }
@@ -2839,10 +2782,11 @@ impl<'a> Parser<'a> {
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
         self.type_this_ref = None;
-        let ind_name = name.extend(Name::from_str("ind"));
-        let rec_name = name.extend(Name::from_str("rec"));
+        let ind_id = name.extend(Name::from_str("ind")).into_global_id();
+        let rec_id = name.extend(Name::from_str("rec")).into_global_id();
         Ok(CmdTypeInductive {
-            name,
+            id,
+            this_name,
             this,
             local_types: local_types
                 .iter()
@@ -2851,8 +2795,8 @@ impl<'a> Parser<'a> {
                     name: Some(binding.name.clone()),
                 })
                 .collect(),
-            ind_name,
-            rec_name,
+            ind_id,
+            rec_id,
             ctors,
         })
     }
@@ -2863,6 +2807,8 @@ impl<'a> Parser<'a> {
         let literal_name = self.qualified_name(&ident);
         self.lex.restore(state);
         let name = self.global_declaration_name(Some(&ident))?;
+        let id = name.clone().into_global_id();
+        let this_name = name.name().clone();
         let this = Id::fresh();
         debug_assert!(
             self.this_ref.is_none(),
@@ -2938,7 +2884,7 @@ impl<'a> Parser<'a> {
             target = generalize(&target, &ctor_params);
             ctors.push(InductiveConstructor {
                 name: ctor_name.clone(),
-                ctor_name: name.extend(ctor_name),
+                ctor_id: name.extend(ctor_name).into_global_id(),
                 target,
             })
         }
@@ -2947,20 +2893,22 @@ impl<'a> Parser<'a> {
         self.this_ref = None;
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
-        let ind_name = name.extend(Name::from_str("ind"));
+        let ind_id = name.extend(Name::from_str("ind")).into_global_id();
         Ok(CmdInductive {
-            name,
+            id,
+            this_name,
             this,
             local_types,
             ctors,
             params,
             target_ty,
-            ind_name,
+            ind_id,
         })
     }
 
     fn structure_cmd(&mut self, _token: Token) -> Result<CmdStructure, ParseError> {
         let name = self.global_declaration_name(None)?;
+        let id = name.clone().into_global_id();
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
             let tv = Name::from_str(token.as_str());
@@ -2989,11 +2937,11 @@ impl<'a> Parser<'a> {
                     self.expect_symbol(":")?;
                     let field_ty = self.ty()?;
                     let field_id = Id::fresh();
-                    let field_qualified_name = name.extend(field_name.clone());
+                    let field_qualified_name = name.extend(field_name.clone()).into_global_id();
                     fields.push(StructureField::Const(StructureConst {
                         field_id,
                         field_name: field_name.clone(),
-                        name: field_qualified_name,
+                        id: field_qualified_name,
                         ty: field_ty,
                     }));
                     self.locals.push(LocalBinding {
@@ -3025,10 +2973,10 @@ impl<'a> Parser<'a> {
                     let mut target = self.term()?;
                     self.locals.truncate(params_start);
                     target = generalize(&target, &params);
-                    let field_qualified_name = name.extend(field_name.clone());
+                    let field_qualified_name = name.extend(field_name.clone()).into_global_id();
                     fields.push(StructureField::Axiom(StructureAxiom {
                         field_name,
-                        name: field_qualified_name,
+                        id: field_qualified_name,
                         target,
                     }))
                 }
@@ -3041,9 +2989,9 @@ impl<'a> Parser<'a> {
         self.locals.truncate(self.locals.len() - num_consts);
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
-        let abs_name = name.extend(Name::from_str("abs"));
+        let abs_id = name.extend(Name::from_str("abs")).into_global_id();
         Ok(CmdStructure {
-            name,
+            id,
             local_types: local_types
                 .iter()
                 .map(|ty| LocalType {
@@ -3051,13 +2999,14 @@ impl<'a> Parser<'a> {
                     name: Some(ty.name.clone()),
                 })
                 .collect(),
-            abs_name,
+            abs_id,
             fields,
         })
     }
 
     fn instance_cmd(&mut self, _token: Token) -> Result<CmdInstance, ParseError> {
         let name = self.global_declaration_name(None)?;
+        let id = name.clone().into_global_id();
         let local_types = self.local_type_parameters()?;
         let local_types = local_types
             .into_iter()
@@ -3130,14 +3079,15 @@ impl<'a> Parser<'a> {
                         field_target = field_target.abs(&[field_param]);
                     }
                     let field_id = Id::fresh();
-                    let field_qualified_name = name.extend(field_name.clone());
+                    let field_qualified_name = name.extend(field_name.clone()).into_global_id();
                     fields.push(InstanceField::Def(InstanceDef {
                         field_id,
                         field_name: field_name.clone(),
-                        name: field_qualified_name,
-                        spec_name: name
+                        id: field_qualified_name,
+                        spec_id: name
                             .extend(field_name.clone())
-                            .extend(Name::from_str("spec")),
+                            .extend(Name::from_str("spec"))
+                            .into_global_id(),
                         ty: field_ty,
                         target: field_target,
                     }));
@@ -3187,11 +3137,11 @@ impl<'a> Parser<'a> {
                         field_id,
                         field_target.clone(),
                     );
-                    let field_qualified_name = name.extend(field_name.clone());
+                    let field_qualified_name = name.extend(field_name.clone()).into_global_id();
                     fields.push(InstanceField::Lemma(InstanceLemma {
                         field_id,
                         field_name,
-                        name: field_qualified_name,
+                        id: field_qualified_name,
                         target: field_target,
                         holes,
                         expr,
@@ -3207,7 +3157,7 @@ impl<'a> Parser<'a> {
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdInstance {
-            name,
+            id,
             local_types,
             local_classes,
             params,
@@ -3218,6 +3168,7 @@ impl<'a> Parser<'a> {
 
     fn class_structure_cmd(&mut self, _token: Token) -> Result<CmdClassStructure, ParseError> {
         let name = self.global_declaration_name(None)?;
+        let id = name.clone().into_global_id();
         let mut local_types = vec![];
         while let Some(token) = self.ident_opt() {
             let tv = Name::from_str(token.as_str());
@@ -3246,11 +3197,11 @@ impl<'a> Parser<'a> {
                     self.expect_symbol(":")?;
                     let field_ty = self.ty()?;
                     let field_id = Id::fresh();
-                    let field_qualified_name = name.extend(field_name.clone());
+                    let field_qualified_name = name.extend(field_name.clone()).into_global_id();
                     fields.push(ClassStructureField::Const(ClassStructureConst {
                         field_id,
                         field_name: field_name.clone(),
-                        name: field_qualified_name,
+                        id: field_qualified_name,
                         ty: field_ty,
                     }));
                     self.locals.push(LocalBinding {
@@ -3282,10 +3233,10 @@ impl<'a> Parser<'a> {
                     let mut target = self.term()?;
                     self.locals.truncate(params_start);
                     target = generalize(&target, &params);
-                    let field_qualified_name = name.extend(field_name.clone());
+                    let field_qualified_name = name.extend(field_name.clone()).into_global_id();
                     fields.push(ClassStructureField::Axiom(ClassStructureAxiom {
                         field_name,
-                        name: field_qualified_name,
+                        id: field_qualified_name,
                         target,
                     }))
                 }
@@ -3299,7 +3250,7 @@ impl<'a> Parser<'a> {
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdClassStructure {
-            name,
+            id,
             local_types: local_types
                 .iter()
                 .map(|ty| LocalType {
@@ -3313,6 +3264,7 @@ impl<'a> Parser<'a> {
 
     fn class_instance_cmd(&mut self, _token: Token) -> Result<CmdClassInstance, ParseError> {
         let name = self.global_declaration_name(None)?;
+        let id = name.into_global_id();
         let local_types = self.local_type_parameters()?;
         let local_types = local_types
             .into_iter()
@@ -3440,7 +3392,7 @@ impl<'a> Parser<'a> {
         self.local_types
             .truncate(self.local_types.len() - local_types.len());
         Ok(CmdClassInstance {
-            name,
+            id,
             local_types,
             local_classes,
             target,
@@ -3457,16 +3409,17 @@ mod tests {
         ExprApp, ExprAssume, ExprConst, ExprInst, ExprLetTerm, ExprLocal, mk_type_prop,
         ungeneralize, unguard,
     };
+    use crate::tt::GlobalId;
     use std::collections::HashMap;
     use std::sync::{Arc, LazyLock};
 
     #[allow(clippy::type_complexity)]
     fn setup_tables() -> (
         TokenTable,
-        HashMap<QualifiedName, Kind>,
-        HashMap<QualifiedName, Const>,
-        HashMap<QualifiedName, Axiom>,
-        HashMap<QualifiedName, ClassType>,
+        HashMap<GlobalId, Kind>,
+        HashMap<GlobalId, Const>,
+        HashMap<GlobalId, Axiom>,
+        HashMap<GlobalId, ClassType>,
     ) {
         let tt = TokenTable::default();
         let mut type_const_table = HashMap::new();
@@ -3474,10 +3427,10 @@ mod tests {
         let axiom_table = HashMap::new();
         let class_predicate_table = HashMap::new();
 
-        let prop = QualifiedName::from_name(Name::from_str("Prop"));
+        let prop = global_id("Prop");
         type_const_table.insert(prop.clone(), Kind(0));
 
-        let p = QualifiedName::from_name(Name::from_str("p"));
+        let p = global_id("p");
         const_table.insert(
             p,
             Const {
@@ -3502,14 +3455,14 @@ mod tests {
         tt: &'a TokenTable,
         namespace_table: &'a HashMap<Path, Namespace>,
         current_namespace: &'a Path,
-        type_const_table: &'a HashMap<QualifiedName, Kind>,
-        const_table: &'a HashMap<QualifiedName, Const>,
-        axiom_table: &'a HashMap<QualifiedName, Axiom>,
-        class_predicate_table: &'a HashMap<QualifiedName, ClassType>,
+        type_const_table: &'a HashMap<GlobalId, Kind>,
+        const_table: &'a HashMap<GlobalId, Const>,
+        axiom_table: &'a HashMap<GlobalId, Axiom>,
+        class_predicate_table: &'a HashMap<GlobalId, ClassType>,
     ) -> Parser<'a> {
-        static EMPTY_TYPE_DEF_TABLE: LazyLock<HashMap<QualifiedName, CmdTypeDef>> =
+        static EMPTY_TYPE_DEF_TABLE: LazyLock<HashMap<GlobalId, CmdTypeDef>> =
             LazyLock::new(HashMap::new);
-        static EMPTY_STRUCTURE_TABLE: LazyLock<HashMap<QualifiedName, CmdStructure>> =
+        static EMPTY_STRUCTURE_TABLE: LazyLock<HashMap<GlobalId, CmdStructure>> =
             LazyLock::new(HashMap::new);
         Parser::new(
             lex,
@@ -3563,20 +3516,24 @@ mod tests {
             .or_insert_with(|| name.clone());
     }
 
+    fn qualified_from_global_id(id: &GlobalId) -> QualifiedName {
+        qualified(&id.to_string())
+    }
+
     fn seed_namespace_table_from_globals(
         namespace_table: &mut HashMap<Path, Namespace>,
-        type_const_table: &HashMap<QualifiedName, Kind>,
-        type_def_table: &HashMap<QualifiedName, CmdTypeDef>,
-        const_table: &HashMap<QualifiedName, Const>,
-        axiom_table: &HashMap<QualifiedName, Axiom>,
-        class_predicate_table: &HashMap<QualifiedName, ClassType>,
+        type_const_table: &HashMap<GlobalId, Kind>,
+        type_def_table: &HashMap<GlobalId, CmdTypeDef>,
+        const_table: &HashMap<GlobalId, Const>,
+        axiom_table: &HashMap<GlobalId, Axiom>,
+        class_predicate_table: &HashMap<GlobalId, ClassType>,
     ) {
         let mut names = vec![];
-        names.extend(type_const_table.keys().cloned());
-        names.extend(type_def_table.keys().cloned());
-        names.extend(const_table.keys().cloned());
-        names.extend(axiom_table.keys().cloned());
-        names.extend(class_predicate_table.keys().cloned());
+        names.extend(type_const_table.keys().map(qualified_from_global_id));
+        names.extend(type_def_table.keys().map(qualified_from_global_id));
+        names.extend(const_table.keys().map(qualified_from_global_id));
+        names.extend(axiom_table.keys().map(qualified_from_global_id));
+        names.extend(class_predicate_table.keys().map(qualified_from_global_id));
         for name in names {
             register_global_name_for_tests(namespace_table, &name);
         }
@@ -3647,9 +3604,7 @@ mod tests {
             &class_predicates,
         );
         assert!(
-            parser
-                .const_table
-                .contains_key(&QualifiedName::from_name(Name::from_str("p"))),
+            parser.const_table.contains_key(&global_id("p")),
             "const table missing p"
         );
         parser.expr().expect("expression parses")
@@ -3669,10 +3624,10 @@ mod tests {
             },
         );
         let current_namespace = root_namespace;
-        let type_const_table: HashMap<QualifiedName, Kind> = HashMap::new();
-        let const_table: HashMap<QualifiedName, Const> = HashMap::new();
-        let axiom_table: HashMap<QualifiedName, Axiom> = HashMap::new();
-        let class_predicate_table: HashMap<QualifiedName, ClassType> = HashMap::new();
+        let type_const_table: HashMap<GlobalId, Kind> = HashMap::new();
+        let const_table: HashMap<GlobalId, Const> = HashMap::new();
+        let axiom_table: HashMap<GlobalId, Axiom> = HashMap::new();
+        let class_predicate_table: HashMap<GlobalId, ClassType> = HashMap::new();
         let mut parser = new_parser_without_type_defs(
             &mut lex,
             &tt,
@@ -3691,14 +3646,14 @@ mod tests {
         input: &str,
         tt: &TokenTable,
         use_table: &mut HashMap<Name, QualifiedName>,
-        type_const_table: &HashMap<QualifiedName, Kind>,
-        const_table: &HashMap<QualifiedName, Const>,
-        axiom_table: &HashMap<QualifiedName, Axiom>,
-        class_predicate_table: &HashMap<QualifiedName, ClassType>,
+        type_const_table: &HashMap<GlobalId, Kind>,
+        const_table: &HashMap<GlobalId, Const>,
+        axiom_table: &HashMap<GlobalId, Axiom>,
+        class_predicate_table: &HashMap<GlobalId, ClassType>,
     ) -> Result<Cmd, ParseError> {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
-        let type_def_table = HashMap::new();
+        let type_def_table: HashMap<GlobalId, CmdTypeDef> = HashMap::new();
         let root_namespace = Path::root();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
         namespace_table.insert(
@@ -3717,7 +3672,7 @@ mod tests {
         );
         let current_namespace = root_namespace.clone();
         ensure_use_target_prefixes_for_tests(&mut namespace_table, &current_namespace);
-        let structure_table = HashMap::new();
+        let structure_table: HashMap<GlobalId, CmdStructure> = HashMap::new();
         let mut parser = Parser::new(
             &mut lex,
             tt,
@@ -3745,16 +3700,16 @@ mod tests {
         input: &str,
         tt: &TokenTable,
         use_table: &mut HashMap<Name, QualifiedName>,
-        type_const_table: &HashMap<QualifiedName, Kind>,
-        const_table: &HashMap<QualifiedName, Const>,
-        axiom_table: &HashMap<QualifiedName, Axiom>,
-        class_predicate_table: &HashMap<QualifiedName, ClassType>,
+        type_const_table: &HashMap<GlobalId, Kind>,
+        const_table: &HashMap<GlobalId, Const>,
+        axiom_table: &HashMap<GlobalId, Axiom>,
+        class_predicate_table: &HashMap<GlobalId, ClassType>,
     ) -> Result<Vec<Cmd>, ParseError> {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
         let mut tt = tt.clone();
         let mut type_const_table = type_const_table.clone();
-        let mut type_def_table: HashMap<QualifiedName, CmdTypeDef> = HashMap::new();
+        let mut type_def_table: HashMap<GlobalId, CmdTypeDef> = HashMap::new();
         let root_namespace = Path::root();
         let mut namespace_table: HashMap<Path, Namespace> = HashMap::new();
         namespace_table.insert(
@@ -3774,7 +3729,7 @@ mod tests {
         let mut cmds = vec![];
         let mut namespace_stack = vec![];
         let mut current_namespace = root_namespace.clone();
-        let mut structure_table: HashMap<QualifiedName, CmdStructure> = HashMap::new();
+        let mut structure_table: HashMap<GlobalId, CmdStructure> = HashMap::new();
         while !lex.is_eof() {
             ensure_use_target_prefixes_for_tests(&mut namespace_table, &current_namespace);
             let mut parser = Parser::new(
@@ -3804,14 +3759,14 @@ mod tests {
                         current_namespace = previous_namespace;
                     }
                 }
-                Cmd::TypeConst(CmdTypeConst { name, kind }) => {
-                    type_const_table.insert(name.clone(), kind.clone());
+                Cmd::TypeConst(CmdTypeConst { id, kind }) => {
+                    type_const_table.insert(id.clone(), kind.clone());
                 }
                 Cmd::TypeDef(cmd) => {
-                    type_def_table.insert(cmd.name.clone(), cmd.clone());
+                    type_def_table.insert(cmd.id.clone(), cmd.clone());
                 }
                 Cmd::Structure(cmd) => {
-                    structure_table.insert(cmd.name.clone(), cmd.clone());
+                    structure_table.insert(cmd.id.clone(), cmd.clone());
                 }
                 Cmd::Infix(cmd) => {
                     tt.add(Operator {
@@ -3918,10 +3873,10 @@ mod tests {
         input: &str,
         tt: &TokenTable,
         use_table: &mut HashMap<Name, QualifiedName>,
-        type_const_table: &HashMap<QualifiedName, Kind>,
-        const_table: &HashMap<QualifiedName, Const>,
-        axiom_table: &HashMap<QualifiedName, Axiom>,
-        class_predicate_table: &HashMap<QualifiedName, ClassType>,
+        type_const_table: &HashMap<GlobalId, Kind>,
+        const_table: &HashMap<GlobalId, Const>,
+        axiom_table: &HashMap<GlobalId, Axiom>,
+        class_predicate_table: &HashMap<GlobalId, ClassType>,
     ) -> Result<Term, ParseError> {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
@@ -3966,10 +3921,10 @@ mod tests {
         input: &str,
         tt: &TokenTable,
         use_table: &mut HashMap<Name, QualifiedName>,
-        type_const_table: &HashMap<QualifiedName, Kind>,
-        const_table: &HashMap<QualifiedName, Const>,
-        axiom_table: &HashMap<QualifiedName, Axiom>,
-        class_predicate_table: &HashMap<QualifiedName, ClassType>,
+        type_const_table: &HashMap<GlobalId, Kind>,
+        const_table: &HashMap<GlobalId, Const>,
+        axiom_table: &HashMap<GlobalId, Axiom>,
+        class_predicate_table: &HashMap<GlobalId, ClassType>,
     ) -> Result<Type, ParseError> {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
@@ -4014,10 +3969,10 @@ mod tests {
         input: &str,
         tt: &TokenTable,
         use_table: &mut HashMap<Name, QualifiedName>,
-        type_const_table: &HashMap<QualifiedName, Kind>,
-        const_table: &HashMap<QualifiedName, Const>,
-        axiom_table: &HashMap<QualifiedName, Axiom>,
-        class_predicate_table: &HashMap<QualifiedName, ClassType>,
+        type_const_table: &HashMap<GlobalId, Kind>,
+        const_table: &HashMap<GlobalId, Const>,
+        axiom_table: &HashMap<GlobalId, Axiom>,
+        class_predicate_table: &HashMap<GlobalId, ClassType>,
     ) -> Result<Expr, ParseError> {
         let structure_table = HashMap::new();
         parse_expr_with_structure_tables(
@@ -4037,11 +3992,11 @@ mod tests {
         input: &str,
         tt: &TokenTable,
         use_table: &mut HashMap<Name, QualifiedName>,
-        type_const_table: &HashMap<QualifiedName, Kind>,
-        const_table: &HashMap<QualifiedName, Const>,
-        axiom_table: &HashMap<QualifiedName, Axiom>,
-        class_predicate_table: &HashMap<QualifiedName, ClassType>,
-        structure_table: &HashMap<QualifiedName, CmdStructure>,
+        type_const_table: &HashMap<GlobalId, Kind>,
+        const_table: &HashMap<GlobalId, Const>,
+        axiom_table: &HashMap<GlobalId, Axiom>,
+        class_predicate_table: &HashMap<GlobalId, ClassType>,
+        structure_table: &HashMap<GlobalId, CmdStructure>,
     ) -> Result<Expr, ParseError> {
         let file = Arc::new(File::new("<test>", input));
         let mut lex = Lex::new(file);
@@ -4094,6 +4049,10 @@ mod tests {
         name
     }
 
+    fn global_id(value: &str) -> GlobalId {
+        GlobalId::from_name(Name::from_str(value))
+    }
+
     fn path(value: &str) -> Path {
         let mut path = Path::root();
         if value.is_empty() {
@@ -4105,13 +4064,13 @@ mod tests {
         path
     }
 
-    fn insert_prop_const(const_table: &mut HashMap<QualifiedName, Const>, name: &str) {
+    fn insert_prop_const(const_table: &mut HashMap<GlobalId, Const>, name: &str) {
         const_table.insert(
-            qualified(name),
+            global_id(name),
             Const {
                 local_types: vec![],
                 local_classes: vec![],
-                ty: mk_type_const(QualifiedName::from_name(Name::from_str("Prop"))),
+                ty: mk_type_const(global_id("Prop")),
             },
         );
     }
@@ -4138,11 +4097,7 @@ mod tests {
         } = *assume;
         let (alias, alias_name) = alias.expect("expected alias id");
         assert_eq!(alias_name, Name::from_str("this"));
-        let expected = mk_const(
-            QualifiedName::from_name(Name::from_str("p")),
-            vec![],
-            vec![],
-        );
+        let expected = mk_const(global_id("p"), vec![], vec![]);
         assert!(local_axiom.alpha_eq(&expected));
 
         let Expr::Local(assump) = body else {
@@ -4167,11 +4122,7 @@ mod tests {
         } = *outer;
         let (outer_alias, outer_alias_name) = outer_alias.expect("expected outer alias");
         assert_eq!(outer_alias_name, Name::from_str("hp"));
-        let expected = mk_const(
-            QualifiedName::from_name(Name::from_str("p")),
-            vec![],
-            vec![],
-        );
+        let expected = mk_const(global_id("p"), vec![], vec![]);
         assert!(outer_axiom.alpha_eq(&expected));
 
         let Expr::App(app) = outer_body else {
@@ -4404,7 +4355,7 @@ mod tests {
         parser.push_local_axiom(
             local_axiom_name.clone(),
             Id::fresh(),
-            mk_const(qualified("p"), vec![], vec![]),
+            mk_const(global_id("p"), vec![], vec![]),
         );
 
         assert!(parser.get_local_const(&local_const_name).is_some());
@@ -4455,8 +4406,8 @@ mod tests {
         let Term::Const(with_const) = with else {
             panic!("expected constant term with whitespace");
         };
-        assert_eq!(without_const.name, qualified("foo.bar"));
-        assert_eq!(with_const.name, without_const.name);
+        assert_eq!(without_const.id, global_id("foo.bar"));
+        assert_eq!(with_const.id, without_const.id);
     }
 
     #[test]
@@ -4474,7 +4425,7 @@ mod tests {
         )
         .expect("commands parse");
         let Cmd::Const(CmdConst {
-            name: _,
+            id: _,
             local_types: _,
             local_classes: _,
             ty,
@@ -4482,13 +4433,13 @@ mod tests {
         else {
             panic!("expected const command");
         };
-        assert_eq!(ty, &mk_type_const(qualified("Prop")));
+        assert_eq!(ty, &mk_type_const(global_id("Prop")));
     }
 
     #[test]
     fn absolute_class_reference_is_resolved_from_root() {
         let (tt, type_consts, consts, axioms, mut class_predicates) = setup_tables();
-        class_predicates.insert(qualified("C"), ClassType { arity: 0 });
+        class_predicates.insert(global_id("C"), ClassType { arity: 0 });
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
         let cmds = parse_cmds_with_tables(
             "namespace foo { const x [.C] : .Prop }",
@@ -4501,7 +4452,7 @@ mod tests {
         )
         .expect("commands parse");
         let Cmd::Const(CmdConst {
-            name: _,
+            id: _,
             local_types: _,
             local_classes,
             ty: _,
@@ -4510,7 +4461,7 @@ mod tests {
             panic!("expected const command");
         };
         assert_eq!(local_classes.len(), 1);
-        assert_eq!(local_classes[0].name, qualified("C"));
+        assert_eq!(local_classes[0].id, global_id("C"));
     }
 
     #[test]
@@ -4528,7 +4479,7 @@ mod tests {
         )
         .expect("commands parse");
         let Cmd::Def(CmdDef {
-            name: _,
+            id: _,
             local_types: _,
             local_classes: _,
             ty: _,
@@ -4540,18 +4491,18 @@ mod tests {
         let Term::Const(const_term) = target else {
             panic!("expected constant in def body");
         };
-        assert_eq!(const_term.name, qualified("p"));
+        assert_eq!(const_term.id, global_id("p"));
     }
 
     #[test]
     fn absolute_expr_reference_is_resolved_from_root() {
         let (tt, type_consts, consts, mut axioms, class_predicates) = setup_tables();
         axioms.insert(
-            qualified("h"),
+            global_id("h"),
             Axiom {
                 local_types: vec![],
                 local_classes: vec![],
-                target: mk_const(qualified("p"), vec![], vec![]),
+                target: mk_const(global_id("p"), vec![], vec![]),
             },
         );
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
@@ -4566,7 +4517,7 @@ mod tests {
         )
         .expect("commands parse");
         let Cmd::Lemma(CmdLemma {
-            name: _,
+            id: _,
             local_types: _,
             local_classes: _,
             target: _,
@@ -4581,11 +4532,11 @@ mod tests {
         };
         let ExprConst {
             metadata: _,
-            name,
+            id,
             ty_args: _,
             instances: _,
         } = &**expr_const;
-        assert_eq!(name, &qualified("h"));
+        assert_eq!(id, &global_id("h"));
     }
 
     #[test]
@@ -4683,7 +4634,7 @@ mod tests {
                 Cmd::Nofix(cmd) => &cmd.entity,
                 _ => panic!("expected fixity command"),
             };
-            assert_eq!(entity, &qualified("p"), "label = {label}");
+            assert_eq!(entity, &global_id("p"), "label = {label}");
         }
     }
 
@@ -4763,7 +4714,7 @@ mod tests {
         )
         .expect("instance parses");
         let Cmd::Instance(CmdInstance {
-            name: _,
+            id: _,
             local_types: _,
             local_classes: _,
             params: _,
@@ -4776,8 +4727,8 @@ mod tests {
         let InstanceField::Def(InstanceDef {
             field_id: _,
             field_name,
-            name,
-            spec_name,
+            id,
+            spec_id,
             ty: _,
             target,
         }) = &fields[1]
@@ -4785,8 +4736,8 @@ mod tests {
             panic!("expected second field to be a definition");
         };
         assert_eq!(field_name, &Name::from_str("b"));
-        assert_eq!(name, &qualified("inst.b"));
-        assert_eq!(spec_name, &qualified("inst.b.spec"));
+        assert_eq!(id, &global_id("inst.b"));
+        assert_eq!(spec_id, &global_id("inst.b.spec"));
         let Term::Local(local) = target else {
             panic!("expected second definition to reference a local");
         };
@@ -4803,7 +4754,7 @@ mod tests {
     #[test]
     fn class_instance_def_can_reference_preceding_definition() {
         let (tt, type_consts, consts, axioms, mut class_predicates) = setup_tables();
-        class_predicates.insert(qualified("C"), ClassType { arity: 0 });
+        class_predicates.insert(global_id("C"), ClassType { arity: 0 });
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
         let cmd = parse_cmd_with_tables(
             "class instance inst : C := { def a : Prop := p def b : Prop := a }",
@@ -4816,7 +4767,7 @@ mod tests {
         )
         .expect("class instance parses");
         let Cmd::ClassInstance(CmdClassInstance {
-            name: _,
+            id: _,
             local_types: _,
             local_classes: _,
             target: _,
@@ -4852,20 +4803,20 @@ mod tests {
     #[test]
     fn instance_field_name_does_not_shadow_outer_param_in_rhs() {
         let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
-        type_consts.insert(qualified("U"), Kind(0));
-        type_consts.insert(qualified("foo"), Kind(0));
+        type_consts.insert(global_id("U"), Kind(0));
+        type_consts.insert(global_id("foo"), Kind(0));
         let structure_field_id = Id::fresh();
         let structure_table = HashMap::from([(
-            qualified("foo"),
+            global_id("foo"),
             CmdStructure {
-                name: qualified("foo"),
+                id: global_id("foo"),
                 local_types: vec![],
-                abs_name: qualified("foo.abs"),
+                abs_id: global_id("foo.abs"),
                 fields: vec![StructureField::Const(StructureConst {
                     field_id: structure_field_id,
                     field_name: Name::from_str("rep"),
-                    name: qualified("foo.rep"),
-                    ty: mk_type_const(qualified("U")),
+                    id: global_id("foo.rep"),
+                    ty: mk_type_const(global_id("U")),
                 })],
             },
         )]);
@@ -4923,11 +4874,11 @@ mod tests {
     fn instance_lemma_can_reference_preceding_lemma() {
         let (tt, type_consts, consts, mut axioms, class_predicates) = setup_tables();
         axioms.insert(
-            qualified("hp"),
+            global_id("hp"),
             Axiom {
                 local_types: vec![],
                 local_classes: vec![],
-                target: mk_const(qualified("p"), vec![], vec![]),
+                target: mk_const(global_id("p"), vec![], vec![]),
             },
         );
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
@@ -4942,7 +4893,7 @@ mod tests {
         )
         .expect("instance parses");
         let Cmd::Instance(CmdInstance {
-            name: _,
+            id: _,
             local_types: _,
             local_classes: _,
             params: _,
@@ -4955,7 +4906,7 @@ mod tests {
         let InstanceField::Lemma(InstanceLemma {
             field_id: _,
             field_name,
-            name,
+            id,
             target: _,
             holes: _,
             expr,
@@ -4964,7 +4915,7 @@ mod tests {
             panic!("expected second field to be a lemma");
         };
         assert_eq!(field_name, &Name::from_str("h2"));
-        assert_eq!(name, &qualified("inst.h2"));
+        assert_eq!(id, &global_id("inst.h2"));
         let Expr::Local(local) = expr else {
             panic!("expected second lemma expression to reference a local lemma");
         };
@@ -4985,14 +4936,14 @@ mod tests {
     fn class_instance_lemma_can_reference_preceding_lemma() {
         let (tt, type_consts, consts, mut axioms, mut class_predicates) = setup_tables();
         axioms.insert(
-            qualified("hp"),
+            global_id("hp"),
             Axiom {
                 local_types: vec![],
                 local_classes: vec![],
-                target: mk_const(qualified("p"), vec![], vec![]),
+                target: mk_const(global_id("p"), vec![], vec![]),
             },
         );
-        class_predicates.insert(qualified("C"), ClassType { arity: 0 });
+        class_predicates.insert(global_id("C"), ClassType { arity: 0 });
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
         let cmd = parse_cmd_with_tables(
             "class instance inst : C := { lemma h1 : p := hp lemma h2 : p := h1 }",
@@ -5005,7 +4956,7 @@ mod tests {
         )
         .expect("class instance parses");
         let Cmd::ClassInstance(CmdClassInstance {
-            name: _,
+            id: _,
             local_types: _,
             local_classes: _,
             target: _,
@@ -5056,34 +5007,31 @@ mod tests {
             &class_predicates,
         )
         .expect("structure parses");
-        let Cmd::Structure(CmdStructure {
-            abs_name, fields, ..
-        }) = cmd
-        else {
+        let Cmd::Structure(CmdStructure { abs_id, fields, .. }) = cmd else {
             panic!("expected structure command");
         };
-        assert_eq!(abs_name, qualified("foo.abs"));
+        assert_eq!(abs_id, global_id("foo.abs"));
         let StructureField::Const(StructureConst {
             field_id,
             field_name,
-            name,
+            id,
             ty: _,
         }) = &fields[0]
         else {
             panic!("expected const field");
         };
         assert_eq!(field_name, &Name::from_str("rep"));
-        assert_eq!(name, &qualified("foo.rep"));
+        assert_eq!(id, &global_id("foo.rep"));
         let StructureField::Axiom(StructureAxiom {
             field_name,
-            name,
+            id,
             target,
         }) = &fields[1]
         else {
             panic!("expected axiom field");
         };
         assert_eq!(field_name, &Name::from_str("ok"));
-        assert_eq!(name, &qualified("foo.ok"));
+        assert_eq!(id, &global_id("foo.ok"));
         let Term::Local(local) = target else {
             panic!("expected axiom target to reference the const field id");
         };
@@ -5110,24 +5058,24 @@ mod tests {
         let ClassStructureField::Const(ClassStructureConst {
             field_id,
             field_name,
-            name,
+            id,
             ty: _,
         }) = &fields[0]
         else {
             panic!("expected const field");
         };
         assert_eq!(field_name, &Name::from_str("rep"));
-        assert_eq!(name, &qualified("foo.rep"));
+        assert_eq!(id, &global_id("foo.rep"));
         let ClassStructureField::Axiom(ClassStructureAxiom {
             field_name,
-            name,
+            id,
             target,
         }) = &fields[1]
         else {
             panic!("expected axiom field");
         };
         assert_eq!(field_name, &Name::from_str("ok"));
-        assert_eq!(name, &qualified("foo.ok"));
+        assert_eq!(id, &global_id("foo.ok"));
         let Term::Local(local) = target else {
             panic!("expected axiom target to reference the const field id");
         };
@@ -5138,11 +5086,11 @@ mod tests {
     fn instance_lemma_self_reference_is_rejected() {
         let (tt, type_consts, consts, mut axioms, class_predicates) = setup_tables();
         axioms.insert(
-            qualified("hp"),
+            global_id("hp"),
             Axiom {
                 local_types: vec![],
                 local_classes: vec![],
-                target: mk_const(qualified("p"), vec![], vec![]),
+                target: mk_const(global_id("p"), vec![], vec![]),
             },
         );
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
@@ -5166,14 +5114,14 @@ mod tests {
     fn class_instance_lemma_self_reference_is_rejected() {
         let (tt, type_consts, consts, mut axioms, mut class_predicates) = setup_tables();
         axioms.insert(
-            qualified("hp"),
+            global_id("hp"),
             Axiom {
                 local_types: vec![],
                 local_classes: vec![],
-                target: mk_const(qualified("p"), vec![], vec![]),
+                target: mk_const(global_id("p"), vec![], vec![]),
             },
         );
-        class_predicates.insert(qualified("C"), ClassType { arity: 0 });
+        class_predicates.insert(global_id("C"), ClassType { arity: 0 });
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
         let err = parse_cmd_with_tables(
             "class instance inst : C := { lemma h1 : p := h1 }",
@@ -5748,7 +5696,7 @@ mod tests {
         let Term::Const(inner) = term else {
             panic!("expected constant term");
         };
-        assert_eq!(inner.name, qualified("prod.fst.default"));
+        assert_eq!(inner.id, global_id("prod.fst.default"));
     }
 
     #[test]
@@ -5783,7 +5731,7 @@ mod tests {
         else {
             panic!("expected infix command");
         };
-        assert_eq!(entity, qualified("foo.baz"));
+        assert_eq!(entity, global_id("foo.baz"));
     }
 
     #[test]
@@ -5818,7 +5766,7 @@ mod tests {
         else {
             panic!("expected prefix command");
         };
-        assert_eq!(entity, qualified("foo.baz"));
+        assert_eq!(entity, global_id("foo.baz"));
     }
 
     #[test]
@@ -5848,7 +5796,7 @@ mod tests {
         let Cmd::Nofix(CmdNofix { op: _, entity }) = cmd else {
             panic!("expected nofix command");
         };
-        assert_eq!(entity, qualified("foo.baz"));
+        assert_eq!(entity, global_id("foo.baz"));
     }
 
     #[test]
@@ -5874,7 +5822,7 @@ mod tests {
         else {
             panic!("expected infix command");
         };
-        assert_eq!(entity, &qualified("foo.qux.real.tail"));
+        assert_eq!(entity, &global_id("foo.qux.real.tail"));
     }
 
     #[test]
@@ -5892,10 +5840,10 @@ mod tests {
             &class_predicates,
         )
         .expect("type const command parses");
-        let Cmd::TypeConst(CmdTypeConst { name, kind: _ }) = cmd else {
+        let Cmd::TypeConst(CmdTypeConst { id, kind: _ }) = cmd else {
             panic!("expected type_const command");
         };
-        assert_eq!(name, qualified("prod.elem"));
+        assert_eq!(id, global_id("prod.elem"));
     }
 
     #[test]
@@ -5918,10 +5866,10 @@ mod tests {
     #[test]
     fn type_fixity_commands_parse() {
         let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
-        type_consts.insert(qualified("prod"), Kind(2));
-        type_consts.insert(qualified("sum"), Kind(2));
-        type_consts.insert(qualified("maybe"), Kind(1));
-        type_consts.insert(qualified("unit"), Kind(0));
+        type_consts.insert(global_id("prod"), Kind(2));
+        type_consts.insert(global_id("sum"), Kind(2));
+        type_consts.insert(global_id("maybe"), Kind(1));
+        type_consts.insert(global_id("unit"), Kind(0));
         let scenarios = [
             ("type infixr × : 35 := prod", "type infixr"),
             ("type infixl ⊕ : 35 := sum", "type infixl"),
@@ -5944,23 +5892,23 @@ mod tests {
             .expect("type fixity command parses");
             match cmd {
                 Cmd::TypeInfixr(cmd) => {
-                    assert_eq!(cmd.entity, qualified("prod"), "label = {label}");
+                    assert_eq!(cmd.entity, global_id("prod"), "label = {label}");
                     assert_eq!(cmd.prec, 35, "label = {label}");
                 }
                 Cmd::TypeInfixl(cmd) => {
-                    assert_eq!(cmd.entity, qualified("sum"), "label = {label}");
+                    assert_eq!(cmd.entity, global_id("sum"), "label = {label}");
                     assert_eq!(cmd.prec, 35, "label = {label}");
                 }
                 Cmd::TypeInfix(cmd) => {
-                    assert_eq!(cmd.entity, qualified("sum"), "label = {label}");
+                    assert_eq!(cmd.entity, global_id("sum"), "label = {label}");
                     assert_eq!(cmd.prec, 35, "label = {label}");
                 }
                 Cmd::TypePrefix(cmd) => {
-                    assert_eq!(cmd.entity, qualified("maybe"), "label = {label}");
+                    assert_eq!(cmd.entity, global_id("maybe"), "label = {label}");
                     assert_eq!(cmd.prec, 90, "label = {label}");
                 }
                 Cmd::TypeNofix(cmd) => {
-                    assert_eq!(cmd.entity, qualified("unit"), "label = {label}");
+                    assert_eq!(cmd.entity, global_id("unit"), "label = {label}");
                 }
                 _ => panic!("expected type fixity command for {label}"),
             }
@@ -5970,18 +5918,30 @@ mod tests {
     #[test]
     fn absolute_type_fixity_entities_are_resolved_from_root() {
         let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
-        type_consts.insert(qualified("prod"), Kind(2));
-        type_consts.insert(qualified("sum"), Kind(2));
-        type_consts.insert(qualified("maybe"), Kind(1));
-        type_consts.insert(qualified("unit"), Kind(0));
+        type_consts.insert(global_id("prod"), Kind(2));
+        type_consts.insert(global_id("sum"), Kind(2));
+        type_consts.insert(global_id("maybe"), Kind(1));
+        type_consts.insert(global_id("unit"), Kind(0));
         let scenarios = [
-            ("type infixr × : 35 := .prod", "type infixr"),
-            ("type infixl ⊕ : 35 := .sum", "type infixl"),
-            ("type infix ~ : 35 := .sum", "type infix"),
-            ("type prefix ‽ : 90 := .maybe", "type prefix"),
-            ("type nofix One := .unit", "type nofix"),
+            (
+                "type infixr × : 35 := .prod",
+                "type infixr",
+                global_id("prod"),
+            ),
+            (
+                "type infixl ⊕ : 35 := .sum",
+                "type infixl",
+                global_id("sum"),
+            ),
+            ("type infix ~ : 35 := .sum", "type infix", global_id("sum")),
+            (
+                "type prefix ‽ : 90 := .maybe",
+                "type prefix",
+                global_id("maybe"),
+            ),
+            ("type nofix One := .unit", "type nofix", global_id("unit")),
         ];
-        for (command, label) in scenarios {
+        for (command, label, expected_entity) in scenarios {
             let input = format!("namespace foo {{ {command} }}");
             let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
             let cmds = parse_cmds_with_tables(
@@ -6002,17 +5962,14 @@ mod tests {
                 Cmd::TypeNofix(cmd) => &cmd.entity,
                 _ => panic!("expected type fixity command"),
             };
-            assert!(
-                entity.path().is_root(),
-                "type fixity entity must resolve from root; label = {label}"
-            );
+            assert_eq!(entity, &expected_entity, "label = {label}");
         }
     }
 
     #[test]
     fn type_def_reference_is_expanded_during_parsing() {
         let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
-        type_consts.insert(qualified("U"), Kind(0));
+        type_consts.insert(global_id("U"), Kind(0));
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
         let cmds = parse_cmds_with_tables(
             "type def sub u := u → Prop
@@ -6026,7 +5983,7 @@ mod tests {
         )
         .expect("commands parse");
         let Cmd::Const(CmdConst {
-            name: _,
+            id: _,
             local_types: _,
             local_classes: _,
             ty,
@@ -6036,15 +5993,15 @@ mod tests {
         };
         assert_eq!(
             ty,
-            &mk_type_const(qualified("Prop")).arrow([mk_type_const(qualified("U"))])
+            &mk_type_const(global_id("Prop")).arrow([mk_type_const(global_id("U"))])
         );
     }
 
     #[test]
     fn type_def_multi_argument_reference_is_expanded_left_associatively() {
         let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
-        type_consts.insert(qualified("U"), Kind(0));
-        type_consts.insert(qualified("V"), Kind(0));
+        type_consts.insert(global_id("U"), Kind(0));
+        type_consts.insert(global_id("V"), Kind(0));
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
         let cmds = parse_cmds_with_tables(
             "type def pairish u v := u → v → Prop
@@ -6058,7 +6015,7 @@ mod tests {
         )
         .expect("commands parse");
         let Cmd::Const(CmdConst {
-            name: _,
+            id: _,
             local_types: _,
             local_classes: _,
             ty,
@@ -6068,23 +6025,23 @@ mod tests {
         };
         assert_eq!(
             ty,
-            &mk_type_const(qualified("Prop"))
-                .arrow([mk_type_const(qualified("U")), mk_type_const(qualified("V"))])
+            &mk_type_const(global_id("Prop"))
+                .arrow([mk_type_const(global_id("U")), mk_type_const(global_id("V"))])
         );
     }
 
     #[test]
     fn declared_type_infixr_has_higher_precedence_than_arrow() {
         let (mut tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
-        type_consts.insert(qualified("U"), Kind(0));
-        type_consts.insert(qualified("V"), Kind(0));
-        type_consts.insert(qualified("W"), Kind(0));
-        type_consts.insert(qualified("prod"), Kind(2));
+        type_consts.insert(global_id("U"), Kind(0));
+        type_consts.insert(global_id("V"), Kind(0));
+        type_consts.insert(global_id("W"), Kind(0));
+        type_consts.insert(global_id("prod"), Kind(2));
         tt.add_type(Operator {
             symbol: "×".to_owned(),
             fixity: Fixity::Infixr,
             prec: 35,
-            entity: qualified("prod"),
+            entity: global_id("prod"),
         })
         .expect("register type infixr");
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
@@ -6101,9 +6058,9 @@ mod tests {
         assert_eq!(
             ty,
             mk_type_arrow(
-                mk_type_const(qualified("prod"))
-                    .apply([mk_type_const(qualified("U")), mk_type_const(qualified("V"))]),
-                mk_type_const(qualified("W"))
+                mk_type_const(global_id("prod"))
+                    .apply([mk_type_const(global_id("U")), mk_type_const(global_id("V"))]),
+                mk_type_const(global_id("W"))
             )
         );
     }
@@ -6111,15 +6068,15 @@ mod tests {
     #[test]
     fn declared_type_infixr_is_right_associative() {
         let (mut tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
-        type_consts.insert(qualified("U"), Kind(0));
-        type_consts.insert(qualified("V"), Kind(0));
-        type_consts.insert(qualified("W"), Kind(0));
-        type_consts.insert(qualified("prod"), Kind(2));
+        type_consts.insert(global_id("U"), Kind(0));
+        type_consts.insert(global_id("V"), Kind(0));
+        type_consts.insert(global_id("W"), Kind(0));
+        type_consts.insert(global_id("prod"), Kind(2));
         tt.add_type(Operator {
             symbol: "×".to_owned(),
             fixity: Fixity::Infixr,
             prec: 35,
-            entity: qualified("prod"),
+            entity: global_id("prod"),
         })
         .expect("register type infixr");
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
@@ -6135,10 +6092,10 @@ mod tests {
         .expect("type parses");
         assert_eq!(
             ty,
-            mk_type_const(qualified("prod")).apply([
-                mk_type_const(qualified("U")),
-                mk_type_const(qualified("prod"))
-                    .apply([mk_type_const(qualified("V")), mk_type_const(qualified("W"))]),
+            mk_type_const(global_id("prod")).apply([
+                mk_type_const(global_id("U")),
+                mk_type_const(global_id("prod"))
+                    .apply([mk_type_const(global_id("V")), mk_type_const(global_id("W"))]),
             ])
         );
     }
@@ -6146,14 +6103,14 @@ mod tests {
     #[test]
     fn declared_type_prefix_binds_tighter_than_application() {
         let (mut tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
-        type_consts.insert(qualified("U"), Kind(0));
-        type_consts.insert(qualified("F"), Kind(1));
-        type_consts.insert(qualified("maybe"), Kind(1));
+        type_consts.insert(global_id("U"), Kind(0));
+        type_consts.insert(global_id("F"), Kind(1));
+        type_consts.insert(global_id("maybe"), Kind(1));
         tt.add_type(Operator {
             symbol: "◻".to_owned(),
             fixity: Fixity::Prefix,
             prec: 90,
-            entity: qualified("maybe"),
+            entity: global_id("maybe"),
         })
         .expect("register type prefix");
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
@@ -6169,8 +6126,8 @@ mod tests {
         .expect("type parses");
         assert_eq!(
             ty,
-            mk_type_const(qualified("F"))
-                .apply([mk_type_const(qualified("maybe")).apply([mk_type_const(qualified("U"))])])
+            mk_type_const(global_id("F"))
+                .apply([mk_type_const(global_id("maybe")).apply([mk_type_const(global_id("U"))])])
         );
     }
 
@@ -6197,7 +6154,7 @@ mod tests {
     #[test]
     fn type_def_rhs_and_reference_resolve_use_aliases() {
         let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
-        type_consts.insert(qualified("foo.U"), Kind(0));
+        type_consts.insert(global_id("foo.U"), Kind(0));
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
         let cmds = parse_cmds_with_tables(
             "namespace foo {
@@ -6214,7 +6171,7 @@ mod tests {
         )
         .expect("commands parse");
         let Cmd::Const(CmdConst {
-            name: _,
+            id: _,
             local_types: _,
             local_classes: _,
             ty,
@@ -6224,7 +6181,7 @@ mod tests {
         };
         assert_eq!(
             ty,
-            &mk_type_const(qualified("foo.U")).arrow([mk_type_const(qualified("foo.U"))])
+            &mk_type_const(global_id("foo.U")).arrow([mk_type_const(global_id("foo.U"))])
         );
     }
 
@@ -6303,26 +6260,28 @@ mod tests {
         )
         .expect("type inductive command parses");
         let Cmd::TypeInductive(CmdTypeInductive {
-            name,
+            id,
+            this_name,
             this,
             local_types,
-            ind_name,
-            rec_name,
+            ind_id,
+            rec_id,
             ctors,
         }) = cmd
         else {
             panic!("expected type inductive command");
         };
-        assert_eq!(name, qualified("foo"));
-        assert_eq!(ind_name, qualified("foo.ind"));
-        assert_eq!(rec_name, qualified("foo.rec"));
+        assert_eq!(this_name, Name::from_str("foo"));
+        assert_eq!(id, global_id("foo"));
+        assert_eq!(ind_id, global_id("foo.ind"));
+        assert_eq!(rec_id, global_id("foo.rec"));
         assert_eq!(local_types.len(), 1);
         assert_ne!(this, local_types[0].id);
         let [
             TypeInductiveConstructor {
                 name,
-                ctor_name,
-                ctor_spec_name,
+                ctor_id,
+                ctor_spec_id,
                 ty,
             },
         ] = ctors.as_slice()
@@ -6330,8 +6289,8 @@ mod tests {
             panic!("expected one type inductive constructor");
         };
         assert_eq!(name, &Name::from_str("mk"));
-        assert_eq!(ctor_name, &qualified("foo.mk"));
-        assert_eq!(ctor_spec_name, &qualified("foo.mk.spec"));
+        assert_eq!(ctor_id, &global_id("foo.mk"));
+        assert_eq!(ctor_spec_id, &global_id("foo.mk.spec"));
         assert_eq!(
             ty,
             &mk_type_local(this).apply([mk_type_local(local_types[0].id)])
@@ -6353,26 +6312,28 @@ mod tests {
         )
         .expect("inductive command parses");
         let Cmd::Inductive(CmdInductive {
-            name,
+            id,
+            this_name,
             this,
             local_types,
             params,
             target_ty,
-            ind_name,
+            ind_id,
             ctors,
         }) = cmd
         else {
             panic!("expected inductive command");
         };
-        assert_eq!(name, qualified("foo"));
-        assert_eq!(ind_name, qualified("foo.ind"));
+        assert_eq!(this_name, Name::from_str("foo"));
+        assert_eq!(id, global_id("foo"));
+        assert_eq!(ind_id, global_id("foo.ind"));
         assert!(local_types.is_empty());
         assert!(params.is_empty());
         assert_eq!(target_ty, mk_type_prop());
         let [
             InductiveConstructor {
                 name,
-                ctor_name,
+                ctor_id,
                 target,
             },
         ] = ctors.as_slice()
@@ -6380,7 +6341,7 @@ mod tests {
             panic!("expected one inductive constructor");
         };
         assert_eq!(name, &Name::from_str("mk"));
-        assert_eq!(ctor_name, &qualified("foo.mk"));
+        assert_eq!(ctor_id, &global_id("foo.mk"));
         let (ctor_params, ctor_body) = ungeneralize(target);
         assert_eq!(ctor_params.len(), 1);
         let (ctor_args, ctor_target) = unguard(&ctor_body);
@@ -6421,6 +6382,12 @@ mod tests {
             .resolve(parser.current_namespace.clone(), qualified("qux.leaf"))
             .into_path();
         assert_eq!(resolved, path("foo.qux.leaf"));
+        assert_eq!(
+            parser
+                .resolve(parser.current_namespace.clone(), qualified("qux.leaf"),)
+                .into_global_id(),
+            global_id("foo.qux.leaf")
+        );
     }
 
     #[test]
@@ -6585,7 +6552,7 @@ mod tests {
         let Term::Const(value_const) = value else {
             panic!("expected const term in let value");
         };
-        assert_eq!(value_const.name, qualified("p"));
+        assert_eq!(value_const.id, global_id("p"));
         let Expr::Assume(assume) = body else {
             panic!("expected assume expression in let body");
         };
@@ -6618,7 +6585,7 @@ mod tests {
         let Some(ty) = ty else {
             panic!("expected type annotation");
         };
-        assert_eq!(ty, mk_type_const(qualified("Prop")));
+        assert_eq!(ty, mk_type_const(global_id("Prop")));
     }
 
     #[test]
@@ -7022,32 +6989,32 @@ mod tests {
     #[test]
     fn obtain_instance_desugars_to_let_have_and_obtain() {
         let (tt, mut type_consts, consts, mut axioms, class_predicates) = setup_tables();
-        type_consts.insert(qualified("foo"), Kind(0));
+        type_consts.insert(global_id("foo"), Kind(0));
         axioms.insert(
-            qualified("hp"),
+            global_id("hp"),
             Axiom {
                 local_types: vec![],
                 local_classes: vec![],
-                target: mk_const(qualified("p"), vec![], vec![]),
+                target: mk_const(global_id("p"), vec![], vec![]),
             },
         );
         let rep_field_id = Id::fresh();
         let structure_table = HashMap::from([(
-            qualified("foo"),
+            global_id("foo"),
             CmdStructure {
-                name: qualified("foo"),
+                id: global_id("foo"),
                 local_types: vec![],
-                abs_name: qualified("foo.abs"),
+                abs_id: global_id("foo.abs"),
                 fields: vec![
                     StructureField::Const(StructureConst {
                         field_id: rep_field_id,
                         field_name: Name::from_str("rep"),
-                        name: qualified("foo.rep"),
-                        ty: mk_type_const(qualified("Prop")),
+                        id: global_id("foo.rep"),
+                        ty: mk_type_const(global_id("Prop")),
                     }),
                     StructureField::Axiom(StructureAxiom {
                         field_name: Name::from_str("ok"),
-                        name: qualified("foo.ok"),
+                        id: global_id("foo.ok"),
                         target: mk_local(rep_field_id),
                     }),
                 ],
@@ -7073,7 +7040,7 @@ mod tests {
         let Term::Const(value_const) = let_term.value else {
             panic!("expected let value to be a const");
         };
-        assert_eq!(value_const.name, qualified("p"));
+        assert_eq!(value_const.id, global_id("p"));
 
         let Expr::App(have_app) = let_term.body else {
             panic!("expected let body to be a have expansion");
@@ -7090,7 +7057,7 @@ mod tests {
         let Expr::Const(proof) = have_app.expr2 else {
             panic!("expected have proof to be hp");
         };
-        assert_eq!(proof.name, qualified("hp"));
+        assert_eq!(proof.id, global_id("hp"));
 
         let Expr::App(obtain_app) = have_assume.expr else {
             panic!("expected have body to be an obtain expansion");
@@ -7111,31 +7078,31 @@ mod tests {
     #[test]
     fn obtain_instance_later_lemma_uses_prior_field_ids() {
         let (tt, mut type_consts, consts, mut axioms, class_predicates) = setup_tables();
-        type_consts.insert(qualified("foo"), Kind(0));
+        type_consts.insert(global_id("foo"), Kind(0));
         axioms.insert(
-            qualified("hp"),
+            global_id("hp"),
             Axiom {
                 local_types: vec![],
                 local_classes: vec![],
-                target: mk_const(qualified("p"), vec![], vec![]),
+                target: mk_const(global_id("p"), vec![], vec![]),
             },
         );
         let structure_table = HashMap::from([(
-            qualified("foo"),
+            global_id("foo"),
             CmdStructure {
-                name: qualified("foo"),
+                id: global_id("foo"),
                 local_types: vec![],
-                abs_name: qualified("foo.abs"),
+                abs_id: global_id("foo.abs"),
                 fields: vec![
                     StructureField::Axiom(StructureAxiom {
                         field_name: Name::from_str("ok"),
-                        name: qualified("foo.ok"),
-                        target: mk_const(qualified("p"), vec![], vec![]),
+                        id: global_id("foo.ok"),
+                        target: mk_const(global_id("p"), vec![], vec![]),
                     }),
                     StructureField::Axiom(StructureAxiom {
                         field_name: Name::from_str("ok2"),
-                        name: qualified("foo.ok2"),
-                        target: mk_const(qualified("p"), vec![], vec![]),
+                        id: global_id("foo.ok2"),
+                        target: mk_const(global_id("p"), vec![], vec![]),
                     }),
                 ],
             },
@@ -7180,8 +7147,8 @@ mod tests {
     #[test]
     fn namespace_command_parses_const_with_prefixed_name() {
         let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
-        type_consts.insert(qualified("Type"), Kind(0));
-        type_consts.insert(qualified("foo.Prop"), Kind(0));
+        type_consts.insert(global_id("Type"), Kind(0));
+        type_consts.insert(global_id("foo.Prop"), Kind(0));
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
         let cmds = parse_cmds_with_tables(
             "namespace foo { const bar : Prop }",
@@ -7200,7 +7167,7 @@ mod tests {
         let Cmd::Const(inner) = &cmds[1] else {
             panic!("expected const command");
         };
-        assert_eq!(inner.name, qualified("foo.bar"));
+        assert_eq!(inner.id, global_id("foo.bar"));
         assert!(matches!(cmds[2], Cmd::BlockEnd));
     }
 
@@ -7226,8 +7193,8 @@ mod tests {
     #[test]
     fn namespace_qualified_declaration_creates_child_path() {
         let (tt, mut type_consts, consts, axioms, class_predicates) = setup_tables();
-        type_consts.insert(qualified("Type"), Kind(0));
-        type_consts.insert(qualified("foo.bar.Prop"), Kind(0));
+        type_consts.insert(global_id("Type"), Kind(0));
+        type_consts.insert(global_id("foo.bar.Prop"), Kind(0));
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
         let cmds = parse_cmds_with_tables(
             "namespace foo.bar { const qux.quux : Prop }",
@@ -7246,7 +7213,7 @@ mod tests {
         let Cmd::Const(inner) = &cmds[1] else {
             panic!("expected const command");
         };
-        assert_eq!(inner.name, qualified("foo.bar.qux.quux"));
+        assert_eq!(inner.id, global_id("foo.bar.qux.quux"));
         assert!(matches!(cmds[2], Cmd::BlockEnd));
     }
 
@@ -7267,13 +7234,13 @@ mod tests {
         let Cmd::Def(def_cmd) = cmd else {
             panic!("expected def command");
         };
-        assert_eq!(def_cmd.name, qualified("qux.quux"));
+        assert_eq!(def_cmd.id, global_id("qux.quux"));
     }
 
     #[test]
     fn namespace_qualified_def_creates_missing_namespace_under_current() {
         let (tt, mut type_consts, mut consts, axioms, class_predicates) = setup_tables();
-        type_consts.insert(qualified("foo.Prop"), Kind(0));
+        type_consts.insert(global_id("foo.Prop"), Kind(0));
         insert_prop_const(&mut consts, "foo.p");
         let mut use_table: HashMap<Name, QualifiedName> = HashMap::new();
         let cmds = parse_cmds_with_tables(
@@ -7293,7 +7260,7 @@ mod tests {
         let Cmd::Def(def_cmd) = &cmds[1] else {
             panic!("expected def command");
         };
-        assert_eq!(def_cmd.name, qualified("foo.qux.quux"));
+        assert_eq!(def_cmd.id, global_id("foo.qux.quux"));
         assert!(matches!(cmds[2], Cmd::BlockEnd));
     }
 }
