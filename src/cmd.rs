@@ -9,8 +9,8 @@ use crate::{
     proof::{self, Axiom, Expr, generalize, guard, mk_type_prop, ungeneralize, unguard},
     tt::{
         self, Class, ClassInstance, ClassType, Const, Delta, GlobalId, Id, Kappa, Kind, Local,
-        LocalEnv, LocalType, Name, Path, QualifiedName, Term, Type, mk_const, mk_fresh_type_hole,
-        mk_instance_local, mk_local, mk_type_arrow, mk_type_const, mk_type_local,
+        LocalEnv, LocalType, Name, Term, Type, mk_const, mk_fresh_type_hole, mk_instance_local,
+        mk_local, mk_type_arrow, mk_type_const, mk_type_local,
     },
 };
 
@@ -18,13 +18,57 @@ fn global_id(value: &str) -> GlobalId {
     GlobalId::from_name(Name::from_str(value))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Default)]
+pub struct Path {
+    inner: Vec<Name>,
+}
+
+impl Path {
+    pub fn root() -> Self {
+        Self { inner: vec![] }
+    }
+
+    pub fn is_root(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    pub fn names(&self) -> &[Name] {
+        &self.inner
+    }
+
+    pub fn extend(mut self, name: Name) -> Self {
+        self.inner.push(name);
+        self
+    }
+
+    pub fn to_global_id(&self) -> GlobalId {
+        GlobalId::from_name(Name::from_str(&self.to_string()))
+    }
+}
+
+impl std::fmt::Display for Path {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_root() {
+            return Ok(());
+        }
+        let Some((first, rest)) = self.inner.split_first() else {
+            return Ok(());
+        };
+        write!(f, "{first}")?;
+        for name in rest {
+            write!(f, ".{name}")?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Namespace {
-    pub use_table: HashMap<Name, QualifiedName>,
+    pub use_table: HashMap<Name, Path>,
 }
 
 impl Namespace {
-    pub fn add(&mut self, alias: Name, target: QualifiedName) {
+    pub fn add(&mut self, alias: Name, target: Path) {
         self.use_table.insert(alias, target);
     }
 }
@@ -139,7 +183,7 @@ pub struct CmdUse {
 #[derive(Clone, Debug)]
 pub struct UseDecl {
     pub alias: Name,
-    pub target: QualifiedName,
+    pub target: Path,
 }
 
 #[derive(Clone, Debug)]
@@ -980,7 +1024,7 @@ impl Eval {
                 let CmdNamespaceStart { path } = inner;
                 let mut parent = Path::root();
                 for name in path.names() {
-                    let child = QualifiedName::from_parts(parent.clone(), name).into_path();
+                    let child = parent.clone().extend(name.clone());
                     self.namespace_table.entry(child.clone()).or_default();
                     parent = child;
                 }
@@ -2763,13 +2807,13 @@ mod tests {
     use super::{
         Cmd, CmdInductive, CmdInstance, CmdNamespaceStart, CmdStructure, CmdTypeConst,
         CmdTypeInductive, CmdUse, Eval, InductiveConstructor, InstanceDef, InstanceField,
-        Namespace, StructureConst, StructureField, TypeInductiveConstructor, UseDecl,
+        Namespace, Path, StructureConst, StructureField, TypeInductiveConstructor, UseDecl,
     };
     use crate::{
         proof::mk_type_prop,
         tt::{
-            GlobalId, Id, Kind, LocalType, Name, Path, QualifiedName, mk_const, mk_local,
-            mk_type_arrow, mk_type_const, mk_type_local,
+            GlobalId, Id, Kind, LocalType, Name, mk_const, mk_local, mk_type_arrow, mk_type_const,
+            mk_type_local,
         },
     };
 
@@ -2779,19 +2823,9 @@ mod tests {
             return path;
         }
         for part in value.split('.') {
-            path = QualifiedName::from_parts(path, Name::from_str(part)).into_path();
+            path = path.extend(Name::from_str(part));
         }
         path
-    }
-
-    fn qualified(value: &str) -> QualifiedName {
-        let mut parts = value.split('.');
-        let first = parts.next().expect("qualified name must not be empty");
-        let mut name = QualifiedName::from_name(Name::from_str(first));
-        for part in parts {
-            name = name.extend(Name::from_str(part));
-        }
-        name
     }
 
     fn global_id(value: &str) -> GlobalId {
@@ -2841,18 +2875,36 @@ mod tests {
     }
 
     #[test]
-    fn namespace_add_stores_qualified_name_target() {
+    fn path_extend_appends_segment() {
+        let actual = Path::root()
+            .extend(Name::from_str("foo"))
+            .extend(Name::from_str("bar"));
+
+        assert_eq!(actual, path("foo.bar"));
+        assert_eq!(
+            actual.names(),
+            &[Name::from_str("foo"), Name::from_str("bar")]
+        );
+    }
+
+    #[test]
+    fn path_to_global_id_uses_dotted_name() {
+        assert_eq!(path("foo.bar").to_global_id(), global_id("foo.bar"));
+    }
+
+    #[test]
+    fn namespace_add_stores_path_target() {
         let mut namespace = Namespace::default();
         let alias = Name::from_str("alias");
-        let target = QualifiedName::from_name(Name::from_str("foo"));
+        let target = path("foo");
         namespace.add(alias.clone(), target.clone());
         assert_eq!(namespace.use_table.get(&alias), Some(&target));
     }
 
     #[test]
-    fn use_decl_stores_qualified_name_target() {
+    fn use_decl_stores_path_target() {
         let alias = Name::from_str("alias");
-        let target = QualifiedName::from_name(Name::from_str("foo"));
+        let target = path("foo");
         let decl = UseDecl {
             alias: alias.clone(),
             target: target.clone(),
@@ -2873,7 +2925,7 @@ mod tests {
     #[test]
     fn block_end_restores_previous_namespace() {
         let mut eval = Eval::default();
-        let path = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
+        let path = path("foo");
         eval.run_cmd(Cmd::NamespaceStart(CmdNamespaceStart { path }))
             .expect("namespace start should succeed");
         eval.run_cmd(Cmd::BlockEnd)
@@ -2885,7 +2937,7 @@ mod tests {
     #[test]
     fn namespace_start_does_not_register_namespace_alias() {
         let mut eval = Eval::default();
-        let path = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
+        let path = path("foo");
         eval.run_cmd(Cmd::NamespaceStart(CmdNamespaceStart {
             path: path.clone(),
         }))
@@ -2913,13 +2965,13 @@ mod tests {
     #[test]
     fn type_const_command_does_not_register_declaration_alias() {
         let mut eval = Eval::default();
-        let foo_path = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
+        let foo_path = path("foo");
         eval.namespace_table
             .insert(foo_path.clone(), Namespace::default());
         eval.namespace_table
             .get_mut(&Path::root())
             .expect("root namespace must exist")
-            .add(Name::from_str("foo"), qualified("foo"));
+            .add(Name::from_str("foo"), path("foo"));
 
         eval.run_cmd(Cmd::TypeConst(CmdTypeConst {
             id: global_id("foo.bar"),
@@ -2960,7 +3012,7 @@ mod tests {
         eval.run_cmd(Cmd::Use(CmdUse {
             decls: vec![UseDecl {
                 alias: Name::from_str("baz"),
-                target: qualified("real.qux"),
+                target: path("real.qux"),
             }],
         }))
         .expect("use command should succeed");
@@ -2969,7 +3021,7 @@ mod tests {
             eval.namespace_table[&current_namespace]
                 .use_table
                 .get(&Name::from_str("baz")),
-            Some(&qualified("real.qux"))
+            Some(&path("real.qux"))
         );
     }
 
@@ -2984,7 +3036,7 @@ mod tests {
         eval.run_cmd(Cmd::Use(CmdUse {
             decls: vec![UseDecl {
                 alias: Name::from_str("baz"),
-                target: qualified("global"),
+                target: path("global"),
             }],
         }))
         .expect("use command should succeed");
@@ -2993,7 +3045,7 @@ mod tests {
             eval.namespace_table[&current_namespace]
                 .use_table
                 .get(&Name::from_str("baz")),
-            Some(&qualified("global"))
+            Some(&path("global"))
         );
     }
 
@@ -3006,11 +3058,11 @@ mod tests {
             decls: vec![
                 UseDecl {
                     alias: Name::from_str("fuga"),
-                    target: qualified("real"),
+                    target: path("real"),
                 },
                 UseDecl {
                     alias: Name::from_str("piyo"),
-                    target: qualified("fuga"),
+                    target: path("fuga"),
                 },
             ],
         }))
@@ -3020,13 +3072,13 @@ mod tests {
             eval.namespace_table[&root_namespace]
                 .use_table
                 .get(&Name::from_str("fuga")),
-            Some(&qualified("real"))
+            Some(&path("real"))
         );
         assert_eq!(
             eval.namespace_table[&root_namespace]
                 .use_table
                 .get(&Name::from_str("piyo")),
-            Some(&qualified("fuga"))
+            Some(&path("fuga"))
         );
     }
 

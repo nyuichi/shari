@@ -11,10 +11,11 @@ The `use` command provides parser-time aliases for qualified-name prefixes. It s
 ## Decision
 
 - Let `use` register prefix aliases in the current namespace table.
-- Resolve each `use` target in the parser against the alias table snapshot from the start of that `use` command, then store the resolved `QualifiedName` in `CmdUse`.
+- Resolve each `use` target in the parser against the alias table snapshot from the start of that `use` command, then store the resolved absolute `Path` in `CmdUse`.
 - Allow grouped forms such as `use foo.{bar, baz}` and `use {foo as bar, baz.{hoge as piyo}}`.
 - Allow unresolved targets at `use` time; reference sites remain responsible for reporting missing declarations.
 - Apply alias lookup before global lookup for unqualified references in parser resolution.
+- Keep unresolved `use` entries in the parser's private `QualifiedName` only until resolution; parser/evaluator boundaries expose only `Path`.
 - Do not let earlier declarations inside the same grouped `use` affect later ones; `use {a as b, b as a}` reads both targets from the pre-command snapshot.
 - Keep evaluator-side `use` handling as a plain install step with no additional alias canonicalization.
 

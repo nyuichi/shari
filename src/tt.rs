@@ -17,26 +17,10 @@ pub struct GlobalId {
     inner: Name,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Default)]
-pub struct Path(Option<QualifiedName>);
-
-// TODO: parseの中でrelative pathを処理するためにこの型が使われているが、この型はabsolute pathを表すものなので、parseの中で専用の型を使うべき。
-#[derive(Debug, Clone, Ord, PartialOrd, Default)]
-pub struct QualifiedName(Arc<QualifiedNameInner>);
-
-#[derive(Debug, Clone, PartialEq, Eq, Ord, Hash, PartialOrd, Default)]
-struct QualifiedNameInner {
-    path: Path,
-    name: Name,
-}
-
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, Default)]
 pub struct Id(usize);
 
 static NAME_TABLE: LazyLock<Mutex<HashMap<String, Weak<String>>>> = LazyLock::new(Default::default);
-static QUALIFIED_NAME_TABLE: LazyLock<
-    Mutex<HashMap<QualifiedNameInner, Weak<QualifiedNameInner>>>,
-> = LazyLock::new(Default::default);
 
 static ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -84,134 +68,6 @@ impl PartialEq for Name {
 impl Eq for Name {}
 
 impl Hash for Name {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        Arc::as_ptr(&self.0).hash(state);
-    }
-}
-
-// TODO: .始まりの完全修飾で表示するようにする。QualifiedNameも同様。
-impl Display for Path {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let names = self.names();
-        if names.is_empty() {
-            return Ok(());
-        }
-        write!(f, "{}", names[0])?;
-        for name in &names[1..] {
-            write!(f, ".{name}")?;
-        }
-        Ok(())
-    }
-}
-
-impl Path {
-    pub fn root() -> Path {
-        Path(None)
-    }
-
-    pub fn is_root(&self) -> bool {
-        self.0.is_none()
-    }
-
-    pub fn as_qualified_name(&self) -> Option<&QualifiedName> {
-        self.0.as_ref()
-    }
-
-    pub fn into_qualified_name(self) -> Option<QualifiedName> {
-        self.0
-    }
-
-    pub fn from_qualified_name(name: QualifiedName) -> Path {
-        Path(Some(name))
-    }
-
-    pub fn names(&self) -> Vec<Name> {
-        let mut names = vec![];
-        let mut p = self;
-        while let Some(name) = p.as_qualified_name() {
-            names.push(name.name().clone());
-            p = name.path();
-        }
-        names.reverse();
-        names
-    }
-}
-
-impl Display for QualifiedName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let names = self.names();
-        if names.is_empty() {
-            return Ok(());
-        }
-        write!(f, "{}", names[0])?;
-        for name in &names[1..] {
-            write!(f, ".{name}")?;
-        }
-        Ok(())
-    }
-}
-
-impl QualifiedName {
-    pub fn from_parts(path: Path, name: Name) -> QualifiedName {
-        let value = QualifiedNameInner { path, name };
-
-        let mut table = QUALIFIED_NAME_TABLE.lock().unwrap();
-        if let Some(existing) = table.get(&value).and_then(|weak| weak.upgrade()) {
-            return QualifiedName(existing);
-        }
-
-        let owned = Arc::new(value.clone());
-        table.insert(value, Arc::downgrade(&owned));
-        QualifiedName(owned)
-    }
-
-    pub fn name(&self) -> &Name {
-        &self.0.name
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.0.path
-    }
-
-    pub fn into_path(self) -> Path {
-        Path::from_qualified_name(self)
-    }
-
-    pub fn into_global_id(self) -> GlobalId {
-        GlobalId::from_name(Name::from_str(&self.to_string()))
-    }
-
-    pub fn append(&self, suffix: &QualifiedName) -> QualifiedName {
-        let mut path = self.clone().into_path();
-        for name in suffix.path().names() {
-            path = QualifiedName::from_parts(path, name).into_path();
-        }
-        Self::from_parts(path, suffix.name().clone())
-    }
-
-    pub fn names(&self) -> Vec<Name> {
-        self.clone().into_path().names()
-    }
-
-    // TODO: parse専用の型ができたら消す
-    pub fn from_name(name: Name) -> QualifiedName {
-        Self::from_parts(Path::root(), name)
-    }
-
-    pub fn extend(&self, suffix: Name) -> QualifiedName {
-        Self::from_parts(self.clone().into_path(), suffix)
-    }
-}
-
-impl PartialEq for QualifiedName {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl Eq for QualifiedName {}
-
-impl Hash for QualifiedName {
     fn hash<H: Hasher>(&self, state: &mut H) {
         Arc::as_ptr(&self.0).hash(state);
     }
@@ -3030,77 +2886,6 @@ mod tests {
         let id = local_id("foo.bar");
         let local = mk_local(id);
         assert!(!local.metadata().is_closed);
-    }
-
-    #[test]
-    fn path_root_is_canonical() {
-        let left = Path::root();
-        let right = Path::root();
-        assert_eq!(left, right);
-        assert!(left.as_qualified_name().is_none());
-    }
-
-    #[test]
-    fn path_from_parts_is_canonical() {
-        let left = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
-        let right = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
-        assert_eq!(left, right);
-    }
-
-    #[test]
-    fn path_from_qualified_name_wraps_qualified_name() {
-        let path = QualifiedName::from_name(Name::from_str("foo")).into_path();
-        let Path(Some(qualified_name)) = path else {
-            panic!("path must not be root");
-        };
-
-        assert_eq!(qualified_name.path(), &Path::root());
-        assert_eq!(qualified_name.name(), &Name::from_str("foo"));
-    }
-
-    #[test]
-    fn path_as_qualified_name_matches_wrapped_value() {
-        let path = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
-        let Some(qualified_name) = path.as_qualified_name() else {
-            panic!("path must provide a qualified name");
-        };
-        assert_eq!(qualified_name.path(), &Path::root());
-        assert_eq!(qualified_name.name(), &Name::from_str("foo"));
-        assert!(Path::root().as_qualified_name().is_none());
-    }
-
-    #[test]
-    fn path_into_qualified_name_returns_owned_value() {
-        let path = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
-        let Some(qualified_name) = path.into_qualified_name() else {
-            panic!("path must provide a qualified name");
-        };
-        assert_eq!(qualified_name.path(), &Path::root());
-        assert_eq!(qualified_name.name(), &Name::from_str("foo"));
-        assert!(Path::root().into_qualified_name().is_none());
-    }
-
-    #[test]
-    fn qualified_name_stores_path_and_name_separately() {
-        let path = QualifiedName::from_parts(Path::root(), Name::from_str("foo")).into_path();
-        let name = QualifiedName::from_parts(path.clone(), Name::from_str("bar"));
-        assert_eq!(name.path(), &path);
-        assert_eq!(name.name().as_str(), "bar");
-        assert_eq!(name.to_string(), "foo.bar");
-    }
-
-    #[test]
-    fn qualified_name_into_path_roundtrips() {
-        let name = QualifiedName::from_name(Name::from_str("foo"));
-        let path = name.clone().into_path();
-        assert_eq!(path.into_qualified_name(), Some(name));
-    }
-
-    #[test]
-    fn qualified_name_extend_accepts_name_suffix() {
-        let name = QualifiedName::from_name(Name::from_str("foo"));
-        let extended = name.extend(Name::from_str("bar"));
-        assert_eq!(extended.to_string(), "foo.bar");
     }
 
     #[test]
