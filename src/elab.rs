@@ -743,8 +743,8 @@ impl<'a> Elaborator<'a> {
                 for field in &*fields {
                     match field {
                         LocalStructureField::Const(LocalStructureConst {
-                            field_name,
                             field_id,
+                            field_name,
                             id,
                             ty: field_ty,
                             ..
@@ -811,9 +811,9 @@ impl<'a> Elaborator<'a> {
                 for field in &*fields {
                     match field {
                         LocalStructureField::Const(LocalStructureConst {
-                            name,
                             field_id,
                             id,
+                            name,
                             ty,
                             ..
                         }) => {
@@ -847,8 +847,8 @@ impl<'a> Elaborator<'a> {
                 for field in &*fields {
                     match field {
                         LocalStructureField::Const(LocalStructureConst {
-                            field_name,
                             field_id,
+                            field_name,
                             id,
                             ty,
                             ..

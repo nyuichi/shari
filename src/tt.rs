@@ -1742,8 +1742,8 @@ impl Term {
 pub struct LocalEnv {
     pub local_types: Vec<LocalType>,
     pub local_classes: Vec<Class>,
-    pub local_deltas: Vec<LocalDelta>,
     pub locals: Vec<Local>,
+    pub local_deltas: Vec<LocalDelta>,
 }
 
 impl LocalEnv {
