@@ -291,17 +291,17 @@ pub enum LocalStructureField {
 
 #[derive(Debug, Clone)]
 pub struct LocalStructureConst {
-    pub field_name: Name,
-    pub name: Name,
     pub field_id: Id,
+    pub field_name: Name,
     pub id: Id,
+    pub name: Name,
     pub ty: Type,
 }
 
 #[derive(Debug, Clone)]
 pub struct LocalStructureAxiom {
-    pub field_name: Name,
     pub id: Id,
+    pub field_name: Name,
     pub target: Term,
 }
 
@@ -1274,8 +1274,8 @@ impl Env<'_> {
                 for field in fields {
                     match field {
                         LocalStructureField::Const(LocalStructureConst {
-                            field_name,
                             field_id,
+                            field_name,
                             id,
                             ty: field_ty,
                             ..
@@ -1322,9 +1322,9 @@ impl Env<'_> {
                 for field in fields {
                     match field {
                         LocalStructureField::Const(LocalStructureConst {
-                            name,
                             field_id,
                             id,
+                            name,
                             ty,
                             ..
                         }) => {
@@ -1358,8 +1358,8 @@ impl Env<'_> {
                 for field in fields {
                     match field {
                         LocalStructureField::Const(LocalStructureConst {
-                            field_name,
                             field_id,
+                            field_name,
                             id,
                             ty,
                             ..

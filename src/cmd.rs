@@ -216,8 +216,8 @@ pub struct CmdLemma {
 #[derive(Clone, Debug)]
 pub struct CmdConst {
     pub id: GlobalId,
-    pub local_classes: Vec<Class>,
     pub local_types: Vec<LocalType>,
+    pub local_classes: Vec<Class>,
     pub ty: Type,
 }
 
@@ -237,8 +237,8 @@ pub struct CmdTypeDef {
 #[derive(Clone, Debug)]
 pub struct CmdTypeInductive {
     pub id: GlobalId,
-    pub this_name: Name,
     pub this: Id,
+    pub this_name: Name,
     pub local_types: Vec<LocalType>,
     pub ind_id: GlobalId,
     pub rec_id: GlobalId,
@@ -247,8 +247,8 @@ pub struct CmdTypeInductive {
 
 #[derive(Clone, Debug)]
 pub struct TypeInductiveConstructor {
-    pub name: Name,
     pub ctor_id: GlobalId,
+    pub name: Name,
     pub ctor_spec_id: GlobalId,
     pub ty: Type,
 }
@@ -256,8 +256,8 @@ pub struct TypeInductiveConstructor {
 #[derive(Clone, Debug)]
 pub struct CmdInductive {
     pub id: GlobalId,
-    pub this_name: Name,
     pub this: Id,
+    pub this_name: Name,
     pub local_types: Vec<LocalType>,
     pub params: Vec<Local>,
     pub target_ty: Type,
@@ -267,8 +267,8 @@ pub struct CmdInductive {
 
 #[derive(Clone, Debug)]
 pub struct InductiveConstructor {
-    pub name: Name,
     pub ctor_id: GlobalId,
+    pub name: Name,
     pub target: Term,
 }
 
@@ -296,8 +296,8 @@ pub struct StructureConst {
 
 #[derive(Clone, Debug)]
 pub struct StructureAxiom {
-    pub field_name: Name,
     pub id: GlobalId,
+    pub field_name: Name,
     pub target: Term,
 }
 
@@ -360,8 +360,8 @@ pub struct ClassStructureConst {
 
 #[derive(Clone, Debug)]
 pub struct ClassStructureAxiom {
-    pub field_name: Name,
     pub id: GlobalId,
+    pub field_name: Name,
     pub target: Term,
 }
 
@@ -1448,8 +1448,8 @@ impl Eval {
     fn run_type_inductive_cmd(&mut self, cmd: CmdTypeInductive) -> anyhow::Result<()> {
         let CmdTypeInductive {
             id,
-            this_name,
             this,
+            this_name,
             local_types,
             ind_id,
             rec_id,
@@ -1783,8 +1783,8 @@ impl Eval {
         //
         let CmdInductive {
             id,
-            this_name,
             this,
+            this_name,
             local_types,
             params,
             target_ty,
@@ -2068,8 +2068,8 @@ impl Eval {
                     });
                 }
                 StructureField::Axiom(StructureAxiom {
-                    field_name,
                     id,
+                    field_name,
                     target,
                 }) => {
                     let field_name = field_name.clone();
@@ -2571,8 +2571,8 @@ impl Eval {
                     });
                 }
                 ClassStructureField::Axiom(ClassStructureAxiom {
-                    field_name,
                     id,
+                    field_name,
                     target,
                 }) => {
                     let field_name = field_name.clone();
@@ -3095,14 +3095,14 @@ mod tests {
 
         eval.run_cmd(Cmd::TypeInductive(CmdTypeInductive {
             id: global_id("foo"),
-            this_name: Name::from_str("foo"),
             this,
+            this_name: Name::from_str("foo"),
             local_types: vec![],
             ind_id: ind_id.clone(),
             rec_id: rec_id.clone(),
             ctors: vec![TypeInductiveConstructor {
-                name: Name::from_str("mk"),
                 ctor_id: ctor_id.clone(),
+                name: Name::from_str("mk"),
                 ctor_spec_id: ctor_spec_id.clone(),
                 ty: mk_type_local(this),
             }],
@@ -3130,15 +3130,15 @@ mod tests {
 
         eval.run_cmd(Cmd::Inductive(CmdInductive {
             id: global_id("foo"),
-            this_name: Name::from_str("foo"),
             this,
+            this_name: Name::from_str("foo"),
             local_types: vec![],
             params: vec![],
             target_ty: mk_type_prop(),
             ind_id: ind_id.clone(),
             ctors: vec![InductiveConstructor {
-                name: Name::from_str("mk"),
                 ctor_id: ctor_id.clone(),
+                name: Name::from_str("mk"),
                 target: mk_local(this),
             }],
         }))

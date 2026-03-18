@@ -202,8 +202,8 @@ pub enum ParseError {
 
 #[derive(Debug, Clone)]
 struct LocalConst {
-    name: QualifiedName,
     id: Id,
+    name: QualifiedName,
 }
 
 #[derive(Debug, Clone)]
@@ -214,8 +214,8 @@ struct LocalAxiom {
 
 #[derive(Debug, Clone)]
 struct LocalBinding {
-    name: Name,
     id: Id,
+    name: Name,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -395,7 +395,7 @@ impl<'a> Parser<'a> {
     }
 
     fn push_local_const(&mut self, name: QualifiedName, id: Id) {
-        self.local_consts.push(LocalConst { name, id });
+        self.local_consts.push(LocalConst { id, name });
     }
 
     fn push_local_axiom(&mut self, name: QualifiedName, id: Id, target: Term) {
@@ -1632,10 +1632,10 @@ impl<'a> Parser<'a> {
                             .join("."),
                     );
                     fields.push(LocalStructureField::Const(LocalStructureConst {
-                        field_name,
-                        name,
                         field_id: bare_id,
                         id,
+                        field_name,
+                        name,
                         ty: field_ty,
                     }));
                     num_consts += 1;
@@ -1656,8 +1656,8 @@ impl<'a> Parser<'a> {
                             id: {
                                 let id = Id::fresh();
                                 self.locals.push(LocalBinding {
-                                    name: param_name.clone(),
                                     id,
+                                    name: param_name.clone(),
                                 });
                                 id
                             },
@@ -1671,8 +1671,8 @@ impl<'a> Parser<'a> {
                     target = generalize(&target, &params);
                     let id = Id::fresh();
                     fields.push(LocalStructureField::Axiom(LocalStructureAxiom {
-                        field_name,
                         id,
+                        field_name,
                         target,
                     }))
                 }
@@ -1684,8 +1684,8 @@ impl<'a> Parser<'a> {
 
         let structure_id = Id::fresh();
         self.local_types.push(LocalBinding {
-            name: name.clone(),
             id: structure_id,
+            name: name.clone(),
         });
         let this_ty = mk_type_local(structure_id);
         let this = Local {
@@ -1699,24 +1699,24 @@ impl<'a> Parser<'a> {
         for field in &fields {
             match field {
                 LocalStructureField::Const(LocalStructureConst {
-                    field_name,
                     field_id,
+                    field_name,
                     id,
                     ty: _,
                     ..
                 }) => {
                     let fullname = structure_name.extend(field_name.clone());
                     local_consts.push(LocalConst {
-                        name: fullname.clone(),
                         id: *id,
+                        name: fullname.clone(),
                     });
                     let mut target = mk_local(*id);
                     target = target.apply([mk_local(this.id)]);
                     subst.push((*field_id, target));
                 }
                 LocalStructureField::Axiom(LocalStructureAxiom {
-                    field_name,
                     id,
+                    field_name,
                     target,
                 }) => {
                     let fullname = structure_name.extend(field_name.clone());
@@ -2551,8 +2551,8 @@ impl<'a> Parser<'a> {
             .map(|name| {
                 let id = Id::fresh();
                 self.local_types.push(LocalBinding {
-                    name: name.clone(),
                     id,
+                    name: name.clone(),
                 });
                 LocalType {
                     id,
@@ -2758,12 +2758,12 @@ impl<'a> Parser<'a> {
             }
             let id = Id::fresh();
             self.local_types.push(LocalBinding {
-                name: local_type.clone(),
                 id,
+                name: local_type.clone(),
             });
             local_types.push(LocalBinding {
-                name: local_type,
                 id,
+                name: local_type,
             });
         }
         self.expect_symbol(":=")?;
@@ -2813,10 +2813,10 @@ impl<'a> Parser<'a> {
             }
             let id = Id::fresh();
             self.local_types.push(LocalBinding {
-                name: tv.clone(),
                 id,
+                name: tv.clone(),
             });
-            local_types.push(LocalBinding { name: tv, id });
+            local_types.push(LocalBinding { id, name: tv });
         }
         let mut ctors: Vec<TypeInductiveConstructor> = vec![];
         while let Some(_token) = self.expect_symbol_opt("|") {
@@ -2830,8 +2830,8 @@ impl<'a> Parser<'a> {
             self.expect_symbol(":")?;
             let ty = self.ty()?;
             ctors.push(TypeInductiveConstructor {
-                name: ctor_name.clone(),
                 ctor_id: name.clone().extend(ctor_name.clone()).to_global_id(),
+                name: ctor_name.clone(),
                 ctor_spec_id: name
                     .clone()
                     .extend(ctor_name.clone())
@@ -2848,8 +2848,8 @@ impl<'a> Parser<'a> {
         let rec_id = name.extend(Name::from_str("rec")).to_global_id();
         Ok(CmdTypeInductive {
             id,
-            this_name,
             this,
+            this_name,
             local_types: local_types
                 .iter()
                 .map(|binding| LocalType {
@@ -2886,7 +2886,7 @@ impl<'a> Parser<'a> {
             .into_iter()
             .map(|name| {
                 let id = Id::fresh();
-                self.local_types.push(LocalBinding { name, id });
+                self.local_types.push(LocalBinding { id, name });
                 LocalType {
                     id,
                     name: Some(
@@ -2907,8 +2907,8 @@ impl<'a> Parser<'a> {
                 id: {
                     let id = Id::fresh();
                     self.locals.push(LocalBinding {
-                        name: param_name.clone(),
                         id,
+                        name: param_name.clone(),
                     });
                     id
                 },
@@ -2935,8 +2935,8 @@ impl<'a> Parser<'a> {
                     id: {
                         let id = Id::fresh();
                         self.locals.push(LocalBinding {
-                            name: ctor_param_name.clone(),
                             id,
+                            name: ctor_param_name.clone(),
                         });
                         id
                     },
@@ -2949,8 +2949,8 @@ impl<'a> Parser<'a> {
             self.locals.truncate(ctor_params_start);
             target = generalize(&target, &ctor_params);
             ctors.push(InductiveConstructor {
-                name: ctor_name.clone(),
                 ctor_id: name.clone().extend(ctor_name.clone()).to_global_id(),
+                name: ctor_name.clone(),
                 target,
             })
         }
@@ -2962,13 +2962,13 @@ impl<'a> Parser<'a> {
         let ind_id = name.extend(Name::from_str("ind")).to_global_id();
         Ok(CmdInductive {
             id,
-            this_name,
             this,
+            this_name,
             local_types,
-            ctors,
             params,
             target_ty,
             ind_id,
+            ctors,
         })
     }
 
@@ -3043,8 +3043,8 @@ impl<'a> Parser<'a> {
                     let field_qualified_name =
                         name.clone().extend(field_name.clone()).to_global_id();
                     fields.push(StructureField::Axiom(StructureAxiom {
-                        field_name,
                         id: field_qualified_name,
+                        field_name,
                         target,
                     }))
                 }
@@ -3308,8 +3308,8 @@ impl<'a> Parser<'a> {
                     let field_qualified_name =
                         name.clone().extend(field_name.clone()).to_global_id();
                     fields.push(ClassStructureField::Axiom(ClassStructureAxiom {
-                        field_name,
                         id: field_qualified_name,
+                        field_name,
                         target,
                     }))
                 }
@@ -6365,8 +6365,8 @@ mod tests {
         .expect("type inductive command parses");
         let Cmd::TypeInductive(CmdTypeInductive {
             id,
-            this_name,
             this,
+            this_name,
             local_types,
             ind_id,
             rec_id,
@@ -6383,8 +6383,8 @@ mod tests {
         assert_ne!(this, local_types[0].id);
         let [
             TypeInductiveConstructor {
-                name,
                 ctor_id,
+                name,
                 ctor_spec_id,
                 ty,
             },
@@ -6417,8 +6417,8 @@ mod tests {
         .expect("inductive command parses");
         let Cmd::Inductive(CmdInductive {
             id,
-            this_name,
             this,
+            this_name,
             local_types,
             params,
             target_ty,
@@ -6436,8 +6436,8 @@ mod tests {
         assert_eq!(target_ty, mk_type_prop());
         let [
             InductiveConstructor {
-                name,
                 ctor_id,
+                name,
                 target,
             },
         ] = ctors.as_slice()
