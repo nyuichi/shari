@@ -1,0 +1,8 @@
+---
+source: tests/proof_error_snapshots.rs
+expression: formatted
+---
+error chain:
+  - command error
+  - missing coherence proof: eq.{Prop} q p
+fixture: tests/proof_errors/overlap_missing_second_pair.shari

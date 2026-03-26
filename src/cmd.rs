@@ -9,8 +9,8 @@ use crate::{
     proof::{self, Axiom, Expr, generalize, guard, mk_type_prop, ungeneralize, unguard},
     tt::{
         self, Class, ClassInstance, ClassType, Const, Delta, GlobalId, Id, Kappa, Kind, Local,
-        LocalEnv, LocalType, Name, Term, Type, mk_const, mk_fresh_type_hole, mk_instance_local,
-        mk_local, mk_type_arrow, mk_type_const, mk_type_local,
+        LocalEnv, LocalType, Name, Term, Type, mk_const, mk_fresh_type_hole, mk_instance_global,
+        mk_instance_local, mk_local, mk_type_arrow, mk_type_const, mk_type_hole, mk_type_local,
     },
 };
 
@@ -679,6 +679,7 @@ pub struct Eval {
     pub class_instance_table: HashMap<GlobalId, ClassInstance>,
     pub structure_table: HashMap<GlobalId, CmdStructure>,
     pub class_structure_table: HashMap<GlobalId, CmdClassStructure>,
+    pub coherence_proofs: Vec<(GlobalId, Vec<LocalType>, Vec<Class>, Term)>,
 }
 
 impl Default for Eval {
@@ -702,6 +703,7 @@ impl Default for Eval {
             class_instance_table: HashMap::new(),
             structure_table: HashMap::new(),
             class_structure_table: HashMap::new(),
+            coherence_proofs: vec![],
         }
     }
 }
@@ -892,6 +894,366 @@ impl Eval {
                 method_table,
             },
         );
+    }
+
+    fn resolve_global_class(&self, class: &Class) -> Option<tt::Instance> {
+        'next_instance: for (id, instance) in &self.class_instance_table {
+            let mut type_subst = Vec::with_capacity(instance.local_types.len());
+            for local_type in &instance.local_types {
+                type_subst.push((local_type.id, mk_fresh_type_hole()));
+            }
+            let target = instance.target.subst(&type_subst);
+            let Some(subst) = class.matches(&target) else {
+                continue;
+            };
+            let ty_args = type_subst
+                .into_iter()
+                .map(|(_, ty)| ty.inst(&subst))
+                .collect::<Vec<_>>();
+            let type_subst = instance
+                .local_types
+                .iter()
+                .zip(&ty_args)
+                .map(|(local_type, ty)| (local_type.id, ty.clone()))
+                .collect::<Vec<_>>();
+            let mut args = vec![];
+            for local_class in &instance.local_classes {
+                let local_class = local_class.subst(&type_subst);
+                let Some(arg) = self.resolve_global_class(&local_class) else {
+                    continue 'next_instance;
+                };
+                args.push(arg);
+            }
+            return Some(mk_instance_global(id.clone(), ty_args, args));
+        }
+        None
+    }
+
+    fn check_class_instance_coherence(
+        &self,
+        id: &GlobalId,
+        local_types: &[LocalType],
+        local_classes: &[Class],
+        target: &Class,
+        fields: &[ClassInstanceField],
+        cmd_structure: &CmdClassStructure,
+    ) -> anyhow::Result<()> {
+        let same_shape = |left_types: &[LocalType],
+                          left_classes: &[Class],
+                          left_target: &Term,
+                          right_types: &[LocalType],
+                          right_classes: &[Class],
+                          right_target: &Term| {
+            if left_types.len() != right_types.len() || left_classes.len() != right_classes.len() {
+                return false;
+            }
+            let type_subst = left_types
+                .iter()
+                .zip(right_types)
+                .map(|(left, right)| (left.id, mk_type_local(right.id)))
+                .collect::<Vec<_>>();
+            if left_classes
+                .iter()
+                .map(|class| class.subst(&type_subst))
+                .collect::<Vec<_>>()
+                != right_classes
+            {
+                return false;
+            }
+            left_target.subst_type(&type_subst).alpha_eq(right_target)
+        };
+        let mut obligations: Vec<(Vec<LocalType>, Vec<Class>, Term)> = vec![];
+        for instance in self.class_instance_table.values() {
+            let new_holes = local_types
+                .iter()
+                .map(|local_type| (local_type.clone(), Id::fresh()))
+                .collect::<Vec<_>>();
+            let old_holes = instance
+                .local_types
+                .iter()
+                .map(|local_type| (local_type.clone(), Id::fresh()))
+                .collect::<Vec<_>>();
+            let new_target = target.subst(
+                &new_holes
+                    .iter()
+                    .map(|(local_type, hole_id)| (local_type.id, mk_type_hole(*hole_id)))
+                    .collect::<Vec<_>>(),
+            );
+            let old_target = instance.target.subst(
+                &old_holes
+                    .iter()
+                    .map(|(local_type, hole_id)| (local_type.id, mk_type_hole(*hole_id)))
+                    .collect::<Vec<_>>(),
+            );
+            let Some(type_subst) = new_target.unify_with(&old_target) else {
+                continue;
+            };
+            let norm_type = |ty: &Type| {
+                ty.replace_hole(&|hole_id| {
+                    type_subst
+                        .iter()
+                        .find(|(id, _)| *id == hole_id)
+                        .map(|(_, value)| value.clone())
+                })
+            };
+            let mut new_type_subst = new_holes
+                .iter()
+                .map(|(local_type, hole_id)| (local_type.id, norm_type(&mk_type_hole(*hole_id))))
+                .collect::<Vec<_>>();
+            let mut old_type_subst = old_holes
+                .iter()
+                .map(|(local_type, hole_id)| (local_type.id, norm_type(&mk_type_hole(*hole_id))))
+                .collect::<Vec<_>>();
+            let mut unified_target = Class {
+                id: target.id.clone(),
+                args: new_target.args.iter().map(norm_type).collect(),
+            };
+            let old_classes = instance
+                .local_classes
+                .iter()
+                .map(|class| class.subst(&old_type_subst))
+                .collect::<Vec<_>>();
+            let new_classes = local_classes
+                .iter()
+                .map(|class| class.subst(&new_type_subst))
+                .collect::<Vec<_>>();
+            let uses_hole = |hole_id| {
+                unified_target
+                    .args
+                    .iter()
+                    .any(|arg| arg.contains_hole(hole_id))
+                    || new_type_subst
+                        .iter()
+                        .any(|(_, ty)| ty.contains_hole(hole_id))
+                    || old_type_subst
+                        .iter()
+                        .any(|(_, ty)| ty.contains_hole(hole_id))
+                    || old_classes
+                        .iter()
+                        .any(|class| class.args.iter().any(|arg| arg.contains_hole(hole_id)))
+                    || new_classes
+                        .iter()
+                        .any(|class| class.args.iter().any(|arg| arg.contains_hole(hole_id)))
+            };
+            let mut obligation_local_types = vec![];
+            let mut hole_subst = vec![];
+            for (local_type, hole_id) in &new_holes {
+                if !uses_hole(*hole_id) {
+                    continue;
+                }
+                let tmp = LocalType {
+                    id: Id::fresh(),
+                    name: local_type.name.clone(),
+                };
+                hole_subst.push((*hole_id, mk_type_local(tmp.id)));
+                obligation_local_types.push(tmp);
+            }
+            for (local_type, hole_id) in &old_holes {
+                if !uses_hole(*hole_id) {
+                    continue;
+                }
+                let tmp = LocalType {
+                    id: Id::fresh(),
+                    name: local_type.name.clone(),
+                };
+                hole_subst.push((*hole_id, mk_type_local(tmp.id)));
+                obligation_local_types.push(tmp);
+            }
+            let fill_type = |ty: &Type| {
+                ty.replace_hole(&|hole_id| {
+                    hole_subst
+                        .iter()
+                        .find(|(id, _)| *id == hole_id)
+                        .map(|(_, value)| value.clone())
+                })
+            };
+            new_type_subst = new_type_subst
+                .into_iter()
+                .map(|(id, ty)| (id, fill_type(&ty)))
+                .collect();
+            old_type_subst = old_type_subst
+                .into_iter()
+                .map(|(id, ty)| (id, fill_type(&ty)))
+                .collect();
+            unified_target = Class {
+                id: unified_target.id,
+                args: unified_target.args.iter().map(fill_type).collect(),
+            };
+            let target_type_subst = cmd_structure
+                .local_types
+                .iter()
+                .zip(&unified_target.args)
+                .map(|(local_type, arg)| (local_type.id, arg.clone()))
+                .collect::<Vec<_>>();
+            let old_classes = instance
+                .local_classes
+                .iter()
+                .map(|class| class.subst(&old_type_subst))
+                .collect::<Vec<_>>();
+            let new_classes = local_classes
+                .iter()
+                .map(|class| class.subst(&new_type_subst))
+                .collect::<Vec<_>>();
+            let mut obligation_classes = vec![];
+            let mut old_instance_subst = vec![];
+            for class in &old_classes {
+                let arg = if class.is_ground() {
+                    self.resolve_global_class(class)
+                        .unwrap_or_else(|| mk_instance_local(class.clone()))
+                } else {
+                    obligation_classes.push(class.clone());
+                    mk_instance_local(class.clone())
+                };
+                old_instance_subst.push((class.clone(), arg));
+            }
+            let mut new_instance_subst = vec![];
+            for class in &new_classes {
+                let arg = if class.is_ground() {
+                    self.resolve_global_class(class)
+                        .unwrap_or_else(|| mk_instance_local(class.clone()))
+                } else {
+                    if !obligation_classes.contains(class) {
+                        obligation_classes.push(class.clone());
+                    }
+                    mk_instance_local(class.clone())
+                };
+                new_instance_subst.push((class.clone(), arg));
+            }
+            let obligation_env = LocalEnv {
+                local_types: obligation_local_types.clone(),
+                local_classes: obligation_classes.clone(),
+                locals: vec![],
+                local_deltas: vec![],
+            };
+            let mut old_subst = vec![];
+            let mut new_subst = vec![];
+            for (structure_field, field) in zip(&cmd_structure.fields, fields) {
+                let (
+                    ClassStructureField::Const(ClassStructureConst {
+                        field_id: structure_field_id,
+                        id: method_id,
+                        ..
+                    }),
+                    ClassInstanceField::Def(ClassInstanceDef { target, .. }),
+                ) = (structure_field, field)
+                else {
+                    continue;
+                };
+                let old_term = instance
+                    .method_table
+                    .get(method_id)
+                    .expect("existing method should exist")
+                    .subst_type(&old_type_subst)
+                    .subst_instance(&old_instance_subst);
+                let new_term = target
+                    .subst_type(&new_type_subst)
+                    .subst_instance(&new_instance_subst);
+                old_subst.push((*structure_field_id, old_term));
+                new_subst.push((*structure_field_id, new_term));
+            }
+            for (structure_field, field) in zip(&cmd_structure.fields, fields) {
+                match (structure_field, field) {
+                    (
+                        ClassStructureField::Const(ClassStructureConst {
+                            field_id: structure_field_id,
+                            ty,
+                            ..
+                        }),
+                        ClassInstanceField::Def(ClassInstanceDef { .. }),
+                    ) => {
+                        let old_term = old_subst
+                            .iter()
+                            .find(|(field_id, _)| field_id == structure_field_id)
+                            .map(|(_, term)| term.clone())
+                            .expect("const substitution should exist");
+                        let new_term = new_subst
+                            .iter()
+                            .find(|(field_id, _)| field_id == structure_field_id)
+                            .map(|(_, term)| term.clone())
+                            .expect("const substitution should exist");
+                        let field_ty = ty.subst(&target_type_subst);
+                        if self
+                            .proof_env()
+                            .tt_env
+                            .equiv(&obligation_env, &old_term, &new_term)
+                        {
+                            continue;
+                        }
+                        let mut target = mk_const(global_id("eq"), vec![field_ty], vec![]);
+                        target = target.apply([old_term, new_term]);
+                        let obligation = (
+                            obligation_local_types.clone(),
+                            obligation_classes.clone(),
+                            target,
+                        );
+                        if !obligations.iter().any(|existing| {
+                            same_shape(
+                                &existing.0,
+                                &existing.1,
+                                &existing.2,
+                                &obligation.0,
+                                &obligation.1,
+                                &obligation.2,
+                            )
+                        }) {
+                            obligations.push(obligation);
+                        }
+                    }
+                    (
+                        ClassStructureField::Axiom(ClassStructureAxiom { target, .. }),
+                        ClassInstanceField::Lemma(_),
+                    ) => {
+                        let old_prop = target.subst_type(&target_type_subst).subst(&old_subst);
+                        let new_prop = target.subst_type(&target_type_subst).subst(&new_subst);
+                        if self
+                            .proof_env()
+                            .tt_env
+                            .equiv(&obligation_env, &old_prop, &new_prop)
+                        {
+                            continue;
+                        }
+                        let mut target = mk_const(global_id("iff"), vec![], vec![]);
+                        target = target.apply([old_prop, new_prop]);
+                        let obligation = (
+                            obligation_local_types.clone(),
+                            obligation_classes.clone(),
+                            target,
+                        );
+                        if !obligations.iter().any(|existing| {
+                            same_shape(
+                                &existing.0,
+                                &existing.1,
+                                &existing.2,
+                                &obligation.0,
+                                &obligation.1,
+                                &obligation.2,
+                            )
+                        }) {
+                            obligations.push(obligation);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for obligation in &obligations {
+            let prefix = format!("{id}.coherence.");
+            if self.coherence_proofs.iter().any(|proof| {
+                proof.0.to_string().starts_with(&prefix)
+                    && same_shape(
+                        &proof.1,
+                        &proof.2,
+                        &proof.3,
+                        &obligation.0,
+                        &obligation.1,
+                        &obligation.2,
+                    )
+            }) {
+                continue;
+            }
+            bail!("missing coherence proof: {}", obligation.2);
+        }
+        Ok(())
     }
 
     fn add_delta(&mut self, id: GlobalId, target: Term) {
@@ -1318,7 +1680,18 @@ impl Eval {
                 }
                 self.elaborate_term(&mut local_env, &mut target, &mk_type_prop())?;
                 // well-formedness check is completed.
-                self.add_axiom(id, local_types, local_classes, target);
+                self.add_axiom(
+                    id.clone(),
+                    local_types.clone(),
+                    local_classes.clone(),
+                    target.clone(),
+                );
+                // TODO: Search only <class instance>.coherence.* when elaborating
+                // <class instance>.
+                if id.to_string().contains(".coherence.") {
+                    self.coherence_proofs
+                        .push((id, local_types, local_classes, target));
+                }
                 Ok(())
             }
             Cmd::Lemma(inner) => {
@@ -1364,7 +1737,18 @@ impl Eval {
                     &expr,
                     &target,
                 );
-                self.add_axiom(id, local_types, local_classes, target);
+                self.add_axiom(
+                    id.clone(),
+                    local_types.clone(),
+                    local_classes.clone(),
+                    target.clone(),
+                );
+                // TODO: Search only <class instance>.coherence.* when elaborating
+                // <class instance>.
+                if id.to_string().contains(".coherence.") {
+                    self.coherence_proofs
+                        .push((id, local_types, local_classes, target));
+                }
                 Ok(())
             }
             Cmd::Const(inner) => {
@@ -2680,19 +3064,6 @@ impl Eval {
             local_env.local_classes.push(local_class.clone());
         }
         self.elaborate_class(&mut local_env, &target)?;
-        // TODO: this implementation is too conservative.
-        for instance in self.class_instance_table.values() {
-            let instance_target = {
-                let mut type_subst = Vec::with_capacity(instance.local_types.len());
-                for id in &instance.local_types {
-                    type_subst.push((id.id, mk_fresh_type_hole()));
-                }
-                instance.target.subst(&type_subst)
-            };
-            if target.matches(&instance_target).is_some() {
-                bail!("overlapping instances are disallowed");
-            }
-        }
         let cmd_structure = self.class_structure_table.get(&target.id).cloned().unwrap();
         let mut type_subst = Vec::with_capacity(cmd_structure.local_types.len());
         for (x, t) in zip(&cmd_structure.local_types, &target.args) {
@@ -2797,6 +3168,14 @@ impl Eval {
             };
             method_table.insert(id.clone(), target.clone());
         }
+        self.check_class_instance_coherence(
+            &id,
+            &local_types,
+            &local_classes,
+            &target,
+            &fields,
+            &cmd_structure,
+        )?;
         self.add_class_instance(id.clone(), local_types, local_classes, target, method_table);
         Ok(())
     }
@@ -2805,9 +3184,10 @@ impl Eval {
 #[cfg(test)]
 mod tests {
     use super::{
-        Cmd, CmdInductive, CmdInstance, CmdNamespaceStart, CmdStructure, CmdTypeConst,
-        CmdTypeInductive, CmdUse, Eval, InductiveConstructor, InstanceDef, InstanceField,
-        Namespace, Path, StructureConst, StructureField, TypeInductiveConstructor, UseDecl,
+        Cmd, CmdAxiom, CmdInductive, CmdInstance, CmdLemma, CmdNamespaceStart, CmdStructure,
+        CmdTypeConst, CmdTypeInductive, CmdUse, Eval, InductiveConstructor, InstanceDef,
+        InstanceField, Namespace, Path, StructureConst, StructureField, TypeInductiveConstructor,
+        UseDecl,
     };
     use crate::{
         proof::mk_type_prop,
@@ -3226,5 +3606,77 @@ mod tests {
                 .contains_key(&global_id("meta.inst_rep_rule"))
         );
         assert!(!eval.axiom_table.contains_key(&global_id("inst.rep.spec")));
+    }
+
+    #[test]
+    fn only_coherence_named_axiom_and_lemma_are_recorded_as_coherence_proofs() {
+        let mut eval = Eval::default();
+        install_minimal_logic(&mut eval);
+        eval.add_type_const(global_id("foo"), Kind(0));
+
+        eval.run_cmd(Cmd::Axiom(CmdAxiom {
+            id: global_id("foo.ax"),
+            local_types: vec![],
+            local_classes: vec![],
+            target: mk_const(global_id("true"), vec![], vec![]),
+        }))
+        .expect("axiom command should succeed");
+        eval.run_cmd(Cmd::Lemma(CmdLemma {
+            id: global_id("foo.lm"),
+            local_types: vec![],
+            local_classes: vec![],
+            target: mk_const(global_id("true"), vec![], vec![]),
+            holes: vec![],
+            expr: crate::proof::mk_expr_const(global_id("foo.ax"), vec![], vec![]),
+        }))
+        .expect("lemma command should succeed");
+        eval.run_cmd(Cmd::Axiom(CmdAxiom {
+            id: global_id("foo.inst.coherence.ax"),
+            local_types: vec![],
+            local_classes: vec![],
+            target: mk_const(global_id("true"), vec![], vec![]),
+        }))
+        .expect("axiom command should succeed");
+        eval.run_cmd(Cmd::Lemma(CmdLemma {
+            id: global_id("foo.inst.coherence.lm"),
+            local_types: vec![],
+            local_classes: vec![],
+            target: mk_const(global_id("true"), vec![], vec![]),
+            holes: vec![],
+            expr: crate::proof::mk_expr_const(global_id("foo.inst.coherence.ax"), vec![], vec![]),
+        }))
+        .expect("lemma command should succeed");
+
+        assert_eq!(eval.coherence_proofs.len(), 2);
+        assert_eq!(
+            eval.coherence_proofs[0].0,
+            global_id("foo.inst.coherence.ax")
+        );
+        assert_eq!(
+            eval.coherence_proofs[1].0,
+            global_id("foo.inst.coherence.lm")
+        );
+    }
+
+    #[test]
+    fn generated_axioms_are_not_recorded_as_coherence_proofs() {
+        let mut eval = Eval::default();
+        install_minimal_logic(&mut eval);
+
+        let abs_id = global_id("meta.struct_abs");
+        eval.run_cmd(Cmd::Structure(CmdStructure {
+            id: global_id("foo"),
+            local_types: vec![],
+            abs_id: abs_id.clone(),
+            fields: vec![StructureField::Const(StructureConst {
+                field_id: Id::fresh(),
+                field_name: Name::from_str("rep"),
+                id: global_id("foo.rep"),
+                ty: mk_type_prop(),
+            })],
+        }))
+        .expect("structure command should succeed");
+
+        assert!(eval.coherence_proofs.is_empty());
     }
 }

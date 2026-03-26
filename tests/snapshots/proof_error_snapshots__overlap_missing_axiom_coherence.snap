@@ -1,0 +1,8 @@
+---
+source: tests/proof_error_snapshots.rs
+expression: formatted
+---
+error chain:
+  - command error
+  - missing coherence proof: iff true p
+fixture: tests/proof_errors/overlap_missing_axiom_coherence.shari

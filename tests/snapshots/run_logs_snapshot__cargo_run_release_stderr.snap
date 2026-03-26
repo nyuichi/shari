@@ -404,6 +404,19 @@ expression: without_timestamps.as_ref()
 [<timestamp> INFO  shari::cmd] + const complete_lattice.top.{u} : complete_lattice u → u
 [<timestamp> INFO  shari::cmd] + const complete_lattice.bot.{u} : complete_lattice u → u
 [<timestamp> INFO  shari::cmd] + const complete_lattice.le.{u} : complete_lattice u → u → u → Prop
+[<timestamp> INFO  shari::cmd] + const Prop.complete_lattice.Meet : (Prop → Prop) → Prop
+[<timestamp> INFO  shari::cmd] + const Prop.complete_lattice.Join : (Prop → Prop) → Prop
+[<timestamp> INFO  shari::cmd] + const Prop.complete_lattice : complete_lattice Prop
+[<timestamp> INFO  shari::cmd] + axiom Prop.complete_lattice.Meet.spec : complete_lattice.Meet Prop.complete_lattice = Prop.complete_lattice.Meet
+[<timestamp> INFO  shari::cmd] + axiom Prop.complete_lattice.Join.spec : complete_lattice.Join Prop.complete_lattice = Prop.complete_lattice.Join
+[<timestamp> INFO  shari::cmd] + axiom Prop.complete_lattice.join_eq : ∀ φ ψ, complete_lattice.join Prop.complete_lattice φ ψ = ∃ z, and (or (z = φ) (z = ψ)) z
+[<timestamp> INFO  shari::cmd] + axiom complete_lattice.has_vee.coherence.prop : or = complete_lattice.join has.summon
+[<timestamp> INFO  shari::cmd] + axiom Prop.complete_lattice.meet_eq : ∀ φ ψ, complete_lattice.meet Prop.complete_lattice φ ψ = ∀ z, or (z = φ) (z = ψ) → z
+[<timestamp> INFO  shari::cmd] + axiom complete_lattice.has_wedge.coherence.prop : and = complete_lattice.meet has.summon
+[<timestamp> INFO  shari::cmd] + axiom Prop.complete_lattice.top_eq : complete_lattice.top Prop.complete_lattice = ∀ z, false → z
+[<timestamp> INFO  shari::cmd] + axiom complete_lattice.has_top.coherence.prop : true = complete_lattice.top has.summon
+[<timestamp> INFO  shari::cmd] + axiom Prop.complete_lattice.bot_eq : complete_lattice.bot Prop.complete_lattice = ∃ z, and false z
+[<timestamp> INFO  shari::cmd] + axiom complete_lattice.has_bot.coherence.prop : false = complete_lattice.bot has.summon
 [<timestamp> INFO  shari::cmd] + const Meet.{u} [has complete_lattice u] : (u → Prop) → u
 [<timestamp> INFO  shari::cmd] + const Join.{u} [has complete_lattice u] : (u → Prop) → u
 [<timestamp> INFO  shari::cmd] + const lfp.{u} [has complete_lattice u] : (u → u) → u

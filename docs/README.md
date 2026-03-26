@@ -21,6 +21,7 @@ This directory is the system of record for durable project knowledge. Start here
 ## Design Docs
 
 - [docs/design-docs/absolute-global-names.md](design-docs/absolute-global-names.md)
+- [docs/design-docs/coherence-checked-overlapping-class-instances.md](design-docs/coherence-checked-overlapping-class-instances.md)
 - [docs/design-docs/expr-let-terms.md](design-docs/expr-let-terms.md)
 - [docs/design-docs/kernel-eta.md](design-docs/kernel-eta.md)
 - [docs/design-docs/local-structures-in-proof-expressions.md](design-docs/local-structures-in-proof-expressions.md)
