@@ -1,0 +1,32 @@
+type const Prop : Type
+
+const imp : Prop → Prop → Prop
+const forall.{u} : (u → Prop) → Prop
+const uexists.{u} : (u → Prop) → Prop
+const eq.{u} : u → u → Prop
+const iff : Prop → Prop → Prop
+const true : Prop
+const p : Prop
+
+infixr → : 25 := imp
+infix = : 50 := eq
+
+axiom hp : p
+axiom ht : true
+
+class structure C u := {
+  const c : Prop
+  axiom ok : c
+}
+
+class instance Prop.C1 : C Prop := {
+  def c : Prop := true
+  lemma ok : true := ht
+}
+
+axiom Prop.C2.coherence.const : true = p
+
+class instance Prop.C2 : C Prop := {
+  def c : Prop := p
+  lemma ok : p := hp
+}

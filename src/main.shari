@@ -1839,8 +1839,128 @@ complete_lattice.Join L ∅
 def complete_lattice.le.{u} (L : complete_lattice u) (x y : u) : Prop :=
 x = complete_lattice.meet L x y
 
+instance Prop.complete_lattice : complete_lattice Prop := {
+  def Meet (S : sub Prop) : Prop := ∀ z, S z → z
+  def Join (S : sub Prop) : Prop := ∃ z, S z ∧ z
+}
+
+class instance Prop.has.complete_lattice : has (complete_lattice Prop) := {
+  def summon : complete_lattice Prop := Prop.complete_lattice
+}
+
+lemma Prop.complete_lattice.join_eq (φ ψ : Prop) :
+  complete_lattice.join Prop.complete_lattice φ ψ = ∃ z, and (or (z = φ) (z = ψ)) z :=
+calc complete_lattice.join Prop.complete_lattice φ ψ = complete_lattice.Join Prop.complete_lattice (λ (z : Prop), or (z = φ) (z = ψ)) := eq.refl
+                                              ... = Prop.complete_lattice.Join (λ (z : Prop), or (z = φ) (z = ψ)) := eq.congr_fun Prop.complete_lattice.Join.spec
+                                              ... = ∃ z, and (or (z = φ) (z = ψ)) z := eq.refl
+
+lemma complete_lattice.has_vee.coherence.prop : or = complete_lattice.join summon := {
+  change or = complete_lattice.join Prop.complete_lattice,
+  fun_ext (take (φ : Prop), {
+    fun_ext (take (ψ : Prop), {
+      prop_ext (iff.intro
+        (assume φ ∨ ψ,
+          have ∃ z, and (or (z = φ) (z = ψ)) z := {
+            or.ind «φ ∨ ψ»
+              (assume φ,
+                exists.intro (and.intro (or.left eq.refl) «φ»))
+              (assume ψ,
+                exists.intro (and.intro (or.right eq.refl) «ψ»))
+          },
+          eq.transport (eq.symm @Prop.complete_lattice.join_eq[φ, ψ]) «∃ z, and (or (z = φ) (z = ψ)) z»)
+        (assume complete_lattice.join Prop.complete_lattice φ ψ,
+          have ∃ z, and (or (z = φ) (z = ψ)) z :=
+            eq.transport @Prop.complete_lattice.join_eq[φ, ψ] «complete_lattice.join Prop.complete_lattice φ ψ»,
+          obtain (z : Prop), and (or (z = φ) (z = ψ)) z := «∃ z, and (or (z = φ) (z = ψ)) z»,
+          have or (z = φ) (z = ψ) := and.left «and (or (z = φ) (z = ψ)) z»,
+          have z := and.right «and (or (z = φ) (z = ψ)) z»,
+          or.ind «or (z = φ) (z = ψ)»
+            (assume z = φ,
+              or.left (eq.transport «z = φ» «z»))
+            (assume z = ψ,
+              or.right (eq.transport «z = ψ» «z»))))
+    })
+  })
+}
+
 class instance complete_lattice.has_vee.{u} [has (complete_lattice u)] : has_vee u := {
-  def vee : u → u → u := complete_lattice.meet summon
+  def vee : u → u → u := complete_lattice.join summon
+}
+
+lemma Prop.complete_lattice.meet_eq (φ ψ : Prop) :
+  complete_lattice.meet Prop.complete_lattice φ ψ = ∀ z, or (z = φ) (z = ψ) → z :=
+calc complete_lattice.meet Prop.complete_lattice φ ψ = complete_lattice.Meet Prop.complete_lattice (λ (z : Prop), or (z = φ) (z = ψ)) := eq.refl
+                                              ... = Prop.complete_lattice.Meet (λ (z : Prop), or (z = φ) (z = ψ)) := eq.congr_fun Prop.complete_lattice.Meet.spec
+                                              ... = ∀ z, or (z = φ) (z = ψ) → z := eq.refl
+
+lemma complete_lattice.has_wedge.coherence.prop : and = complete_lattice.meet summon := {
+  change and = complete_lattice.meet Prop.complete_lattice,
+  fun_ext (take (φ : Prop), {
+    fun_ext (take (ψ : Prop), {
+      prop_ext (iff.intro
+        (assume φ ∧ ψ,
+          have ∀ z, or (z = φ) (z = ψ) → z := {
+            take (z : Prop),
+            assume or (z = φ) (z = ψ),
+            or.ind «or (z = φ) (z = ψ)»
+              (assume z = φ,
+                eq.transport (eq.symm «z = φ») (and.left «φ ∧ ψ»))
+              (assume z = ψ,
+                eq.transport (eq.symm «z = ψ») (and.right «φ ∧ ψ»))
+          },
+          eq.transport (eq.symm @Prop.complete_lattice.meet_eq[φ, ψ]) «∀ z, or (z = φ) (z = ψ) → z»)
+        (assume complete_lattice.meet Prop.complete_lattice φ ψ,
+          have ∀ z, or (z = φ) (z = ψ) → z :=
+            eq.transport @Prop.complete_lattice.meet_eq[φ, ψ] «complete_lattice.meet Prop.complete_lattice φ ψ»,
+          have or (φ = φ) (φ = ψ) := {
+            or.left eq.refl
+          },
+          have or (ψ = φ) (ψ = ψ) := {
+            or.right eq.refl
+          },
+          and.intro
+            («∀ z, or (z = φ) (z = ψ) → z»[φ] «or (φ = φ) (φ = ψ)»)
+            («∀ z, or (z = φ) (z = ψ) → z»[ψ] «or (ψ = φ) (ψ = ψ)»)))
+    })
+  })
+}
+
+lemma Prop.complete_lattice.top_eq :
+  complete_lattice.top Prop.complete_lattice = ∀ z, false → z :=
+calc complete_lattice.top Prop.complete_lattice = complete_lattice.Meet Prop.complete_lattice ∅ := eq.refl
+                                         ... = Prop.complete_lattice.Meet ∅ := eq.congr_fun Prop.complete_lattice.Meet.spec
+                                         ... = ∀ z, false → z := eq.refl
+
+lemma complete_lattice.has_top.coherence.prop : true = complete_lattice.top summon := {
+  change true = complete_lattice.top Prop.complete_lattice,
+  prop_ext (iff.intro
+    (assume true,
+      have ∀ z, false → z := {
+        take (z : Prop),
+        assume false,
+        false.ind «false»
+      },
+      eq.transport (eq.symm Prop.complete_lattice.top_eq) «∀ z, false → z»)
+    (assume complete_lattice.top Prop.complete_lattice,
+      true.intro))
+}
+
+lemma Prop.complete_lattice.bot_eq :
+  complete_lattice.bot Prop.complete_lattice = ∃ z, and false z :=
+calc complete_lattice.bot Prop.complete_lattice = complete_lattice.Join Prop.complete_lattice ∅ := eq.refl
+                                         ... = Prop.complete_lattice.Join ∅ := eq.congr_fun Prop.complete_lattice.Join.spec
+                                         ... = ∃ z, and false z := eq.refl
+
+lemma complete_lattice.has_bot.coherence.prop : false = complete_lattice.bot summon := {
+  change false = complete_lattice.bot Prop.complete_lattice,
+  prop_ext (iff.intro
+    (assume false,
+      false.ind «false»)
+    (assume complete_lattice.bot Prop.complete_lattice,
+      have ∃ z, and false z :=
+        eq.transport Prop.complete_lattice.bot_eq «complete_lattice.bot Prop.complete_lattice»,
+      obtain (z : Prop), and false z := «∃ z, and false z»,
+      and.left «and false z»))
 }
 
 class instance complete_lattice.has_wedge.{u} [has (complete_lattice u)] : has_wedge u := {
@@ -1879,12 +1999,6 @@ lemma is_structure.ext.{base, u} [is_structure base u] (x₁ x₂ : u) : is_stru
   assume is_structure.rep.{base, u} x₁ = is_structure.rep x₂,
   have is_structure.char.{base, u} (is_structure.rep x₂) := is_structure.spec.{base, u},
   have ∃! x, is_structure.rep.{base, u} x = is_structure.rep x₂ := is_structure.abs.{base, u} «is_structure.char.{base, u} (is_structure.rep x₂)»,
-  -- TODO: obtain (x : t), φ as h
-  obtain (x : u), is_structure.rep.{base, u} x = is_structure.rep x₂ ∧ ∀ x', is_structure.rep x' = is_structure.rep x₂ → x = x' := «∃! x, is_structure.rep.{base, u} x = is_structure.rep x₂»,
-  have is_structure.rep.{base, u} x = is_structure.rep x₂ := and.left «is_structure.rep.{base, u} x = is_structure.rep x₂ ∧ ∀ x', is_structure.rep.{base, u} x' = is_structure.rep x₂ → x = x'»,
-  have ∀ x', is_structure.rep.{base, u} x' = is_structure.rep x₂ → x = x' := and.right «is_structure.rep.{base, u} x = is_structure.rep x₂ ∧ ∀ x', is_structure.rep.{base, u} x' = is_structure.rep x₂ → x = x'»,
-  have x = x₂ := «∀ x', is_structure.rep.{base, u} x' = is_structure.rep x₂ → x = x'»[_] eq.refl,
-  have x = x₁ := «∀ x', is_structure.rep.{base, u} x' = is_structure.rep x₂ → x = x'»[_] «is_structure.rep.{base, u} x₁ = is_structure.rep x₂»,
-  calc x₁ = x          := eq.symm «x = x₁»
-      ... = x₂         := «x = x₂»
+  have unique (λ (x : u), is_structure.rep.{base, u} x = is_structure.rep x₂) := uexists.unique «∃! x, is_structure.rep.{base, u} x = is_structure.rep x₂»,
+  «unique (λ (x : u), is_structure.rep.{base, u} x = is_structure.rep x₂)»[x₁, x₂] «is_structure.rep.{base, u} x₁ = is_structure.rep x₂» eq.refl
 }

@@ -46,6 +46,19 @@ fn declarations_keep_primary_fields_before_auxiliary_fields() {
         "LocalEnv",
         &["local_types", "local_classes", "locals", "local_deltas"],
     );
+
+    let main = read("src/main.shari");
+    for name in [
+        "axiom Prop.complete_lattice.join_eq_or",
+        "axiom Prop.complete_lattice.meet_eq_and",
+        "axiom Prop.complete_lattice.top_eq_true",
+        "axiom Prop.complete_lattice.bot_eq_false",
+    ] {
+        assert!(
+            !main.contains(name),
+            "main prelude should not keep helper axiom `{name}`",
+        );
+    }
 }
 
 fn assert_struct_fields(text: &str, name: &str, expected: &[&str]) {

@@ -1,0 +1,16 @@
+type const Prop : Type
+
+const p : Prop
+const true : Prop
+
+class structure C u := {
+  const c : Prop
+}
+
+class instance Prop.C1 : C Prop := {
+  def c : Prop := true
+}
+
+class instance Prop.C2 : C Prop := {
+  def c : Prop := p
+}

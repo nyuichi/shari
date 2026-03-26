@@ -606,6 +606,66 @@ impl Display for Class {
 }
 
 impl Class {
+    // While `matches` is directional, `unify_with` is symmetric.
+    pub fn unify_with(&self, other: &Class) -> Option<Vec<(Id, Type)>> {
+        if self.id != other.id || self.args.len() != other.args.len() {
+            return None;
+        }
+        let mut subst: Vec<(Id, Type)> = vec![];
+        let mut pending = zip(&self.args, &other.args)
+            .map(|(left, right)| (left.clone(), right.clone()))
+            .collect::<Vec<_>>();
+        while let Some((left, right)) = pending.pop() {
+            let left = left.replace_hole(&|hole_id| {
+                subst
+                    .iter()
+                    .find(|(id, _)| *id == hole_id)
+                    .map(|(_, value)| value.clone())
+            });
+            let right = right.replace_hole(&|hole_id| {
+                subst
+                    .iter()
+                    .find(|(id, _)| *id == hole_id)
+                    .map(|(_, value)| value.clone())
+            });
+            match (&left, &right) {
+                (Type::Hole(left_hole), _) => {
+                    if left == right {
+                        continue;
+                    }
+                    if right.contains_hole(left_hole.id) {
+                        return None;
+                    }
+                    subst.push((left_hole.id, right));
+                }
+                (_, Type::Hole(right_hole)) => {
+                    if left == right {
+                        continue;
+                    }
+                    if left.contains_hole(right_hole.id) {
+                        return None;
+                    }
+                    subst.push((right_hole.id, left));
+                }
+                (Type::Const(_), Type::Const(_)) | (Type::Local(_), Type::Local(_)) => {
+                    if left != right {
+                        return None;
+                    }
+                }
+                (Type::Arrow(left_inner), Type::Arrow(right_inner)) => {
+                    pending.push((left_inner.cod.clone(), right_inner.cod.clone()));
+                    pending.push((left_inner.dom.clone(), right_inner.dom.clone()));
+                }
+                (Type::App(left_inner), Type::App(right_inner)) => {
+                    pending.push((left_inner.arg.clone(), right_inner.arg.clone()));
+                    pending.push((left_inner.fun.clone(), right_inner.fun.clone()));
+                }
+                _ => return None,
+            }
+        }
+        Some(subst)
+    }
+
     pub fn subst(&self, subst: &[(Id, Type)]) -> Class {
         let mut changed = false;
         let args: Vec<Type> = self
@@ -2631,6 +2691,42 @@ mod tests {
     }
 
     #[test]
+    fn unfold_head_does_not_resolve_ground_local_class_receiver() {
+        let class_id = global_id("C");
+        let method_id = global_id("C.m");
+        let instance_id = global_id("Prop.C");
+        let body_id = global_id("body");
+        let mut fixture = EnvFixture::new();
+        fixture.kappa_table.insert(method_id.clone(), Kappa);
+        fixture.class_instance_table.insert(
+            instance_id,
+            ClassInstance {
+                local_types: vec![],
+                local_classes: vec![],
+                target: Class {
+                    id: class_id.clone(),
+                    args: vec![mk_type_prop()],
+                },
+                method_table: HashMap::from([(
+                    method_id.clone(),
+                    mk_const(body_id.clone(), vec![], vec![]),
+                )]),
+            },
+        );
+        let env = fixture.env();
+        let term = mk_const(
+            method_id,
+            vec![mk_type_prop()],
+            vec![mk_instance_local(Class {
+                id: class_id,
+                args: vec![mk_type_prop()],
+            })],
+        );
+
+        assert!(env.unfold_head(&empty_local_env(), &term).is_none());
+    }
+
+    #[test]
     fn equiv_unfolds_mixed_local_heads() {
         let fixture = EnvFixture::new();
         let env = fixture.env();
@@ -2900,5 +2996,78 @@ mod tests {
     #[test]
     fn global_id_displays_dotted_name() {
         assert_eq!(global_id("foo.bar").to_string(), "foo.bar");
+    }
+
+    #[test]
+    fn class_unify_matches_specific_instance_against_generic_new_target() {
+        let new_ty = LocalType {
+            id: Id::fresh(),
+            name: Some(Name::from_str("u")),
+        };
+        let new_hole = Id::fresh();
+        let new_class = Class {
+            id: global_id("C"),
+            args: vec![mk_type_hole(new_hole)],
+        };
+        let old_class = Class {
+            id: global_id("C"),
+            args: vec![mk_type_prop()],
+        };
+
+        let unified = new_class
+            .unify_with(&old_class)
+            .expect("classes should unify");
+
+        assert_eq!(new_ty.name, Some(Name::from_str("u")));
+        assert_eq!(unified.len(), 1);
+        assert_eq!(unified[0].0, new_hole);
+        assert_eq!(unified[0].1, mk_type_prop());
+    }
+
+    #[test]
+    fn class_unify_preserves_old_only_type_binder() {
+        let f = global_id("F");
+        let new_ty = LocalType {
+            id: Id::fresh(),
+            name: Some(Name::from_str("u")),
+        };
+        let old_ty = LocalType {
+            id: Id::fresh(),
+            name: Some(Name::from_str("v")),
+        };
+        let new_hole = Id::fresh();
+        let old_hole = Id::fresh();
+        let new_class = Class {
+            id: global_id("C"),
+            args: vec![mk_type_const(f.clone()).apply([mk_type_hole(new_hole)])],
+        };
+        let old_class = Class {
+            id: global_id("C"),
+            args: vec![mk_type_const(f).apply([mk_type_hole(old_hole)])],
+        };
+
+        let unified = new_class
+            .unify_with(&old_class)
+            .expect("classes should unify");
+
+        assert_eq!(new_ty.name, Some(Name::from_str("u")));
+        assert_eq!(old_ty.name, Some(Name::from_str("v")));
+        assert_eq!(unified.len(), 1);
+        assert_eq!(unified[0].0, new_hole);
+        assert_eq!(unified[0].1, mk_type_hole(old_hole));
+    }
+
+    #[test]
+    fn class_unify_rejects_distinct_rigid_heads() {
+        let left = Class {
+            id: global_id("C"),
+            args: vec![mk_type_prop()],
+        };
+        let right = Class {
+            id: global_id("D"),
+            args: vec![mk_type_prop()],
+        };
+
+        assert!(left.unify_with(&right).is_none());
     }
 }

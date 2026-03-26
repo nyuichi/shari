@@ -1,0 +1,31 @@
+type const Prop : Type
+type const Bool : Type
+
+const imp : Prop → Prop → Prop
+const forall.{u} : (u → Prop) → Prop
+const uexists.{u} : (u → Prop) → Prop
+const eq.{u} : u → u → Prop
+const true : Prop
+const p : Prop
+const q : Prop
+
+infixr → : 25 := imp
+infix = : 50 := eq
+
+class structure C u := {
+  const c : Prop
+}
+
+class instance Prop.C : C Prop := {
+  def c : Prop := true
+}
+
+class instance Bool.C : C Bool := {
+  def c : Prop := q
+}
+
+axiom Any.C.coherence.prop : true = p
+
+class instance Any.C.{u} : C u := {
+  def c : Prop := p
+}

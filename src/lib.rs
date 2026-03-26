@@ -354,4 +354,110 @@ mod tests {
             "eq.ap nat.zero.spec should elaborate after applying a function-valued recursor result",
         );
     }
+
+    #[test]
+    fn class_instance_overlap_accepts_const_coherence_lemma() {
+        let script = format!(
+            "{}
+             const p : Prop
+             class structure C u := {{
+                 const c : Prop
+             }}
+             class instance Prop.C1 : C Prop := {{
+                 def c : Prop := p
+             }}
+             axiom Prop.C2.coherence.main : p = true
+             class instance Prop.C2 : C Prop := {{
+                 def c : Prop := true
+             }}",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file).expect("overlapping class instances should accept matching coherence lemma");
+    }
+
+    #[test]
+    fn class_instance_overlap_accepts_generic_instance_with_multiple_pairs() {
+        let script = format!(
+            "{}
+             type const Bool : Type
+             const p : Prop
+             const q : Prop
+             const r : Prop
+             class structure C u := {{
+                 const c : Prop
+             }}
+             class instance Prop.C : C Prop := {{
+                 def c : Prop := p
+             }}
+             class instance Bool.C : C Bool := {{
+                 def c : Prop := q
+             }}
+             axiom Any.C.coherence.prop : p = r
+             axiom Any.C.coherence.bool : q = r
+             class instance Any.C.{{u}} : C u := {{
+                 def c : Prop := r
+             }}",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file)
+            .expect("generic overlapping instance should require all critical-pair proofs");
+    }
+
+    #[test]
+    fn class_instance_overlap_accepts_axiom_coherence_axiom() {
+        let script = format!(
+            "{}
+             const iff : Prop → Prop → Prop
+             axiom ht : true
+             const p : Prop
+             axiom hp : p
+             class structure C u := {{
+                 const c : Prop
+                 axiom ok : c
+             }}
+             class instance Prop.C1 : C Prop := {{
+                 def c : Prop := true
+                 lemma ok : true := ht
+             }}
+             axiom Prop.C2.coherence.const : true = p
+             axiom Prop.C2.coherence.ok : iff true p
+             class instance Prop.C2 : C Prop := {{
+                 def c : Prop := p
+                 lemma ok : p := hp
+             }}",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file).expect("axiom coherence candidate should be accepted from top-level axioms");
+    }
+
+    #[test]
+    fn class_instance_overlap_resolves_ground_prereq_to_global_instance() {
+        let script = format!(
+            "{}
+             const p : Prop
+             class structure has_top u := {{
+                 const top : u
+             }}
+             class structure C u := {{
+                 const c : Prop
+             }}
+             class instance Prop.has_top : has_top Prop := {{
+                 def top : Prop := true
+             }}
+             class instance Prop.C1 : C Prop := {{
+                 def c : Prop := p
+             }}
+             axiom Prop.C2.coherence.main : p = has_top.top
+             class instance Prop.C2.{{u}} [has_top u] : C u := {{
+                 def c : Prop := has_top.top
+              }}",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file)
+            .expect("ground class prerequisites should resolve to existing global instances");
+    }
 }
