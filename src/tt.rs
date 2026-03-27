@@ -917,6 +917,7 @@ pub struct TermMetadata {
     pub bound: usize,
     pub has_const: bool,
     pub has_hole: bool,
+    pub is_type_ground: bool,
 }
 
 impl PartialEq for TermMetadata {
@@ -925,6 +926,7 @@ impl PartialEq for TermMetadata {
             && self.bound == other.bound
             && self.has_const == other.has_const
             && self.has_hole == other.has_hole
+            && self.is_type_ground == other.is_type_ground
     }
 }
 
@@ -938,6 +940,7 @@ impl Default for TermMetadata {
             bound: 0,
             has_const: false,
             has_hole: false,
+            is_type_ground: true,
         }
     }
 }
@@ -1090,6 +1093,7 @@ impl Display for Term {
 pub fn mk_abs(binder_name: Option<Name>, binder_type: Type, body: Term) -> Term {
     let mut body_meta = body.metadata().clone();
     body_meta.span = None;
+    body_meta.is_type_ground = binder_type.is_ground() && body_meta.is_type_ground;
     Term::Abs(Arc::new(TermAbs {
         metadata: body_meta,
         binder_type,
@@ -1107,6 +1111,7 @@ pub fn mk_app(fun: Term, arg: Term) -> Term {
         bound: lhs.bound.max(rhs.bound),
         has_const: lhs.has_const || rhs.has_const,
         has_hole: lhs.has_hole || rhs.has_hole,
+        is_type_ground: lhs.is_type_ground && rhs.is_type_ground,
     };
     Term::App(Arc::new(TermApp { metadata, fun, arg }))
 }
@@ -1118,6 +1123,7 @@ pub fn mk_var(index: usize) -> Term {
         bound: index + 1,
         has_const: false,
         has_hole: false,
+        is_type_ground: true,
     };
     Term::Var(Arc::new(TermVar { metadata, index }))
 }
@@ -1129,6 +1135,8 @@ pub fn mk_const(id: GlobalId, ty_args: Vec<Type>, instances: Vec<Instance>) -> T
         bound: 0,
         has_const: true,
         has_hole: false,
+        is_type_ground: ty_args.iter().all(Type::is_ground)
+            && instances.iter().all(Instance::is_type_ground),
     };
     Term::Const(Arc::new(TermConst {
         metadata,
@@ -1145,6 +1153,7 @@ pub fn mk_local(id: Id) -> Term {
         bound: 0,
         has_const: false,
         has_hole: false,
+        is_type_ground: true,
     };
     Term::Local(Arc::new(TermLocal { metadata, id }))
 }
@@ -1160,6 +1169,7 @@ pub fn mk_hole(id: Id) -> Term {
         bound: 0,
         has_const: false,
         has_hole: true,
+        is_type_ground: true,
     };
     Term::Hole(Arc::new(TermHole { metadata, id }))
 }
@@ -1696,17 +1706,7 @@ impl Term {
     }
 
     pub fn is_type_ground(&self) -> bool {
-        match self {
-            Term::Var(_) => true,
-            Term::Abs(inner) => inner.binder_type.is_ground() && inner.body.is_type_ground(),
-            Term::App(inner) => inner.fun.is_type_ground() && inner.arg.is_type_ground(),
-            Term::Local(_) => true,
-            Term::Const(inner) => {
-                inner.ty_args.iter().all(Type::is_ground)
-                    && inner.instances.iter().all(Instance::is_type_ground)
-            }
-            Term::Hole(_) => true,
-        }
+        self.metadata().is_type_ground
     }
 
     pub fn is_instance_ground(&self) -> bool {
@@ -2982,6 +2982,33 @@ mod tests {
         let id = local_id("foo.bar");
         let local = mk_local(id);
         assert!(!local.metadata().is_closed);
+    }
+
+    #[test]
+    fn term_metadata_caches_type_groundness() {
+        let prop = mk_type_prop();
+        let type_hole = mk_type_hole(Id::fresh());
+        let non_ground_instance = mk_instance_local(Class {
+            id: global_id("C"),
+            args: vec![type_hole.clone()],
+        });
+
+        let ground_const = mk_const(global_id("ground"), vec![prop.clone()], vec![]);
+        assert!(ground_const.metadata().is_type_ground);
+
+        let non_ground_const = mk_const(
+            global_id("non_ground"),
+            vec![type_hole.clone()],
+            vec![non_ground_instance],
+        );
+        assert!(!non_ground_const.metadata().is_type_ground);
+
+        let abs = mk_abs(Some(Name::from_str("x")), type_hole, mk_var(0));
+        assert!(!abs.metadata().is_type_ground);
+
+        let app = mk_app(ground_const, non_ground_const.clone());
+        assert!(!app.metadata().is_type_ground);
+        assert!(!non_ground_const.is_type_ground());
     }
 
     #[test]
