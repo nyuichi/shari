@@ -1756,7 +1756,6 @@ impl<'a> Elaborator<'a> {
             self.push_term_constraint(local_env, left, right, error);
             return None;
         }
-        // TODO: cache is_type_ground in term metadata so this fast path stays cheap.
         if left.is_ground()
             && left.is_type_ground()
             && right.is_ground()
