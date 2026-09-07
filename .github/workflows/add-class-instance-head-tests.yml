@@ -1,0 +1,79 @@
+name: Add class instance head regression tests
+
+on:
+  push:
+    branches:
+      - fix/class-instance-head-types
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: fix/class-instance-head-types
+          fetch-depth: 0
+      - name: Add tests and docs
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('src/lib.rs'); s=p.read_text()
+          tests=r'''
+
+    #[test]
+    fn class_instance_rejects_type_parameter_absent_from_head() {
+        let script = format!(
+            "{}\nclass structure probe := {{ const p : Prop }}\nclass instance probe_impl.{{u}} : probe := {{ def p : Prop := true }}",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        let err = process(file).expect_err("hidden instance type parameter must be rejected");
+        let chain = error_chain(&err);
+        assert!(chain.iter().any(|msg| msg.contains("does not occur in the instance head")), "unexpected error chain: {chain:?}");
+    }
+
+    #[test]
+    fn class_instance_rejects_type_parameter_used_only_in_prerequisite() {
+        let script = format!(
+            "{}\nclass structure D u := {{ const d : u }}\nclass structure C u := {{ const c : Prop }}\nclass instance bad.{{u, v}} [D v] : C u := {{ def c : Prop := true }}",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        let err = process(file).expect_err("prerequisite-only type parameter must be rejected");
+        let chain = error_chain(&err);
+        assert!(chain.iter().any(|msg| msg.contains("does not occur in the instance head")), "unexpected error chain: {chain:?}");
+    }
+
+    #[test]
+    fn class_instance_accepts_type_parameters_in_head() {
+        let script = format!(
+            "{}\nclass structure C u := {{ const c : Prop }}\nclass instance good.{{u}} : C u := {{ def c : Prop := true }}",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file).expect("head-determined type parameter should be accepted");
+    }
+'''
+          pos=s.rfind('\n}')
+          assert pos >= 0
+          p.write_text(s[:pos]+tests+s[pos:])
+
+          p=Path('docs/SHARI_LANGUAGE_GUIDE.md'); s=p.read_text()
+          old='- **Type classes** – `class structure` and `class instance` mirror structures/instances but live in the class namespace and accept class arguments on fields.'
+          new=old+' Every type parameter bound by a `class instance` must occur in the instance head class arguments after type-alias expansion; parameters appearing only in prerequisites or field bodies are rejected.'
+          assert old in s
+          p.write_text(s.replace(old,new,1))
+          PY
+          cargo fmt --all
+          cargo test --all --all-features --locked
+      - name: Commit tests and docs
+        run: |
+          git rm .github/workflows/add-class-instance-head-tests.yml
+          git config user.name 'Yuichi Nishiwaki'
+          git config user.email 'yuichi.nishiwaki@icloud.com'
+          git add src/lib.rs docs/SHARI_LANGUAGE_GUIDE.md
+          git commit -m 'Test class instance head type restriction'
+          git push origin HEAD:fix/class-instance-head-types
