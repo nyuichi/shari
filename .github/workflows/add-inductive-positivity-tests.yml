@@ -1,0 +1,82 @@
+name: Add inductive strict positivity regression tests
+
+on:
+  push:
+    branches:
+      - fix/inductive-strict-positivity
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+        with:
+          ref: fix/inductive-strict-positivity
+          fetch-depth: 0
+      - name: Add tests and docs
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/lib.rs')
+          s = p.read_text()
+          tests = """
+
+              #[test]
+              fn inductive_rejects_negative_recursive_occurrence() {
+                  let script = format!(
+                      \"{}\\ninductive bad : Prop\\n| intro : (bad → true) → bad\",
+                      minimal_logic_prelude()
+                  );
+                  let file = Arc::new(File::new(\"<test>\", script));
+                  let err = process(file).expect_err(\"negative recursive occurrence must be rejected\");
+                  let chain = error_chain(&err);
+                  assert!(chain.iter().any(|msg| msg.contains(\"strict positivity\")), \"unexpected error chain: {chain:?}\");
+              }
+
+              #[test]
+              fn inductive_rejects_nested_negative_recursive_occurrence() {
+                  let script = format!(
+                      \"{}\\ninductive bad_nested : Prop\\n| intro : ((bad_nested → true) → true) → bad_nested\",
+                      minimal_logic_prelude()
+                  );
+                  let file = Arc::new(File::new(\"<test>\", script));
+                  let err = process(file).expect_err(\"nested negative recursive occurrence must be rejected\");
+                  let chain = error_chain(&err);
+                  assert!(chain.iter().any(|msg| msg.contains(\"strict positivity\")), \"unexpected error chain: {chain:?}\");
+              }
+
+              #[test]
+              fn inductive_accepts_direct_positive_recursive_occurrence() {
+                  let script = format!(
+                      \"{}\\ninductive good : Prop\\n| intro : good → good\",
+                      minimal_logic_prelude()
+                  );
+                  let file = Arc::new(File::new(\"<test>\", script));
+                  process(file).expect(\"direct positive recursion should remain accepted\");
+              }
+          """
+          pos = s.rfind('\n}')
+          assert pos >= 0
+          p.write_text(s[:pos] + tests + s[pos:])
+
+          p = Path('docs/SHARI_LANGUAGE_GUIDE.md')
+          s = p.read_text()
+          old = '- **Inductive propositions** – `inductive` declares propositional inductives with parameters and constructor blocks separated by `|`. Constructor targets are automatically generalized over constructor parameters.'
+          new = old + ' Recursive occurrences must be strictly positive: recursive occurrences in implication antecedents, under unsupported term structure, or inside arguments to the recursive predicate are rejected.'
+          assert old in s
+          p.write_text(s.replace(old, new, 1))
+          PY
+          cargo fmt --all
+          cargo test --all --all-features --locked
+      - name: Commit tests and docs
+        run: |
+          git rm .github/workflows/add-inductive-positivity-tests.yml
+          git config user.name 'Yuichi Nishiwaki'
+          git config user.email 'yuichi.nishiwaki@icloud.com'
+          git add src/lib.rs docs/SHARI_LANGUAGE_GUIDE.md
+          git commit -m 'Test strict positivity checking for inductive predicates'
+          git push origin HEAD:fix/inductive-strict-positivity
