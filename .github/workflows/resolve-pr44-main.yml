@@ -1,0 +1,92 @@
+name: Resolve PR 44 main conflict
+
+on:
+  push:
+    branches:
+      - fix/inductive-strict-positivity
+    paths:
+      - .github/workflows/resolve-pr44-main.yml
+
+permissions:
+  contents: write
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Merge main and preserve both regression test groups
+        shell: bash
+        run: |
+          git config user.name 'Yuichi Nishiwaki'
+          git config user.email 'yuichi.nishiwaki@icloud.com'
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True)
+
+          main = 'b4c8aeb3a488e09d256cfc540d04f2c9595add5e'
+          expected_head = '47960c74950bf905d6342fcc83604f221365b346'
+          assert git('rev-parse', 'HEAD^').strip() == expected_head, 'PR head changed'
+          assert git('rev-parse', 'origin/main').strip() == main, 'main changed'
+          base = git('merge-base', 'HEAD', main).strip()
+          assert base == 'aa4c0b38b4971bae4408be5eb418336e80aae946'
+          path = 'src/lib.rs'
+          original = git('show', f'{base}:{path}')
+          ours = git('show', f'HEAD:{path}')
+          theirs = git('show', f'{main}:{path}')
+          assert original.endswith('\n}\n')
+          prefix = original[:-3]
+          for source in (ours, theirs):
+              assert source.startswith(prefix) and source.endswith('\n}\n'), 'unexpected test edits'
+          merged = prefix + ours[len(prefix):-3] + theirs[len(prefix):-3] + '\n}\n'
+          result = subprocess.run(['git', 'merge', '--no-commit', '--no-ff', main])
+          assert result.returncode in (0, 1), 'merge failed unexpectedly'
+          conflicts = git('diff', '--name-only', '--diff-filter=U').splitlines()
+          assert conflicts == [path], f'unexpected conflicts: {conflicts}'
+          Path(path).write_text(merged)
+          subprocess.run(['git', 'add', path], check=True)
+          assert not git('ls-files', '-u').strip(), 'unresolved conflicts remain'
+          code = Path('src/cmd.rs').read_text()
+          assert 'validate_inductive_argument' not in code, 'helper was reintroduced'
+          assert 'for guard in &ctor_guards' in code, 'inline positivity check was lost'
+          assert 'constructor violates strict positivity' in code
+          assert 'does not occur in the instance head' in code, 'class instance check was lost'
+          for name in (
+              'inductive_rejects_negative_recursive_occurrence',
+              'inductive_rejects_nested_negative_recursive_occurrence',
+              'inductive_accepts_direct_positive_recursive_occurrence',
+              'class_instance_rejects_type_parameter_absent_from_head',
+              'class_instance_rejects_type_parameter_used_only_in_prerequisite',
+              'class_instance_accepts_type_parameters_in_head',
+          ):
+              assert merged.count(f'fn {name}(') == 1, f'missing or duplicate test: {name}'
+          guide = Path('docs/SHARI_LANGUAGE_GUIDE.md').read_text()
+          assert 'Recursive occurrences must be strictly positive' in guide
+          assert 'Every type parameter bound by a `class instance` must occur' in guide
+          print('Resolved src/lib.rs by retaining both complete test groups.')
+          PY
+          git rm .github/workflows/resolve-pr44-main.yml
+          git diff --cached --check
+          git diff --cached --stat
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features --locked
+      - name: Run tests
+        run: cargo test --all --all-features --locked
+      - name: Check main.shari
+        run: cargo run --locked --quiet
+      - name: Commit and push merge to PR branch only
+        shell: bash
+        run: |
+          git commit -m "Merge main into fix/inductive-strict-positivity" -m "Keep the inline positivity validation and retain both inductive and class-instance regression tests."
+          git merge-base --is-ancestor b4c8aeb3a488e09d256cfc540d04f2c9595add5e HEAD
+          git push origin HEAD:refs/heads/fix/inductive-strict-positivity
+          git log -1 --format='%H%n%P%n%s'
