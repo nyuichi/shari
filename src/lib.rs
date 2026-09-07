@@ -460,4 +460,44 @@ mod tests {
         process(file)
             .expect("ground class prerequisites should resolve to existing global instances");
     }
+
+    #[test]
+    fn inductive_rejects_negative_recursive_occurrence() {
+        let script = format!(
+            "{}\ninductive bad : Prop\n| intro : (bad → true) → bad",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        let err = process(file).expect_err("negative recursive occurrence must be rejected");
+        let chain = error_chain(&err);
+        assert!(
+            chain.iter().any(|msg| msg.contains("strict positivity")),
+            "unexpected error chain: {chain:?}"
+        );
+    }
+
+    #[test]
+    fn inductive_rejects_nested_negative_recursive_occurrence() {
+        let script = format!(
+            "{}\ninductive bad_nested : Prop\n| intro : ((bad_nested → true) → true) → bad_nested",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        let err = process(file).expect_err("nested negative recursive occurrence must be rejected");
+        let chain = error_chain(&err);
+        assert!(
+            chain.iter().any(|msg| msg.contains("strict positivity")),
+            "unexpected error chain: {chain:?}"
+        );
+    }
+
+    #[test]
+    fn inductive_accepts_direct_positive_recursive_occurrence() {
+        let script = format!(
+            "{}\ninductive good : Prop\n| intro : good → good",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file).expect("direct positive recursion should remain accepted");
+    }
 }
