@@ -22,10 +22,15 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           p=Path('src/cmd.rs'); s=p.read_text()
-          marker='        let mut ctor_params_list = vec![];\n'
-          helper='''        fn validate_inductive_argument(term: &Term, this: Id) -> anyhow::Result<bool> {\n            if let Some((_param, body)) = ungeneralize1(term) {\n                return validate_inductive_argument(&body, this);\n            }\n            if let Some((guard, body)) = unguard1(term) {\n                if guard.contains_local(this) {\n                    bail!("constructor violates strict positivity");\n                }\n                return validate_inductive_argument(&body, this);\n            }\n            if !term.contains_local(this) { return Ok(false); }\n            if !term.head().alpha_eq(&mk_local(this)) {\n                bail!("invalid recursive occurrence in inductive constructor");\n            }\n            for arg in term.args() {\n                if arg.contains_local(this) {\n                    bail!("invalid recursive occurrence in inductive constructor");\n                }\n            }\n            Ok(true)\n        }\n\n        let mut ctor_params_list = vec![];\n'''
-          assert marker in s
-          s=s.replace(marker,helper,1)
+          s=s.replace(
+              'proof::{self, Axiom, Expr, generalize, guard, mk_type_prop, ungeneralize, unguard},',
+              'proof::{self, Axiom, Expr, generalize, guard, mk_type_prop, ungeneralize, ungeneralize1, unguard, unguard1},',
+              1,
+          )
+          anchor='''fn global_id(value: &str) -> GlobalId {\n    GlobalId::from_name(Name::from_str(value))\n}\n'''
+          helper='''fn global_id(value: &str) -> GlobalId {\n    GlobalId::from_name(Name::from_str(value))\n}\n\nfn validate_inductive_argument(term: &Term, this: Id) -> anyhow::Result<bool> {\n    if let Some((_param, body)) = ungeneralize1(term) {\n        return validate_inductive_argument(&body, this);\n    }\n    if let Some((guard, body)) = unguard1(term) {\n        if guard.contains_local(this) {\n            bail!("constructor violates strict positivity");\n        }\n        return validate_inductive_argument(&body, this);\n    }\n    if !term.contains_local(this) {\n        return Ok(false);\n    }\n    if !term.head().alpha_eq(&mk_local(this)) {\n        bail!("invalid recursive occurrence in inductive constructor");\n    }\n    for arg in term.args() {\n        if arg.contains_local(this) {\n            bail!("invalid recursive occurrence in inductive constructor");\n        }\n    }\n    Ok(true)\n}\n'''
+          assert anchor in s
+          s=s.replace(anchor,helper,1)
           old='''            let mut ctor_ind_args = vec![];\n            for ctor_arg in &ctor_args {\n                let mut current = ctor_arg.clone();\n                loop {\n                    let (params, body) = ungeneralize(&current);\n                    let (args, next) = unguard(&body);\n                    if params.is_empty() && args.is_empty() {\n                        break;\n                    }\n                    current = next;\n                }\n                if current.contains_local(this) {\n                    if !current.head().alpha_eq(&mk_local(this)) {\n                        bail!("invalid target");\n                    }\n                    for a in current.args() {\n                        if a.contains_local(this) {\n                            bail!("invalid target");\n                        }\n                    }\n                    ctor_ind_args.push(ctor_arg.clone());\n                }\n            }\n'''
           new='''            let mut ctor_ind_args = vec![];\n            for ctor_arg in &ctor_args {\n                if validate_inductive_argument(ctor_arg, this)? {\n                    ctor_ind_args.push(ctor_arg.clone());\n                }\n            }\n'''
           assert old in s
