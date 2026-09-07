@@ -1,0 +1,89 @@
+name: Inline inductive positivity check
+
+on:
+  push:
+    branches:
+      - fix/inductive-strict-positivity
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: fix/inductive-strict-positivity
+          fetch-depth: 0
+      - name: Inline positivity validation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('src/cmd.rs')
+          s = p.read_text()
+
+          s2, n = re.subn(
+              r'\nfn validate_inductive_argument\(term: &Term, this: Id\) -> anyhow::Result<bool> \{.*?\n\}\n',
+              '\n',
+              s,
+              count=1,
+              flags=re.S,
+          )
+          if n != 1:
+              raise SystemExit('validate_inductive_argument helper not found')
+          s = s2
+
+          old = '''            let mut ctor_ind_args = vec![];
+            for ctor_arg in &ctor_args {
+                if validate_inductive_argument(ctor_arg, this)? {
+                    ctor_ind_args.push(ctor_arg.clone());
+                }
+            }
+'''
+          new = '''            let mut ctor_ind_args = vec![];
+            for ctor_arg in &ctor_args {
+                let mut current = ctor_arg.clone();
+                loop {
+                    let (params, body) = ungeneralize(&current);
+                    let (args, next) = unguard(&body);
+                    for arg in &args {
+                        if arg.contains_local(this) {
+                            bail!("constructor violates strict positivity");
+                        }
+                    }
+                    if params.is_empty() && args.is_empty() {
+                        break;
+                    }
+                    current = next;
+                }
+                if !current.contains_local(this) {
+                    continue;
+                }
+                if !current.head().alpha_eq(&mk_local(this)) {
+                    bail!("invalid target");
+                }
+                for a in current.args() {
+                    if a.contains_local(this) {
+                        bail!("invalid target");
+                    }
+                }
+                ctor_ind_args.push(ctor_arg.clone());
+            }
+'''
+          if old not in s:
+              raise SystemExit('helper call site not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          cargo fmt --all
+          cargo test --all --all-features --locked
+      - name: Commit refactor
+        run: |
+          git rm .github/workflows/inline-inductive-positivity-check.yml
+          git config user.name 'Yuichi Nishiwaki'
+          git config user.email 'yuichi.nishiwaki@icloud.com'
+          git add src/cmd.rs
+          git commit -m 'Inline inductive strict positivity validation'
+          git push origin HEAD:fix/inductive-strict-positivity
