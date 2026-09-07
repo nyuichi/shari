@@ -1,0 +1,117 @@
+name: Apply class instance head type fix
+
+on:
+  push:
+    branches: [fix/class-instance-head-types]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/class-instance-head-types
+          fetch-depth: 0
+      - name: Apply patch and regression tests
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          cmd = Path('src/cmd.rs')
+          text = cmd.read_text()
+          needle = """        self.elaborate_class(&mut local_env, &target)?;\n        let cmd_structure = self.class_structure_table.get(&target.id).cloned().unwrap();\n"""
+          repl = """        self.elaborate_class(&mut local_env, &target)?;
+        for local_type in &local_types {
+            if !target
+                .args
+                .iter()
+                .any(|arg| arg.contains_local(local_type.id))
+            {
+                let name = local_type
+                    .name
+                    .as_ref()
+                    .map_or_else(|| local_type.id.to_string(), ToString::to_string);
+                bail!(
+                    \"class instance type parameter `{name}` does not occur in the instance head: {target}\"
+                );
+            }
+        }
+        let cmd_structure = self.class_structure_table.get(&target.id).cloned().unwrap();
+"""
+          if needle not in text:
+              raise SystemExit('could not find class-instance insertion point')
+          cmd.write_text(text.replace(needle, repl, 1))
+
+          lib = Path('src/lib.rs')
+          text = lib.read_text()
+          tests = r'''
+
+              #[test]
+              fn class_instance_rejects_type_parameter_absent_from_head() {
+                  let script = format!(
+                      "{}\nclass structure probe := {{ const p : Prop }}\nclass instance probe_impl.{{u}} : probe := {{ def p : Prop := forall (λ (x : u), true) }}",
+                      minimal_logic_prelude()
+                  );
+                  let file = Arc::new(File::new("<test>", script));
+                  let err = process(file).expect_err("hidden instance type parameter must be rejected");
+                  let chain = error_chain(&err);
+                  assert!(
+                      chain.iter().any(|msg| msg.contains("does not occur in the instance head")),
+                      "expected missing-head-type error: {chain:?}"
+                  );
+              }
+
+              #[test]
+              fn class_instance_rejects_type_parameter_used_only_in_prerequisite() {
+                  let script = format!(
+                      "{}\nclass structure D u := {{ const d : u }}\nclass structure C u := {{ const c : u }}\nclass instance bad.{{u, v}} [D v] : C u := {{ def c : u := c }}",
+                      minimal_logic_prelude()
+                  );
+                  let file = Arc::new(File::new("<test>", script));
+                  let err = process(file).expect_err("prerequisite-only type parameter must be rejected");
+                  let chain = error_chain(&err);
+                  assert!(
+                      chain.iter().any(|msg| msg.contains("does not occur in the instance head")),
+                      "expected missing-head-type error: {chain:?}"
+                  );
+              }
+
+              #[test]
+              fn class_instance_accepts_all_type_parameters_in_head() {
+                  let script = format!(
+                      "{}\nclass structure C u := {{ const c : u }}\nclass instance good.{{u}} : C u := {{ def c : u := c }}",
+                      minimal_logic_prelude()
+                  );
+                  let file = Arc::new(File::new("<test>", script));
+                  process(file).expect("head-determined type parameter should be accepted");
+              }
+          '''
+          pos = text.rfind('\n}')
+          if pos < 0:
+              raise SystemExit('could not find lib test module end')
+          lib.write_text(text[:pos] + tests + text[pos:])
+
+          guide = Path('docs/SHARI_LANGUAGE_GUIDE.md')
+          text = guide.read_text()
+          old = "- **Type classes** – `class structure` and `class instance` mirror structures/instances but live in the class namespace and accept class arguments on fields."
+          new = old + " Every type parameter bound by a `class instance` declaration must occur in the instance head class arguments after type-alias expansion; parameters appearing only in prerequisites or field bodies are rejected."
+          if old not in text:
+              raise SystemExit('could not find language-guide class paragraph')
+          guide.write_text(text.replace(old, new, 1))
+          PY
+          cargo fmt --all -- --check || cargo fmt --all
+          cargo test --all
+      - name: Commit passing fix
+        shell: bash
+        run: |
+          git rm .github/workflows/apply-class-instance-head-types.yml
+          git config user.name 'Yuichi Nishiwaki'
+          git config user.email 'yuichi.nishiwaki@icloud.com'
+          git add src/cmd.rs src/lib.rs docs/SHARI_LANGUAGE_GUIDE.md
+          git commit -m 'Reject hidden class instance type parameters'
+          git push origin HEAD:fix/class-instance-head-types
