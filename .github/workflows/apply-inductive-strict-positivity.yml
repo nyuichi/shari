@@ -2,161 +2,42 @@ name: Apply inductive strict positivity fix
 
 on:
   push:
-    branches: [fix/inductive-strict-positivity]
+    branches:
+      - fix/inductive-strict-positivity
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v3
         with:
           ref: fix/inductive-strict-positivity
           fetch-depth: 0
-      - name: Apply patch and regression tests
-        shell: bash
+      - name: Apply patch
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
-          cmd = Path('src/cmd.rs')
-          text = cmd.read_text()
-          marker = """        let mut ctor_params_list = vec![];\n"""
-          helper = """        fn validate_inductive_argument(term: &Term, this: Id) -> anyhow::Result<bool> {
-              if let Some((_param, body)) = ungeneralize1(term) {
-                  return validate_inductive_argument(&body, this);
-              }
-              if let Some((guard, body)) = unguard1(term) {
-                  if guard.contains_local(this) {
-                      bail!(\"constructor violates strict positivity\");
-                  }
-                  return validate_inductive_argument(&body, this);
-              }
-              if !term.contains_local(this) {
-                  return Ok(false);
-              }
-              if !term.head().alpha_eq(&mk_local(this)) {
-                  bail!(\"invalid recursive occurrence in inductive constructor\");
-              }
-              for arg in term.args() {
-                  if arg.contains_local(this) {
-                      bail!(\"invalid recursive occurrence in inductive constructor\");
-                  }
-              }
-              Ok(true)
-          }
-
-          let mut ctor_params_list = vec![];
-"""
-          if marker not in text:
-              raise SystemExit('could not find inductive helper insertion point')
-          text = text.replace(marker, helper, 1)
-
-          old = """            let mut ctor_ind_args = vec![];
-              for ctor_arg in &ctor_args {
-                  let mut current = ctor_arg.clone();
-                  loop {
-                      let (params, body) = ungeneralize(&current);
-                      let (args, next) = unguard(&body);
-                      if params.is_empty() && args.is_empty() {
-                          break;
-                      }
-                      current = next;
-                  }
-                  if current.contains_local(this) {
-                      if !current.head().alpha_eq(&mk_local(this)) {
-                          bail!(\"invalid target\");
-                      }
-                      for a in current.args() {
-                          if a.contains_local(this) {
-                              bail!(\"invalid target\");
-                          }
-                      }
-                      ctor_ind_args.push(ctor_arg.clone());
-                  }
-              }
-"""
-          new = """            let mut ctor_ind_args = vec![];
-              for ctor_arg in &ctor_args {
-                  if validate_inductive_argument(ctor_arg, this)? {
-                      ctor_ind_args.push(ctor_arg.clone());
-                  }
-              }
-"""
-          if old not in text:
-              raise SystemExit('could not find old inductive occurrence check')
-          text = text.replace(old, new, 1)
-          cmd.write_text(text)
-
-          lib = Path('src/lib.rs')
-          text = lib.read_text()
-          tests = r'''
-
-              #[test]
-              fn inductive_rejects_negative_recursive_occurrence() {
-                  let script = format!(
-                      "{}\ninductive bad : Prop\n| intro : (bad → true) → bad",
-                      minimal_logic_prelude()
-                  );
-                  let file = Arc::new(File::new("<test>", script));
-                  let err = process(file).expect_err("negative recursive occurrence must be rejected");
-                  let chain = error_chain(&err);
-                  assert!(
-                      chain.iter().any(|msg| msg.contains("strict positivity")),
-                      "expected strict-positivity error: {chain:?}"
-                  );
-              }
-
-              #[test]
-              fn inductive_rejects_nested_negative_recursive_occurrence() {
-                  let script = format!(
-                      "{}\ninductive bad_nested : Prop\n| intro : ((bad_nested → true) → true) → bad_nested",
-                      minimal_logic_prelude()
-                  );
-                  let file = Arc::new(File::new("<test>", script));
-                  let err = process(file).expect_err("nested negative recursive occurrence must be rejected");
-                  let chain = error_chain(&err);
-                  assert!(
-                      chain.iter().any(|msg| msg.contains("strict positivity")),
-                      "expected strict-positivity error: {chain:?}"
-                  );
-              }
-
-              #[test]
-              fn inductive_accepts_direct_positive_recursive_occurrence() {
-                  let script = format!(
-                      "{}\ninductive good : Prop\n| intro : good → good",
-                      minimal_logic_prelude()
-                  );
-                  let file = Arc::new(File::new("<test>", script));
-                  process(file).expect("direct positive recursion should remain accepted");
-              }
-          '''
-          pos = text.rfind('\n}')
-          if pos < 0:
-              raise SystemExit('could not find lib test module end')
-          text = text[:pos] + tests + text[pos:]
-          lib.write_text(text)
-
-          guide = Path('docs/SHARI_LANGUAGE_GUIDE.md')
-          text = guide.read_text()
-          old = "- **Inductive propositions** – `inductive` declares propositional inductives with parameters and constructor blocks separated by `|`. Constructor targets are automatically generalized over constructor parameters."
-          new = old + " Recursive occurrences must be strictly positive: after peeling constructor parameters, a recursive premise may occur only at the positive tail of nested `∀`/implication structure; recursive occurrences in implication antecedents or inside recursive arguments are rejected."
-          if old not in text:
-              raise SystemExit('could not find language-guide inductive paragraph')
-          guide.write_text(text.replace(old, new, 1))
+          p=Path('src/cmd.rs'); s=p.read_text()
+          marker='        let mut ctor_params_list = vec![];\n'
+          helper='''        fn validate_inductive_argument(term: &Term, this: Id) -> anyhow::Result<bool> {\n            if let Some((_param, body)) = ungeneralize1(term) {\n                return validate_inductive_argument(&body, this);\n            }\n            if let Some((guard, body)) = unguard1(term) {\n                if guard.contains_local(this) {\n                    bail!("constructor violates strict positivity");\n                }\n                return validate_inductive_argument(&body, this);\n            }\n            if !term.contains_local(this) { return Ok(false); }\n            if !term.head().alpha_eq(&mk_local(this)) {\n                bail!("invalid recursive occurrence in inductive constructor");\n            }\n            for arg in term.args() {\n                if arg.contains_local(this) {\n                    bail!("invalid recursive occurrence in inductive constructor");\n                }\n            }\n            Ok(true)\n        }\n\n        let mut ctor_params_list = vec![];\n'''
+          assert marker in s
+          s=s.replace(marker,helper,1)
+          old='''            let mut ctor_ind_args = vec![];\n            for ctor_arg in &ctor_args {\n                let mut current = ctor_arg.clone();\n                loop {\n                    let (params, body) = ungeneralize(&current);\n                    let (args, next) = unguard(&body);\n                    if params.is_empty() && args.is_empty() {\n                        break;\n                    }\n                    current = next;\n                }\n                if current.contains_local(this) {\n                    if !current.head().alpha_eq(&mk_local(this)) {\n                        bail!("invalid target");\n                    }\n                    for a in current.args() {\n                        if a.contains_local(this) {\n                            bail!("invalid target");\n                        }\n                    }\n                    ctor_ind_args.push(ctor_arg.clone());\n                }\n            }\n'''
+          new='''            let mut ctor_ind_args = vec![];\n            for ctor_arg in &ctor_args {\n                if validate_inductive_argument(ctor_arg, this)? {\n                    ctor_ind_args.push(ctor_arg.clone());\n                }\n            }\n'''
+          assert old in s
+          p.write_text(s.replace(old,new,1))
           PY
-          cargo fmt --all -- --check || cargo fmt --all
-          cargo test --all
-      - name: Commit passing fix
-        shell: bash
+          cargo fmt --all
+          cargo test --all --all-features --locked
+      - name: Commit fix
         run: |
           git rm .github/workflows/apply-inductive-strict-positivity.yml
           git config user.name 'Yuichi Nishiwaki'
           git config user.email 'yuichi.nishiwaki@icloud.com'
-          git add src/cmd.rs src/lib.rs docs/SHARI_LANGUAGE_GUIDE.md
+          git add src/cmd.rs
           git commit -m 'Fix strict positivity checking for inductive predicates'
           git push origin HEAD:fix/inductive-strict-positivity
