@@ -3064,6 +3064,21 @@ impl Eval {
             local_env.local_classes.push(local_class.clone());
         }
         self.elaborate_class(&mut local_env, &target)?;
+        for local_type in &local_types {
+            if !target
+                .args
+                .iter()
+                .any(|arg| arg.contains_local(local_type.id))
+            {
+                let name = local_type
+                    .name
+                    .as_ref()
+                    .map_or_else(|| local_type.id.to_string(), ToString::to_string);
+                bail!(
+                    "class instance type parameter `{name}` does not occur in the instance head: {target}"
+                );
+            }
+        }
         let cmd_structure = self.class_structure_table.get(&target.id).cloned().unwrap();
         let mut type_subst = Vec::with_capacity(cmd_structure.local_types.len());
         for (x, t) in zip(&cmd_structure.local_types, &target.args) {
