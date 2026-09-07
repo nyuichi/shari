@@ -460,4 +460,48 @@ mod tests {
         process(file)
             .expect("ground class prerequisites should resolve to existing global instances");
     }
+
+    #[test]
+    fn class_instance_rejects_type_parameter_absent_from_head() {
+        let script = format!(
+            "{}\nclass structure probe := {{ const p : Prop }}\nclass instance probe_impl.{{u}} : probe := {{ def p : Prop := true }}",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        let err = process(file).expect_err("hidden instance type parameter must be rejected");
+        let chain = error_chain(&err);
+        assert!(
+            chain
+                .iter()
+                .any(|msg| msg.contains("does not occur in the instance head")),
+            "unexpected error chain: {chain:?}"
+        );
+    }
+
+    #[test]
+    fn class_instance_rejects_type_parameter_used_only_in_prerequisite() {
+        let script = format!(
+            "{}\nclass structure D u := {{ const d : u }}\nclass structure C u := {{ const c : Prop }}\nclass instance bad.{{u, v}} [D v] : C u := {{ def c : Prop := true }}",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        let err = process(file).expect_err("prerequisite-only type parameter must be rejected");
+        let chain = error_chain(&err);
+        assert!(
+            chain
+                .iter()
+                .any(|msg| msg.contains("does not occur in the instance head")),
+            "unexpected error chain: {chain:?}"
+        );
+    }
+
+    #[test]
+    fn class_instance_accepts_type_parameters_in_head() {
+        let script = format!(
+            "{}\nclass structure C u := {{ const c : Prop }}\nclass instance good.{{u}} : C u := {{ def c : Prop := true }}",
+            minimal_logic_prelude()
+        );
+        let file = Arc::new(File::new("<test>", script));
+        process(file).expect("head-determined type parameter should be accepted");
+    }
 }
