@@ -6,10 +6,7 @@ use crate::{
     elab,
     parse::TokenTable,
     print::{OpTable, Pretty},
-    proof::{
-        self, Axiom, Expr, generalize, guard, mk_type_prop, ungeneralize, ungeneralize1, unguard,
-        unguard1,
-    },
+    proof::{self, Axiom, Expr, generalize, guard, mk_type_prop, ungeneralize, unguard},
     tt::{
         self, Class, ClassInstance, ClassType, Const, Delta, GlobalId, Id, Kappa, Kind, Local,
         LocalEnv, LocalType, Name, Term, Type, mk_const, mk_fresh_type_hole, mk_instance_global,
@@ -19,30 +16,6 @@ use crate::{
 
 fn global_id(value: &str) -> GlobalId {
     GlobalId::from_name(Name::from_str(value))
-}
-
-fn validate_inductive_argument(term: &Term, this: Id) -> anyhow::Result<bool> {
-    if let Some((_param, body)) = ungeneralize1(term) {
-        return validate_inductive_argument(&body, this);
-    }
-    if let Some((guard, body)) = unguard1(term) {
-        if guard.contains_local(this) {
-            bail!("constructor violates strict positivity");
-        }
-        return validate_inductive_argument(&body, this);
-    }
-    if !term.contains_local(this) {
-        return Ok(false);
-    }
-    if !term.head().alpha_eq(&mk_local(this)) {
-        bail!("invalid recursive occurrence in inductive constructor");
-    }
-    for arg in term.args() {
-        if arg.contains_local(this) {
-            bail!("invalid recursive occurrence in inductive constructor");
-        }
-    }
-    Ok(true)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Default)]
@@ -2275,9 +2248,32 @@ impl Eval {
             ctor_target_list.push(m.clone());
             let mut ctor_ind_args = vec![];
             for ctor_arg in &ctor_args {
-                if validate_inductive_argument(ctor_arg, this)? {
-                    ctor_ind_args.push(ctor_arg.clone());
+                let mut current = ctor_arg.clone();
+                loop {
+                    let (ctor_params, body) = ungeneralize(&current);
+                    let (ctor_guards, next) = unguard(&body);
+                    for guard in &ctor_guards {
+                        if guard.contains_local(this) {
+                            bail!("constructor violates strict positivity");
+                        }
+                    }
+                    if ctor_params.is_empty() && ctor_guards.is_empty() {
+                        break;
+                    }
+                    current = next;
                 }
+                if !current.contains_local(this) {
+                    continue;
+                }
+                if !current.head().alpha_eq(&mk_local(this)) {
+                    bail!("invalid target");
+                }
+                for a in current.args() {
+                    if a.contains_local(this) {
+                        bail!("invalid target");
+                    }
+                }
+                ctor_ind_args.push(ctor_arg.clone());
             }
             ctor_ind_args_list.push(ctor_ind_args);
         }
