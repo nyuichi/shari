@@ -12,7 +12,8 @@ jobs:
   apply:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Check out repository
+        uses: actions/checkout@v3
         with:
           ref: fix/inductive-strict-positivity
           fetch-depth: 0
@@ -20,21 +21,29 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
           p = Path('src/cmd.rs')
           s = p.read_text()
-
-          s2, n = re.subn(
-              r'\nfn validate_inductive_argument\(term: &Term, this: Id\) -> anyhow::Result<bool> \{.*?\n\}\n',
-              '\n',
-              s,
-              count=1,
-              flags=re.S,
-          )
-          if n != 1:
-              raise SystemExit('validate_inductive_argument helper not found')
-          s = s2
+          start = s.index('\nfn validate_inductive_argument(')
+          end_marker = '\n}\n\nimpl std::fmt::Display for Path'
+          # The helper is a top-level function immediately before the next top-level item.
+          # Locate its closing brace by brace counting instead of regex.
+          i = start + 1
+          brace = 0
+          seen = False
+          while i < len(s):
+              if s[i] == '{':
+                  brace += 1
+                  seen = True
+              elif s[i] == '}':
+                  brace -= 1
+                  if seen and brace == 0:
+                      end = i + 1
+                      break
+              i += 1
+          else:
+              raise SystemExit('helper end not found')
+          s = s[:start] + s[end:]
 
           old = '''            let mut ctor_ind_args = vec![];
             for ctor_arg in &ctor_args {
