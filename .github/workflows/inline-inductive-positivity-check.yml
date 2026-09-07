@@ -12,80 +12,14 @@ jobs:
   apply:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
         with:
           ref: fix/inductive-strict-positivity
           fetch-depth: 0
-      - name: Inline positivity validation
+      - name: Apply inline refactor
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path('src/cmd.rs')
-          s = p.read_text()
-          start = s.index('\nfn validate_inductive_argument(')
-          end_marker = '\n}\n\nimpl std::fmt::Display for Path'
-          # The helper is a top-level function immediately before the next top-level item.
-          # Locate its closing brace by brace counting instead of regex.
-          i = start + 1
-          brace = 0
-          seen = False
-          while i < len(s):
-              if s[i] == '{':
-                  brace += 1
-                  seen = True
-              elif s[i] == '}':
-                  brace -= 1
-                  if seen and brace == 0:
-                      end = i + 1
-                      break
-              i += 1
-          else:
-              raise SystemExit('helper end not found')
-          s = s[:start] + s[end:]
-
-          old = '''            let mut ctor_ind_args = vec![];
-            for ctor_arg in &ctor_args {
-                if validate_inductive_argument(ctor_arg, this)? {
-                    ctor_ind_args.push(ctor_arg.clone());
-                }
-            }
-'''
-          new = '''            let mut ctor_ind_args = vec![];
-            for ctor_arg in &ctor_args {
-                let mut current = ctor_arg.clone();
-                loop {
-                    let (params, body) = ungeneralize(&current);
-                    let (args, next) = unguard(&body);
-                    for arg in &args {
-                        if arg.contains_local(this) {
-                            bail!("constructor violates strict positivity");
-                        }
-                    }
-                    if params.is_empty() && args.is_empty() {
-                        break;
-                    }
-                    current = next;
-                }
-                if !current.contains_local(this) {
-                    continue;
-                }
-                if !current.head().alpha_eq(&mk_local(this)) {
-                    bail!("invalid target");
-                }
-                for a in current.args() {
-                    if a.contains_local(this) {
-                        bail!("invalid target");
-                    }
-                }
-                ctor_ind_args.push(ctor_arg.clone());
-            }
-'''
-          if old not in s:
-              raise SystemExit('helper call site not found')
-          p.write_text(s.replace(old, new, 1))
-          PY
+          echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCnA9UGF0aCgic3JjL2NtZC5ycyIpCnM9cC5yZWFkX3RleHQoKQpvbGRfaW1wb3J0ID0gJyAgICBwcm9vZjo6e1xuICAgICAgICBzZWxmLCBBeGlvbSwgRXhwciwgZ2VuZXJhbGl6ZSwgZ3VhcmQsIG1rX3R5cGVfcHJvcCwgdW5nZW5lcmFsaXplLCB1bmdlbmVyYWxpemUxLCB1bmd1YXJkLFxuICAgICAgICB1bmd1YXJkMSxcbiAgICB9LFxuJwpuZXdfaW1wb3J0ID0gJyAgICBwcm9vZjo6e3NlbGYsIEF4aW9tLCBFeHByLCBnZW5lcmFsaXplLCBndWFyZCwgbWtfdHlwZV9wcm9wLCB1bmdlbmVyYWxpemUsIHVuZ3VhcmR9LFxuJwppZiBvbGRfaW1wb3J0IG5vdCBpbiBzOiByYWlzZSBTeXN0ZW1FeGl0KCJpbXBvcnQgYmxvY2sgbm90IGZvdW5kIikKcz1zLnJlcGxhY2Uob2xkX2ltcG9ydCxuZXdfaW1wb3J0LDEpCm9sZF9oZWxwZXIgPSAnZm4gdmFsaWRhdGVfaW5kdWN0aXZlX2FyZ3VtZW50KHRlcm06ICZUZXJtLCB0aGlzOiBJZCkgLT4gYW55aG93OjpSZXN1bHQ8Ym9vbD4ge1xuICAgIGlmIGxldCBTb21lKChfcGFyYW0sIGJvZHkpKSA9IHVuZ2VuZXJhbGl6ZTEodGVybSkge1xuICAgICAgICByZXR1cm4gdmFsaWRhdGVfaW5kdWN0aXZlX2FyZ3VtZW50KCZib2R5LCB0aGlzKTtcbiAgICB9XG4gICAgaWYgbGV0IFNvbWUoKGd1YXJkLCBib2R5KSkgPSB1bmd1YXJkMSh0ZXJtKSB7XG4gICAgICAgIGlmIGd1YXJkLmNvbnRhaW5zX2xvY2FsKHRoaXMpIHtcbiAgICAgICAgICAgIGJhaWwhKFwiY29uc3RydWN0b3IgdmlvbGF0ZXMgc3RyaWN0IHBvc2l0aXZpdHlcIik7XG4gICAgICAgIH1cbiAgICAgICAgcmV0dXJuIHZhbGlkYXRlX2luZHVjdGl2ZV9hcmd1bWVudCgmYm9keSwgdGhpcyk7XG4gICAgfVxuICAgIGlmICF0ZXJtLmNvbnRhaW5zX2xvY2FsKHRoaXMpIHtcbiAgICAgICAgcmV0dXJuIE9rKGZhbHNlKTtcbiAgICB9XG4gICAgaWYgIXRlcm0uaGVhZCgpLmFscGhhX2VxKCZta19sb2NhbCh0aGlzKSkge1xuICAgICAgICBiYWlsIShcImludmFsaWQgcmVjdXJzaXZlIG9jY3VycmVuY2UgaW4gaW5kdWN0aXZlIGNvbnN0cnVjdG9yXCIpO1xuICAgIH1cbiAgICBmb3IgYXJnIGluIHRlcm0uYXJncygpIHtcbiAgICAgICAgaWYgYXJnLmNvbnRhaW5zX2xvY2FsKHRoaXMpIHtcbiAgICAgICAgICAgIGJhaWwhKFwiaW52YWxpZCByZWN1cnNpdmUgb2NjdXJyZW5jZSBpbiBpbmR1Y3RpdmUgY29uc3RydWN0b3JcIik7XG4gICAgICAgIH1cbiAgICB9XG4gICAgT2sodHJ1ZSlcbn1cblxuJwppZiBvbGRfaGVscGVyIG5vdCBpbiBzOiByYWlzZSBTeXN0ZW1FeGl0KCJoZWxwZXIgbm90IGZvdW5kIikKcz1zLnJlcGxhY2Uob2xkX2hlbHBlciwiIiwxKQpvbGRfY2FsbCA9ICcgICAgICAgICAgICBsZXQgbXV0IGN0b3JfaW5kX2FyZ3MgPSB2ZWNbXTtcbiAgICAgICAgICAgIGZvciBjdG9yX2FyZyBpbiAmY3Rvcl9hcmdzIHtcbiAgICAgICAgICAgICAgICBpZiB2YWxpZGF0ZV9pbmR1Y3RpdmVfYXJndW1lbnQoY3Rvcl9hcmcsIHRoaXMpPyB7XG4gICAgICAgICAgICAgICAgICAgIGN0b3JfaW5kX2FyZ3MucHVzaChjdG9yX2FyZy5jbG9uZSgpKTtcbiAgICAgICAgICAgICAgICB9XG4gICAgICAgICAgICB9XG4nCm5ld19jYWxsID0gJyAgICAgICAgICAgIGxldCBtdXQgY3Rvcl9pbmRfYXJncyA9IHZlY1tdO1xuICAgICAgICAgICAgZm9yIGN0b3JfYXJnIGluICZjdG9yX2FyZ3Mge1xuICAgICAgICAgICAgICAgIGxldCBtdXQgY3VycmVudCA9IGN0b3JfYXJnLmNsb25lKCk7XG4gICAgICAgICAgICAgICAgbG9vcCB7XG4gICAgICAgICAgICAgICAgICAgIGxldCAoY3Rvcl9wYXJhbXMsIGJvZHkpID0gdW5nZW5lcmFsaXplKCZjdXJyZW50KTtcbiAgICAgICAgICAgICAgICAgICAgbGV0IChjdG9yX2d1YXJkcywgbmV4dCkgPSB1bmd1YXJkKCZib2R5KTtcbiAgICAgICAgICAgICAgICAgICAgZm9yIGd1YXJkIGluICZjdG9yX2d1YXJkcyB7XG4gICAgICAgICAgICAgICAgICAgICAgICBpZiBndWFyZC5jb250YWluc19sb2NhbCh0aGlzKSB7XG4gICAgICAgICAgICAgICAgICAgICAgICAgICAgYmFpbCEoXCJjb25zdHJ1Y3RvciB2aW9sYXRlcyBzdHJpY3QgcG9zaXRpdml0eVwiKTtcbiAgICAgICAgICAgICAgICAgICAgICAgIH1cbiAgICAgICAgICAgICAgICAgICAgfVxuICAgICAgICAgICAgICAgICAgICBpZiBjdG9yX3BhcmFtcy5pc19lbXB0eSgpICYmIGN0b3JfZ3VhcmRzLmlzX2VtcHR5KCkge1xuICAgICAgICAgICAgICAgICAgICAgICAgYnJlYWs7XG4gICAgICAgICAgICAgICAgICAgIH1cbiAgICAgICAgICAgICAgICAgICAgY3VycmVudCA9IG5leHQ7XG4gICAgICAgICAgICAgICAgfVxuICAgICAgICAgICAgICAgIGlmICFjdXJyZW50LmNvbnRhaW5zX2xvY2FsKHRoaXMpIHtcbiAgICAgICAgICAgICAgICAgICAgY29udGludWU7XG4gICAgICAgICAgICAgICAgfVxuICAgICAgICAgICAgICAgIGlmICFjdXJyZW50LmhlYWQoKS5hbHBoYV9lcSgmbWtfbG9jYWwodGhpcykpIHtcbiAgICAgICAgICAgICAgICAgICAgYmFpbCEoXCJpbnZhbGlkIHRhcmdldFwiKTtcbiAgICAgICAgICAgICAgICB9XG4gICAgICAgICAgICAgICAgZm9yIGEgaW4gY3VycmVudC5hcmdzKCkge1xuICAgICAgICAgICAgICAgICAgICBpZiBhLmNvbnRhaW5zX2xvY2FsKHRoaXMpIHtcbiAgICAgICAgICAgICAgICAgICAgICAgIGJhaWwhKFwiaW52YWxpZCB0YXJnZXRcIik7XG4gICAgICAgICAgICAgICAgICAgIH1cbiAgICAgICAgICAgICAgICB9XG4gICAgICAgICAgICAgICAgY3Rvcl9pbmRfYXJncy5wdXNoKGN0b3JfYXJnLmNsb25lKCkpO1xuICAgICAgICAgICAgfVxuJwppZiBvbGRfY2FsbCBub3QgaW4gczogcmFpc2UgU3lzdGVtRXhpdCgiY2FsbCBzaXRlIG5vdCBmb3VuZCIpCnM9cy5yZXBsYWNlKG9sZF9jYWxsLG5ld19jYWxsLDEpCnAud3JpdGVfdGV4dChzKQo=' | base64 -d > /tmp/refactor.py
+          python3 /tmp/refactor.py
           cargo fmt --all
           cargo test --all --all-features --locked
       - name: Commit refactor
