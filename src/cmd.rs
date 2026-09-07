@@ -2250,24 +2250,30 @@ impl Eval {
             for ctor_arg in &ctor_args {
                 let mut current = ctor_arg.clone();
                 loop {
-                    let (params, body) = ungeneralize(&current);
-                    let (args, next) = unguard(&body);
-                    if params.is_empty() && args.is_empty() {
+                    let (ctor_params, body) = ungeneralize(&current);
+                    let (ctor_guards, next) = unguard(&body);
+                    for guard in &ctor_guards {
+                        if guard.contains_local(this) {
+                            bail!("constructor violates strict positivity");
+                        }
+                    }
+                    if ctor_params.is_empty() && ctor_guards.is_empty() {
                         break;
                     }
                     current = next;
                 }
-                if current.contains_local(this) {
-                    if !current.head().alpha_eq(&mk_local(this)) {
+                if !current.contains_local(this) {
+                    continue;
+                }
+                if !current.head().alpha_eq(&mk_local(this)) {
+                    bail!("invalid target");
+                }
+                for a in current.args() {
+                    if a.contains_local(this) {
                         bail!("invalid target");
                     }
-                    for a in current.args() {
-                        if a.contains_local(this) {
-                            bail!("invalid target");
-                        }
-                    }
-                    ctor_ind_args.push(ctor_arg.clone());
                 }
+                ctor_ind_args.push(ctor_arg.clone());
             }
             ctor_ind_args_list.push(ctor_ind_args);
         }
